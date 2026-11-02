@@ -439,6 +439,10 @@ async def test_a_child_starts_from_the_preloaded_task_modules_frozen(
     assert int(frozen) > 0
 
 
+@pytest.mark.skipif(
+    not Path("/proc/self/smaps_rollup").exists(),
+    reason="a child's memory is read from Linux's smaps_rollup; CI and the images run this",
+)
 async def test_a_child_that_grew_past_its_limit_is_replaced_after_its_job(
     engine: AsyncEngine, lane: str, tmp_path: Path
 ) -> None:

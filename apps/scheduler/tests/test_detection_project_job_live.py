@@ -113,7 +113,7 @@ async def test_a_sustained_slowdown_opens_exactly_one_finding_and_closes_it(
     assert finding.state == "closed" and finding.closed_reason == "recovered"
     assert finding.severity == "warning"
     assert finding.started_at == ONSET
-    assert finding.title.startswith(f"{SERVICE} is 2.")
+    assert finding.title.startswith(f"{SERVICE} has been up to 2.")
     assert finding.title.endswith(f"slower than normal since {ONSET:%H:%M} UTC")
     (signal,) = finding.signals
     assert signal["signal"] == "slower"
@@ -246,6 +246,27 @@ async def test_a_job_killed_before_its_commit_leaves_one_finding_once_rerun(
         start=opening, end=opening + MINUTE
     )
     assert len(readings) == 1
+
+
+async def test_the_running_scheduler_does_not_disturb_a_run_on_the_test_clock(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """An open finding makes the project active, so the dev stack's own sweep queues it a job
+    for the real clock's minute. That must find nothing to judge: a test clock behind the
+    real one is overtaken, and the test's later minutes are never judged."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+    opening = minutes[: len(minutes) // 2]
+    assert sum(o.opened for o in await _judge_through(engine, store, project, opening)) == 1
+
+    real_minute = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=3)
+    await project_job.judge_project(
+        engine, store, project.project_id, settled=real_minute, now=real_minute
+    )
+
+    rest = minutes[len(minutes) // 2 :]
+    assert sum(o.closed for o in await _judge_through(engine, store, project, rest)) == 1
 
 
 async def test_two_jobs_at_once_judge_each_minute_once(
@@ -387,8 +408,8 @@ async def test_two_hours_on_two_signals_and_three_endpoints_are_one_finding(
     assert finding.closed_reason == "recovered"
     assert finding.closed_at >= ONSET + deviation
     assert finding.started_at <= ONSET + timedelta(minutes=1)
-    assert finding.title.startswith(f"{SERVICE} is failing ")
-    assert finding.title.endswith(", and is slower")
+    assert finding.title.startswith(f"{SERVICE} has failed up to ")
+    assert finding.title.endswith(", and has also been slower")
     signals = {(s["signal"], s["endpoint"]) for s in finding.signals}
     assert ("slower", None) in signals
     endpoints = {endpoint for signal, endpoint in signals if signal == "failing"}

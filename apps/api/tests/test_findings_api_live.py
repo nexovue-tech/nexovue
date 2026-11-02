@@ -241,7 +241,8 @@ async def _write_readings(
     p95_by_minutes_ago: dict[int, float],
     version: int = 1,
 ) -> None:
-    now = datetime.now(UTC).replace(second=0, microsecond=0, tzinfo=None)
+    # Aware: the ClickHouse client reads a naive time in the machine's own zone.
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
     rows = [
         [
             str(tenant.organization.id),

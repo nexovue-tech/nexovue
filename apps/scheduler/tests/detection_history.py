@@ -7,6 +7,7 @@ hands it settled minutes. Shared by `test_detection_project_job_live.py` and
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -51,8 +52,12 @@ MINUTE: Final = timedelta(minutes=1)
 SUSTAIN: Final = 5
 # Time to a finding beyond critical, at normal sensitivity (spec, *Product values*).
 TIME_TO_A_FINDING: Final = timedelta(minutes=12)
-# The minute the trouble starts: noon today, far from any midnight a pool stops at.
-ONSET: Final = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+# The minute the trouble starts: noon tomorrow, far from any midnight a pool stops at. Ahead of
+# the real clock, so the dev stack's own sweep, judging an open finding's project at the real
+# minute, finds nothing to judge rather than overtaking the test's minutes.
+ONSET: Final = (datetime.now(UTC) + timedelta(days=1)).replace(
+    hour=12, minute=0, second=0, microsecond=0
+)
 # A steady latency shape over 11 buckets, in percent, at 100 requests a minute.
 SHAPE: Final = (1, 3, 8, 15, 22, 20, 14, 9, 5, 2, 1)
 FIRST_BUCKET: Final = 20
@@ -254,10 +259,19 @@ async def judge_through(
     minutes: Sequence[datetime],
 ) -> list[Outcome]:
     """The coordinator's minutes, one settled minute after another."""
-    return [
-        await judge_project(engine, store, tenant.project_id, settled=minute, now=minute)
-        for minute in minutes
-    ]
+    outcomes = []
+    for minute in minutes:
+        outcome = await judge_project(engine, store, tenant.project_id, settled=minute, now=minute)
+        # The dev stack's own job can hold the project's lock for a moment.
+        for _ in range(50):
+            if not outcome.skipped:
+                break
+            await asyncio.sleep(0.1)
+            outcome = await judge_project(
+                engine, store, tenant.project_id, settled=minute, now=minute
+            )
+        outcomes.append(outcome)
+    return outcomes
 
 
 async def findings(engine: AsyncEngine, tenant: AlertTenant) -> list[Any]:

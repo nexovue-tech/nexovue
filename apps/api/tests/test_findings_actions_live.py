@@ -336,7 +336,8 @@ async def _write_readings(
     service_name: str = SERVICE,
 ) -> None:
     """`count` judged minutes ending now, each 5-minute window at `p95` against `normal`."""
-    now = datetime.now(UTC).replace(second=0, microsecond=0, tzinfo=None)
+    # Aware: the ClickHouse client reads a naive time in the machine's own zone.
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
     rows = [
         [
             str(team.org_id),
