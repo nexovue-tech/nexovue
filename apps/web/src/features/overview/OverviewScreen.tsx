@@ -10,8 +10,9 @@ import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
+import type { OverviewPlot } from "@/shared/overview-plots";
+import { buildOverviewPlots } from "@/shared/overview-plots";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
-
 import type { OverviewService, ProjectTotals } from "./api";
 import {
   useChecksSummary,
@@ -21,8 +22,6 @@ import {
   useVitalsSummary,
   useWorstServices,
 } from "./api";
-import type { OverviewPlot } from "./overview-plots";
-import { buildOverviewPlots } from "./overview-plots";
 
 /**
  * How the whole system is running, in one screen.
@@ -45,10 +44,11 @@ export function OverviewScreen() {
   const overview = useProjectOverview(projectId, timeWindow);
   const worst = useWorstServices(projectId, timeWindow);
   const deploys = useProjectDeploys(projectId);
-  // The strip waits for the panels. Five telemetry reads at once is one more
-  // than the tier allows in flight, and the fifth is refused rather than
-  // queued — so firing them together made one read of this screen fail every
-  // time it was opened.
+  // The strip waits for the panels. The telemetry tier's in-flight cap is 8
+  // per API process and a read past it waits in the limiter rather than being
+  // refused — and at two API processes each holds a cap of 4, so five reads at
+  // once still leave one waiting out the queue on every cold load. The gating
+  // stays while that arithmetic holds (F20 plan, T1.8).
   const panelsLanded = overview.data !== undefined;
   const nodes = useNodesSummary(projectId, timeWindow, panelsLanded);
   const checks = useChecksSummary(projectId, timeWindow, panelsLanded);

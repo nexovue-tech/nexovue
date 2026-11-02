@@ -42,6 +42,17 @@ const ACTIONS = [
 ];
 
 describe("the finding page", () => {
+  it("offers the way back to the feed, which is the front door at / (FR1)", async () => {
+    stubApi(finding());
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const back = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => (link.textContent ?? "").trim() === "All findings",
+    );
+    expect(back?.getAttribute("href")).toBe("/");
+  });
+
   it("leads with the sentence, then each signal's values, comparison and readings (AC38)", async () => {
     stubApi(finding());
     const { container } = await mountFinding();

@@ -327,15 +327,16 @@ for the customer rather than handed over empty.
 Two halves, at different stages:
 
 - **The composed overview — built, 2026-09.** Auto-composed RED and USE panels from rollups that
-  already exist, holding `/` until the insight engine exists. Specified in
+  already exist. It held `/` until the insight engine existed; the engine shipped as F6, and F20's
+  Step 1 (2026-11-02) moved `/` to the Findings feed, with Overview at `/overview`. Specified in
   [`../features/console-redesign/`](../features/console-redesign/) (OD2 and
   `wireframes-dashboard.md`) and shipped as T30–T34 of that feature's task plan.
 - **The builder — still to specify.** Not foreclosed by the above: an auto-composed dashboard is a
   fixed instance of what a builder would produce, so the composed overview is the first step toward
   one rather than a substitute for it.
 
-**The front door is unchanged**: the Findings feed (F1) is what a person lands on. What changed is
-that the other surface stopped being a lesser one.
+**The front door is unchanged**: the Findings feed (F1) is what a person lands on — served at `/`
+since F20 Step 1 (2026-11-02). What changed is that the other surface stopped being a lesser one.
 
 ### F21 — Alerts & Notification Connectors ✅ DESIGNED
 Specified and approved 2026-09-18: [`docs/features/alerts/spec.md`](../features/alerts/spec.md); designed and

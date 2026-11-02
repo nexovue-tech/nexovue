@@ -96,6 +96,44 @@ describe("what the screen may claim when the feed is empty", () => {
       wrong: false,
     });
   });
+
+  it("treats service_count 0, the API's real shape, as nothing reporting (AC3)", () => {
+    // `/services/overview` always answers `totals` — zeros with `service_count: 0`
+    // rather than nothing — so the absent-totals branch above never fires on a
+    // successful read. A quiet hour is not a new project: the window, not "yet".
+    const silent: ProjectTotals = {
+      service_count: 0,
+      error_count: 0,
+      requests_per_minute: 0,
+      error_rate: 0,
+      p95_ms: 0,
+    };
+
+    for (const unread of [undefined, checks({ total: 0, passing: 0 })]) {
+      expect(headlineFor(silent, unread)).toEqual({
+        title: "Nothing has reported in this window",
+        wrong: false,
+      });
+    }
+  });
+
+  it("still names a down check when no service reported, because a probe said so", () => {
+    // A synthetic check is our probe, not the customer's telemetry: it can be
+    // down while no trace arrives, and hiding that would be the false calm
+    // this screen exists to prevent.
+    const silent: ProjectTotals = {
+      service_count: 0,
+      error_count: 0,
+      requests_per_minute: 0,
+      error_rate: 0,
+      p95_ms: 0,
+    };
+
+    expect(headlineFor(silent, checks({ passing: 0, down: 4 }))).toEqual({
+      title: "4 checks are down",
+      wrong: true,
+    });
+  });
 });
 
 /**

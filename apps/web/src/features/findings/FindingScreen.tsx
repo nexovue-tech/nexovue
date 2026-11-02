@@ -72,7 +72,8 @@ export function FindingScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-4 pt-5 pb-10">
-      <Link to="/findings" className="text-ink-dim text-sm hover:text-ink">
+      {/* The feed is the front door now (FR1): back means `/`. */}
+      <Link to="/" className="text-ink-dim text-sm hover:text-ink">
         All findings
       </Link>
       {finding.isPending ? (

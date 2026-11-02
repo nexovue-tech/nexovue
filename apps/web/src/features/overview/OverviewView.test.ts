@@ -11,10 +11,9 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-
+import { buildOverviewPlots } from "@/shared/overview-plots";
 import type { OverviewViewProps } from "./OverviewScreen";
 import { OverviewView } from "./OverviewScreen";
-import { buildOverviewPlots } from "./overview-plots";
 
 const mounted: Root[] = [];
 

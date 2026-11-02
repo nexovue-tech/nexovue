@@ -2,16 +2,27 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is built and validated, 2026-11-02**, on the worktree branch `wt/f20`, uncommitted: the coordinator reviews the diff and commits. Steps 2 to 11 are not started.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 1 done, awaiting the coordinator's review and commit. Nothing else in flight.
 
 
 ## Completed
 
+- **2026-11-02. Plan Step 1 built (T1.1 to T1.9).** What changed, read from the diff:
+  - `apps/web/src/app/router.tsx`: `/` serves `FindingsScreen`; `overviewRoute` at `/overview`; the `/findings` list route deleted; the stale OD2 comment rewritten; the 404 screen says "Back to Findings" (T1.1, T1.4).
+  - `apps/web/src/app/routes/route-manifest.ts`: Home offers Findings `/`, Overview `/overview`, Alerts (T1.2).
+  - New checked-in `apps/web/src/app/routes/console-routes.json`, held to the router by `route-manifest.test.ts`, and read by the scheduler's new `apps/scheduler/tests/test_alert_links.py`, which composes an incident, batch, finding and project message and matches every `link` and `manage_link` against it (T1.6, FR43, AC54).
+  - `apps/web/src/app/layout/Sidebar.tsx`: Findings active on `/` and on `/findings/$findingId`; proved by the new `Sidebar.test.ts`, a real render of the app router (T1.4, AC55).
+  - `apps/web/src/features/findings/FindingScreen.tsx`: back link to `/` (T1.3).
+  - `apps/scheduler/.../alerts/messages.py:378`: the project notice links to `{base}/` (T1.5, AC2).
+  - `overview-plots.ts` moved to `apps/web/src/shared/overview-plots.ts` with `OverviewPoint` declared there; both features' `api.ts` import it from `shared/`; a search confirms `shared/` imports nothing from `@/features` (T1.7).
+  - FD15's empty state: `headline.ts` treats `service_count === 0` as "Nothing has reported in this window" (after a down check's line, which a probe proved); the feed hides the zero readings and charts, links the setup docs and says to widen the window. With telemetry and no findings, the feed draws Overview's three charts from the same `/services/overview` answer (`points`, no extra scan) and links to `/overview` (T1.7, FR3, AC3).
+  - T1.8: the four false "a fifth read is refused" comments corrected to the measured truth (cap 8 per process, waits, 4 at two processes; the gating stays). Comments only, no behaviour change.
+  - T1.9: `feature-catalog.md` and `console-redesign/wireframes-dashboard.md` now say the front door moved, dated.
 - **2026-11-02.** Research written ([`research.md`](research.md)).
 - **2026-11-02.** Read the foundation, the Phase 2 plan, the workflow, the F6 documents and the code they cite, on `feature/anomaly-detection`.
 - **2026-11-02.** Wrote the specification, design and plan from that reading.
@@ -29,7 +40,7 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1 (`apps/web/src/app/router.tsx`), which ships as soon as F6 merges. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+The coordinator reviews Step 1's diff and commits. Then Step 2 waits on the buyer round (the foundation's founder decision 8) and founder decision 1. **Still owed from "implementation start": the design's 3 proposed ADRs in `docs/decisions/`, numbered then** — they concern Step 2+'s dashboard infrastructure and were not filed with Step 1, which was built alone under D58 by a session scoped to Step 1's tasks only.
 
 
 ## Open decisions
@@ -61,8 +72,8 @@ A skeptical review (architect, developer, UX, sales, marketing, customer, securi
 
 ## Blocked
 
-- **Implementation** waits on spec, design and plan approval.
-- **All steps** wait on F6 merging. Step 1 then ships alone (D58). Step 2 onward also waits on the buyer round (the foundation's founder decision 8) and decision 1, and under the approved stage order, on the chain.
+- **Step 1 is built** (F6 merged, D58); it waits only on the coordinator's review and commit.
+- **Step 2 onward** waits on the buyer round (the foundation's founder decision 8) and decision 1, and under the approved stage order, on the chain.
 - **Step 5 onward** waits on F28.
 
 ## Reviews
@@ -316,6 +327,7 @@ Fourteen further findings. All fourteen were checked against the code or the doc
 
 ## Risks
 
+- **Step 1 residuals (2026-11-02):** the founder's browser judging of the new front door has not happened (no stack was brought up); `console-routes.json` is a second copy of the route list, held to the router by `route-manifest.test.ts` and to the scheduler by `test_alert_links.py`, and drifts only if both tests are weakened; the design's 3 proposed ADRs are still unfiled (see *Next action*).
 - **No buyer has been asked** whether a builder matters, or which parts. The evidence is weak, and this is the largest piece of Stage 6.
 - **No cap is published before deployment** (foundation item 9: no rented test server). T5.7 runs on the Mac, which shares 11.7 GiB with the demo, and is rerun on Oracle before any cap or "how many at once" is stated. Oracle's free allowance (2 Arm CPUs, 12 GB) is below the 16 GB minimum, so that rerun needs a paid shape, which returns to the founder at deployment.
 - **Every cap is a guess** until the plan's T5.7: 30 panels, 40 scans, 4 at once, 5 and 2 per process, 3 and 1 per organization, a 60-second default, a 30-second floor, a 20-second deadline, a 15-second statement limit, 7-day raw windows, the shared read's rows, and the API account's limits.
@@ -328,7 +340,18 @@ Fourteen further findings. All fourteen were checked against the code or the doc
 
 ## Validation
 
-Run:
+### Step 1, run 2026-11-02
+
+Counts read from the output, not exit codes:
+
+- **Every behaviour change's test was seen failing first, then passing.** Before the implementation: 11 web test failures across 5 files (`route-manifest.test.ts` 3 — no `/overview`, Home still `Overview`/`/findings`, `console-routes.json` missing; `Sidebar.test.ts` 3 — Findings href `/findings`, Overview not at `/overview`, 404 said "Back to Overview"; `headline.test.ts` 1 — `service_count` 0 read "Here is what this project reported"; `FindingsView.test.ts` 3 — no charts, no `/overview` link, no "Nothing has reported in this window"; `FindingScreen.test.ts` 1 — back link `/findings`), and 3 Python failures (`test_alert_links.py` both tests; `test_alert_messages.py` project notice still `/findings`).
+- **Web unit tests:** whole suite, `vitest run`: **138 files, 1,533 tests, all passed** (14 new).
+- **Typecheck:** `pnpm -r --if-present run typecheck`: all workspaces `Done`.
+- **Biome:** `biome check` over `apps/web/src`: no errors in changed files (one pre-existing warning in untouched `infrastructure/databases/connection-health.ts`).
+- **Scheduler:** `uv run pytest test_alert_links.py test_alert_messages.py`: **31 passed** (2 new in `test_alert_links.py`). `uv run ruff check .`: clean. `uv run mypy apps/scheduler`: no issues in 156 files.
+- **Not run for Step 1:** `just check` (the coordinator runs it; this machine is shared), the live suites and Playwright (`just e2e` needs the dev stack, which Step 1's tasks do not require and was not brought up). Step 1 names no e2e spec. **The founder's judging step — land on the feed, see the three charts, reach Overview in one click, try a project with no telemetry, follow an alert's detection link — has not been done in a browser.**
+
+### Document-stage validation, run 2026-11-02
 
 - One throwaway FastAPI 0.162 app, in memory, on 2026-11-02: `GET /api/v1/dashboards/panels:read` answered 200 with the panels router first, and 422 with the `/dashboards/{id}` router first. That route is now gone.
 - Text search of uPlot's built file: no `innerHTML`.
@@ -337,7 +360,7 @@ Run:
 - A count of panels in the ten boards under `tools/otel-demo/upstream/src/grafana/provisioning/dashboards/demo/`: 143.
 - A script over `spec.md` and `plan.md`: every FR, NFR and AC in the spec appears in the plan's *Traceability*, with no number that the spec lacks. Rerun after the follow-up review, adding AC145.
 
-**Not run:** any repository test, query, browser, load test or demo. All figures in these documents marked *guess* or *arithmetic* are not measurements.
+**Not run at the document stage:** any repository test, query, browser, load test or demo. All figures in these documents marked *guess* or *arithmetic* are not measurements. (Step 1's own runs are above.)
 
 ## Specification impact
 
@@ -347,8 +370,8 @@ The specification is new. Where it differs from `research.md` or the foundation,
 
 Now disagreeing with the code or with each other, and left unchanged, since this run may only write this feature's documents:
 
-- `overview/api.ts:143-151`, `OverviewScreen.tsx:48-51`, `FindingsScreen.tsx:48-49` and `findings/api.ts:241-244` carry false comments about a fifth read being refused (plan T1.8).
-- `feature-catalog.md` says the front door is the feed, and `/` serves Overview. This predates this work (plan T1.9).
+- ~~The four false "a fifth read is refused" comments~~ corrected in Step 1 (T1.8, 2026-11-02).
+- ~~`feature-catalog.md`'s front-door line~~ corrected in Step 1 (T1.9, 2026-11-02).
 - `phase-2-foundation.md` section 8 names `/dashboards/panels:read`, and does not list the other routes. Section 9 takes F28's markers, which now agrees (T11.2).
 - `vision.md` speaks against "an empty builder". The customer-facing name is now *Dashboards*, and `phase-2-plan.md` still says "dashboard builder", as a record of what was approved.
 
@@ -363,7 +386,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-02 (Step 1 built and validated)
 
 ## Founder approval, 2026-11-02
 

@@ -157,9 +157,9 @@ export function mountFinding() {
   return mountAt("/findings/f-1", placeholder("Feed"));
 }
 
-/** The feed itself, at `/findings`, with each finding's page a placeholder. */
+/** The feed itself, at `/` — the front door (FR1) — each finding's page a placeholder. */
 export function mountFeed() {
-  return mountAt("/findings", FindingsScreen, placeholder("Finding"));
+  return mountAt("/", FindingsScreen, placeholder("Finding"));
 }
 
 const placeholder = (text: string) => () => createElement("p", null, text);
@@ -185,7 +185,7 @@ async function mountAt(
       }),
       createRoute({
         getParentRoute: () => shellRoute,
-        path: "/findings",
+        path: "/",
         component: feed,
       }),
       createRoute({

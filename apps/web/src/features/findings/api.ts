@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
+import type { OverviewPoint } from "@/shared/overview-plots";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
 
@@ -195,6 +196,14 @@ export interface ProjectTotals {
 
 interface ServiceOverviewResponse {
   totals: ProjectTotals;
+  /** The same buckets Overview draws. The feed draws them too, from this one answer. */
+  points: OverviewPoint[];
+}
+
+/** What the feed keeps of the answer: the totals, and the buckets its charts draw. */
+export interface ProjectSummary {
+  totals: ProjectTotals;
+  points: OverviewPoint[];
 }
 
 interface CheckSummary {
@@ -214,12 +223,12 @@ interface CheckListResponse {
 }
 
 /**
- * The RED summary the healthy state carries.
+ * The RED summary the healthy state carries, with the buckets behind it.
  *
  * Declared here rather than imported from `features/overview`, because a feature never
- * imports another feature. What the two share is the endpoint and the token layer, which
- * is the right amount of sharing — not a type that would couple two screens' rendering
- * to one another.
+ * imports another feature; the one shared shape, `OverviewPoint`, lives in `shared/`
+ * beside the chart-building it feeds. The answer already holds `points`, so drawing
+ * Overview's three charts on an empty feed costs no extra scan (FR3).
  */
 export function useProjectSummary(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
@@ -231,16 +240,17 @@ export function useProjectSummary(projectId: string | undefined, timeWindow: Tim
         searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
         signal,
       }),
-    select: (response) => response.totals,
+    select: (response): ProjectSummary => ({ totals: response.totals, points: response.points }),
   });
 }
 
 /**
  * How many checks are passing, read only once the summary has landed.
  *
- * Gated for the reason the Overview strip is: the telemetry tier allows four reads in
- * flight and refuses the fifth rather than queueing it, so a screen that fires
- * everything at once fails part of itself every time it is opened.
+ * Gated for the reason the Overview strip is: the telemetry tier's in-flight cap is 8
+ * per API process and a read past it waits in the limiter rather than being refused —
+ * and at two API processes each holds a cap of 4, so a screen that fires everything at
+ * once still leaves a read waiting out the queue (F20 plan, T1.8).
  */
 export function useCheckCounts(
   projectId: string | undefined,
