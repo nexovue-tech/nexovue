@@ -41,6 +41,8 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
     severity: "warning",
     state: "open",
     closed_reason: null,
+    service_snoozed_until: null,
+    service_muted_until: null,
     muted: false,
     started_at: minutesAgo(30),
     closed_at: null,

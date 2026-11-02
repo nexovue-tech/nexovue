@@ -73,6 +73,9 @@ export interface Finding {
   state: FindingState;
   closed_reason: ClosedReason | null;
   muted: boolean;
+  /** The service's snooze and mute as they stand now, not when the finding opened. */
+  service_snoozed_until: string | null;
+  service_muted_until: string | null;
   started_at: string;
   closed_at: string | null;
   acknowledged_at: string | null;

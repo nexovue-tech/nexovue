@@ -386,6 +386,11 @@ function FindingRow({ finding }: { finding: Finding }) {
           label={`How ${subject} has been trending.`}
         />
         <span className="font-mono text-2xs text-ink-dim">
+          {finding.service_muted_until !== null
+            ? "Muted · "
+            : finding.service_snoozed_until !== null
+              ? "Snoozed · "
+              : null}
           {finding.state === "acknowledged" ? "Acked" : formatRelativeTime(finding.started_at)}
         </span>
       </div>

@@ -45,6 +45,8 @@ const RESPONSE: FindingsResponse = {
       started_at: "2026-09-13T15:04:00Z",
       closed_at: "2026-09-13T16:00:00Z",
       acknowledged_at: null,
+      service_snoozed_until: null,
+      service_muted_until: null,
       signals: [
         {
           signal: "slower",

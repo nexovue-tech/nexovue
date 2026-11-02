@@ -343,6 +343,37 @@ describe("the finding page", () => {
     expect(call?.body).toEqual({ project_id: PROJECT_ID, minutes: 1440 });
   });
 
+  it("still says the service is snoozed after a reload, and offers to end it", async () => {
+    const api = stubApi(finding({ service_snoozed_until: minutesAgo(-30) }), {
+      role: "member",
+      extra: {
+        "POST /services/checkout/snooze": json({ muted_until: null, snoozed_until: null }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect(readable(container)).toContain("checkout is snoozed until");
+    expect(readable(container)).not.toContain("Snooze this service");
+    await press(container, "End snooze");
+
+    await waitFor(() => api.to("POST", "/services/checkout/snooze").length === 1, "the end");
+    expect(api.to("POST", "/services/checkout/snooze")[0]?.body).toEqual({
+      project_id: PROJECT_ID,
+      minutes: null,
+    });
+  });
+
+  it("still says the service is muted after a reload, and offers to unmute", async () => {
+    stubApi(finding({ service_muted_until: minutesAgo(-30) }));
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect(readable(container)).toContain("checkout is muted until");
+    expect(readable(container)).not.toContain("Mute this service");
+    expect(readable(container)).toContain("Unmute");
+  });
+
   it("lets a member snooze the service, for a length the server counts (FR22, FR31)", async () => {
     const api = stubApi(finding(), {
       role: "member",

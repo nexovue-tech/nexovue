@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import Final, cast
 
 import httpx
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -27,6 +28,7 @@ from starlette.routing import Route
 
 from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX
 from nexovue_api.auth.sessions import Session, SessionStore
+from nexovue_api.middleware import ratelimit as ratelimit_middleware
 from nexovue_api.middleware.ratelimit import TOO_MANY_CONCURRENT_DETAIL, RateLimitMiddleware
 from nexovue_api.ratelimit.headers import POLICY_HEADER, RETRY_AFTER_HEADER, STATE_HEADER
 from nexovue_api.ratelimit.limiter import RateLimiter
@@ -221,10 +223,13 @@ async def test_a_persons_reads_are_not_spent_by_a_token_at_the_same_desk() -> No
         assert await _reads(desk, person, PER_PERSON) == [200] * PER_PERSON
 
 
-async def test_an_organizations_tokens_share_one_in_flight_ceiling() -> None:
+async def test_an_organizations_tokens_share_one_in_flight_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Minting more tokens must not multiply what one tenant may have scanning at
     once (readiness group 2b): four tokens fill the organization's 32, a fifth is
-    refused, and another organization's token is not."""
+    refused once its wait runs out, and another organization's token is not."""
+    monkeypatch.setattr(ratelimit_middleware, "CONCURRENCY_WAIT_SECONDS", 0.2)
     world = _World()
     ceiling = TOKEN_TIER.org_max_concurrent
     per_token = TOKEN_TIER.max_concurrent
@@ -240,8 +245,8 @@ async def test_an_organizations_tokens_share_one_in_flight_ceiling() -> None:
         await asyncio.sleep(0.1)
         elsewhere = asyncio.create_task(slow(world.token(str(uuid.uuid4()))))
         try:
-            # A refusal is immediate; a fifth token served instead waits at the
-            # gate, so running out of time here is the failure.
+            # A refusal comes when the wait runs out; a fifth token served instead waits
+            # at the gate, so running out of time here is the failure.
             fifth = await asyncio.wait_for(slow(world.token(org_id)), timeout=2)
         finally:
             world.released.set()
@@ -252,6 +257,29 @@ async def test_an_organizations_tokens_share_one_in_flight_ceiling() -> None:
     assert fifth.json()["detail"] == TOO_MANY_CONCURRENT_DETAIL
     assert {response.status_code for response in answered} == {200}
     assert other.status_code == 200
+
+
+async def test_a_read_past_the_cap_waits_for_a_slot_rather_than_being_refused() -> None:
+    """A screen's burst is legitimate. A read over the cap is slow, not absent: the cap
+    still holds what scans at once, and a screen no longer loads with a panel missing."""
+    world = _World()
+    token = world.token()
+    per_token = TOKEN_TIER.max_concurrent
+    assert per_token is not None
+
+    async def slow() -> httpx.Response:
+        return await runner.get(SLOW_READ, headers={"Authorization": f"Bearer {token}"})
+
+    async with _client(world) as runner:
+        held = [asyncio.create_task(slow()) for _ in range(per_token)]
+        await asyncio.sleep(0.05)
+        over = asyncio.create_task(slow())
+        await asyncio.sleep(0.2)
+        assert not over.done(), "it was answered without waiting for a slot"
+        world.released.set()
+        answered = await asyncio.gather(*held, over)
+
+    assert {response.status_code for response in answered} == {200}
 
 
 async def test_an_organizations_tokens_cannot_hold_its_people_s_reads() -> None:

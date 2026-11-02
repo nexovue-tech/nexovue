@@ -6,6 +6,9 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 
 ## Records
 
+- [Console findings review](console-findings-review/bug.md) — a screen's reads wait rather than being refused; titles, snooze state, units, chart zone and the seed's rates corrected.
+- [Live tests on a Mac](live-tests-on-a-mac/bug.md) — five live tests failed on a machine outside UTC or outside Linux, or while the dev stack's own scheduler ran.
+- [Detection false delayed](detection-false-delayed/bug.md) — Findings said nexovue was behind on a healthy stack, because a sweep just before the worker's once-a-minute write reads 2 minutes short.
 - [SDD adoption](sdd-adoption/change.md) — documentation structure, agent instructions, templates, and the current-state baseline.
 - [Signup session before commit](signup-session-before-commit/bug.md) — signup minted a session before the tenant it named was durable.
 - [Agent skills](agent-skills/change.md) — the development workflow moved to an agent-agnostic document, and four Claude Code skills that run it.

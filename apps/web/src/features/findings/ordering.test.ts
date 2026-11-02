@@ -11,6 +11,8 @@ const finding = (overrides: Partial<Finding> & { id: string }): Finding => ({
   severity: "warning",
   state: "open",
   closed_reason: null,
+  service_snoozed_until: null,
+  service_muted_until: null,
   muted: false,
   started_at: "2026-09-13T10:00:00Z",
   closed_at: null,

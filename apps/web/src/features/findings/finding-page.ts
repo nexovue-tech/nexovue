@@ -27,6 +27,8 @@ export const SIGNAL_NAMES: Record<FindingSignalKind, string> = {
   traffic: "Losing traffic",
 };
 
+const RATE_UNIT = "requests a minute";
+
 /** A value in its signal's unit; a missing one is the em dash, never a zero. */
 export function formatSignalValue(unit: FindingSignal["unit"], value: number | null): string {
   if (value === null) return UNKNOWN;
@@ -38,7 +40,8 @@ export function formatSignalValue(unit: FindingSignal["unit"], value: number | n
 /** "412 ms at worst, against 110 ms normally. Now 330 ms." */
 export function describeSignal(entry: FindingSignal): string {
   const value = (reading: number | null) => formatSignalValue(entry.unit, reading);
-  return `${value(entry.worst)} at worst, against ${value(entry.normal)} normally. Now ${value(entry.current)}.`;
+  const counted = entry.unit === "rpm" ? ` ${RATE_UNIT}` : "";
+  return `${value(entry.worst)}${counted} at worst, against ${value(entry.normal)} normally. Now ${value(entry.current)}.`;
 }
 
 /**
@@ -67,7 +70,7 @@ export function bandSentence(entry: FindingSignal): string {
   if (entry.band_low === null && entry.band_high === null) return `Normal band ${UNKNOWN}.`;
   const low = formatSignalValue(entry.unit, entry.band_low);
   const high = formatSignalValue(entry.unit, entry.band_high);
-  return `Normal band ${low} to ${high}.`;
+  return `Normal band ${low} to ${high}${entry.unit === "rpm" ? ` ${RATE_UNIT}` : ""}.`;
 }
 
 /** Who may do what to this finding, as this person (FR22, FR23, AC39). */

@@ -8,6 +8,7 @@ Every Postgres statement binds `org_id`. The ClickHouse statement names
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
@@ -18,7 +19,7 @@ from nexovue_platform.detection import (
     resolve_parameters,
 )
 from nexovue_platform.jobs import ENQUEUE
-from sqlalchemy import case, func, select, text
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
@@ -357,3 +358,32 @@ async def service_readings(
         _SERVICE_READINGS,
         {"project_id": str(project_id), "service": service_name, "since": since, "until": until},
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceQuiet:
+    """A service's snooze and mute, each only while it is still ahead."""
+
+    snoozed_until: datetime | None
+    muted_until: datetime | None
+
+
+async def quiet_services(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, now: datetime
+) -> dict[str, ServiceQuiet]:
+    """The project's services that are snoozed or muted right now, by name."""
+    settings = ServiceDetectionSettings
+    rows = await session.execute(
+        select(settings.service_name, settings.snoozed_until, settings.muted_until).where(
+            settings.org_id == org_id,
+            settings.project_id == project_id,
+            or_(settings.snoozed_until > now, settings.muted_until > now),
+        )
+    )
+    return {
+        name: ServiceQuiet(
+            snoozed_until=snoozed if snoozed is not None and snoozed > now else None,
+            muted_until=muted if muted is not None and muted > now else None,
+        )
+        for name, snoozed, muted in rows
+    }

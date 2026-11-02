@@ -483,7 +483,7 @@ def title(service: str, finding: OpenFinding, zone: ZoneInfo) -> str:
         if also not in others and key_signal(key) != key_signal(lead):
             others.append(also)
     if others:
-        sentence += ", and is " + " and ".join(others)
+        sentence += ", and has also been " + " and ".join(others)
     return sentence
 
 
@@ -491,15 +491,15 @@ def _lead_sentence(service: str, key: str, record: KeyRecord, since: str) -> str
     worst, normal = record.worst, record.normal
     if key == SLOWER:
         ratio = (worst or 0.0) / normal if normal else 0.0
-        return f"{service} is {times(ratio)} slower than normal since {since}"
+        return f"{service} has been up to {times(ratio)} slower than normal since {since}"
     if key == TRAFFIC:
         if not worst:
             return f"{service} stopped receiving requests at {since}"
         share = round(_PERCENT * worst / normal) if normal else 0
-        return f"{service} is receiving {share}% of its normal traffic since {since}"
+        return f"{service} has dropped to {share}% of its normal traffic since {since}"
     subject = "requests" if key == FAILING else f"{record.endpoint} requests"
     return (
-        f"{service} is failing {percent(worst)} of {subject}, "
+        f"{service} has failed up to {percent(worst)} of {subject}, "
         f"against {percent(normal)} normally, since {since}"
     )
 

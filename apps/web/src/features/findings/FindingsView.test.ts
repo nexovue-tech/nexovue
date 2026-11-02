@@ -44,6 +44,8 @@ const FINDING: Finding = {
   severity: "critical",
   state: "open",
   closed_reason: null,
+  service_snoozed_until: null,
+  service_muted_until: null,
   muted: false,
   started_at: "2026-09-13T15:04:00Z",
   closed_at: null,
@@ -210,6 +212,15 @@ describe("the feed leads when there is anything in it", () => {
 
     expect(text).toContain("Checkout is 4× slower than normal since 15:04");
     expect(text).not.toContain("synthetic checks are passing");
+  });
+
+  it("says when the finding's service is snoozed or muted, after a reload too", async () => {
+    const until = new Date(Date.now() + 30 * 60_000).toISOString();
+    const snoozed = await readable({ findings: [{ ...FINDING, service_snoozed_until: until }] });
+    const muted = await readable({ findings: [{ ...FINDING, service_muted_until: until }] });
+
+    expect(snoozed).toContain("Snoozed");
+    expect(muted).toContain("Muted");
   });
 
   it("reads as a sentence with the service beneath it", async () => {

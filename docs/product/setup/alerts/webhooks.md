@@ -61,9 +61,9 @@ timestamp more than five minutes from your clock to refuse a replayed request.
       "resolved_at": null
     },
     "rule": { "name": "Critical problems" },
-    "summary": "[critical] checkout is 4× slower than normal since 14:02 UTC",
+    "summary": "[critical] checkout has been up to 4× slower than normal since 14:02 UTC",
     "details": [
-      "checkout is 4× slower than normal since 14:02 UTC.",
+      "checkout has been up to 4× slower than normal since 14:02 UTC.",
       "Slower: 1,200 ms at worst, against 300 ms normally (Fridays around 14:00, last 3 weeks).",
       "Started: 2026-09-19 14:02 UTC.",
       "Rule: Critical problems."

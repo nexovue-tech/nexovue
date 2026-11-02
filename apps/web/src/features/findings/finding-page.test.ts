@@ -5,6 +5,7 @@ import { bandStretches } from "@/shared/components/chart-band";
 import type { FindingSignal, SignalSeries } from "./api";
 import {
   bandSentence,
+  describeSignal,
   evidenceSentence,
   ownEndpoint,
   PLOT_LINES,
@@ -154,5 +155,24 @@ describe("ownEndpoint", () => {
 
   it("keeps an entry stored before keys were kept as it was", () => {
     expect(ownEndpoint({ ...base, key: null, endpoint: "GET /x" })).toBe("GET /x");
+  });
+});
+
+describe("a traffic reading says what it counts", () => {
+  const entry = {
+    signal: "traffic",
+    unit: "rpm",
+    worst: 4,
+    normal: 24,
+    current: 7.2,
+    band_low: 12,
+    band_high: 24,
+  } as unknown as FindingSignal;
+
+  it("names requests a minute once in each sentence", () => {
+    expect(describeSignal(entry)).toBe(
+      "4.0 requests a minute at worst, against 24 normally. Now 7.2.",
+    );
+    expect(bandSentence(entry)).toBe("Normal band 12 to 24 requests a minute.");
   });
 });

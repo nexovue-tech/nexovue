@@ -248,6 +248,8 @@ def test_a_row_maps_to_the_contract_the_web_client_reads() -> None:
         "id",
         "project_id",
         "scope",
+        "service_snoozed_until",
+        "service_muted_until",
         "service_name",
         "title",
         "severity",

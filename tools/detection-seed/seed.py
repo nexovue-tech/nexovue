@@ -21,7 +21,7 @@ import math
 import random
 import sys
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Final
@@ -86,6 +86,14 @@ SELECT DISTINCT service_name FROM service_stats_1m
 WHERE tenant_id = {tenant:String} AND project_id = {project:String}
   AND minute >= now() - toIntervalDay(7)
 ORDER BY service_name
+"""
+# Each service's requests a minute over the last hour, for the history to match.
+_LIVE_RATES: Final = """
+SELECT service_name, sum(request_count) / greatest(uniqExact(minute), 1)
+FROM service_stats_1m
+WHERE tenant_id = {tenant:String} AND project_id = {project:String}
+  AND minute >= now() - toIntervalHour(1)
+GROUP BY service_name
 """
 _EARLIEST: Final = """
 SELECT min(minute), count() FROM service_stats_1m
@@ -201,6 +209,12 @@ def _lognormal_cdf(x: float, mu: float, sigma: float) -> float:
     return 0.5 * math.erfc(-(math.log(x) - mu) / (sigma * math.sqrt(2)))
 
 
+def live_peaks(rates: Mapping[str, float], now: datetime, zone: tzinfo) -> dict[str, float]:
+    """The peak that puts each service's history at its live rate at this time of day."""
+    load = load_factor(now.astimezone(zone))
+    return {service: rate / load for service, rate in rates.items()}
+
+
 def generate(
     services: Sequence[str],
     start: datetime,
@@ -208,19 +222,21 @@ def generate(
     zone: tzinfo,
     peak_rpm: float,
     seed: int,
+    peaks: Mapping[str, float] | None = None,
 ) -> Iterator[Row]:
     """Every service's rows for each minute from start to end inclusive; quiet minutes are skipped,
-    as the worker writes nothing for a minute with no requests."""
+    as the worker writes nothing for a minute with no requests. A service in `peaks` peaks at that
+    rate, so its history matches what it really sends; any other at a random share of `peak_rpm`."""
     for service in services:
         rng = random.Random(f"{seed}:{service}")
         character = profile(rng)
+        known = peaks.get(service) if peaks else None
+        service_peak = peak_rpm * character.scale if known is None else known
         at = start
         while at <= end:
             load = load_factor(at.astimezone(zone))
             # Over-dispersed, as real traffic is: the rate itself wanders a little each minute.
-            requests = poisson(
-                rng, peak_rpm * character.scale * load * rng.lognormvariate(0.0, 0.1)
-            )
+            requests = poisson(rng, service_peak * load * rng.lognormvariate(0.0, 0.1))
             if requests:
                 errors = min(requests, poisson(rng, requests * character.failure_rate))
                 # Busier minutes run slightly slower, plus a small minute-to-minute wobble.
@@ -344,7 +360,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     batch: list[str] = []
     written = 0
-    rows = generate(services, start, end, ZoneInfo(project.timezone), args.rpm, args.seed)
+    zone = ZoneInfo(project.timezone)
+    rates = client.query(_LIVE_RATES, parameters=ids).result_rows
+    peaks = live_peaks({str(name): float(rate) for name, rate in rates}, datetime.now(UTC), zone)
+    rows = generate(services, start, end, zone, args.rpm, args.seed, peaks)
     for row in rows:
         batch.append(json.dumps(_json_row(project, row), separators=(",", ":")))
         if len(batch) == BATCH_ROWS:

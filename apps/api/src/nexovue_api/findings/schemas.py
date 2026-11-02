@@ -70,6 +70,9 @@ class Finding(BaseModel):
     state: FindingState
     closed_reason: ClosedReason | None
     muted: bool
+    # The service's snooze and mute as they stand now, not when the finding opened.
+    service_snoozed_until: datetime | None
+    service_muted_until: datetime | None
     started_at: datetime
     closed_at: datetime | None
     acknowledged_at: datetime | None

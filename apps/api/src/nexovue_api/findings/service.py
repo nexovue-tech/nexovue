@@ -127,8 +127,12 @@ async def list_findings(
     truncated = len(rows) > queries.FEED_PAGE
     rows = rows[: queries.FEED_PAGE]
     trends = await _open_trends(repository, project_id=project_id, rows=rows, now=now)
+    quiet = await queries.quiet_services(session, org_id=org_id, project_id=project_id, now=now)
     return FindingListResponse(
-        findings=[to_finding(row, trend=trends.get(row.id, [])) for row in rows],
+        findings=[
+            to_finding(row, trend=trends.get(row.id, []), quiet=quiet.get(row.service_name or ""))
+            for row in rows
+        ],
         muted_count=await queries.muted_count(
             session, org_id=org_id, project_id=project_id, state=stored_state
         ),
@@ -319,6 +323,9 @@ async def _detail(
 ) -> tuple[FindingDetail, list[dict[str, Any]]]:
     """The page, and the readings it was drawn from, newest first."""
     signals = parse_signals(row.signals)
+    quiet = (
+        await queries.quiet_services(session, org_id=row.org_id, project_id=row.project_id, now=now)
+    ).get(row.service_name or "")
     readings: list[dict[str, Any]] = []
     if row.service_name is not None and signals:
         until = row.closed_at or now
@@ -335,7 +342,7 @@ async def _detail(
     )
     incidents = await queries.linked_incidents(session, org_id=row.org_id, finding_id=row.id)
     detail = FindingDetail(
-        **to_finding(row, trend=trend, signals=signals).model_dump(),
+        **to_finding(row, trend=trend, signals=signals, quiet=quiet).model_dump(),
         series=[
             SignalSeries(
                 signal=signal,
@@ -553,9 +560,15 @@ def false_finding_rate(*, false_alarms: int, services: int, days: int) -> float 
 
 
 def to_finding(
-    row: FindingRow, *, trend: list[float], signals: list[FindingSignal] | None = None
+    row: FindingRow,
+    *,
+    trend: list[float],
+    signals: list[FindingSignal] | None = None,
+    quiet: queries.ServiceQuiet | None = None,
 ) -> Finding:
     return Finding(
+        service_snoozed_until=None if quiet is None else quiet.snoozed_until,
+        service_muted_until=None if quiet is None else quiet.muted_until,
         id=row.id,
         project_id=row.project_id,
         scope=row.scope,

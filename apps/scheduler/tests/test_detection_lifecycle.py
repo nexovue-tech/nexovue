@@ -479,8 +479,8 @@ def test_the_worst_signal_leads_the_title_and_the_others_follow() -> None:
     finding.started_at = datetime(2026, 11, 4, 8, 40, tzinfo=UTC)
 
     assert title("Checkout", finding, KOLKATA) == (
-        "Checkout is failing 3.2% of requests, against 0.4% normally, since 14:10 IST, "
-        "and is slower"
+        "Checkout has failed up to 3.2% of requests, against 0.4% normally, since 14:10 IST, "
+        "and has also been slower"
     )
 
 
@@ -490,6 +490,19 @@ def test_the_worst_signal_leads_the_title_and_the_others_follow() -> None:
 )
 def test_a_rate_is_written_as_a_rate(value: float, written: str) -> None:
     assert percent(value) == written
+
+
+def test_a_slowdown_and_a_traffic_fall_name_their_worst_without_claiming_it_is_now() -> None:
+    """The value is the worst so far and the title outlives the problem, so it must not
+    say the service *is* at that value while the page says "Now" something else."""
+    slow = Run()
+    slow.feed([_at(ONSET, slower=_slower("unusual"))])
+    fell = Run()
+    fell.feed([_at(ONSET, traffic=_traffic("unusual", requests=17))])
+    assert slow.finding is not None and fell.finding is not None
+
+    assert " has been up to " in title("checkout", slow.finding, UTC_ZONE)
+    assert title("email", fell.finding, UTC_ZONE).startswith("email has dropped to ")
 
 
 def test_a_stop_and_an_endpoint_read_plainly() -> None:
@@ -504,7 +517,7 @@ def test_a_stop_and_an_endpoint_read_plainly() -> None:
         "frontend stopped receiving requests at 13:56 UTC"
     )
     assert title("checkout", endpoint.finding, UTC_ZONE) == (
-        "checkout is failing 100% of POST /pay requests, against 1% normally, since 13:56 UTC"
+        "checkout has failed up to 100% of POST /pay requests, against 1% normally, since 13:56 UTC"
     )
 
 

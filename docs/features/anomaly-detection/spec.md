@@ -306,8 +306,9 @@ statistical parameters behind FR9 are the design's.
   - feedback.
 - **FR17**: The title follows F1's AC1.3: subject, then what changed, then magnitude, then since when. It
   uses no metric names, IDs or the term p95. A failure rate is given as two rates, never a multiple. With
-  several signals, the worst one leads: "Checkout is failing 3.2% of requests, against 0.4% normally, since
-  14:10 IST, and is slower."
+  several signals, the worst one leads: "Checkout has failed up to 3.2% of requests, against 0.4% normally,
+  since 14:10 IST, and has also been slower." The value is the worst so far, and the title outlives the
+  problem, so it never says the service *is* at that value.
 
 ### The user's controls
 

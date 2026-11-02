@@ -109,7 +109,7 @@ function FindingPage({
       <Header finding={finding} zone={zone} />
       <Controls finding={finding} zone={zone} onReload={onReload} />
       <Signals finding={finding} />
-      <Readings finding={finding} />
+      <Readings finding={finding} zone={zone} />
       {finding.scope === "project" ? <Services finding={finding} /> : null}
       <Incidents finding={finding} zone={zone} />
       <Feedback finding={finding} />
@@ -244,6 +244,16 @@ function Controls({
     );
   };
 
+  const endQuiet = (kind: Quieting) => {
+    if (finding.service_name === null) return;
+    const service = finding.service_name;
+    setDone("");
+    quiet.mutate(
+      { kind, minutes: null },
+      { onSuccess: (controls) => setDone(quietDone(kind, service, controls, zone)) },
+    );
+  };
+
   const quieten = (kind: Quieting) => {
     const choice = QUIET_CHOICES[kind].find((each) => each.id === quietChoice[kind]);
     if (choice === undefined || finding.service_name === null) return;
@@ -290,17 +300,40 @@ function Controls({
             This is the new normal
           </Button>
         ) : null}
-        {allowed.snooze ? (
+        {allowed.snooze && finding.service_snoozed_until === null ? (
           <Button variant="secondary" onClick={() => setArmed("snooze")}>
             Snooze this service
           </Button>
         ) : null}
-        {allowed.mute ? (
+        {allowed.mute && finding.service_muted_until === null ? (
           <Button variant="secondary" onClick={() => setArmed("mute")}>
             Mute this service
           </Button>
         ) : null}
       </div>
+
+      {finding.service_snoozed_until !== null ? (
+        <p className={PROSE}>
+          {finding.service_name} is snoozed until{" "}
+          {formatZonedTime(finding.service_snoozed_until, { zone })}.{" "}
+          {allowed.snooze ? (
+            <Button variant="secondary" onClick={() => endQuiet("snooze")}>
+              End snooze
+            </Button>
+          ) : null}
+        </p>
+      ) : null}
+      {finding.service_muted_until !== null ? (
+        <p className={PROSE}>
+          {finding.service_name} is muted until{" "}
+          {formatZonedTime(finding.service_muted_until, { zone })}.{" "}
+          {allowed.mute ? (
+            <Button variant="secondary" onClick={() => endQuiet("mute")}>
+              Unmute
+            </Button>
+          ) : null}
+        </p>
+      ) : null}
 
       {armed === "false-alarm" ? (
         <Confirm
@@ -461,7 +494,7 @@ function Evidence({ entry }: { entry: FindingSignal }) {
  * the normal and the minimum change the sensitivity asks for: a reading past its edge
  * can be unusual, one inside it cannot.
  */
-function Readings({ finding }: { finding: FindingDetail }) {
+function Readings({ finding, zone }: { finding: FindingDetail; zone?: string }) {
   if (finding.scope === "project") return null;
   return (
     <section aria-labelledby="finding-readings" className="flex flex-col gap-3">
@@ -475,7 +508,9 @@ function Readings({ finding }: { finding: FindingDetail }) {
           for this finding. The values above were stored with it.
         </p>
       ) : (
-        finding.series.map((series) => <SignalChart key={series.signal} series={series} />)
+        finding.series.map((series) => (
+          <SignalChart key={series.signal} series={series} zone={zone} />
+        ))
       )}
     </section>
   );
@@ -485,7 +520,7 @@ function Readings({ finding }: { finding: FindingDetail }) {
 const DOTS_BELOW = 30;
 
 /** One signal's readings, its normal, and the band between the normal and its edge. */
-function SignalChart({ series }: { series: SignalSeries }) {
+function SignalChart({ series, zone }: { series: SignalSeries; zone?: string }) {
   // Built once per series, so a re-render of the page does not hand the chart new rows.
   const plot = useMemo(() => signalPlot(series), [series]);
   const formatValue = useMemo(
@@ -505,6 +540,7 @@ function SignalChart({ series }: { series: SignalSeries }) {
         formatValue={formatValue}
         description={`${SIGNAL_NAMES[series.signal]}: each judged minute against its normal band, shaded from the normal to its edge, ${series.points.length} minutes.`}
         showPoints={series.points.length < DOTS_BELOW}
+        zone={zone}
       />
     </figure>
   );

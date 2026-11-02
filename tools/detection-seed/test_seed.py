@@ -14,6 +14,7 @@ from seed import (
     Row,
     generate,
     latency_bucket,
+    live_peaks,
     main,
     require_local,
     spread,
@@ -95,6 +96,24 @@ def test_a_large_minute_spreads_around_its_median() -> None:
     assert sum(buckets) == 10_000
     assert max(range(LATENCY_BUCKET_COUNT), key=lambda i: buckets[i]) == latency_bucket(50.0)
     assert sum(1 for count in buckets if count) > 5
+
+
+def test_the_history_sits_at_each_service_s_live_rate() -> None:
+    """A random rate read as a traffic fall on the demo: checkout really sends 4 a minute and
+    its seeded normal said 21, so every comparison opened a false finding."""
+    now = datetime(2026, 11, 2, 15, 0, tzinfo=UTC)
+    peaks = live_peaks({"checkout": 4.0, "frontend": 400.0}, now, UTC)
+    start = now - timedelta(days=7, minutes=30)
+    rows = list(
+        generate(["checkout", "frontend"], start, start + timedelta(hours=1), UTC, 120.0, 6, peaks)
+    )
+
+    def rate(service: str) -> float:
+        counts = [row.request_count for row in rows if row.service_name == service]
+        return sum(counts) / 60
+
+    assert rate("checkout") == pytest.approx(4.0, rel=0.25)
+    assert rate("frontend") == pytest.approx(400.0, rel=0.1)
 
 
 def test_the_history_ends_before_the_live_minutes() -> None:

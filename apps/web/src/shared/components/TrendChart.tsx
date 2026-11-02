@@ -113,6 +113,8 @@ export interface TrendChartProps {
    * a gap on both sides has no neighbour to draw a line to, and is otherwise invisible.
    */
   showPoints?: boolean;
+  /** The IANA zone the time axis reads in, when the sentences around it name one; else the browser's. */
+  zone?: string;
 }
 
 /**
@@ -136,6 +138,7 @@ function TrendCanvas({
   description,
   onSelectRange,
   showPoints = false,
+  zone,
 }: TrendChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
@@ -174,6 +177,7 @@ function TrendCanvas({
         () => latest.current.band,
         selectable ? (from, to) => latest.current.onSelectRange?.(from, to) : undefined,
         showPoints,
+        zone,
       ),
       latest.current.data,
       host,
@@ -190,7 +194,7 @@ function TrendCanvas({
       chart.destroy();
       chartRef.current = null;
     };
-  }, [selectable, showPoints]);
+  }, [selectable, showPoints, zone]);
 
   useEffect(() => {
     chartRef.current?.setData(data);
@@ -348,9 +352,11 @@ function chartOptions(
   band: () => ChartBand | undefined,
   onSelectRange?: (fromSeconds: number, toSeconds: number) => void,
   showPoints = false,
+  zone?: string,
 ): uPlot.Options {
   return {
     width,
+    ...(zone ? { tzDate: (seconds: number) => uPlot.tzDate(new Date(seconds * 1000), zone) } : {}),
     hooks: {
       // Drawn under the series, not over it: a deploy is context for the line,
       // and a rule painted on top of the reading obscures the thing it explains.

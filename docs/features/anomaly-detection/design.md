@@ -315,7 +315,8 @@ Recorded as each plan step lands. It says where the built code differs from the 
   - **The final review** (four reviewers: tenancy and security, durability and migrations, the console,
     and spec coverage) found nothing high. Fixes:
     - *Data delayed* reads the sweep's own record: the pipeline is behind when its settled minute trails
-      what the sweep's clock could have settled by 2 minutes, and a service when its judged minute trails
+      what the sweep's clock could have settled by 3 minutes (2 at this review; a healthy sweep reads
+      2 short, `docs/changes/detection-false-delayed/bug.md`), and a service when its judged minute trails
       the settled minute by 3. The old 6-minute rule marked a healthy project delayed whenever a job ran
       past a minute, which AC29 allows.
     - Snooze and mute take a length; the server sets the end. A member's snoozes of one service total at
@@ -777,11 +778,11 @@ Other details:
 - **Rendering.** The finding's message uses `one_line` and each channel's escaping, from
   [nexovue-tech/nexovue#20](https://github.com/nexovue-tech/nexovue/pull/20), which is already merged.
 - **Titles (FR17).** Each signal has its own template, with the project's zone named:
-  - "Checkout is 4× slower than normal since 15:04 IST";
-  - "Checkout is failing 3.2% of requests, against 0.4% normally, since 15:04 IST". A failure rate is given
+  - "Checkout has been up to 4× slower than normal since 15:04 IST";
+  - "Checkout has failed up to 3.2% of requests, against 0.4% normally, since 15:04 IST". A failure rate is given
     as two rates, because "8× more" from a 0.1% normal informs nobody;
-  - "Checkout's traffic is 30% of normal since 15:04 IST";
-  - "Checkout's POST /pay is failing 41% of requests…", when only an endpoint fails;
+  - "Checkout has dropped to 30% of its normal traffic since 15:04 IST";
+  - "Checkout has failed up to 41% of POST /pay requests…", when only an endpoint fails;
   - the project finding's title, given under FR15.
 
   The title is rewritten in place as the finding's worst value grows.
