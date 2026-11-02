@@ -80,7 +80,10 @@ at all, and nothing reaches `main` until the end.
    `scheduler-light` floor (`uncapped_floor`): whichever of F3's T1.7 or F19's T1.5 comes first.
 6. **A step is done** when `just check` passes, the step's own checks pass, `/review-diff` has run, the plan's
    tasks are ticked, and `status.md` and this table are updated in the same commit.
-7. **If the code disagrees with the plan,** the session stops and writes the question under *Open decisions* in
+7. **Nobody waits for CI.** A session tests on its own machine, pushes and finishes; CI runs on the draft pull
+   request in the background. **Before starting a step, a session reads the latest CI result on the draft pull
+   request. If it is red, it fixes that first,** in its own commit, then builds its step.
+8. **If the code disagrees with the plan,** the session stops and writes the question under *Open decisions* in
    that feature's `status.md`. It does not redesign.
 
 ### Lanes
