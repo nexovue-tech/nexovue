@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -45,7 +46,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if cfg.Disabled {
+	plantedText, planted, err := logBodyArgument(os.Args[1:])
+	if err != nil {
+		return err
+	}
+	// A planted line is a person's explicit ask (F4 T1.0), not a gate run, so
+	// it is not silenced by the gate's skip switch.
+	if cfg.Disabled && !planted {
 		fmt.Println("gateseed: NEXOVUE_SKIP_LIVE_TESTS is set — seeding nothing.")
 		return nil
 	}
@@ -54,6 +61,9 @@ func run() error {
 	defer stop()
 
 	client := &http.Client{Timeout: cfg.RequestTimeout}
+	if planted {
+		return plantLogLine(ctx, client, cfg, plantedText)
+	}
 	at := time.Now().UTC()
 
 	gateCheck, err := EnsureGateCheck(ctx, cfg)
@@ -171,4 +181,51 @@ func arrivals(cfg Config, gateCheck string) []Arrival {
 			),
 		},
 	}
+}
+
+// logBodyArgument reads the one option this tool takes: `--log-body "text"`,
+// in either spelling. Anything else on the command line is a mistake worth
+// stopping on — seeding something other than what was asked for is worse than
+// refusing.
+func logBodyArgument(args []string) (text string, planted bool, err error) {
+	const flag = "--log-body"
+	switch {
+	case len(args) == 0:
+		return "", false, nil
+	case len(args) == 1 && strings.HasPrefix(args[0], flag+"=") && args[0] != flag+"=":
+		return strings.TrimPrefix(args[0], flag+"="), true, nil
+	case len(args) == 2 && args[0] == flag && args[1] != "":
+		return args[1], true, nil
+	}
+	return "", false, fmt.Errorf(`usage: gateseed [--log-body "one chosen log line"]`)
+}
+
+// plantLogLine sends one chosen log record through the receiver with the dev
+// key and waits until it is readable, so the demonstration that follows —
+// asking a connected assistant about it — never reads an empty window.
+func plantLogLine(ctx context.Context, client *http.Client, cfg Config, text string) error {
+	expected, err := Baselines(ctx, client, cfg, []Arrival{{
+		What:   "the planted log line",
+		Expect: 1,
+		// Counted by service rather than by body text: the text is anybody's
+		// chosen string, and splicing it into SQL is the mistake this avoids.
+		Statement: fmt.Sprintf(
+			"SELECT count() FROM logs WHERE service_name = '%s'", cfg.ServiceName,
+		),
+	}})
+	if err != nil {
+		return err
+	}
+	if err := export(ctx, client, cfg, logsPath, LogBody(cfg, text, time.Now().UTC())); err != nil {
+		return err
+	}
+	started := time.Now()
+	if err := WaitFor(ctx, client, cfg, expected); err != nil {
+		return err
+	}
+	fmt.Printf(
+		"gateseed: one log line for service %q readable after %s. Ask the assistant about the last hour.\n",
+		cfg.ServiceName, time.Since(started).Round(time.Millisecond),
+	)
+	return nil
 }

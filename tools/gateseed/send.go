@@ -16,6 +16,7 @@ const (
 	ingestKeyHeader = "x-nexovue-key"
 	tracesPath      = "/v1/traces"
 	metricsPath     = "/v1/metrics"
+	logsPath        = "/v1/logs"
 	// The receiver reads OTLP/JSON on its server doors, so nothing here needs a
 	// protobuf toolchain or an SDK — which keeps the seeder small enough to read
 	// in one sitting and to be obviously sending what it says it sends.

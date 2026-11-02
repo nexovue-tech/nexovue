@@ -19,7 +19,7 @@ server; see foundation, *What A and B change*).
 | 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | No | No | After deploy |
-| 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | Step 1 built on `wt/f4`, awaiting review and commit (2026-11-02); Steps 2+ blocked on F3 and the buyer round | No | After deploy |
 | 5 Fix | [F5 AI solution](../features/ai-solution/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 6 Around | [F20 Dashboards](../features/dashboards/status.md) | Done | Yes | Yes | Step 1 built on `wt/f20`, awaiting review and commit (2026-11-02); Steps 2+ not started | No | After deploy |

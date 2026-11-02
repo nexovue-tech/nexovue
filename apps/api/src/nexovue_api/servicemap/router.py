@@ -1,9 +1,14 @@
 """Reading the service map.
 
 `project_id` arrives as a query parameter, which makes it a value the caller
-chose. It is proved to belong to the caller's organization before it reaches a
-telemetry query — `require_project` is that proof, and the repository the query
-runs through is bound to the session's tenant, never to anything in the URL.
+chose. It is proved to belong to the caller's organization — and to a token's
+scope — before it reaches a telemetry query: `require_readable_project` is that
+proof, and the repository the query runs through is bound to the caller's
+tenant, never to anything in the URL.
+
+On the read surface since F4's Step 1 (FR36, D21): the map was already served
+in process to the MCP server's callers, so a token reaching it over HTTP is the
+same promise said openly, in `THE_SURFACE` and the customer documentation.
 """
 
 from __future__ import annotations
@@ -14,9 +19,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_readable_project
 from nexovue_api.servicemap import service
 from nexovue_api.servicemap.schemas import ServiceMapResponse
 from nexovue_api.window import clamp_limit, resolve_window
@@ -26,7 +31,7 @@ router = APIRouter(prefix="/service-map", tags=["service-map"])
 
 @router.get("", summary="Service dependencies in a time window, busiest first")
 async def get_service_map(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: Annotated[uuid.UUID, Query(description="Project to read dependencies from")],
@@ -41,7 +46,7 @@ async def get_service_map(
         bool, Query(description="Only edges that failed at least once")
     ] = False,
 ) -> ServiceMapResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.get_service_map(
         repository,

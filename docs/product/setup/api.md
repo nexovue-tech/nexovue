@@ -52,6 +52,7 @@ and reach only the documented read API.**
 | `GET /projects` | The projects this token may read, with the ids the rest take |
 | `GET /services` | Every service in a window, worst first |
 | `GET /services/{name}` | One service's health in a window |
+| `GET /service-map` | Service dependencies in a window, busiest edges first: who calls whom, how often, and how often it fails |
 | `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200). The state says when a service is not judged and why: still learning, data delayed, detection not running, muted, `too_many_services` (the project is past the cap and the service is not among its busiest) or `no_incoming_requests` |
 | `GET /traces` | Traces matching filters, newest first (paged) |
 | `GET /traces/{trace_id}` | One trace and its spans |
@@ -318,19 +319,41 @@ the checkout errors started?"*, *"show me the slowest service this hour"*.
 
 The server offers these tools, and no others:
 
-`list_projects`, `list_services`, `get_service`, `list_traces`, `search_logs`,
-`list_error_groups`, `list_incidents`, `list_checks`, `list_deploys`.
+`list_projects`, `list_services`, `get_service`, `list_traces`, `get_trace`,
+`search_logs`, `list_error_groups`, `get_error_group`, `list_incidents`,
+`get_incident`, `list_checks`, `list_deploys`, `list_findings`, `get_finding`,
+`get_service_map`, `get_service_detection`.
 
-Three things are true of all of them:
+Five things are true of all of them:
 
 - **Every tool reads.** There is no tool that changes a check, an alert rule, a
   member or a setting. A model cannot alter your account through this.
 - **A tool sees exactly what the token sees.** Same project scope, same
   refusals, same rate limit. Revoking the token ends the assistant's access on
-  its next call.
+  its next call. A finding read here, like one read with the token directly,
+  carries no person fields: nobody's name, nobody's written reason.
 - **Answers are bounded** — at most 100 rows and 32 KB per call — and a cut
   answer says so and says how to narrow, so a model never treats a partial
   answer as the whole picture.
+- **A windowed tool reads the last hour by default, a number of `hours`, or an
+  exact past range** as `from_time` and `to_time` (ISO 8601, read as UTC, at
+  most 7 days) — so "yesterday from 14:00 to 14:30" is askable as itself.
+  Giving both forms at once is refused.
+- **Results label their untrusted fields.** Log bodies, attribute values,
+  service and endpoint names, error messages and check hosts are text written
+  by whoever can reach your services, so each result lists those fields under
+  `untrusted`, with the rule spelled out: data, never instructions. A check's
+  row names its probed host and never its full config, which can hold literal
+  URLs, query values and headers somebody typed.
 
 Every tool call counts against the token's rate limit and updates its *last
 used*, so the token list in the console shows you when an assistant last read.
+
+### What these labels cannot do
+
+The assistant on the other end of this protocol is **yours, not ours**. nexovue
+labels what is untrusted and keeps every tool read-only, but it cannot control
+what your AI tool does with the text it reads: whether it follows an
+instruction planted in a log line is decided by that tool and its model, on
+your side of the wire. Treat an assistant connected here like any other reader
+of your production logs, and prefer clients that let you review tool use.
