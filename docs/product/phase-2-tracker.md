@@ -14,7 +14,7 @@ server; see foundation, *What A and B change*).
 
 | Stage | Feature | Docs | Spec approved | Plan approved | Built | Merged | Measured |
 |---|---|---|---|---|---|---|---|
-| 1 Detect | [F6 Anomaly detection](../features/anomaly-detection/status.md) | Done | Yes | Yes | Yes | PR #23 open | After deploy |
+| 1 Detect | [F6 Anomaly detection](../features/anomaly-detection/status.md) | Done | Yes | Yes | Yes | PR #24 open | After deploy |
 | — | Browser-door change (owned by F28) | In F28's docs | — | — | — | — | — |
 | 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | No | No | No | No | After deploy |
 | 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | No | No | No | No | After deploy |
