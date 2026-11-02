@@ -58,14 +58,16 @@
 >
 > *Phase* is when the remaining work is planned, not when the built part shipped. Everything marked
 > Phase 0 is done; §5 lists it.
+>
+> `📝` in *Specified* means a specification is written and **Proposed**: the founder has not approved it, and what it describes is not built. Phase 2's seven are marked so on 2026-11-02.
 
 | # | Feature | Built | Specified | Phase | Where it stands |
 |---|---|---|---|---|---|
 | **F1** | Findings feed | 🟡 Partly | ✅ | 2 | Screen, ordering and actions built and tested; **no engine produces a finding**, so it shows the healthy state |
 | **F2** | Finding detail | 🔴 No | 🔲 | 2 | Needs the engine first |
-| **F3** | AI insights | 🔴 No | 🔲 | 2 | The differentiator; nothing built |
-| **F4** | AI chatbot (RAG) | 🔴 No | 🔲 | 2 | Compose reserves an `insight` service and Ollama; the package does not exist |
-| **F5** | AI solution | 🔴 No | 🔲 | 2 | The chain's last link: after F3 earns trust |
+| **F3** | AI insights | 🔴 No | 📝 | 2 | [Specified](../features/ai-insights/spec.md), not built. Now "Finding explanation": facts from code, AI wording optional |
+| **F4** | AI chatbot (RAG) | 🔴 No | 📝 | 2 | [Specified](../features/ai-chatbot/spec.md), not built. Compose reserves an `insight` service and Ollama; the package does not exist |
+| **F5** | AI solution | 🔴 No | 📝 | 2 | [Specified](../features/ai-solution/spec.md), not built. The chain's last link: after F3 earns trust |
 | **F6** | Anomaly detection | 🔴 No | 🔲 | 2 | Feeds F1 and F21; worth little before alerts exist |
 | **F7** | Owner status page | 🔴 No | 🔲 | Later | The P3 persona has no surface yet |
 | **F8** | Service overview | ✅ Yes | 🔲 | 0 | Services list, ranking, trends, service detail |
@@ -79,16 +81,16 @@
 | **F16** | Session replay | 🔴 No | 🔲 | Later | Neither built nor scoped |
 | **F17** | Continuous profiling | ✅ Preview | ✅ | **1** | **Built 2026-09-19 as a preview** to the approved [spec](../features/profiling/spec.md) — see [status](../features/profiling/status.md); storage restated per busy core (D6) and met at ~73 MB a day. Before it: moved into Phase 1 Track 1, 2026-09-19, by founder decision. The OTel profiles signal entered public alpha in March 2026; its OTLP format is still *Development* (sent to `/v1development/profiles`) and will change, so the design must confine that format to the intake. Nothing collects profiles today |
 | **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Committed 2026-09-18 (`75b5424`) — see [status](../features/synthetic-checks/status.md) |
-| **F19** | SLO tracking | 🔴 No | 🔲 | 2 | After the chain ([plan](phase-2-plan.md)) |
-| **F20** | Dashboards | 🟡 Partly | 🔶 | 2 | The composed Overview is built and holds `/`; the **builder** is not. After the chain ([plan](phase-2-plan.md)) |
+| **F19** | SLO tracking | 🔴 No | 📝 | 2 | [Specified](../features/slo-tracking/spec.md), not built. After the chain ([plan](phase-2-plan.md)) |
+| **F20** | Dashboards | 🟡 Partly | 📝 | 2 | [Specified](../features/dashboards/spec.md), and what it specifies is not built. The composed Overview is built and holds `/`; the **builder** is not. After the chain ([plan](phase-2-plan.md)) |
 | **F21** | Alerts & notification connectors | ✅ Yes | ✅ | **1** | **Built 2026-09-19** to the approved [spec](../features/alerts/spec.md) — see [status](../features/alerts/status.md). Before it: The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
-| **F22** | Case management | 🔴 No | 🔲 | 2 | Depends on findings existing |
+| **F22** | Case management | 🔴 No | 📝 | 2 | [Specified](../features/case-management/spec.md), not built. Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | Later | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
 | **F25** | Usage & cost view | ✅ Yes | 🔶 | 0 | Usage, allowance, projected cost, billing, charge history. **A real specification exists since 2026-09-21** and awaits approval — 14 business rules, 15 acceptance criteria, six gaps marked. Writing it found a hole nothing was holding: the allowance rule is implemented in Python and in Go and neither checked the other ([AC25.15](../features/usage-billing/spec.md)) |
 | **F26** | RBAC / user management | ✅ Yes | ✅ | **1** | **Built 2026-09-19** as Stage 1 of [Team, API and admin access](../features/team-and-api-access/spec.md) (with F31 and F36): invite by email, accept, four roles on every route and screen, remove, transfer ownership, audit log screen — see [status](../features/team-and-api-access/status.md) |
 | **F27** | Data controls | 🟡 Partly | 🔲 | Later | Masking, plan retention, tenant purge and CSV export built; archival tiers and a GDPR surface are not |
-| **F28** | Deployment / release tracking | 🟡 Partly | 🔲 | 2 | Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
+| **F28** | Deployment / release tracking | 🟡 Partly | 📝 | 2 | [Specified](../features/deployment-release-tracking/spec.md), and what it specifies is not built. Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
 | **F29** | LLM / AI-app observability | ✅ Yes | ✅ | 1 | Built to its [spec](../features/llm-observability/spec.md); see [status](../features/llm-observability/status.md) |
 | **F30** | Public status page | 🔴 No | 🔲 | Later | |
 | **F31** | Admin console (internal) | ✅ Yes | ✅ | **1** | **Built 2026-09-20** as Stage 3 of [Team, API and admin access](../features/team-and-api-access/spec.md): one super-admin user seeded from the environment signs in on the ordinary sign-in page and opens the platform area with a 30-minute step-up ([ADR-018](../decisions/ADR-018-the-operator-is-a-user-in-the-console.md), which supersedes ADR-016's separate app the same day); onboard a paying customer after the website payment ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)); hosted signup closed by a switch; suspend and resume ingest; comp a plan until a date; read-only, audited *view as* inside the owner's grant — see [status](../features/team-and-api-access/status.md) |
@@ -249,13 +251,19 @@ Insight engine (findings generation, dedup/grouping) · anomaly detection · liv
 ### F2 — Finding Detail Page 🔲 TO SPECIFY
 One finding's full story: what was detected, evidence (charts, linked traces, correlated logs, deploy events), AI probable cause with confidence, AI suggested fix (F5), actions (create/view case, ask chatbot, resolve). *The evidence-visible, human-in-the-loop principle from the market analysis lives here.*
 
-### F3 — AI Insights 🔲 TO SPECIFY
+### F3 — AI Insights 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/ai-insights/spec.md), [design](../features/ai-insights/design.md), [plan](../features/ai-insights/plan.md). Where this older text differs, the spec is the proposal.
+
 The proactive finding-generation surface rules: cross-signal correlation presented in plain language; how insights differ from raw anomalies (an insight = anomaly + context + cause hypothesis).
 
-### F4 — AI Chatbot (RAG) 🔲 TO SPECIFY
+### F4 — AI Chatbot (RAG) 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/ai-chatbot/spec.md), [design](../features/ai-chatbot/design.md), [plan](../features/ai-chatbot/plan.md). Where this older text differs, the spec is the proposal.
+
 "Ask your system anything" panel available on every screen. Answers grounded in the user's telemetry (live tool-calling) + knowledge base (resolved findings, runbooks). Must cite/link the data it used.
 
-### F5 — AI Solution 🔲 TO SPECIFY
+### F5 — AI Solution 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/ai-solution/spec.md), [design](../features/ai-solution/design.md), [plan](../features/ai-solution/plan.md). Where this older text differs, the spec is the proposal.
+
 Suggested fix with explanation on finding detail; optional draft-PR flow via GitHub connector; human-in-the-loop gating (never auto-applies without explicit action).
 
 ### F6 — Anomaly Detection (user-facing surface) ✅ SPECIFIED
@@ -303,10 +311,14 @@ Specified, designed and built through the SDD workflow: [`spec.md`](../features/
 [`design.md`](../features/synthetic-checks/design.md), [`plan.md`](../features/synthetic-checks/plan.md). Browser
 checks, screenshots and customer scripts are out of scope by founder decision (spec D13, D16).
 
-### F19 — SLO Tracking 🔲 TO SPECIFY
+### F19 — SLO Tracking 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/slo-tracking/spec.md), [design](../features/slo-tracking/design.md), [plan](../features/slo-tracking/plan.md). Where this older text differs, the spec is the proposal.
+
 Define targets on services/endpoints; error-budget status; budget-burn alerts into findings feed.
 
-### F20 — Dashboards 🔶 PART SPECIFIED
+### F20 — Dashboards 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/dashboards/spec.md), [design](../features/dashboards/design.md), [plan](../features/dashboards/plan.md). Where this older text differs, the spec is the proposal.
+
 **Amended 2026-09-12: insights and dashboards are both first-class.** The earlier entry called this
 an "optional mode" and a builder that is "never the front door", which read as *a dashboard is
 something we tolerate*. It is not: a dashboard-shaped overview is reachable, complete, and composed
@@ -333,7 +345,9 @@ rate and p95, and a service going silent; one incident per breach, flap guard, b
 maintenance windows. **WhatsApp, SMS and a native Opsgenie connector are dropped** (D6): SMS and phone reach a
 person through PagerDuty, and Opsgenie ends support on 5 April 2027.
 
-### F22 — Case Management 🔲 TO SPECIFY
+### F22 — Case Management 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/case-management/spec.md), [design](../features/case-management/design.md), [plan](../features/case-management/plan.md). Where this older text differs, the spec is the proposal.
+
 Auto-created cases from findings; list/detail with lifecycle (open → investigating → resolved); GitHub Issues/Jira connectors (create + status sync); case timeline.
 
 > **Not a helpdesk.** A case here is an *incident* raised from a finding, never a customer support ticket. Customer support tooling is unplaced — see the commercial-model open questions in `vision.md` §7.
@@ -368,7 +382,9 @@ features are built while one-user-per-org is quietly true. *(Corrected 2026-09-1
 ### F27 — Data Controls 🔲 TO SPECIFY
 Retention settings per plan; PII masking rules configuration; data export/delete (GDPR surface); log archival tiers.
 
-### F28 — Deployment / Release Tracking 🔲 TO SPECIFY
+### F28 — Deployment / Release Tracking 📝 SPECIFIED, NOT BUILT
+**Proposed 2026-11-02, not approved, not built:** [spec](../features/deployment-release-tracking/spec.md), [design](../features/deployment-release-tracking/design.md), [plan](../features/deployment-release-tracking/plan.md). Where this older text differs, the spec is the proposal.
+
 Releases list with deploy markers on all charts; before/after comparison per release (latency, error rate); post-deploy regression surfaced as a finding; suspect-release linkage on errors. Powered by deploy events (GitHub/CI webhooks).
 
 ### F29 — LLM / AI-App Observability 🔲 TO SPECIFY
