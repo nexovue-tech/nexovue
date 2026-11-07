@@ -18,6 +18,9 @@ for 15 minutes of being expected to, or never has (D24, D34) — first, and
 whatever the pipeline says, since a sweep that cannot settle a minute is one of
 the ways detection stops.
 
+Then it queues F19's reliability target jobs for the same minute (`slos.job`);
+a failure there is logged and changes nothing above or below.
+
 Last, it records itself in `detection_sweep`: when it ran, and the newest minute
 it handed out. Beat reads that minute's age for *detection stalled* (plan T7.1),
 the operator's alarm for the case the owners' email cannot report: this sweep
@@ -57,6 +60,7 @@ from nexovue_scheduler.jobs.queue import enqueue_all
 from nexovue_scheduler.jobs.registry import SoftTimeLimit, task
 from nexovue_scheduler.process_engine import enqueue, with_engine
 from nexovue_scheduler.settings import get_settings
+from nexovue_scheduler.slos import job as slo_jobs
 
 logger = get_logger(__name__)
 
@@ -160,7 +164,25 @@ def _hand_out() -> datetime | None:
     logger.info(
         "detection project jobs queued", settled_minute=settled.isoformat(), projects=queued
     )
+    _queue_slo_jobs(settled)
     return settled
+
+
+def _queue_slo_jobs(settled: datetime) -> None:
+    """F19's work for the same settled minute, on the same clock and holds (design,
+    *Where it runs*). Its failure must not stop detection or the sweep's record (AC95)."""
+    try:
+        judged = with_engine(
+            lambda engine: slo_jobs.queue_jobs(engine, settled, now=datetime.now(UTC))
+        )
+    except (SoftTimeLimit, KeyboardInterrupt):
+        raise
+    except Exception:
+        logger.exception("could not queue reliability target jobs; trying next minute")
+        return
+    logger.info(
+        "reliability target jobs queued", settled_minute=settled.isoformat(), projects=judged
+    )
 
 
 def _report_stopped() -> None:

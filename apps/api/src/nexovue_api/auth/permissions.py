@@ -24,6 +24,9 @@ class Action(StrEnum):
     # reopen, link an issue.
     OPERATE_CASES = "operate_cases"
     UPLOAD_SOURCE_MAPS = "upload_source_maps"
+    # Reliability targets (F19, D20): create, change, disable, delete, restore.
+    # Every change is visible to all and a deletion can be undone for 30 days.
+    CONFIGURE_SLOS = "configure_slos"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
     MANAGE_CHECK_SECRETS = "manage_check_secrets"
@@ -59,6 +62,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.OPERATE_ALERTS: _EVERYONE_WHO_WORKS,
     Action.OPERATE_CASES: _EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: _EVERYONE_WHO_WORKS,
+    Action.CONFIGURE_SLOS: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,

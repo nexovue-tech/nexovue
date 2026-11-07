@@ -25,17 +25,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Final, Literal
 
-# --------------------------------------------------------------------- buckets
-
-# `service_stats_1m.latency_buckets`: 64 counts over boundaries log-spaced from
-# 1 ms to 60 s (apps/workers/internal/pipeline/derive/services.go). Edge i is
-# 60000^(i/64) ms; bucket i lies between edges i and i + 1, and a duration outside
-# the range folds into the end bucket on its side.
-BUCKET_COUNT: Final = 64
-_CEILING_MS: Final = 60_000.0
-LOG_EDGES: Final = tuple(
-    math.log(_CEILING_MS) * index / BUCKET_COUNT for index in range(BUCKET_COUNT + 1)
-)
+# `service_stats_1m.latency_buckets`' 64 counts and their log-spaced edges, shared with
+# reliability targets, so the worker's Go has one Python copy (F19, *Reading latency*).
+from nexovue_platform.slo import BUCKET_COUNT, LOG_EDGES
 
 # ------------------------------------------------------------------ parameters
 

@@ -88,6 +88,10 @@ describe("the sidebar", () => {
       "/alerts/incidents/$incidentId",
       // F6 (D12): reached from a finding's card, a service's timeline and its messages.
       "/findings/$findingId",
+      // F19: reached from the targets list, a target's page and its actions.
+      "/slos/new",
+      "/slos/$sloId",
+      "/slos/$sloId/edit",
       "/settings/channels/$channelId",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.
@@ -131,11 +135,12 @@ describe("the front door (F20 Step 1, FR1, FR2)", () => {
     expect(served.has("/findings")).toBe(false);
   });
 
-  it("offers Findings at /, Overview at /overview and Alerts in Home (AC2)", () => {
+  it("offers Findings at /, Overview at /overview, Alerts, then targets in Home (AC2, F19 D22)", () => {
     expect(NAV_SECTIONS[0].items).toEqual([
       { path: "/", title: "Findings" },
       { path: "/overview", title: "Overview" },
       { path: "/alerts", title: "Alerts" },
+      { path: "/slos", title: "Targets (SLOs)" },
     ]);
   });
 });

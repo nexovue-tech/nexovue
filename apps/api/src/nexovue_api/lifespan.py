@@ -13,12 +13,11 @@ import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
 import clickhouse_connect
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import FastAPI
-from mcp.server import MCPServer
 from nexovue_platform.email import EMAIL_VARIABLES, EmailSender, build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
 from nexovue_platform.tenant_statements import MAX_EXECUTION_SECONDS
@@ -131,10 +130,24 @@ class Resources:
     evaluations: EvaluationReader
 
 
+class _SessionManager(Protocol):
+    def run(self) -> AbstractAsyncContextManager[None]: ...
+
+
+class MountedAssistant(Protocol):
+    """What the lifespan needs of the MCP server mounted at `/api/mcp`: its session
+    manager, entered for the app's life. Typed here rather than imported, so every route,
+    which reaches this module through its authorization, does not import the MCP SDK,
+    and the no-AI walks from an API root need no exception (F19 D55, F20 D38)."""
+
+    @property
+    def session_manager(self) -> _SessionManager: ...
+
+
 def build_lifespan(
     settings: Settings,
     *,
-    assistant: MCPServer | None = None,
+    assistant: MountedAssistant | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """A lifespan that opens the pools, publishes them on the app, and closes them.
 

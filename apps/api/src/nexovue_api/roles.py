@@ -19,7 +19,12 @@ CONSOLE_FILES: Final = Path("/srv/web")
 ROLES: Final[dict[str, list[str]]] = {
     "api": ["uvicorn", "nexovue_api.main:app", "--host", "0.0.0.0", "--port", "8000"],
     "scheduler-beat": ["python", "-m", "nexovue_scheduler", "beat"],
-    "scheduler-light": ["python", "-m", "nexovue_scheduler", "worker", "--concurrency", "8"],
+    # Capped queues together hold at most 4 of the 8 slots, so probes and alert sweeps
+    # keep 4 whatever detection, evidence, releases and SLO work ask (F3 A56, F19 D66).
+    "scheduler-light": [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--concurrency", "8", "--uncapped-floor", "4"),
+    ],
     "scheduler-deliveries": [
         *("python", "-m", "nexovue_scheduler", "worker"),
         *("--queues", "deliveries", "--concurrency", "4"),

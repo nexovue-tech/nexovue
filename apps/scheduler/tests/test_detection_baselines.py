@@ -22,6 +22,7 @@ import pytest
 from detection_series import daily, series, span
 from detection_series import minute as series_minute
 from detection_series import window as series_window
+from nexovue_platform.slo import BUCKET_COUNT, LOG_EDGES
 
 from nexovue_scheduler.detection.baselines import (
     Baselines,
@@ -44,8 +45,6 @@ from nexovue_scheduler.detection.baselines import (
     traffic_json,
 )
 from nexovue_scheduler.detection.method import (
-    BUCKET_COUNT,
-    LOG_EDGES,
     SENSITIVITIES,
     Minute,
     Window,

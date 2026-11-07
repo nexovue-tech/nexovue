@@ -151,6 +151,30 @@ CROSS_TENANT_STATEMENTS: Final = (
         "what establishes the tenant: the project job is given a project id and reads its "
         "organization from the project's own row, never from the caller (design 2.1, m6)",
     ),
+    # Reliability targets (F19), handed out by the detection coordinator each minute.
+    _across(
+        "slos.job",
+        "_PROJECTS_TO_JUDGE",
+        "the SLO hand-out: every organization's projects holding a live target, longest-"
+        "waiting first, so each is handed its own judging (F19 design, 'Which projects get "
+        "a job', AC65)",
+    ),
+    _across(
+        "slos.job",
+        "_PROJECTS_TO_COUNT",
+        f"{_SWEEP}: the projects whose recent days are due a count (F19, by what is due)",
+    ),
+    _across(
+        "slos.job",
+        "_TARGETS_TO_READ",
+        f"{_SWEEP}: the targets whose history is behind their definition (F19 AC64)",
+    ),
+    _across(
+        "slos.job",
+        "_TARGET_PROJECT",
+        "what establishes the tenant: a history job is given a target id and reads its "
+        "project, and through it the organization, from the target's own row (F6's m6)",
+    ),
     # The job queue and its metrics.
     _across("jobs.queue", "_CLAIM", "a worker claims due jobs of every organization"),
     _across("jobs.queue", "_FINISH", "a claimed job, by its id and this worker's lease"),

@@ -16,6 +16,7 @@ from stretching. Passwords, typed by humans, use argon2.
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Final
 
 from nexovue_platform.alerts.model import (
@@ -57,6 +58,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -2503,4 +2505,195 @@ class Job(Base):
         ),
         Index("ix_jobs_queue_run_after", "queue", "run_after"),
         Index("ix_jobs_org_id", "org_id"),
+    )
+
+
+class SloTarget(Base):
+    """A reliability target (F19): one thing measured over one window (BR1).
+
+    Soft-deleted for 30 days, so a deletion can be undone and still shows on the
+    list (FR31). The name and description are free text a person typed: shown on
+    console pages only, never copied into an incident or a notification (FR33)."""
+
+    __tablename__ = "slo_targets"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    service_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    endpoint_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    check_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("checks.id", ondelete="SET NULL"), nullable=True
+    )
+    objective_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    window_days: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    boundary_index: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    asked_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    left_out_endpoints: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    upstream_sampling: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    definition_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # A change of what is counted raises the first; the history read catches the
+    # second up, and runs again if they still differ at its end (AC64).
+    definition_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    history_read_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    history_read_through: Mapped[date | None] = mapped_column(Date, nullable=True)
+    first_event_at: Mapped[OptionalTimestamp]
+    exhausted_warned_at: Mapped[OptionalTimestamp]
+    exhausted_armed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+    deleted_at: Mapped[OptionalTimestamp]
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_slo_targets_org_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_slo_targets_created_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "deleted_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (deleted_by)",
+            name="fk_slo_targets_deleted_by",
+        ),
+        Index(
+            "uq_slo_targets_live_name",
+            "org_id",
+            "project_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_slo_targets_live_definition",
+            "org_id",
+            "project_id",
+            "definition_key",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_slo_targets_org_id_project_id_created_at", "org_id", "project_id", "created_at"),
+    )
+
+
+class SloStatus(Base):
+    """Where a target stood at the last minute the job worked it out (F19, D26)."""
+
+    __tablename__ = "slo_status"
+
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    evaluated_minute: Mapped[RequiredTimestamp]
+    tiers: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    last_event_minute: Mapped[OptionalTimestamp]
+    burning_since: Mapped[OptionalTimestamp]
+    last_held_minute: Mapped[OptionalTimestamp]
+    unjudged_since: Mapped[OptionalTimestamp]
+    longest_quiet_7d: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "slo_id"],
+            ["slo_targets.org_id", "slo_targets.id"],
+            ondelete="CASCADE",
+            name="fk_slo_status_target",
+        ),
+        Index(
+            "ix_slo_status_org_id_project_id_evaluated_minute",
+            "org_id",
+            "project_id",
+            "evaluated_minute",
+        ),
+    )
+
+
+class SloDailyCount(Base):
+    """One target's local day (F19, D2): rewritten until 7 days old, then final."""
+
+    __tablename__ = "slo_daily_counts"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    good: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    failures: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quiet_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    lost_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    excluded_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    quiet_leading_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    quiet_trailing_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    longest_quiet_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    expected_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    missed_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maintenance_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    loss_known: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    definition_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    final: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    computed_at: Mapped[RequiredTimestamp]
+    changed_at: Mapped[OptionalTimestamp]
+    changed_why: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "slo_id"],
+            ["slo_targets.org_id", "slo_targets.id"],
+            ondelete="CASCADE",
+            name="fk_slo_daily_counts_target",
+        ),
+    )
+
+
+class SloTargetChange(Base):
+    """One change to a target, for its history (F19, FR30). Kept when the target is
+    purged, so a past report stays true (D46); it goes with the project."""
+
+    __tablename__ = "slo_target_changes"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    at: Mapped[CreatedAt]
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    what: Mapped[str] = mapped_column(Text, nullable=False)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "actor_user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (actor_user_id)",
+            name="fk_slo_target_changes_actor",
+        ),
+        Index("ix_slo_target_changes_org_id_slo_id_at", "org_id", "slo_id", "at"),
+        Index("ix_slo_target_changes_org_id_actor_user_id", "org_id", "actor_user_id"),
     )

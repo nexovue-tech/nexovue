@@ -1,0 +1,446 @@
+"""F19's arithmetic and states, without a store (plan T1.1).
+
+AC1's allowance, AC51's combinations, AC89's words by kind, AC110's order, AC111's
+exact and missed cases, and the bucket boundaries' parity with the worker's Go
+(AC3's parity half), read the way `tools/detection-seed/test_seed.py` reads them.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import math
+import re
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+from nexovue_platform import slo
+from nexovue_platform.slo import Burn, DayCounts, Facts, State
+
+SERVICES_GO = (
+    Path(__file__).resolve().parents[3] / "apps/workers/internal/pipeline/derive/services.go"
+)
+MIGRATION = next((Path(__file__).resolve().parents[1] / "migrations/versions").glob("0052_*.py"))
+NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
+KOLKATA = ZoneInfo("Asia/Kolkata")
+UTC_ZONE = ZoneInfo("UTC")
+
+
+def _facts(**changes: object) -> Facts:
+    """A fresh, enabled, healthy 28-day availability target: On track."""
+    base = Facts(
+        kind=slo.SERVICE_AVAILABILITY,
+        window_days=28,
+        enabled=True,
+        now=NOW,
+        evaluated_minute=NOW - timedelta(minutes=1),
+        expected_since=NOW - timedelta(days=30),
+        counting=False,
+        source_gone=False,
+        burn=None,
+        coverage=0.99,
+        last_event_minute=NOW - timedelta(minutes=1),
+        days_held=28,
+        allowed=1_000,
+        failures=400,
+        alerting=None,
+        snoozed=False,
+        longest_quiet_7d_minutes=0,
+        traffic_finding_open=False,
+        check_interval_seconds=None,
+    )
+    return base.replace(**changes)
+
+
+FAST = Burn(severity="critical", rate=14.0, since=NOW - timedelta(hours=1), hours_left=48.0)
+SLOW = Burn(severity="warning", rate=3.0, since=NOW - timedelta(hours=5), hours_left=200.0)
+
+
+# ------------------------------------------------------------------ arithmetic
+
+
+def test_ac1_the_allowance_is_what_the_objective_allows_less_the_failures() -> None:
+    allowed = slo.allowed_failures(Decimal("99.9"), 1_000_000)
+    assert allowed == 1_000
+    assert slo.allowance_left(Decimal("99.9"), 1_000_000, 400) == 600
+
+
+def test_the_allowance_rounds_down_and_is_never_shown_below_zero() -> None:
+    assert slo.allowed_failures(Decimal("99.9"), 1_999) == 1
+    assert slo.allowance_left(Decimal("99.9"), 1_000, 5) == -4
+    assert slo.shown_allowance(-4) == 0
+
+
+def test_ac1_a_7_day_window_adds_only_the_days_it_holds() -> None:
+    today = date(2026, 11, 7)
+    first = datetime(2026, 10, 1, tzinfo=UTC)
+    rows = {
+        today - timedelta(days=offset): DayCounts(good=900, total=1_000, lost_minutes=0)
+        for offset in range(7)
+        if offset != 3
+    }
+    rows[today - timedelta(days=9)] = DayCounts(good=0, total=50_000, lost_minutes=0)
+    figures = slo.window_figures(rows, window_days=7, first_event_at=first, now=NOW, zone=UTC_ZONE)
+    assert (figures.good, figures.total, figures.failures) == (5_400, 6_000, 600)
+    assert figures.days_held == 6
+
+
+def test_fr9_a_window_never_reaches_before_the_first_event() -> None:
+    today = date(2026, 11, 7)
+    assert slo.window_days_of(today, 28, first_event_day=None)[0] == today - timedelta(days=27)
+    assert slo.window_days_of(today, 7, first_event_day=today - timedelta(days=2)) == [
+        today - timedelta(days=2),
+        today - timedelta(days=1),
+        today,
+    ]
+
+
+def test_fr11_lost_minutes_lower_coverage_from_the_first_event() -> None:
+    first = NOW - timedelta(hours=10)
+    rows = {NOW.date(): DayCounts(good=10, total=10, lost_minutes=60)}
+    figures = slo.window_figures(rows, window_days=28, first_event_at=first, now=NOW, zone=UTC_ZONE)
+    assert figures.coverage == pytest.approx(1 - 60 / 600)
+
+
+@pytest.mark.parametrize(
+    ("objective", "refused"),
+    [
+        (Decimal("99.999"), True),
+        (Decimal("89.9"), True),
+        (Decimal("100"), True),
+        (Decimal("90"), False),
+        (Decimal("99.99"), False),
+        (Decimal("99.5"), False),
+    ],
+)
+def test_fr2_an_objective_outside_the_range_or_too_fine_is_refused(
+    objective: Decimal, refused: bool
+) -> None:
+    assert (slo.objective_refusal(objective) is not None) is refused
+
+
+def test_a_figure_rounds_towards_failing() -> None:
+    assert slo.figure_percent(99_899, 100_000) == Decimal("99.89")
+    assert slo.figure_percent(999, 1_000) == Decimal("99.90")
+    assert slo.figure_percent(0, 0) is None
+
+
+# ----------------------------------------------------------------------- words
+
+
+@pytest.mark.parametrize(
+    ("kind", "words", "never"),
+    [
+        (slo.SERVICE_AVAILABILITY, "Failures still allowed", "slow"),
+        (slo.ENDPOINT_AVAILABILITY, "Failures still allowed", "runs"),
+        (slo.SERVICE_LATENCY, "Slow requests still allowed", "failures"),
+        (slo.CHECK_AVAILABILITY, "Failed runs still allowed", "requests"),
+    ],
+)
+def test_ac89_each_kind_has_its_own_allowance_words(kind: str, words: str, never: str) -> None:
+    assert slo.allowance_words(kind) == words
+    everything = " ".join(
+        (slo.allowance_words(kind), slo.failure_noun(kind), slo.event_noun(kind))
+    ).lower()
+    assert never not in everything
+
+
+def test_the_label_is_composed_and_two_targets_on_a_service_differ() -> None:
+    availability = slo.subject_label(
+        slo.SERVICE_AVAILABILITY,
+        service_name="checkout",
+        objective=Decimal("99.90"),
+        window_days=28,
+    )
+    endpoint = slo.subject_label(
+        slo.ENDPOINT_AVAILABILITY,
+        service_name="checkout",
+        endpoint_name="/pay",
+        objective=Decimal("99.9"),
+        window_days=28,
+    )
+    latency = slo.subject_label(
+        slo.SERVICE_LATENCY,
+        service_name="checkout",
+        boundary_index=slo.boundary_at_or_under(500.0),
+        objective=Decimal("95"),
+        window_days=28,
+    )
+    check = slo.subject_label(
+        slo.CHECK_AVAILABILITY, check_name="Payment check", objective=Decimal("99"), window_days=7
+    )
+    assert availability == "checkout availability, 99.9% over 28 days"
+    assert endpoint == "checkout /pay availability, 99.9% over 28 days"
+    assert latency == "checkout latency under 487.2 ms, 95% over 28 days"
+    assert check == "Payment check availability, 99% over 7 days"
+
+
+def test_the_definition_key_ignores_the_name_and_tells_definitions_apart() -> None:
+    one = slo.definition_key(
+        slo.SERVICE_AVAILABILITY, service_name="checkout", objective=Decimal("99.9"), window_days=28
+    )
+    same = slo.definition_key(
+        slo.SERVICE_AVAILABILITY,
+        service_name="checkout",
+        objective=Decimal("99.90"),
+        window_days=28,
+    )
+    other = slo.definition_key(
+        slo.SERVICE_AVAILABILITY, service_name="checkout", objective=Decimal("99.9"), window_days=7
+    )
+    assert one == same != other
+
+
+# --------------------------------------------------------------------- buckets
+
+
+def _go_constant(source: str, name: str) -> float:
+    found = re.search(rf"\b{name}\s*=\s*([\d_.]+)", source)
+    assert found, f"{name} is no longer a literal in services.go"
+    return float(found.group(1).replace("_", ""))
+
+
+def test_ac3_the_boundaries_are_the_workers() -> None:
+    source = SERVICES_GO.read_text()
+    count = int(_go_constant(source, "LatencyBucketCount"))
+    floor = _go_constant(source, "latencyFloorMS")
+    ceiling = _go_constant(source, "latencyCeilingMS")
+    assert "math.Pow(latencyCeilingMS/latencyFloorMS, float64(i+1)/LatencyBucketCount)" in source
+    assert count == slo.BUCKET_COUNT
+    assert count - 1 == slo.BOUNDARY_COUNT
+    for index in range(slo.BOUNDARY_COUNT):
+        want = floor * math.pow(ceiling / floor, (index + 1) / count)
+        assert abs(slo.boundary_ms(index) - want) <= want * 1e-12
+
+
+def test_fr3_a_typed_threshold_snaps_down_to_a_boundary() -> None:
+    index = slo.boundary_at_or_under(500.0)
+    assert index is not None
+    assert round(slo.boundary_ms(index), 1) == 487.2
+    assert slo.boundary_at_or_under(slo.boundary_ms(10)) == 10
+    assert slo.boundary_at_or_under(1.0) is None
+    assert slo.boundary_at_or_under(120_000.0) == slo.BOUNDARY_COUNT - 1
+
+
+# ---------------------------------------------------------------------- states
+
+
+def test_a_healthy_target_is_on_track_with_no_qualifier() -> None:
+    status = slo.status_of(_facts())
+    assert status.state is State.ON_TRACK
+    assert status.qualifiers == ()
+    assert not status.attention
+
+
+@pytest.mark.parametrize(
+    ("changes", "qualifier"),
+    [
+        ({"allowed": 8, "failures": 1}, slo.Qualifier.THIN_TRAFFIC),
+        ({"failures": 1_000}, None),
+        ({"failures": 1_200}, slo.Qualifier.MISSED),
+        ({"coverage": 0.71}, slo.Qualifier.NOT_MEASURED),
+        ({"last_event_minute": NOW - timedelta(hours=3)}, slo.Qualifier.NO_RECENT_REQUESTS),
+        ({"alerting": False}, slo.Qualifier.NO_ALERTS),
+    ],
+)
+def test_ac51_a_burn_on_fresh_status_reads_running_out_and_the_rest_are_qualifiers(
+    changes: dict[str, object], qualifier: slo.Qualifier | None
+) -> None:
+    status = slo.status_of(_facts(burn=FAST, **changes))
+    assert status.state is State.RUNNING_OUT
+    assert status.attention
+    if qualifier is not None:
+        assert qualifier in status.qualifiers
+
+
+def test_ac51_a_burn_with_nothing_left_says_so_in_its_sentence() -> None:
+    status = slo.status_of(_facts(burn=FAST, failures=1_000))
+    assert status.variant is slo.Variant.NOTHING_LEFT
+
+
+def test_ac51_a_burn_on_stale_status_reads_not_up_to_date_and_still_counts() -> None:
+    status = slo.status_of(_facts(burn=FAST, evaluated_minute=NOW - timedelta(minutes=16)))
+    assert status.state is State.NOT_UP_TO_DATE
+    assert status.variant is slo.Variant.WAS_BURNING
+    assert status.attention
+
+
+def test_ac51_a_disabled_target_with_a_tier_holding_reads_disabled_and_sorts_last() -> None:
+    disabled = slo.status_of(_facts(enabled=False, burn=FAST))
+    assert disabled.state is State.DISABLED
+    assert slo.Qualifier.RUNNING_OUT in disabled.qualifiers
+    on_track = slo.status_of(_facts())
+    ordered = slo.ordered([("disabled", disabled), ("fine", on_track)])
+    assert [name for name, _ in ordered] == ["fine", "disabled"]
+
+
+def test_ac51_a_resolving_burn_reads_back_within_its_allowance() -> None:
+    resolving = Burn(
+        severity="critical", rate=0.4, since=FAST.since, hours_left=None, resolving=True
+    )
+    assert slo.status_of(_facts(burn=resolving)).variant is slo.Variant.RESOLVING
+
+
+def test_ac51_a_burn_no_tier_can_judge_reads_not_judged_since() -> None:
+    unjudged = Burn(severity="warning", rate=3.0, since=SLOW.since, hours_left=None, judged=False)
+    assert slo.status_of(_facts(burn=unjudged)).variant is slo.Variant.NOT_JUDGED
+
+
+@pytest.mark.parametrize(
+    ("changes", "state"),
+    [
+        ({"enabled": False}, State.DISABLED),
+        ({"evaluated_minute": NOW - timedelta(minutes=16)}, State.NOT_UP_TO_DATE),
+        ({"evaluated_minute": None}, State.NOT_UP_TO_DATE),
+        ({"source_gone": True}, State.SOURCE_GONE),
+        ({"counting": True}, State.COUNTING),
+        ({"coverage": 0.89}, State.NOT_MEASURED),
+        ({"last_event_minute": NOW - timedelta(minutes=16)}, State.NO_RECENT_REQUESTS),
+        ({"days_held": 6}, State.BUILDING_HISTORY),
+        ({"failures": 1_000}, State.NOTHING_LEFT),
+        ({"allowed": 9, "failures": 0}, State.TOO_LITTLE_TRAFFIC),
+    ],
+)
+def test_fr10_each_state_applies_when_its_rule_does(
+    changes: dict[str, object], state: State
+) -> None:
+    assert slo.status_of(_facts(**changes)).state is state
+
+
+def test_a_target_never_worked_out_reads_counting_until_15_minutes_have_passed() -> None:
+    new = _facts(evaluated_minute=None, expected_since=NOW - timedelta(minutes=2), counting=True)
+    owed = _facts(evaluated_minute=None, expected_since=NOW - timedelta(minutes=16), counting=True)
+    assert slo.status_of(new).state is State.COUNTING
+    assert slo.status_of(owed).state is State.NOT_UP_TO_DATE
+
+
+def test_ac9_coverage_at_91_percent_judges_and_at_89_does_not() -> None:
+    assert slo.status_of(_facts(coverage=0.91)).state is State.ON_TRACK
+    assert slo.status_of(_facts(coverage=0.89)).state is State.NOT_MEASURED
+
+
+def test_building_history_is_under_a_quarter_of_the_window() -> None:
+    assert slo.status_of(_facts(days_held=7)).state is State.ON_TRACK
+    assert slo.status_of(_facts(window_days=7, days_held=1)).state is State.BUILDING_HISTORY
+    assert slo.status_of(_facts(window_days=7, days_held=2)).state is State.ON_TRACK
+
+
+def test_a_check_reads_no_recent_runs_only_after_three_intervals() -> None:
+    check = {"kind": slo.CHECK_AVAILABILITY, "check_interval_seconds": 3_600}
+    two_hours = _facts(last_event_minute=NOW - timedelta(hours=2), **check)
+    four_hours = _facts(last_event_minute=NOW - timedelta(hours=4), **check)
+    assert slo.status_of(two_hours).state is State.ON_TRACK
+    assert slo.status_of(four_hours).state is State.NO_RECENT_REQUESTS
+
+
+def test_ac111_exactly_at_the_allowance_reads_exactly_on_target_and_one_more_misses() -> None:
+    exactly = slo.status_of(_facts(failures=1_000))
+    beyond = slo.status_of(_facts(failures=1_001))
+    assert (exactly.state, exactly.variant) == (State.NOTHING_LEFT, slo.Variant.EXACTLY_ON_TARGET)
+    assert (beyond.state, beyond.variant) == (State.NOTHING_LEFT, slo.Variant.MISSED)
+
+
+def test_ac111_two_allowed_and_five_failures_is_nothing_left_and_counts() -> None:
+    status = slo.status_of(_facts(allowed=2, failures=5))
+    assert status.state is State.NOTHING_LEFT
+    assert status.attention
+    assert slo.Qualifier.THIN_TRAFFIC in status.qualifiers
+
+
+def test_ac12_a_window_with_no_failure_carries_the_instrumentation_qualifier() -> None:
+    status = slo.status_of(_facts(failures=0))
+    assert slo.Qualifier.NEVER_FAILED in status.qualifiers
+
+
+@pytest.mark.parametrize(
+    ("longest", "silent", "counted"),
+    [(40, 79, False), (40, 81, True), (8 * 60, 15 * 60, False), (8 * 60, 17 * 60, True)],
+)
+def test_ac98_the_attention_limit_follows_the_usual_quiet(
+    longest: int, silent: int, counted: bool
+) -> None:
+    facts = _facts(
+        last_event_minute=NOW - timedelta(minutes=silent), longest_quiet_7d_minutes=longest
+    )
+    status = slo.status_of(facts)
+    assert status.state is State.NO_RECENT_REQUESTS
+    assert status.attention is counted
+
+
+def test_ac98_a_silence_of_25_hours_or_an_open_traffic_finding_always_counts() -> None:
+    long_quiet = {"longest_quiet_7d_minutes": 20 * 60}
+    day = _facts(last_event_minute=NOW - timedelta(hours=25), **long_quiet)
+    finding = _facts(
+        last_event_minute=NOW - timedelta(minutes=20), traffic_finding_open=True, **long_quiet
+    )
+    assert slo.status_of(day).attention
+    assert slo.status_of(finding).attention
+
+
+def test_qualifiers_come_in_the_designs_order() -> None:
+    status = slo.status_of(
+        _facts(burn=FAST, alerting=False, allowed=8, failures=9, coverage=0.5, days_held=1)
+    )
+    assert status.qualifiers == (
+        slo.Qualifier.NO_ALERTS,
+        slo.Qualifier.MISSED,
+        slo.Qualifier.THIN_TRAFFIC,
+        slo.Qualifier.NOT_MEASURED,
+        slo.Qualifier.BUILDING_HISTORY,
+    )
+
+
+def test_ac110_counted_rows_come_first_critical_then_warning_then_shortest_time_left() -> None:
+    rows = [
+        ("building", slo.status_of(_facts(days_held=1))),
+        ("disabled", slo.status_of(_facts(enabled=False))),
+        ("warning", slo.status_of(_facts(burn=SLOW))),
+        ("gone", slo.status_of(_facts(source_gone=True))),
+        ("critical-later", slo.status_of(_facts(burn=FAST))),
+        (
+            "critical-sooner",
+            slo.status_of(_facts(burn=Burn("critical", 30.0, FAST.since, hours_left=5.0))),
+        ),
+        ("fine", slo.status_of(_facts())),
+    ]
+    names = [name for name, _ in slo.ordered(rows)]
+    assert names == [
+        "critical-sooner",
+        "critical-later",
+        "warning",
+        "gone",
+        "building",
+        "fine",
+        "disabled",
+    ]
+    counted = sum(status.attention for _, status in rows)
+    assert names[:counted] == ["critical-sooner", "critical-later", "warning", "gone"]
+
+
+# ---------------------------------------------------------------------- days
+
+
+def test_ac73_a_day_in_kolkata_is_its_local_midnight_to_midnight() -> None:
+    start, end = slo.day_bounds(date(2026, 11, 7), KOLKATA)
+    assert start == datetime(2026, 11, 6, 18, 30, tzinfo=UTC)
+    assert end - start == timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    ("day", "minutes"),
+    [(date(2026, 3, 8), 1_380), (date(2026, 11, 1), 1_500), (date(2026, 11, 7), 1_440)],
+)
+def test_ac73_a_clock_change_day_has_its_own_length(day: date, minutes: int) -> None:
+    start, end = slo.day_bounds(day, ZoneInfo("America/New_York"))
+    assert (end - start) == timedelta(minutes=minutes)
+
+
+def test_the_migration_froze_the_same_kinds_and_answers() -> None:
+    spec = importlib.util.spec_from_file_location("revision_0052", MIGRATION)
+    assert spec is not None and spec.loader is not None
+    revision = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(revision)
+    assert ", ".join(f"'{kind}'" for kind in slo.KINDS) == revision._KINDS
+    assert ", ".join(f"'{answer}'" for answer in slo.SAMPLING_ANSWERS) == revision._SAMPLING

@@ -21,6 +21,13 @@ from a capped queue at once, whatever slots are free: `scheduler-light` takes th
 eight slots (D32). The cap is per worker, which is per container; it is the
 container's slots it protects.
 
+**Capped queues share one floor** (F3 A56, F19 D66). A cap alone would not protect
+the probes: capped queues are claimed first, and together they ask for more seats
+than a container should give. So a worker given `uncapped_floor` lets its capped
+queues together hold at most `concurrency - uncapped_floor` slots, and each pass
+starts from the next capped queue, so none starves. `scheduler-light` keeps 4 of 8
+for probes and alert sweeps, whatever later features add.
+
 **Stopping is orderly.** On SIGTERM it claims nothing more and waits for what it
 is running. A job still running when the process is killed outright keeps its
 lease until the lease lapses, and is then claimed again by another worker if it
@@ -47,7 +54,7 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from nexovue_scheduler import metrics
+from nexovue_scheduler import metrics, slos
 from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE
 from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import child, queue, registry
@@ -69,7 +76,10 @@ DIED: Final = "died"
 # How long a dead child is given to be reaped, so its exit code can be read.
 REAP_SECONDS: Final = 5.0
 # The most jobs a worker runs at once from each capped queue.
-QUEUE_CAPS: Final[Mapping[str, int]] = {DETECTION_QUEUE: DETECTION_CONCURRENCY}
+QUEUE_CAPS: Final[Mapping[str, int]] = {
+    DETECTION_QUEUE: DETECTION_CONCURRENCY,
+    **slos.QUEUE_CAPS,
+}
 # A child's own memory, beyond the pages it shares, past which it is replaced after a job.
 # A fresh child holds a few MiB of its own; the worst job measured, a project's hourly
 # baseline, leaves about 30 MiB (T8.2). Eight at this limit fit `scheduler-light`.
@@ -205,8 +215,11 @@ class Worker:
         task_modules: tuple[str, ...] = registry.TASK_MODULES,
         pulse: Pulse | None = None,
         caps: Mapping[str, int] = QUEUE_CAPS,
+        uncapped_floor: int = 0,
         child_memory_limit: int = MAX_CHILD_PRIVATE_BYTES,
     ) -> None:
+        if not 0 <= uncapped_floor <= concurrency:
+            raise ValueError(f"an uncapped floor of {uncapped_floor} does not fit {concurrency}")
         self._engine = engine
         self._pulse = pulse or Pulse()
         self._reach_postgres_at = 0.0
@@ -215,6 +228,9 @@ class Worker:
         self._caps = {queue_name: cap for queue_name, cap in caps.items() if queue_name in queues}
         self._uncapped = [queue_name for queue_name in queues if queue_name not in self._caps]
         self._running_from = dict.fromkeys(self._caps, 0)
+        # The most slots every capped queue together may hold, and whose turn is first.
+        self._capped_room = concurrency - uncapped_floor
+        self._first_turn = 0
         # Unique per worker, not per process: the lease fence is this name, and two
         # workers sharing one would finish each other's jobs.
         self._name = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
@@ -258,17 +274,29 @@ class Worker:
             if self._listener is not None:
                 await self._listener.close()
 
+    def _capped_in_turn(self) -> list[str]:
+        """The capped queues, starting from the one whose turn it is, which moves on
+        each pass, so under the floor no queue is always served last."""
+        names = list(self._caps)
+        if not names:
+            return []
+        first = self._first_turn % len(names)
+        self._first_turn = first + 1
+        return names[first:] + names[:first]
+
     async def _claim_into_idle_slots(self) -> None:
-        # Capped queues first: each takes no more than its room, so it cannot
-        # crowd out the rest, and the rest cannot starve it.
-        lanes = [
-            ([queue_name], cap - self._running_from[queue_name])
-            for queue_name, cap in self._caps.items()
+        # Capped queues first: each takes no more than its room, and all of them no
+        # more than the floor leaves, so they cannot crowd out the rest, and the rest
+        # cannot starve them.
+        shared = self._capped_room - sum(self._running_from.values())
+        lanes: list[tuple[list[str], int, bool]] = [
+            ([queue_name], self._caps[queue_name] - self._running_from[queue_name], True)
+            for queue_name in self._capped_in_turn()
         ]
         if self._uncapped:
-            lanes.append((self._uncapped, len(self._idle)))
-        for lane, room in lanes:
-            limit = min(room, len(self._idle))
+            lanes.append((self._uncapped, len(self._idle), False))
+        for lane, room, capped_lane in lanes:
+            limit = min(room, len(self._idle), shared if capped_lane else len(self._idle))
             if limit <= 0:
                 continue
             try:
@@ -277,7 +305,9 @@ class Worker:
                 logger.exception("jobs could not be claimed; trying again")
                 return
             self._pulse.reached_postgres()
-            capped = lane[0] if lane[0] in self._caps else None
+            capped = lane[0] if capped_lane else None
+            if capped_lane:
+                shared -= len(jobs)
             for job in jobs:
                 slot = self._idle.pop()
                 if capped is not None:

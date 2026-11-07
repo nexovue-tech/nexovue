@@ -278,6 +278,7 @@ async def test_me_says_what_the_person_may_do(user: User, organization: Organiza
         "operate_alerts",
         "operate_cases",
         "upload_source_maps",
+        "configure_slos",
     ]
 
 

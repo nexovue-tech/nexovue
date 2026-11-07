@@ -15,6 +15,7 @@ export type Action =
   | "operate_alerts"
   | "operate_cases"
   | "upload_source_maps"
+  | "configure_slos"
   | "manage_channels"
   | "manage_check_secrets"
   | "configure_projects"

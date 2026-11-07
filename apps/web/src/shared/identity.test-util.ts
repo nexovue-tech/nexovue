@@ -10,7 +10,13 @@ import type { Action, Session } from "./identity";
 
 export type TestRole = "owner" | "admin" | "member" | "viewer";
 
-const WORK: Action[] = ["operate_checks", "operate_alerts", "operate_cases", "upload_source_maps"];
+const WORK: Action[] = [
+  "operate_checks",
+  "operate_alerts",
+  "operate_cases",
+  "upload_source_maps",
+  "configure_slos",
+];
 const ADMINISTER: Action[] = [
   ...WORK,
   "manage_channels",

@@ -58,6 +58,7 @@ from nexovue_api.servicemap import router as service_map_router
 from nexovue_api.services import router as services_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
 from nexovue_api.signup import router as signup_router
+from nexovue_api.slos import router as slos_router
 from nexovue_api.sourcemaps import router as source_maps_router
 from nexovue_api.support import router as support_router
 from nexovue_api.synthetics import router as synthetics_router
@@ -141,6 +142,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(maintenance_router.router)
     versioned.include_router(alerts_router.router)
     versioned.include_router(findings_router.router)
+    versioned.include_router(slos_router.router)
     versioned.include_router(detection_router.router)
     versioned.include_router(channels_router.router)
     versioned.include_router(channel_tests_router.router)

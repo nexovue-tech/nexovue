@@ -35,6 +35,7 @@ from nexovue_api.data.postgres.models import (
     Organization,
     Project,
     SiteKey,
+    SloTarget,
     User,
 )
 
@@ -71,6 +72,12 @@ DEPLOY_WEBHOOK_SECRET_CREATED: Final = "deploy.webhook_secret_created"
 DEPLOY_WEBHOOK_SECRET_REVOKED: Final = "deploy.webhook_secret_revoked"
 INTEGRATION_CREATED: Final = "integration.created"
 INTEGRATION_DELETED: Final = "integration.deleted"
+# F19. A reliability target and its figure are something people quote, so every
+# change to one is recorded, with ids only (AC34, AC88).
+SLO_CREATED: Final = "slo.created"
+SLO_TARGET_CHANGED: Final = "slo.target_changed"
+SLO_DELETED: Final = "slo.deleted"
+SLO_RESTORED: Final = "slo.restored"
 CHECK_CREATED: Final = "check.created"
 CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
@@ -179,6 +186,7 @@ API_KEY_TARGET: Final = "api_key"
 API_TOKEN_TARGET: Final = "api_token"
 SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
+SLO_TARGET: Final = "slo"
 CHECK_SECRET_TARGET: Final = "check_secret"
 MAINTENANCE_WINDOW_TARGET: Final = "maintenance_window"
 NOTIFICATION_CHANNEL_TARGET: Final = "notification_channel"
@@ -646,6 +654,39 @@ def _rule_event(db: AsyncSession, action: str, rule: AlertRule, actor_user_id: u
         action=action,
         target=_target(ALERT_RULE_TARGET, rule.id),
     )
+
+
+def _record_slo(
+    db: AsyncSession, action: str, *, target: SloTarget, actor_user_id: uuid.UUID
+) -> None:
+    """A target's act, by id: its project rides in the detail as an id, and no name,
+    description or definition, which a person may have filled with free text (AC88)."""
+    _add(
+        db,
+        org_id=target.org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(SLO_TARGET, target.id),
+        detail={"project_id": str(target.project_id)},
+    )
+
+
+def record_slo_created(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
+    _record_slo(db, SLO_CREATED, target=target, actor_user_id=actor_user_id)
+
+
+def record_slo_target_changed(
+    db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID
+) -> None:
+    _record_slo(db, SLO_TARGET_CHANGED, target=target, actor_user_id=actor_user_id)
+
+
+def record_slo_deleted(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
+    _record_slo(db, SLO_DELETED, target=target, actor_user_id=actor_user_id)
+
+
+def record_slo_restored(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
+    _record_slo(db, SLO_RESTORED, target=target, actor_user_id=actor_user_id)
 
 
 def record_check_created(db: AsyncSession, *, check: Check, actor_user_id: uuid.UUID) -> None:

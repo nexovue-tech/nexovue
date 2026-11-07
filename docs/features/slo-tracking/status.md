@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code is written.
+**In development. Step 1 is on `feature/phase-2` (2026-11-08).** The founder approved the specification, design and plan on 2026-11-02. Steps 2 onward are not started; Step 4 waits on the demand gate and the browser-door change.
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Plan Step 1, *A real figure on a real screen, with no alerts*: built in worktree `wt/f19`, not committed. T1.1 to T1.10 are done; T1.11 is done but for its `metrics_gauge` helper (*Open decisions*, 1).
 
 ## Completed
 
@@ -20,15 +20,61 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges: Step 1, after re-reading every line reference (plan P1). File the design's four proposed ADRs in `docs/decisions/` at the start of implementation, numbered then. T1.5 needs F3's floor (plan P3): build it there if F3's T1.7 has not merged.
+The coordinator reviews Step 1's diff and commits it as `F19 Step 1: a real figure on a real screen, with no alerts`, after `just check` (not run here, by instruction) and the founder's answer to *Open decisions* 1. Then the founder judges Step 1 on the dev stack with the demo running (plan, Step 1's *Judgeable*), which was not done here.
+
+## Step 1, built 2026-11-07
+
+**What was built, by task.**
+
+| Task | Done | Where |
+|---|---|---|
+| T1.1 | Kinds, limits, whole-day window, FR12's allowance, FR10's state and qualifiers and FR10a's order as pure functions, the composed label and definition key, the latency boundaries moved from `detection/method.py`, queue and task names, and the history job request | `nexovue_platform/slo.py`; `method.py`, `baselines.py`, `detection/store.py` and four test helpers import the boundaries from it |
+| T1.2 | Alembic **0052**: `slo_targets`, `slo_status`, `slo_daily_counts`, `slo_target_changes`; downgrade refuses; inventory lines | `0052_slo_targets.py`, `models.py`, `organizations/tables.py`, `test_migration_rules.py` |
+| T1.3 | `_query` takes `settings`; `SLO_SERVICE_DAY_SQL` under lowered bounds; **`sumForEachMergeIf` works on ClickHouse 26.3.20.7** (one statement split 64 buckets by window), so the fallback is not needed | `alerts/telemetry.py`, `slos/store.py` |
+| T1.4 | A day's row, quiet and lost minutes, leading, trailing and longest stretches, a stretch across midnight; `holds.lost_minutes` and D37's header | `slos/counts.py`, `detection/holds.py` |
+| T1.5 | The three queues and caps on `scheduler-light`; **the floor, built here** (`uncapped_floor`, `--uncapped-floor 4`, capped lanes taking turns), for F3 to rebase onto; `judge_slos`, `count_slos`, `read_slo_history`, `queue_jobs` with its three cross-tenant statements named; the coordinator's guarded call | `jobs/worker.py`, `__main__.py`, `roles.py`, `docker-compose.yaml`, `nexovue.yaml` (comment), `jobs/registry.py`, `slos/job.py`, `detection/coordinator.py` |
+| T1.6 | `CONFIGURE_SLOS` (owner, admin, member) in all five copies, plus `test_auth_routes.py`, which pins a member's list too | as the plan names |
+| T1.7 | `/slos` list, read, create, change, soft delete, restore; history rows and `slo.*` audit entries with ids only; token responses with no person; service checked against the project at write | `nexovue_api/slos/`, `main.py`, `audit/service.py`, `test_read_surface_structure.py`, `test_authorization_coverage.py`, `docs/product/setup/api.md` |
+| T1.8 | `/slos`, `/slos/new`, `/slos/$sloId`, `/slos/$sloId/edit`; linked rows, tones from the severity tokens, headline, stale banner, deleted line with Restore, disable, ConfirmPanel with FR31's wording, 60-second refresh, staleness worked out in the browser, times in the project's zone; AC13's scan | `apps/web/src/features/slos/`, `router.tsx`, `route-manifest.ts`, `console-routes.json`, `apps/api/tests/test_slo_words.py` |
+| T1.9 | Recorded below (*Decisions*) and in the spec's out-of-scope row | `spec.md` |
+| T1.10 | Three roots walking subfolders; a network-client rule with its control; `lifespan.py` types the MCP server as a Protocol; **the walker moved to `nexovue_platform/import_walk.py`** (F19 landed first) | `test_detection_has_no_ai.py`, `lifespan.py`, `import_walk.py` |
+| T1.11 | `slo_rows.py` writes exact `service_stats_1m` and `endpoint_stats_1m` rows with day and night traffic | `apps/scheduler/tests/slo_rows.py` |
+
+**ADRs filed:** ADR-027 (daily counts in Postgres) and ADR-028 (SLO judging on `scheduler-light` under the floor). The design's other two proposed ADRs (*an incident can say what it is about*; *a burn does not repeat news*) belong to Steps 4 and 5 and are left for them. F3's own proposed ADR on the floor is F3's to file.
+
+**Decisions taken while building, within the design.**
+
+- **T1.9:** the worker sees each span's `tracestate` and already parses `ot=rv:`; an OpenTelemetry consistent-probability sampler also writes `ot=th:`, read by nothing. Detection would cover one kind of upstream sampler only, so FR5's question stays the decision. *The `th` behaviour is from memory of OpenTelemetry's sampling specification and was not re-read on the web here: unverified.*
+- **A target never worked out** reads **Counting** for its first 15 minutes, then **Not up to date** (`Facts.expected_since`, the target's creation). Without it every new target read Not up to date at once.
+- **The last event of a silence longer than a day** is read from the newest stored day with events, only when that day was counted after it ended, so its trailing quiet stretch runs to its end.
+- **Counting before any sweep has settled a minute** counts to the current minute.
+- **`queue_jobs` orders by `min(coalesce(evaluated_minute, '-infinity'))`**, so a project with one never-judged target leads, where the design's `min(...) NULLS FIRST` would let its other targets' age hide it.
+- **The critical badge uses the severity badge fill** (`critical-subtle`, `critical-border`, `critical-text`); the tokens reserve `critical-solid` for dots and accent bars.
+- **Step 1 never shows the "No alerts will be sent" qualifier:** no rule kind for burns exists until Step 4, so the state function takes `alerting=None` until then.
+
+**Not built or not proved in Step 1, said plainly.**
+
+- **AC81** (375px, keyboard, live region): the layout stacks by CSS and the live region is in place, but nothing was checked in a browser. Not proved.
+- **AC64's "burn judged every minute with 20 history jobs queued" and AC65 at 2 times overload, as timings:** held by the floor test (separate capped queues, turns) and by the longest-waiting order, not by a timed run.
+- **AC97 (F4's ticket refused):** no F4 ticket kind exists on the branch, so there is nothing to refuse yet; F4's Step 2 must add `/slos` to its refusals.
+- **A token on a write** is refused by `CurrentIdentity`, held for every write by `test_authorization_coverage.py`; the in-process live harness has no session store, so `test_slos_live.py` does not call one.
+- **AC35 in `test_tenant_isolation_live.py`:** that suite needs the whole running stack and has no per-route list; AC35 for `/slos` is proved in `test_slos_live.py` (another organization gets 404 on read, change, delete and list). Not run, not changed.
+- **AC73's range:** the spec says day minutes total 1,410 to 1,500; a spring-forward day in New York is 1,380, which the test holds. The spec's range is narrower than the zones it covers.
+- **Step 1's *Judgeable* on the dev stack** was not walked: no full stack was started on this shared machine.
+
+**Self-review (`/review-diff`), 2026-11-07.** One MEDIUM finding, fixed: a target's service was not checked against the project at write (design, *Tenancy path*); now refused beside its field, test seen failing first. Unintended changes: none; every changed file is named above or is a test the plan names.
 
 ## Open decisions
 
-**None for the founder.** Both were approved on 2026-11-02, as recommended (*Founder answers, 2026-11-02*, below). The gate's bar and P2's span-kind question are decided (spec D62, D63).
+**None.** Answered 2026-11-08, kept for the record:
+
+1. **Founder answer, 2026-11-08: option (b).** **T1.11's `metrics_gauge` rows.** The plan's T1.11 asks the helper to write exact `metrics_gauge` rows too, proved by AC2 through `test_slo_store_live.py`. In Step 1 no reader of check readings exists (that is T2.3, which moves `_COUNTED` from `apps/api/.../synthetics/queries.py:37-60`), and a reading is several JSON attributes (`synthetics/queries.py:37-48`: outcome, final, maintenance, run id, attempt) whose exact shape only that reader proves. **Options:** (a) write the helper now, proved only by counting its own rows back; (b) move this part of T1.11 into T2.3, beside its reader. **Recommendation: (b)**, so the helper is proved by the code that reads it. The service and endpoint parts are built.
+
+The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, below).
 
 ## Blocked
 
-- **F19's build** waits for F6 to merge, and for F28, F3, F22, F4 and F5 in the plan's order.
+- Nothing blocks Steps 2 and 3. Step 1 is on `feature/phase-2` (2026-11-08); T2.3 now also writes the helper's `metrics_gauge` rows.
 - **Plan Step 4 onward** waits on the demand gate, and on precondition P2: a separate change keeping browser-door spans out of the rollups. **F19's release waits on P2 too.** It has no record yet. Foundation item 7 sets it before Stage 1 reaches a customer, and F28 owns it (item 22, 2026-11-02).
   **2026-11-07:** P2 is `docs/changes/browser-door/`, built (all four steps, with the AC37 live test through the real
   receiver and worker) and on `feature/phase-2` (2026-11-07).
@@ -52,7 +98,16 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 ## Validation
 
-**Almost nothing was run.** No test, query or measurement of the product. One read-only run of the no-AI test's own import walk, from a scratch script, gave the evidence for D55. Documents only. Code was read, on a branch with uncommitted work, so line numbers will drift. The plan requires reading them again at start. A script checked that every FR and AC in the spec has a plan task and test, and that every T-number and D-number cited exists. That is a check of the documents, not of the design.
+**Step 1, 2026-11-07,** on the worktree, against its own stores (`f19-pg`, Postgres 18 with pgvector, port 25432; `f19-ch`, ClickHouse 26.3.20.7, port 28123), migrated to Alembic 0052 and ClickHouse 000038. `just check` was not run, by instruction.
+
+| What | Result |
+|---|---|
+| Seen failing first | `test_policy.py` (no `CONFIGURE_SLOS`); `test_slo_model.py` (no module, then two clock-change days measured by wall clock, fixed by `day_bounds` in UTC); `test_deletion_live.py` (`test_the_database_holds_no_table_this_deletion_has_not_classified`, without the inventory lines); `test_slo_store_live.py` (3 of 4, `_query` took no `settings`); `test_slo_counts.py` (no module); the floor test and AC68 (7 failed); AC95(d) (the exception reached the sweep with the guard removed); `test_scheduler_postgres_tenancy_structure.py` (four unnamed statements); `test_slo_job_live.py` (AC8 at 16 minutes and 25 hours read Building history and Source gone: two real defects, fixed above); `test_authorization_coverage.py` and `test_read_surface_structure.py` (routes unplaced); the no-AI walk (`mcp.server <- nexovue_api.lifespan <- nexovue_api.auth.dependencies <- nexovue_api.slos.router`), and again with an `mcp` import planted in `nexovue_api/slos/queries.py`; `route-manifest.test.ts` (2 failed); `test_slo_words.py` (with "Uptime budget" planted); the service check at write |
+| Written with their code, failing first only on real defects | `test_slos_live.py` (new targets read Not up to date; fixed), the web screen tests (the zone read "GMT+5:30" not "IST", and the clock test; both fixed) |
+| F19 suites, final | `test_slo_model.py` 61, `test_slo_counts.py` 8, `test_slo_words.py` 15, `test_slo_store_live.py` 4, `test_slo_job_live.py` 16, `test_slos_live.py` 15, `test_detection_has_no_ai.py` 6; web `features/slos` 19 |
+| Wider | Scheduler offline suite 4,687 passed (`test_connect_guard.py` left out: it needs public DNS). API suites touched 2,243 passed. Live: `test_jobs_live.py`, `test_detection_store_live.py`, `test_deletion_live.py` (25) passed. `test_alert_telemetry_live.py` fails 3 of 4 with and without this change: it needs the seeded `acme/production` project. Web: 140 files, 1,607 tests passed; `tsc` clean; Biome clean but for one existing warning in `infrastructure/databases/connection-health.ts`. Ruff and mypy clean on every changed Python file |
+
+**Before Step 1:** almost nothing was run. No test, query or measurement of the product. One read-only run of the no-AI test's own import walk, from a scratch script, gave the evidence for D55. Documents only. Code was read, on a branch with uncommitted work, so line numbers will drift. The plan requires reading them again at start. A script checked that every FR and AC in the spec has a plan task and test, and that every T-number and D-number cited exists. That is a check of the documents, not of the design.
 
 ## Specification impact
 
@@ -280,7 +335,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-07
 
 ## Founder decision, 2026-11-02: SLO work runs on `scheduler-light` (D66)
 

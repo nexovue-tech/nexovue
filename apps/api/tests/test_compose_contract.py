@@ -18,8 +18,10 @@ import yaml
 
 import nexovue_api
 from nexovue_api.roles import command_for
+from nexovue_scheduler import slos
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_QUEUE
+from nexovue_scheduler.jobs.worker import QUEUE_CAPS
 
 COMPOSE: Final = Path(nexovue_api.__file__).parents[4] / "deploy" / "compose"
 
@@ -303,6 +305,41 @@ def test_scheduler_light_judges_detection_beside_its_probes(layout: str, tmp_pat
     assert others == ["scheduler-light"], f"{layout}: {others} take detection jobs"
 
 
+def _floor_of(argv: list[str]) -> int:
+    return int(argv[argv.index("--uncapped-floor") + 1]) if "--uncapped-floor" in argv else 0
+
+
+def _concurrency_of(argv: list[str]) -> int:
+    return int(argv[argv.index("--concurrency") + 1])
+
+
+def test_slo_work_runs_on_scheduler_light_under_its_floor(layout: str, tmp_path: Path) -> None:
+    """F19 D66, AC68, NFR2: the three SLO queues are `scheduler-light`'s and no other
+    worker's, each capped, and every capped queue together sits under a floor that
+    leaves probes and alert sweeps 4 of its 8 slots. No `scheduler-slo` exists."""
+    services = _render(layout, tmp_path)
+    assert "scheduler-slo" not in services, f"{layout}: a scheduler-slo service exists"
+
+    argv = {
+        name: command_for(service["command"][0], service["command"][1:])
+        for name, service in services.items()
+        if name.startswith("scheduler-") and name != "scheduler-beat"
+    }
+    queues = {
+        name: _queues_of(arguments, services[name]["environment"]["PROBER_REGION"])
+        for name, arguments in argv.items()
+    }
+    light = argv["scheduler-light"]
+    for queue_name in slos.QUEUES:
+        assert queue_name in queues["scheduler-light"]
+        assert QUEUE_CAPS[queue_name] == slos.QUEUE_CAPS[queue_name]
+        others = [name for name, taken in queues.items() if queue_name in taken]
+        assert others == ["scheduler-light"], f"{layout}: {others} take {queue_name}"
+    assert (_concurrency_of(light), _floor_of(light)) == (8, 4)
+    capped = [name for name in queues["scheduler-light"] if name in QUEUE_CAPS]
+    assert set(capped) >= {DETECTION_QUEUE, *slos.QUEUES}
+
+
 def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
     """The dev stack runs the worker by its own command line, not by role."""
     dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
@@ -316,4 +353,6 @@ def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
 
     assert DETECTION_QUEUE in workers["scheduler-light"]
     assert "light.local" in workers["scheduler-light"]
+    assert set(slos.QUEUES) <= set(workers["scheduler-light"])
+    assert _floor_of(dev["services"]["scheduler-light"]["command"].split()) == 4
     assert DETECTION_QUEUE not in workers["scheduler-deliveries"]

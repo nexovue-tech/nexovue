@@ -25,6 +25,8 @@ FR1 = {
     # F22 FR34: working a case — take, assign, note, resolve, reopen, link an issue.
     Action.OPERATE_CASES: EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: EVERYONE_WHO_WORKS,
+    # F19 D20: reliability targets — create, change, disable, delete, restore.
+    Action.CONFIGURE_SLOS: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: ADMINISTRATORS,

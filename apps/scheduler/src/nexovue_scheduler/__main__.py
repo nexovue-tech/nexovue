@@ -1,18 +1,20 @@
 """`python -m nexovue_scheduler beat` or `... worker`: the scheduler's two roles.
 
     beat                                   schedule from Postgres while leader
-    worker [--queues a,b] [--concurrency N]
+    worker [--queues a,b] [--concurrency N] [--uncapped-floor N]
     health                                 exit 0 if this container's process is alive
 
 Either role answers /healthz, /readyz and /metrics on HEALTH_ADDR
 (`health.py`); `health` is what the compose healthcheck runs, because the image
 has no curl.
 
-A worker with no `--queues` takes `light`, its own location's `light.<region>`
-and `detection` — everything but `deliveries`, which has a worker of its own so a
-slow receiver holds a delivery slot and never a probe's. That worker is
-`scheduler-light`; it runs at most two detection jobs at once (`jobs/worker.py`).
-`--queues` replaces the list, so naming `light` alone drops the region's probes.
+A worker with no `--queues` takes `light`, its own location's `light.<region>`,
+`detection` and F19's `slo`, `slo_counts` and `slo_history` — everything but
+`deliveries`, which has a worker of its own so a slow receiver holds a delivery slot
+and never a probe's. That worker is `scheduler-light`; each capped queue runs at
+most its cap at once, and `--uncapped-floor` keeps that many slots for the uncapped
+queues whatever the capped ones ask (`jobs/worker.py`). `--queues` replaces the
+list, so naming `light` alone drops the region's probes.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from nexovue_platform.telemetry.logging import configure_logging, get_logger
 from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from nexovue_scheduler import health, metrics
+from nexovue_scheduler import health, metrics, slos
 from nexovue_scheduler.beat import Beat
 from nexovue_scheduler.detection import DETECTION_QUEUE
 from nexovue_scheduler.jobs.worker import Worker
@@ -54,6 +56,12 @@ def main(arguments: list[str] | None = None) -> None:
         help="comma-separated; default light, light.<region> and detection",
     )
     worker.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    worker.add_argument(
+        "--uncapped-floor",
+        type=int,
+        default=0,
+        help="slots the capped queues together leave to the uncapped ones (F3 A56)",
+    )
     chosen = parser.parse_args(arguments)
 
     settings = get_settings()
@@ -72,7 +80,7 @@ def main(arguments: list[str] | None = None) -> None:
         asyncio.run(_beat(settings, pulse))
     else:
         queues = worker_queues(chosen.queues, region=settings.prober_region)
-        asyncio.run(_worker(settings, queues, chosen.concurrency, pulse))
+        asyncio.run(_worker(settings, queues, chosen.concurrency, pulse, chosen.uncapped_floor))
 
 
 def worker_queues(named: str, *, region: str) -> list[str]:
@@ -81,6 +89,7 @@ def worker_queues(named: str, *, region: str) -> list[str]:
         SHARED_QUEUE,
         probe_queue(region),
         DETECTION_QUEUE,
+        *slos.QUEUES,
     ]
 
 
@@ -113,7 +122,11 @@ async def _beat(settings: Settings, pulse: health.Pulse) -> None:
 
 
 async def _worker(
-    settings: Settings, queues: list[str], concurrency: int, pulse: health.Pulse
+    settings: Settings,
+    queues: list[str],
+    concurrency: int,
+    pulse: health.Pulse,
+    uncapped_floor: int,
 ) -> None:
     engine = create_async_engine(
         str(settings.postgres_dsn), pool_size=2, max_overflow=2, pool_pre_ping=True
@@ -125,6 +138,7 @@ async def _worker(
             queues=queues,
             concurrency=concurrency,
             pulse=pulse,
+            uncapped_floor=uncapped_floor,
         )
         await worker.run(_stop_on_signal())
     finally:

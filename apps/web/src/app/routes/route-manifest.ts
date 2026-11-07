@@ -19,6 +19,7 @@ export type NavPath =
   | "/"
   | "/overview"
   | "/alerts"
+  | "/slos"
   | "/services"
   | "/service-map"
   | "/traces"
@@ -56,6 +57,9 @@ export const NAV_SECTIONS: NavSection[] = [
       // F21. Beside Findings: both answer "what is wrong", one found by us and one
       // declared by a rule the customer wrote.
       { path: "/alerts", title: "Alerts" },
+      // F19 (D22): after Alerts. It answers "are we meeting our target", as those two
+      // answer "what is wrong". "SLO" appears here so it can be found (D16).
+      { path: "/slos", title: "Targets (SLOs)" },
     ],
   },
   {

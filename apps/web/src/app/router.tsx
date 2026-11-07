@@ -90,6 +90,10 @@ const NewRuleScreen = lazyRouteComponent(
   () => import("@/features/alerts/RuleEditor"),
   "NewRuleScreen",
 );
+const SlosScreen = lazyRouteComponent(() => import("@/features/slos/SlosScreen"), "SlosScreen");
+const SloScreen = lazyRouteComponent(() => import("@/features/slos/SloScreen"), "SloScreen");
+const NewSloScreen = lazyRouteComponent(() => import("@/features/slos/SloForm"), "NewSloScreen");
+const EditSloScreen = lazyRouteComponent(() => import("@/features/slos/SloForm"), "EditSloScreen");
 const AuditScreen = lazyRouteComponent(() => import("@/features/audit/AuditScreen"), "AuditScreen");
 const AcceptInviteScreen = lazyRouteComponent(
   () => import("@/features/auth/AcceptInviteScreen"),
@@ -427,6 +431,31 @@ const incidentRoute = createRoute({
   component: IncidentScreen,
 });
 
+// F19: reliability targets. `new` is static, so it is never read as a target id.
+const slosRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos",
+  component: SlosScreen,
+});
+
+const newSloRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos/new",
+  component: NewSloScreen,
+});
+
+const sloRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos/$sloId",
+  component: SloScreen,
+});
+
+const editSloRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos/$sloId/edit",
+  component: EditSloScreen,
+});
+
 const profilesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/profiles",
@@ -690,6 +719,10 @@ const routeTree = rootRoute.addChildren([
     newRuleRoute,
     ruleRoute,
     incidentRoute,
+    slosRoute,
+    newSloRoute,
+    sloRoute,
+    editSloRoute,
     servicesRoute,
     serviceRoute,
     serviceMapRoute,

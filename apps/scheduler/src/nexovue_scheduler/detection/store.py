@@ -27,6 +27,7 @@ from urllib.parse import unquote, urlsplit
 import clickhouse_connect
 from clickhouse_connect.driver.client import Client
 from nexovue_platform.detection import SHIFT_COLUMNS, SHIFT_READINGS
+from nexovue_platform.slo import BUCKET_COUNT
 from nexovue_platform.telemetry.logging import get_logger
 from nexovue_platform.tenant_statements import (
     READ_SETTINGS,
@@ -39,7 +40,7 @@ from nexovue_platform.tenant_statements import (
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from nexovue_scheduler.detection.method import BUCKET_COUNT, EndpointCounts, Minute
+from nexovue_scheduler.detection.method import EndpointCounts, Minute
 from nexovue_scheduler.settings import get_settings
 
 logger = get_logger(__name__)
