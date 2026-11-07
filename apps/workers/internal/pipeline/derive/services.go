@@ -136,9 +136,9 @@ type ServiceCap struct {
 	TenantID string
 }
 
-// observeService folds one inbound span into its service-minute. Its caller has
-// already applied the endpoint rollup's inbound filter, so the two rollups
-// count exactly the same spans.
+// observeService folds one inbound span into its service-minute, and into its
+// version row. Its caller has already applied the endpoint rollup's inbound
+// filter, so the three rollups count exactly the same spans.
 func (c *Counters) observeService(minute time.Time, span Span) {
 	key := countedService{
 		serviceKey: serviceKey{
@@ -160,6 +160,7 @@ func (c *Counters) observeService(minute time.Time, span Span) {
 		totals.errors++
 	}
 	totals.buckets[LatencyBucket(span.DurationMS)]++
+	c.observeVersion(key, span)
 }
 
 // drainServices hands out the rows for every minute the caller calls closed,

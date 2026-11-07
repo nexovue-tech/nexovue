@@ -49,7 +49,21 @@ func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 // did not absorb. Measured, not assumed — do not remove it without reproducing
 // that.
 func (l *Loop[S]) Retry(ctx context.Context, what string, op func(context.Context) error) error {
-	deadline := l.now().Add(retryBudget)
+	return RetryWithin(ctx, l.log, l.now, what, retryBudget, op)
+}
+
+// RetryWithin is Retry under a budget the caller chooses. It is for a call whose
+// failure costs less than ending the worker, so the caller can give up sooner
+// and carry on: the error it returns past the budget is the caller's to absorb.
+func RetryWithin(
+	ctx context.Context,
+	log *slog.Logger,
+	now func() time.Time,
+	what string,
+	budget time.Duration,
+	op func(context.Context) error,
+) error {
+	deadline := now().Add(budget)
 	delay := retryFirstDelay
 
 	for attempt := 1; ; attempt++ {
@@ -58,7 +72,7 @@ func (l *Loop[S]) Retry(ctx context.Context, what string, op func(context.Contex
 		cancel()
 		if err == nil {
 			if attempt > 1 {
-				l.log.InfoContext(ctx, "recovered after a transient failure",
+				log.InfoContext(ctx, "recovered after a transient failure",
 					slog.String("operation", what),
 					slog.Int("attempts", attempt),
 				)
@@ -74,11 +88,11 @@ func (l *Loop[S]) Retry(ctx context.Context, what string, op func(context.Contex
 		if IsPermanent(err) {
 			return err
 		}
-		if !l.now().Add(delay).Before(deadline) {
-			return fmt.Errorf("%s failed for %s: %w", what, retryBudget, err)
+		if !now().Add(delay).Before(deadline) {
+			return fmt.Errorf("%s failed for %s: %w", what, budget, err)
 		}
 
-		l.log.WarnContext(ctx, "transient failure, retrying",
+		log.WarnContext(ctx, "transient failure, retrying",
 			slog.String("operation", what),
 			slog.Int("attempt", attempt),
 			slog.Duration("retry_in", delay),

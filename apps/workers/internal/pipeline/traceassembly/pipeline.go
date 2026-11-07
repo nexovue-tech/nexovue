@@ -94,6 +94,10 @@ type Pipeline struct {
 	// same inbound spans as the endpoint rollup.
 	services *derive.ServiceWriter
 	edges    *serviceedges.Writer
+	// versions writes `service_versions_1m`, what a release is compared on,
+	// from the same spans as services. Unlike every insert beside it, its
+	// failure never holds detection's progress or ends the worker (F28 D13).
+	versions versionInserter
 	seen     *dedupe.Offsets
 
 	// ingest is the durable half of `seen`: the per-partition record of what has
@@ -144,6 +148,18 @@ type Pipeline struct {
 	// minting service names.
 	servicesOverCap uint64
 
+	// versionRowsSteppedOver counts version rollup rows given up after the
+	// insert kept failing past its own budget; versionRowsSkipped counts the
+	// rows of the pause that follows; versionsFolded counts requests counted
+	// under `__other__`. Each one climbing is a hole or a fold the comparison
+	// labels, and flat is normal.
+	versionRowsSteppedOver uint64
+	versionRowsSkipped     uint64
+	versionsFolded         uint64
+	// versionsPausedUntil is when the version insert is next tried after it
+	// kept failing.
+	versionsPausedUntil time.Time
+
 	// progressHeld is how many partitions' progress is held after a refusal
 	// right now; progressHoldsReleased counts holds that reached their bound
 	// and were advanced past the refusal anyway. Either above zero means
@@ -157,7 +173,25 @@ type Pipeline struct {
 
 	log      *slog.Logger
 	sampling config.Sampling
+	// clock is the wall clock, replaced in tests.
+	clock func() time.Time
 }
+
+// versionInserter is the version rollup's writer, narrowed to the one call the
+// pipeline makes so a test can stand in a store that fails.
+type versionInserter interface {
+	Insert(ctx context.Context, stats []derive.VersionStat) error
+}
+
+// The version insert's own budget and pause (F28 D13; both guesses). The other
+// derived inserts spend the loop's two minutes and then end the worker, which
+// would be the wrong price for a table detection does not read. Past its budget
+// the insert is stepped over, and skipped for the pause, so a sustained failure
+// of this one table costs its budget once rather than on every drain.
+const (
+	versionInsertBudget = 30 * time.Second
+	versionInsertPause  = 5 * time.Minute
+)
 
 // spanStorage is what one batch still owes storage: the moment its spans have
 // certainly left the sampling buffer, and the newest counter bucket it fed.
@@ -209,6 +243,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		metrics:       derive.NewWriter(pool),
 		endpoints:     derive.NewEndpointWriter(pool),
 		services:      derive.NewServiceWriter(pool),
+		versions:      derive.NewVersionWriter(pool),
 		edges:         serviceedges.NewWriter(pool),
 		seen:          dedupe.NewOffsets(),
 		ingest:        ingest,
@@ -216,6 +251,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		topic:         cfg.Spans.Topic,
 		log:           log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
 		sampling:      cfg.Sampling,
+		clock:         time.Now,
 	}
 
 	loop, err := consume.Dial[spanStorage](consume.Settings{
@@ -287,6 +323,7 @@ func (p *Pipeline) release(disowned map[string][]int32) {
 		slog.Int("counter_series", counters.Series),
 		slog.Int("endpoint_series", counters.Endpoints),
 		slog.Int("service_series", counters.Services),
+		slog.Int("version_series", counters.Versions),
 		slog.Uint64("edge_calls", edges.Calls),
 		slog.Int("edge_series", edges.Edges),
 		slog.Int("edge_pairs_pending", edges.Pending),
@@ -381,6 +418,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int("counter_series", p.stages.counters.Pending()),
 		slog.Int("endpoint_series", p.stages.counters.PendingEndpoints()),
 		slog.Int("service_series", p.stages.counters.PendingServices()),
+		slog.Int("version_series", p.stages.counters.PendingVersions()),
 		slog.Uint64("spans_kept", stats.SpansKept),
 		slog.Uint64("spans_dropped", stats.SpansDropped),
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
@@ -392,6 +430,9 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("spans_parked", p.spansParked),
 		slog.Uint64("derived_rows_refused", p.derivedRowsRefused),
 		slog.Uint64("services_over_cap", p.servicesOverCap),
+		slog.Uint64("versions_folded", p.versionsFolded),
+		slog.Uint64("version_rows_stepped_over", p.versionRowsSteppedOver),
+		slog.Uint64("version_rows_skipped", p.versionRowsSkipped),
 		slog.Int("derived_progress_held", p.progressHeld),
 		slog.Uint64("derived_progress_holds_released", p.progressHoldsReleased),
 		slog.Int("summarised_traces", summaries.OpenTraces),
@@ -699,12 +740,16 @@ func partitionsOf(positions []consume.Position) []ingeststate.Partition {
 // insertDerived writes one drain's derived rows, and reports whether the store
 // refused any of them. One insert per table carries every partition, so one
 // refusal leaves a hole in all of the settlement's partitions (C22).
+//
+// The version rollup goes last and outside that report: its failure is never an
+// error here and never holds progress (insertVersions).
 func (p *Pipeline) insertDerived(
 	ctx context.Context,
 	derived derive.Derived,
 	edges []serviceedges.Edge,
 ) (bool, error) {
 	p.reportServiceCap(ctx, derived.ServicesOverCap)
+	p.reportVersionsFolded(ctx, derived.VersionsFolded)
 	inserts := []func(context.Context) (bool, error){
 		func(ctx context.Context) (bool, error) { return p.insertCounters(ctx, derived.Points) },
 		func(ctx context.Context) (bool, error) { return p.insertEndpoints(ctx, derived.Endpoints) },
@@ -719,7 +764,43 @@ func (p *Pipeline) insertDerived(
 		}
 		anyRefused = anyRefused || refused
 	}
+	p.insertVersions(ctx, derived.Versions)
 	return anyRefused, nil
+}
+
+// insertVersions writes the version rollup, and never fails the settlement
+// (F28 D13). A refusal is counted with every other refused derived row but holds
+// no progress, since detection does not read this table. A failure that outlasts
+// versionInsertBudget is counted and stepped over, and the inserts of the next
+// versionInsertPause are skipped and counted. Either way the minutes keep a hole
+// that is not repaired, which the comparison's completeness check labels. If all
+// of ClickHouse is down, the inserts before this one fail and block as they do.
+func (p *Pipeline) insertVersions(ctx context.Context, stats []derive.VersionStat) {
+	if len(stats) == 0 {
+		return
+	}
+	rows := uint64(len(stats))
+	if p.clock().Before(p.versionsPausedUntil) {
+		p.versionRowsSkipped += rows
+		return
+	}
+	err := consume.RetryWithin(ctx, p.log, p.clock, "insert version rollup", versionInsertBudget,
+		func(callCtx context.Context) error { return p.versions.Insert(callCtx, stats) })
+	switch {
+	case err == nil:
+		return
+	case consume.IsPermanent(err):
+		_, _ = p.stepOverRefusal(ctx, "service_versions_1m", len(stats), err)
+	default:
+		p.versionRowsSteppedOver += rows
+		p.versionsPausedUntil = p.clock().Add(versionInsertPause)
+		p.log.ErrorContext(ctx, "the version rollup insert kept failing; stepped over and paused",
+			slog.Int("rows", len(stats)),
+			slog.Duration("budget", versionInsertBudget),
+			slog.Duration("paused_for", versionInsertPause),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // recordProgress writes how far each settled partition is counted, holding the
@@ -764,6 +845,22 @@ func (p *Pipeline) reportServiceCap(ctx context.Context, overCap derive.ServiceC
 		slog.Int("services", overCap.Services),
 		slog.String("tenant_id", overCap.TenantID),
 		slog.Int("cap", derive.MaxServicesPerTenant),
+	)
+}
+
+// reportVersionsFolded says once per drain that requests were counted under
+// `__other__`, naming the organization with the most: past a version cap, or a
+// version that could never become a release.
+func (p *Pipeline) reportVersionsFolded(ctx context.Context, folded derive.VersionsFolded) {
+	if folded.Requests == 0 {
+		return
+	}
+	p.versionsFolded += folded.Requests
+	p.log.WarnContext(ctx, "counted requests under a combined version; an organization is over a version cap "+
+		"or sent versions that cannot be kept",
+		slog.Uint64("requests", folded.Requests),
+		slog.String("tenant_id", folded.TenantID),
+		slog.String("version", derive.OtherVersion),
 	)
 }
 

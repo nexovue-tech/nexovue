@@ -49,6 +49,7 @@ func (r spanRow) countable(receivedAt time.Time, retentionDays uint16, partition
 		// this span's duration in its latency sample.
 		SpanKind:   r.SpanKind,
 		SpanName:   r.SpanName,
+		Version:    r.CountedVersion,
 		TraceID:    r.TraceID,
 		SpanID:     r.SpanID,
 		Timestamp:  r.Timestamp,

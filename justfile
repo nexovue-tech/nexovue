@@ -117,6 +117,19 @@ detection-fault *args:
 detection-scale *args:
     uv run python tools/detection-measure/scale.py {{args}}
 
+# F28 plan T1.5: releases through the real receiver, with `service.version` shaped by a mode (rolling,
+# swap, no-version, rollback, exceptions, cold-start, churn, many-services); `verify` reads the rollups
+# back against what was sent. Each command's options: `just release-demo <command> --help`.
+# Send demo releases through the receiver, and verify the rollups
+release-demo *args:
+    uv run python tools/release-demo/send.py {{args}}
+
+# F28 plan T1.6: the Step 1a cost run, against a baseline worker; writes JSON for the cost report.
+# Each command's options: `just release-measure <command> --help`.
+# Measure the version rollup's rows, disk and worker memory
+release-measure *args:
+    uv run python tools/release-demo/release_measure.py {{args}}
+
 # F6 plan T8.1: the demo's fault flags against detection, scored as AC36's table. A run takes about
 # 12 days after its warm-up; see tools/fault-bed/README.md. Needs NEXOVUE_TOKEN, a read API token.
 # Drive the demo's fault flags and score detection (check, run, score)

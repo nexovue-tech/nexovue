@@ -1,7 +1,8 @@
 // Package derive computes the exact per-minute aggregates that the screens,
 // the dashboards and anomaly detection read: the counter points of
 // `metrics_sum`, the endpoint rollup `endpoint_stats_1m`, and the service
-// rollup `service_stats_1m` that anomaly detection judges.
+// rollup `service_stats_1m` that anomaly detection judges, and the version
+// rollup `service_versions_1m` that a release is compared on.
 //
 // It runs before the sampler, over every span of every trace. That order is the
 // whole point: storage can drop nine healthy traces in ten and the
@@ -62,6 +63,11 @@ type Span struct {
 	// spans reach it.
 	SpanKind string
 	SpanName string
+
+	// Version is the service.version the span's resource named, or empty. Only
+	// the version rollup reads it; its caller empties it for a door whose
+	// versions are not trusted (F28 D12).
+	Version string
 
 	// TraceID and SpanID identify the span, and are what weights its duration
 	// in the rollup's latency sample. A span id is unique only within a trace,
@@ -188,7 +194,12 @@ type Counters struct {
 	endpoints map[countedEndpoint]*endpointTotals
 	// services is the third, one row per service-minute with a latency
 	// histogram, fed from the same inbound spans as endpoints.
-	services  map[countedService]*serviceTotals
+	services map[countedService]*serviceTotals
+	// versions is the fourth, services split by version, fed from the same
+	// call as services so the two count exactly the same spans. arrivals is
+	// the room its arrival caps have used.
+	versions  map[countedVersion]*serviceTotals
+	arrivals  versionArrivals
 	lateGrace time.Duration
 }
 
@@ -202,11 +213,15 @@ type Derived struct {
 	Services  []ServiceStat
 	// ServicesOverCap is what the per-tenant cap left out of Services.
 	ServicesOverCap ServiceCap
+	// Versions splits Services by version, and sums to it per service-minute.
+	Versions []VersionStat
+	// VersionsFolded is what Versions counted under OtherVersion.
+	VersionsFolded VersionsFolded
 }
 
 // Empty reports whether a drain produced nothing at all.
 func (d Derived) Empty() bool {
-	return len(d.Points) == 0 && len(d.Endpoints) == 0 && len(d.Services) == 0
+	return len(d.Points) == 0 && len(d.Endpoints) == 0 && len(d.Services) == 0 && len(d.Versions) == 0
 }
 
 // NewCounters returns counters that hold a minute open for lateGrace after it
@@ -220,6 +235,8 @@ func NewCounters(lateGrace time.Duration) *Counters {
 		buckets:   make(map[counted]*totals),
 		endpoints: make(map[countedEndpoint]*endpointTotals),
 		services:  make(map[countedService]*serviceTotals),
+		versions:  make(map[countedVersion]*serviceTotals),
+		arrivals:  newVersionArrivals(),
 		lateGrace: lateGrace,
 	}
 }
@@ -325,11 +342,14 @@ func (c *Counters) drain(closed func(minute time.Time) bool) Derived {
 	// different block every time and every replay double-counts.
 	sort.Slice(points, func(i, j int) bool { return points[i].less(points[j]) })
 	services, overCap := c.drainServices(closed)
+	versions, folded := c.drainVersions(closed, keptServices(services))
 	return Derived{
 		Points:          points,
 		Endpoints:       c.drainEndpoints(closed),
 		Services:        services,
 		ServicesOverCap: overCap,
+		Versions:        versions,
+		VersionsFolded:  folded,
 	}
 }
 
@@ -349,11 +369,12 @@ type Disowned struct {
 	Series    int
 	Endpoints int
 	Services  int
+	Versions  int
 	Spans     uint64
 }
 
 // Disown drops every share that arrived on one of the given partitions, from
-// the counter buckets and both rollups.
+// the counter buckets and every rollup, with the arrival room it used.
 //
 // This is not lost data, and the reason is the ordering the offsets already
 // rest on: a batch's offsets — and its durable counted-through watermark — move
@@ -396,6 +417,17 @@ func (c *Counters) Disown(partitions []int32) Disowned {
 		dropped.Services++
 		delete(c.services, key)
 	}
+	for key := range c.versions {
+		if _, gone := leaving[key.partition]; !gone {
+			continue
+		}
+		dropped.Versions++
+		delete(c.versions, key)
+	}
+	c.arrivals.forget(func(time.Time) bool { return false }, func(partition int32) bool {
+		_, gone := leaving[partition]
+		return gone
+	})
 	return dropped
 }
 

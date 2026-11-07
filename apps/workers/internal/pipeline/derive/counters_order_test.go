@@ -24,7 +24,7 @@ func TestDrainIsByteReproducible(t *testing.T) {
 						Timestamp: minute.Add(time.Second), ReceivedAt: minute.Add(time.Second),
 						TenantID: "t", ProjectID: "p",
 						ServiceName: service, Endpoint: route, DurationMS: 5,
-						SpanKind: kind, SpanName: route,
+						SpanKind: kind, SpanName: route, Version: route,
 						SpanID: []byte(fmt.Sprintf("%s%s%d", service, route, index)),
 					})
 				}
@@ -34,9 +34,9 @@ func TestDrainIsByteReproducible(t *testing.T) {
 	}
 
 	first := build()
-	if len(first.Points) == 0 || len(first.Endpoints) == 0 {
-		t.Fatalf("drained %d points and %d endpoint rows; the fixture is wrong",
-			len(first.Points), len(first.Endpoints))
+	if len(first.Points) == 0 || len(first.Endpoints) == 0 || len(first.Versions) == 0 {
+		t.Fatalf("drained %d points, %d endpoint rows and %d version rows; the fixture is wrong",
+			len(first.Points), len(first.Endpoints), len(first.Versions))
 	}
 
 	// Many rounds: a single comparison could pass on a lucky shuffle.
@@ -60,6 +60,17 @@ func TestDrainIsByteReproducible(t *testing.T) {
 			if !sameEndpointRow(first.Endpoints[i], again.Endpoints[i]) {
 				t.Fatalf("round %d differs at endpoint row %d:\n  first: %+v\n  again: %+v",
 					round, i, first.Endpoints[i], again.Endpoints[i])
+			}
+		}
+
+		if len(again.Versions) != len(first.Versions) {
+			t.Fatalf("round %d drained %d version rows, want %d",
+				round, len(again.Versions), len(first.Versions))
+		}
+		for i := range first.Versions {
+			if first.Versions[i] != again.Versions[i] {
+				t.Fatalf("round %d differs at version row %d:\n  first: %+v\n  again: %+v",
+					round, i, first.Versions[i], again.Versions[i])
 			}
 		}
 	}

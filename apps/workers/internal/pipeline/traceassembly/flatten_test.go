@@ -47,6 +47,8 @@ type spanOptions struct {
 	events       []*tracepb.Span_Event
 	startNano    uint64
 	endNano      uint64
+	// door is the receiver door the envelope came through; unset is DOOR_OTLP.
+	door nexovuev1.Door
 }
 
 // marshalEnvelope builds the bytes a Kafka message would carry.
@@ -58,6 +60,9 @@ func marshalEnvelope(t *testing.T, semconv string, options spanOptions) []byte {
 	}
 	if options.endNano == 0 {
 		options.endNano = options.startNano + 1_500_000 // 1.5 ms
+	}
+	if options.door == nexovuev1.Door_DOOR_UNSPECIFIED {
+		options.door = nexovuev1.Door_DOOR_OTLP
 	}
 
 	request := &tracesvc.ExportTraceServiceRequest{
@@ -90,7 +95,7 @@ func marshalEnvelope(t *testing.T, semconv string, options spanOptions) []byte {
 	message, err := proto.Marshal(&nexovuev1.Envelope{
 		TenantId:       "tenant-a",
 		ProjectId:      "project-a",
-		Door:           nexovuev1.Door_DOOR_OTLP,
+		Door:           options.door,
 		Signal:         nexovuev1.Signal_SIGNAL_SPANS,
 		SemconvVersion: semconv,
 		Payload:        payload,
@@ -519,5 +524,35 @@ func TestSpanLinksAreFlattened(t *testing.T) {
 	}
 	if !strings.Contains(links[0].Attributes, `"batch":3`) {
 		t.Errorf("link attributes = %q, want the batch size", links[0].Attributes)
+	}
+}
+
+// AC17, before the browser-door change: a server span through the browser door
+// names a version anyone holding a page's public key can choose, so it counts
+// under no version. Through the secret-key door the version is kept. Every
+// other column is the same either way: only what the version rollup counts
+// changes. The browser-door change later keeps such spans out of both rollups
+// and deletes this branch (F28 D55).
+func TestABrowserDoorSpanCountsUnderNoVersion(t *testing.T) {
+	const receivedAt = 1_700_000_000
+	cases := map[nexovuev1.Door]string{
+		nexovuev1.Door_DOOR_OTLP:      "2026.08.1",
+		nexovuev1.Door_DOOR_RUM:       "",
+		nexovuev1.Door_DOOR_SYNTHETIC: "2026.08.1",
+	}
+	for door, want := range cases {
+		t.Run(door.String(), func(t *testing.T) {
+			row := flattenOne(t, marshalEnvelope(t, "1.27.0", spanOptions{
+				kind: tracepb.Span_SPAN_KIND_SERVER,
+				door: door,
+			}))
+
+			if got := row.countable(time.Unix(receivedAt, 0), 30, 0).Version; got != want {
+				t.Errorf("countable version = %q, want %q", got, want)
+			}
+			if row.DeploymentVersion != "2026.08.1" {
+				t.Errorf("DeploymentVersion = %q; the stored span keeps what was sent", row.DeploymentVersion)
+			}
+		})
 	}
 }

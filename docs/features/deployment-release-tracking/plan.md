@@ -108,21 +108,21 @@ demo tool. Nothing built on it has been written yet.
 *Judgeable:* Read the committed cost report: its pass or fail against each threshold, the absolute sizes, how often a small team would reach `side_by_side`, and the list of what
 disappears if the gate fails. Run a query and see the printed counts equal to `release-demo`'s.
 
-- [ ] **T1.1** — `deploy/clickhouse/migrations/000038_service_versions_1m.up.sql`, `.down.sql` (*new*) · table per design
+- [x] **T1.1** — `deploy/clickhouse/migrations/000038_service_versions_1m.up.sql`, `.down.sql` (*new*) · table per design
   · with `apps/scheduler/src/nexovue_scheduler/erasure/tables.py` `DERIVED_TABLES` and `erasure/statements.py`, in this
   same task, since the inventory fails otherwise · proved by `apps/scheduler/tests/test_erasure_inventory.py`,
   `test_erasure_live.py` (AC20)
-- [ ] **T1.2** — `apps/workers/internal/pipeline/derive/versions.go` (*new*), `counters.go`, `services.go` · `Span.Version`,
+- [x] **T1.2** — `apps/workers/internal/pipeline/derive/versions.go` (*new*), `counters.go`, `services.go` · `Span.Version`,
   `versions` map, all three caps, fold to `__other__`, `Derived.Versions`, `Disown`, `PendingVersions`, the Go side of the name check · proved by
   `derive/versions_test.go` (*new*: sum equals `service_stats_1m`'s for any mix; two `Counters` instances that fold differently; a junk burst before the real version; 25 versions in one
   drain; long and control-character versions; AC15, AC18). The real version's count landing in `__other__` is asserted here, and "Versions were combined" in T4.1's AC67, `disown_test.go`, `counters_order_test.go`
-- [ ] **T1.3** — `traceassembly/stages.go`, `flatten.go` · `countable` carries the version, empty for `DOOR_RUM` until the F6 change removes that branch · proved
+- [x] **T1.3** — `traceassembly/stages.go`, `flatten.go` · `countable` carries the version, empty for `DOOR_RUM` until the F6 change removes that branch · proved
   by `flatten_test.go` (AC17's before-the-change case)
-- [ ] **T1.4** — `derive/versionwriter.go` (*new*), `traceassembly/pipeline.go`, `consume/retry.go` · writer, token, insert last in `insertDerived`, with its own 30-second budget, step-over and 5-minute skip, no hold, never an error, log fields at `:289,:383` · proved by
+- [x] **T1.4** — `derive/versionwriter.go` (*new*), `traceassembly/pipeline.go`, `consume/retry.go` · writer, token, insert last in `insertDerived`, with its own 30-second budget, step-over and 5-minute skip, no hold, never an error, log fields at `:289,:383` · proved by
   `derive/versionwriter_test.go` (*new*), `traceassembly/refusal_test.go` (AC19; *new case with a fake writer that always returns a non-permanent error*: AC54), `restart_test.go`, `counterhandover_test.go` (AC16)
-- [ ] **T1.5** — `tools/release-demo/send.py`, `test_send.py` (*new*), `justfile`, `pyproject.toml` (`tools/release-demo` added to both `testpaths` and `pythonpath`, or `just test-py` never collects this folder) · sends OTLP through the receiver. Named modes: `rolling` (share, failure rate), `swap`, `no-version`, `rollback`, `exceptions`, `cold-start`, `churn`, `many-services`, and `--deploys N` for a webhook sender (from T2.2 on) · proved by `test_send.py`, and by the printed counts matching the store
-- [ ] **T1.6** — `tools/release-demo/release_measure.py` (*new*; `tools/detection-measure/measure.py` already holds that module name on `pythonpath`), `tools/detection-measure/scale.py` · the fixed run: baseline at the commit before T1.2, same traffic, 30 minutes, 3 repeats, a rollout an hour on every service, memory sampled, spread and peak · proved by `tools/release-demo/test_release_demo_measure.py` (*new*)
-- [ ] **T1.7** — `docs/research/release-rollup-cost-<date>.md` (*new*) · **the gate:** rows, disk, worker memory, on the
+- [x] **T1.5** — *Built 2026-11-07 without `--deploys N`, which the task gives from T2.2 on, when the new deploy body exists.* `tools/release-demo/send.py`, `test_send.py` (*new*), `justfile`, `pyproject.toml` (`tools/release-demo` added to both `testpaths` and `pythonpath`, or `just test-py` never collects this folder) · sends OTLP through the receiver. Named modes: `rolling` (share, failure rate), `swap`, `no-version`, `rollback`, `exceptions`, `cold-start`, `churn`, `many-services`, and `--deploys N` for a webhook sender (from T2.2 on) · proved by `test_send.py`, and by the printed counts matching the store
+- [x] **T1.6** — `tools/release-demo/release_measure.py` (*new*; `tools/detection-measure/measure.py` already holds that module name on `pythonpath`), `tools/detection-measure/scale.py` · the fixed run: baseline at the commit before T1.2, same traffic, 30 minutes, 3 repeats, a rollout an hour on every service, memory sampled, spread and peak · proved by `tools/release-demo/test_release_demo_measure.py` (*new*)
+- [x] **T1.7** — *Built 2026-11-07 as [`docs/research/release-rollup-cost-2026-11-07.md`](../../research/release-rollup-cost-2026-11-07.md): passed on demo data; the alert-delay row cannot be measured before Step 1b.* `docs/research/release-rollup-cost-<date>.md` (*new*) · **the gate:** rows, disk, worker memory, on the
   demo and with churn, against the design's thresholds, absolute figures per million requests, how often `side_by_side` is reached at small-team traffic, and an arithmetic estimate for a per-endpoint table · labelled demo throughout · proved by the report (AC21). **Stop here if it fails:** tighten the caps once, then bring the numbers to the founder, with the design's list of what disappears
 
 ### Step 1b — A release compared by version, on real traffic
@@ -274,7 +274,7 @@ no test server is rented (item 9). The whole-server fit on 16 GB waits for Oracl
 - [x] Design approval: 2026-11-02
 - [x] **Plan approval:** 2026-11-02
 - [ ] F6 merged
-- [ ] Step 1a cost gate
+- [x] Step 1a cost gate: passed on demo data, 2026-11-07 ([report](../../research/release-rollup-cost-2026-11-07.md)). Its alert evaluation start delay row cannot be measured before Step 1b's sync job exists, and no Step 1b task holds it yet (status, *Open decisions*)
 - [ ] The one round of customer conversations held, before Step 1b (foundation item 8)
 - [ ] F6 browser-door change, before Step 4. F28 owns it (foundation item 22, approved 2026-11-02); its tasks are added when this plan is next revised
 - [ ] Implementation

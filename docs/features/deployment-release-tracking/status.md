@@ -2,12 +2,74 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**In development.** The founder approved the specification, design and plan on 2026-11-02. Plan Step 1a (the version
+rollup and its cost measurement) is on `feature/phase-2`, and its cost gate passed on demo data
+(2026-11-07). Step 1b waits on the one round of buyer conversations (foundation item 8), a hard stop.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 1a built, awaiting the coordinator's review and commit. The cost gate's verdict is in
+[`docs/research/release-rollup-cost-2026-11-07.md`](../../research/release-rollup-cost-2026-11-07.md).
+
+**The gate passed on demo data, development machine, not a server figure** (T1.7, AC21). Demo traffic, 50 services
+with a rollout an hour, 3 repeats of 30 minutes: rows 1.096× `service_stats_1m` (bound 3×), steady rows 1.000× (1.5×),
+worker peak memory −0.3% (+15%), disk per request 1.101× (2×); `side_by_side` on 81 of 84 rollouts. Churn, 40 services
+with 70 new versions a minute each, one 15-minute pair: worker peak 151 MiB against `GOMEMLIMIT` 1,088 MiB, and totals
+exact, with every service's versions folded into `__other__` and every request conserved. The design's churn row is its
+own (`GOMEMLIMIT`, totals exact), so churn's ratios (21× rows, +15.8% memory, 2.065× disk) are reported for information,
+not judged against the demo's bounds. The tool first judged churn against the demo's ratios, and counted folding as
+inexact totals; both were fixed in `release_measure.py`, tests first. The alert evaluation start delay row cannot be
+measured before Step 1b. `sizing.md` is unchanged: no worker memory growth on the demo.
+
+## Step 1a, built 2026-11-07
+
+What exists now, read from the code:
+
+- **`service_versions_1m`**, ClickHouse migration `000038` (the next free number on the branch), `000035`'s shape plus
+  `version`, in the erasure inventory (`erasure/tables.py`, `erasure/statements.py`, `test_erasure_live.py`). T1.1.
+- **The worker's version map** (`derive/versions.go`): fed from `observeService`, so it counts exactly the spans
+  `service_stats_1m` counts; the drain cap of 20 per service per drain, the arrival caps of 64 per partition, service and
+  minute and 512 per tenant, partition and minute; folding into `__other__` for over-long or failing names; a service
+  the per-tenant cap leaves out leaves its versions out; `Disown`, `PendingVersions`, the fold report. The Go side of the
+  name check is `derive.NameAllowed`, held to `packages/contracts/fixtures/release-names.json`, which the webhook's
+  Python check reads in T2.2. T1.2.
+- **The browser door counts under no version** (`traceassembly/flatten.go`, `countedVersion`), until the browser-door
+  change keeps such spans out of both rollups and deletes that branch (D55). This matches that change's plan, which
+  filters before `counters.Observe` (`docs/changes/browser-door/plan.md`, T1.1): no conflict. T1.3.
+- **The writer** (`derive/versionwriter.go`) with its deduplication token, inserted last in `insertDerived`, never an
+  error and never holding progress: a refusal is counted in `derived_rows_refused`; a transient failure has its own
+  30-second budget (`consume.RetryWithin`, new), then is stepped over and the insert paused for 5 minutes, counted in
+  `version_rows_stepped_over` and `version_rows_skipped`. Heartbeat and release log lines carry `version_series` and
+  `versions_folded`. T1.4.
+- **`tools/release-demo`**: `send.py` (every named mode; a ledger of what the receiver accepted; `verify` against the
+  store) and `release_measure.py` (the timed runs and the gate's table), with `just release-demo` and
+  `just release-measure`, and both in `pyproject.toml`'s `testpaths` and `pythonpath`. `--deploys N` is not built: the
+  task gives it "from T2.2 on", when the new deploy body exists. T1.5, T1.6.
+- **`tools/detection-measure/scale.py`** reads `service_versions_1m` and each table's index memory in its storage census,
+  so `just detection-scale watch` at AC29's volume reports the version table beside `service_stats_1m`.
+- **ADR-025** filed (the first of the design's three proposed ADRs). The other two, the releases record and the deploy
+  envelope, are filed when Step 1b and Step 2 start, since nothing they decide is built yet.
+
+**Tests, each seen failing first.** Go: `derive/versions_test.go` (14 tests: AC15 for any mix over 40 seeds, AC18's
+25 versions, the two-drain fold, the 64-name junk burst, the per-partition and per-tenant arrival caps, long and
+control-character names, the shared name cases, the service cap, the empty version, a reproducible drain, the revoke
+with its arrival room, the arrival room freed with its minute), `versionwriter_test.go`, `consume/permanent_test.go`
+(the budgeted retry), `traceassembly/flatten_test.go` (AC17 before the change), `refusal_test.go` (AC19 for this table,
+AC54), `counterhandover_test.go` and `restart_test.go` (AC16), and `counters_order_test.go`, `disown_test.go` extended.
+A store probe, `derive/versionwriter_storeprobe_test.go`, writes one drain to both tables in a real ClickHouse 26.3 and
+reads the version rows summing to the service rows bucket by bucket, with a retried insert deduplicated: passed.
+Python: `tools/release-demo/test_send.py` (12), `test_release_demo_measure.py` (19: 9, then 10 more for T1.7, of which
+the folded-churn, GOMEMLIMIT and compose-limit tests failed against the earlier tool first; the five "totals differ"
+cases passed against it too, since it was stricter), `test_erasure_inventory.py` (failed on the missing table, then
+passed). `uv run pytest tools/release-demo -q`: 31 passed; `ruff check`, `ruff format --check` and `mypy .` clean.
+
+**End to end, on this machine's own stores** (ClickHouse, Postgres, Kafka on non-default ports, receiver and worker
+from source): `release-demo send rolling` then `verify` printed 240 and 239 requests sent on v1 and v2, the same stored
+in `service_versions_1m`, and the version rows summing to `service_stats_1m`.
+
+**Not run:** `just check` (the coordinator runs it); `test_erasure_live.py`, which needs the full dev stack with
+SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 
 ## Completed
@@ -28,19 +90,37 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1a (and the browser-door change it owns), after re-reading line references. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+Coordinator: review and commit Step 1a, with the cost report. Step 1b waits on the founder's buyer round (foundation
+item 8); its Postgres migration
+takes the next number after F22's `0051`. The browser-door change (`docs/changes/browser-door/`) must extend its live
+test to `service_versions_1m` when it is built (its own status, *Documentation impact*).
 
 
 ## Open decisions
 
-**None.** The customer conversations (foundation item 8) and the browser-door change (item 7) were settled by the foundation
-on 2026-11-02, and D1 now matches the foundation's section 9. The browser-door owner (F28) and the conditional gate after
-Step 1a were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below).
+**None blocking.** Two readings made while building Step 1a, recorded so they can be overruled:
+
+- **The name check refuses DEL (U+007F).** FR9 says "C0 and C1 control characters"; DEL is in neither range strictly, but
+  it is Unicode category Cc with them. The check uses Cc, and the shared fixture states it. Overrule by removing the DEL
+  case from `release-names.json` and narrowing `derive.NameAllowed`.
+- **The empty version takes arrival room like any version.** The design does not say whether `''` is exempt from the
+  arrival caps. Treating it as a version means a junk burst can fold "no version" traffic into `__other__` too, which the
+  "versions were combined" label already covers.
+- **The gate applies the four ratio rows to the demo traffic and the churn row to churn** (design, *The gate*; founder
+  decision 24 splits cost checks from correctness checks the same way). "Totals exact" means nothing lost and every
+  service's versions, `__other__` included, holding what was sent, with no named version above it; folding a named
+  version short is allowed (FR17, AC18). Overrule by making churn meet the ratio bounds too, which it does not (21× rows,
+  +15.8% memory, 2.065× disk; a cost failure under decision 24, which keeps version comparison if it fits 16 GB).
+- **Churn ran once for 15 minutes,** not the design's 3 repeats of 30 minutes. Its margin is wide (151 of 1,088 MiB),
+  so the gate is called passed; the founder may ask for the full repeats.
+- **The gate's alert evaluation start delay row has no task.** It needs Step 1b's sync job. Proposed: add it to Step 1b's
+  sync-job task when the plan is next revised, and measure it before Step 1b is called done.
+
+The customer conversations (foundation item 8) and the browser-door change (item 7) were settled by the foundation on
+2026-11-02. The conditional gate after Step 1a was answered on 2026-11-02 (foundation item 24).
 
 ## Blocked
 
-- **The build is blocked on F6 merging** (findings, `service_stats_1m`, `detection_sweep`).
-- **Blocked on founder approval** of specification, design and plan.
 - **Step 1b waits for the one round of customer conversations** (foundation item 8).
 - **Step 4 is blocked on the shared browser-door change** (below; foundation item 7, D58). **F28 owns it** (foundation item 22,
   2026-11-02). The plan holds no task for it yet; they are added when the plan is next revised.
@@ -454,7 +534,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-07
 
 ## Founder approval, 2026-11-02
 

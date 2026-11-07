@@ -78,6 +78,7 @@ _MINUTE_KEYED_TABLES: Final = frozenset(
         "service_edges_1m",
         "web_vitals_1m",
         "service_stats_1m",
+        "service_versions_1m",
         "detection_readings",
     }
 )

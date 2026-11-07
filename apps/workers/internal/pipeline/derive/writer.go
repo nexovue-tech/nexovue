@@ -31,6 +31,14 @@ const (
 	columnServiceName = "service_name"
 )
 
+// The columns the three per-minute rollups share, spelled once for their writers.
+const (
+	columnRetentionDays = "derived_retention_days"
+	columnMinute        = "minute"
+	columnRequestCount  = "request_count"
+	columnErrorCount    = "error_count"
+)
+
 // jsonAsStringSetting lets the JSON column travel the native protocol as one
 // JSON document per row, which is the shape ch-go's ColJSONStr encodes.
 const jsonAsStringSetting = "output_format_native_write_json_as_string"
