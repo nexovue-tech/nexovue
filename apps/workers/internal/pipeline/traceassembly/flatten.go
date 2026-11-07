@@ -84,10 +84,6 @@ type spanRow struct {
 	// edge derivation and never written: it is only ever read to name a callee
 	// that sent us nothing of its own.
 	Peer serviceedges.Peer
-	// CountedVersion is the version this span counts under in the version
-	// rollup: DeploymentVersion, or empty for a door whose versions are not
-	// trusted. Carried for the counters and never written.
-	CountedVersion string
 }
 
 // spanLink is one entry of the `links` Nested column, and one candidate caller
@@ -197,7 +193,6 @@ func flattenSpan(
 		RPCMethod:         rpc.method,
 		RPCStatus:         rpc.status,
 		DeploymentVersion: resource.version,
-		CountedVersion:    countedVersion(envelope.GetDoor(), resource.version),
 		ResourceAttrs:     resource.attrsJSON,
 		SpanAttrs:         otlpvalue.AttributesJSON(attributes),
 		Events:            eventsJSON(span.GetEvents()),
@@ -210,19 +205,6 @@ func flattenSpan(
 		// stored: nothing queries it.
 		TraceState: span.GetTraceState(),
 	}
-}
-
-// countedVersion is the version a span counts under in the version rollup.
-//
-// A span through the browser door names a version chosen by whoever holds the
-// page's public key, so it counts under no version (F28 D12). It still counts
-// in both rollups, keeping their sums equal, until the browser-door change keeps
-// such spans out of both and deletes this branch (D55).
-func countedVersion(door nexovuev1.Door, version string) string {
-	if door == nexovuev1.Door_DOOR_RUM {
-		return ""
-	}
-	return version
 }
 
 // promotedValues are the HTTP columns lifted out of the attribute map.

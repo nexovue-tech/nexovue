@@ -326,8 +326,8 @@ func TestAServiceLeftOutByTheServiceCapLeavesItsVersionsOut(t *testing.T) {
 	sumsMatch(t, drained)
 }
 
-// A browser-door span reaches the counters with no version until the browser-door
-// change keeps it out of both tables; until then it counts under the empty one.
+// A span whose resource names no service.version still counts, under the empty
+// version, so the version rows keep summing to the service row.
 func TestASpanWithNoVersionCountsUnderTheEmptyVersion(t *testing.T) {
 	counters := NewCounters(0)
 	counters.Observe(serviceMinute, versionedSpan(0, "checkout", "", 5, false))

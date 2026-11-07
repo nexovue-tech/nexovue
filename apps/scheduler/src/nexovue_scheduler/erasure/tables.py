@@ -42,6 +42,7 @@ DERIVED_TABLES: Final[tuple[str, ...]] = (
     "web_vitals_1m",
     "service_stats_1m",
     "service_versions_1m",
+    "services_over_cap_1m",
     "detection_readings",
 )
 

@@ -149,9 +149,9 @@ func TestAReplayDrainsTheSameVersionRows(t *testing.T) {
 	}
 
 	first, replay := drain(), drain()
-	if len(first) != 2 {
-		t.Fatalf("drained %d version rows, want the sent version and the browser door's empty one: %+v",
-			len(first), first)
+	if len(first) != 1 || first[0].RequestCount != 32 {
+		t.Fatalf("drained %+v, want one row of the 32 secret-key spans: browser-door spans count nowhere",
+			first)
 	}
 	if len(replay) != len(first) {
 		t.Fatalf("the replay drained %d version rows, want %d", len(replay), len(first))

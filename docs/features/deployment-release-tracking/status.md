@@ -9,7 +9,7 @@ rollup and its cost measurement) is on `feature/phase-2`, and its cost gate pass
 
 ## Current task
 
-Step 1a built, awaiting the coordinator's review and commit. The cost gate's verdict is in
+Step 1a is on `feature/phase-2` (2026-11-07). The cost gate's verdict is in
 [`docs/research/release-rollup-cost-2026-11-07.md`](../../research/release-rollup-cost-2026-11-07.md).
 
 **The gate passed on demo data, development machine, not a server figure** (T1.7, AC21). Demo traffic, 50 services
@@ -124,6 +124,8 @@ The customer conversations (foundation item 8) and the browser-door change (item
 - **Step 1b waits for the one round of customer conversations** (foundation item 8).
 - **Step 4 is blocked on the shared browser-door change** (below; foundation item 7, D58). **F28 owns it** (foundation item 22,
   2026-11-02). The plan holds no task for it yet; they are added when the plan is next revised.
+  **2026-11-07:** the browser-door change is built (all four steps; its live test asserts `service_versions_1m` too,
+  and it deleted `countedVersion`, D55) and is on `feature/phase-2` (2026-11-07) (`docs/changes/browser-door/status.md`).
 
 ## Reviews
 

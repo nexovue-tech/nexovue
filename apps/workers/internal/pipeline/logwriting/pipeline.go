@@ -32,6 +32,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/vitals"
 )
@@ -115,6 +116,10 @@ type Pipeline struct {
 	// already acknowledged. It is the direct evidence that the watermark is
 	// doing something, and reads zero on a worker that never restarted.
 	alreadyStored uint64
+	// syntheticRefused counts records dropped for claiming to be a synthetic
+	// check's evidence from a door other than the prober's. Flat is normal;
+	// climbing names someone forging a check's evidence.
+	syntheticRefused uint64
 
 	defaultRetentionDays uint16
 
@@ -218,6 +223,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("messages_already_stored", p.alreadyStored),
 		slog.Uint64("messages_parked", p.parked),
 		slog.Uint64("values_masked", p.valuesMasked),
+		slog.Uint64("synthetic_records_refused", p.syntheticRefused),
 	}
 }
 
@@ -240,6 +246,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 	p.block.reset()
 	p.resetVitals()
 	messages, masked, stored := 0, 0, 0
+	var refused proberdoor.Refusals
 	// held is exactly the records whose rows are in the block, each with its own
 	// rows, which is what a refusal is narrowed over. Skipped and parked records
 	// are deliberately not in it.
@@ -254,7 +261,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 			p.alreadyStored++
 			continue
 		}
-		rows, readings, maskedHere, err := p.absorbMessage(polled.At, record.Value)
+		out, maskedHere, err := p.absorbMessage(polled.At, record.Value)
 		if err != nil {
 			if parkErr := p.loop.Park(ctx, record, err); parkErr != nil {
 				return written{}, parkErr
@@ -262,11 +269,12 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 			p.parked++
 			continue
 		}
-		for _, row := range rows {
+		refused.Merge(out.syntheticRefused)
+		for _, row := range out.rows {
 			p.block.append(row)
 		}
-		p.holdVitals(readings)
-		held = append(held, heldLog{record: record, rows: rows})
+		p.holdVitals(out.readings)
+		held = append(held, heldLog{record: record, rows: out.rows})
 		masked += maskedHere
 		messages++
 
@@ -289,6 +297,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 	}
 	stored += inserted
 	p.valuesMasked += countOf(masked)
+	p.reportSyntheticRefused(ctx, refused)
 
 	p.log.DebugContext(ctx, "batch absorbed",
 		slog.Int("messages", messages),
@@ -296,6 +305,20 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 		slog.Int("values_masked", masked),
 	)
 	return written{}, nil
+}
+
+// reportSyntheticRefused says once per batch that records claiming to be a
+// synthetic check's evidence were dropped, naming who sent the first. Once per
+// batch rather than per record, so a forger cannot turn the drop into a flood
+// of log lines.
+func (p *Pipeline) reportSyntheticRefused(ctx context.Context, refused proberdoor.Refusals) {
+	if refused.Count <= 0 {
+		return
+	}
+	p.syntheticRefused += countOf(refused.Count)
+	p.log.LogAttrs(ctx, slog.LevelWarn,
+		"dropped log records claiming to be a synthetic check's evidence; only the prober's door may send them",
+		refused.Attrs()...)
 }
 
 // writeChunk inserts what has accumulated in the block, then records how far
@@ -388,10 +411,10 @@ func (p *Pipeline) storing(record *kgo.Record) bool {
 func (p *Pipeline) absorbMessage(
 	now time.Time,
 	message []byte,
-) ([]logRow, []vitals.Reading, int, error) {
+) (flattened, int, error) {
 	payload, err := decodeEnvelope(message)
 	if err != nil {
-		return nil, nil, 0, err
+		return flattened{}, 0, err
 	}
 
 	projectID := payload.envelope.GetProjectId()
@@ -406,8 +429,7 @@ func (p *Pipeline) absorbMessage(
 		retentionDays:        rawDays,
 		derivedRetentionDays: derivedDays,
 	}
-	rows, readings := payload.rows(marks)
-	return rows, readings, masked, nil
+	return payload.rows(marks), masked, nil
 }
 
 // Settle has nothing to do: every batch is written inside Absorb, so nothing

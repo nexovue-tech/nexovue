@@ -93,7 +93,10 @@ type Pipeline struct {
 	// services writes `service_stats_1m`, anomaly detection's input, from the
 	// same inbound spans as the endpoint rollup.
 	services *derive.ServiceWriter
-	edges    *serviceedges.Writer
+	// overCap writes `services_over_cap_1m`, the tenant-minutes the service cap
+	// left services out of, so a screen can say a minute was capped.
+	overCap overCapInserter
+	edges   *serviceedges.Writer
 	// versions writes `service_versions_1m`, what a release is compared on,
 	// from the same spans as services. Unlike every insert beside it, its
 	// failure never holds detection's progress or ends the worker (F28 D13).
@@ -177,6 +180,12 @@ type Pipeline struct {
 	clock func() time.Time
 }
 
+// overCapInserter is the over-cap record's writer, narrowed to the one call the
+// pipeline makes so a test can stand in a store.
+type overCapInserter interface {
+	Insert(ctx context.Context, entries []derive.ServiceCap) error
+}
+
 // versionInserter is the version rollup's writer, narrowed to the one call the
 // pipeline makes so a test can stand in a store that fails.
 type versionInserter interface {
@@ -243,6 +252,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		metrics:       derive.NewWriter(pool),
 		endpoints:     derive.NewEndpointWriter(pool),
 		services:      derive.NewServiceWriter(pool),
+		overCap:       derive.NewOverCapWriter(pool),
 		versions:      derive.NewVersionWriter(pool),
 		edges:         serviceedges.NewWriter(pool),
 		seen:          dedupe.NewOffsets(),
@@ -754,6 +764,7 @@ func (p *Pipeline) insertDerived(
 		func(ctx context.Context) (bool, error) { return p.insertCounters(ctx, derived.Points) },
 		func(ctx context.Context) (bool, error) { return p.insertEndpoints(ctx, derived.Endpoints) },
 		func(ctx context.Context) (bool, error) { return p.insertServices(ctx, derived.Services) },
+		func(ctx context.Context) (bool, error) { return false, p.insertOverCap(ctx, derived.ServicesOverCap) },
 		func(ctx context.Context) (bool, error) { return p.insertEdges(ctx, edges) },
 	}
 	anyRefused := false
@@ -835,15 +846,17 @@ func (p *Pipeline) recordProgress(
 }
 
 // reportServiceCap says once per drain that an organization had more services
-// in a minute than the rollup counts, naming the one that lost the most.
-func (p *Pipeline) reportServiceCap(ctx context.Context, overCap derive.ServiceCap) {
-	if overCap.Services == 0 {
+// in a minute than the rollup counts, naming the one that lost the most. The
+// line is the operator's pointer; `services_over_cap_1m` holds every minute.
+func (p *Pipeline) reportServiceCap(ctx context.Context, entries []derive.ServiceCap) {
+	report := derive.CapReportOf(entries)
+	if report.Services == 0 {
 		return
 	}
-	p.servicesOverCap += uint64(max(overCap.Services, 0)) //nolint:gosec // clamped to non-negative
+	p.servicesOverCap += report.Services
 	p.log.WarnContext(ctx, "left services out of the service rollup; the organization is over its cap",
-		slog.Int("services", overCap.Services),
-		slog.String("tenant_id", overCap.TenantID),
+		slog.Uint64("services", report.Services),
+		slog.String("tenant_id", report.TenantID),
 		slog.Int("cap", derive.MaxServicesPerTenant),
 	)
 }
@@ -938,6 +951,23 @@ func (p *Pipeline) insertServices(ctx context.Context, stats []derive.ServiceSta
 		return p.services.Insert(callCtx, stats)
 	})
 	return p.stepOverRefusal(ctx, "service_stats_1m", len(stats), err)
+}
+
+// insertOverCap writes the record of tenant-minutes the service cap left
+// services out of. `services_over_cap_1m` carries a deduplication window
+// (000039) and the drain reports in order, so a retry is recognised.
+//
+// It retries within the loop's own budget, through RetryWithin so a drain test
+// can stand in a store. A refusal is counted and holds no progress: detection
+// reads `service_stats_1m`, which a refused record leaves whole.
+func (p *Pipeline) insertOverCap(ctx context.Context, entries []derive.ServiceCap) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	err := consume.RetryWithin(ctx, p.log, p.clock, "insert over-cap record", consume.RetryBudget,
+		func(callCtx context.Context) error { return p.overCap.Insert(callCtx, entries) })
+	_, err = p.stepOverRefusal(ctx, "services_over_cap_1m", len(entries), err)
+	return err
 }
 
 // insertSummaries writes the per-trace rows behind the trace list.

@@ -15,7 +15,7 @@ server; see foundation, *What A and B change*).
 | Stage | Feature | Docs | Spec approved | Plan approved | On the branch | Merged | Measured |
 |---|---|---|---|---|---|---|---|
 | 1 Detect | [F6 Anomaly detection](../features/anomaly-detection/status.md) | Done | Yes | Yes | Yes | Yes, PR #24 | After deploy |
-| — | [Browser-door change](../changes/browser-door/status.md) (owned by F28) | Done | — | Yes, 2026-11-07 | No | No | After deploy |
+| — | [Browser-door change](../changes/browser-door/status.md) (owned by F28) | Done | — | Yes, 2026-11-07 | Built 2026-11-07, all four steps, live test passed on a local stack; on the branch 2026-11-07 | No | After deploy |
 | 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | Step 1a (2026-11-07); cost gate passed on demo data ([report](../research/release-rollup-cost-2026-11-07.md)). Step 1b waits on the buyer round (foundation item 8) | No | After deploy |
 | 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | Step 1 (2026-11-07); Step 2 (2026-11-07) except T2.9, which waits on F3 | No | After deploy |

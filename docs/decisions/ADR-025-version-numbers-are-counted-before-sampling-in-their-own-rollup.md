@@ -34,7 +34,9 @@ the code stood in the way:
    counted and holds no progress; a transient failure has its own 30-second budget, then is stepped over and
    paused for 5 minutes (`traceassembly/pipeline.go`, `insertVersions`; F28 D13).
 5. **A browser-door span counts under no version** until the browser-door change
-   (`docs/changes/browser-door/`) keeps such spans out of both rollups (F28 D12, D55).
+   (`docs/changes/browser-door/`) keeps such spans out of both rollups (F28 D12, D55). That change is built:
+   such spans now reach no rollup at all (`traceassembly/stages.go`, `countsInRollups`), and the empty-version
+   branch is deleted.
 
 ## Consequences
 

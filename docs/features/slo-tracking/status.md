@@ -30,6 +30,8 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 - **F19's build** waits for F6 to merge, and for F28, F3, F22, F4 and F5 in the plan's order.
 - **Plan Step 4 onward** waits on the demand gate, and on precondition P2: a separate change keeping browser-door spans out of the rollups. **F19's release waits on P2 too.** It has no record yet. Foundation item 7 sets it before Stage 1 reaches a customer, and F28 owns it (item 22, 2026-11-02).
+  **2026-11-07:** P2 is `docs/changes/browser-door/`, built (all four steps, with the AC37 live test through the real
+  receiver and worker) and on `feature/phase-2` (2026-11-07).
 
 ## Risks
 

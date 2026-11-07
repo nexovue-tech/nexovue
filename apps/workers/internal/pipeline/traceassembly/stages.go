@@ -3,6 +3,8 @@ package traceassembly
 import (
 	"time"
 
+	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
+
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
@@ -49,7 +51,7 @@ func (r spanRow) countable(receivedAt time.Time, retentionDays uint16, partition
 		// this span's duration in its latency sample.
 		SpanKind:   r.SpanKind,
 		SpanName:   r.SpanName,
-		Version:    r.CountedVersion,
+		Version:    r.DeploymentVersion,
 		TraceID:    r.TraceID,
 		SpanID:     r.SpanID,
 		Timestamp:  r.Timestamp,
@@ -237,6 +239,18 @@ type handling struct {
 	partition int32
 }
 
+// countsInRollups reports whether spans through this door are counted into the
+// counters and the endpoint, service and version rollups.
+//
+// The browser door's are not: its site key is printed in the page, so anyone
+// can send a SERVER span under any service name through it and forge a
+// service's traffic (docs/changes/browser-door). nexovue's own browser SDK sends
+// no SERVER or CONSUMER span, so no real request is lost (F19 spec D63). Edges
+// and storage still take the span, so the trace view keeps it.
+func countsInRollups(door nexovuev1.Door) bool {
+	return door != nexovuev1.Door_DOOR_RUM
+}
+
 // absorbMessage runs one Kafka message through every stage its handling still
 // calls for.
 //
@@ -254,20 +268,22 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 	receivedAt := consume.ReceivedAt(payload.envelope, now)
 	rawDays, derivedDays := s.retention.Retention(payload.envelope.GetProjectId())
 
+	countedDoor := countsInRollups(payload.envelope.GetDoor())
 	result := absorbed{receivedAt: receivedAt}
 	for _, row := range payload.rows() {
 		row.ReceivedAt = receivedAt
 		row.RetentionDays, row.DerivedRetentionDays = rawDays, derivedDays
 		// Derive before sample: the counters and the endpoint rollup see every
-		// span, whatever the sampler decides about the trace it belongs to.
-		if run.count {
+		// span from a counted door, whatever the sampler decides about its trace.
+		if run.count && countedDoor {
 			countable := row.countable(receivedAt, derivedDays, run.partition)
 			minute, discarded := s.counters.Observe(now, countable)
 			result.latestMinute = later(result.latestMinute, minute)
 			if discarded != 0 {
 				result.skew.observe(countable, discarded)
 			}
-
+		}
+		if run.count {
 			// Edges see every span too, and for the same reason: the sampler
 			// keeps about one healthy trace in ten, so an edge rate measured
 			// after it would be a tenth of the truth.

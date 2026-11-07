@@ -125,31 +125,33 @@ Each behavior change's test is written first and **seen failing** against today'
 appear in the trace view but in neither `service_stats_1m` nor `endpoint_stats_1m`. The new live test does
 exactly this.
 
-- [ ] **T1.1** — `apps/workers/internal/pipeline/traceassembly/stages.go` · in `absorbMessage`, skip the
+- [x] **T1.1** — `apps/workers/internal/pipeline/traceassembly/stages.go` · in `absorbMessage`, skip the
   `counters.Observe` call (`:264`) when `payload.envelope.GetDoor() == DOOR_RUM`, leaving `edges.Observe`,
   the sampling buffer and the skew report untouched · proved by a new `traceassembly` test (beside
   `invariants_test.go`) that absorbs a `DOOR_RUM` envelope carrying a `SERVER` span and asserts the counters
   derived nothing while the edge accumulator and the buffer both saw it — seen failing first.
-- [ ] **T1.2** — same test file · a `DOOR_OTLP` envelope with the same span still counts in both rollup
+- [x] **T1.2** — same test file · a `DOOR_OTLP` envelope with the same span still counts in both rollup
   accumulators, so the filter cannot over-reach · part of T1.1's table-driven test.
-- [ ] **T1.3** — `apps/api/tests/test_browser_door_live.py` (new) · the AC37 end-to-end proof through the
+- [x] **T1.3** — `apps/api/tests/test_browser_door_live.py` (new) · the AC37 end-to-end proof through the
   real receiver, Kafka and worker: sign up, create a site key, POST a forged `SERVER` span to
   `/browser/v1/traces`, then assert a row lands in `spans` and none in `service_stats_1m` or
   `endpoint_stats_1m` (both tables in one test, per F28 D55) · fails loudly when the stack is down
   (`tests/helpers/live.py`) · seen failing first. F28 extends this to `service_versions_1m` when its
   migration exists; recorded in `status.md`, *Documentation impact*.
+  *Built 2026-11-07:* F28's `000038` already existed, so the test asserts all three tables itself. F28's
+  `countedVersion` branch, which its D55 says this change deletes, is deleted with its test.
 
 ### Step 2 — The cap keeps the busiest
 
 *Judgeable:* the new unit test's scenario — 2,001 one-request `aaa-*` services plus one busy real service in
 one tenant-minute — keeps the busy one.
 
-- [ ] **T2.1** — `apps/workers/internal/pipeline/derive/services.go` · `capServices` ranks each
+- [x] **T2.1** — `apps/workers/internal/pipeline/derive/services.go` · `capServices` ranks each
   tenant-minute's rows by request count descending, name ascending as the tie-break, before applying the cap;
   the input stays the drain's sorted rows, so a replay still drains the same block · proved by a new case in
   `services_test.go` (minted `aaa-*` names no longer evict a busy service; a tie keeps the same service every
   run) — seen failing first, since today's code keeps first-in-name-order.
-- [ ] **T2.2** — `derive/counters_order_test.go` · the drain-determinism property still holds with the new
+- [x] **T2.2** — `derive/counters_order_test.go` · the drain-determinism property still holds with the new
   ordering: two drains of identical input produce identical rows in identical order · extend the existing
   ordering test.
 
@@ -159,15 +161,15 @@ one tenant-minute — keeps the busy one.
 **Task shapes depend on open decision 1; the recommendation's tasks follow. If the founder picks another
 option, this step is re-planned before implementation.**
 
-- [ ] **T3.1** — `derive/services.go` · widen `ServiceCap` (`:131-137`) to per tenant-minute entries
+- [x] **T3.1** — `derive/services.go` · widen `ServiceCap` (`:131-137`) to per tenant-minute entries
   (tenant, minute, services dropped), still computed inside `capServices` · proved by a new case in
   `services_test.go` asserting two tenants over the cap in different minutes each get their own entry —
   seen failing first.
-- [ ] **T3.2** — `deploy/clickhouse/migrations/000038_<name>.up.sql` / `.down.sql` · the over-cap record
+- [x] **T3.2** — `deploy/clickhouse/migrations/000039_services_over_cap_1m.up.sql` / `.down.sql` (`000038` became F28's) · the over-cap record
   table (per decision 1's recommendation), copying `000035`'s deduplication-token pattern so a retried
   insert cannot double-count; tenant first in the sort key · plus `erasure/tables.py`, or erasure's live
   test fails (foundation section 8 checklist).
-- [ ] **T3.3** — `traceassembly/pipeline.go` · write the entries at drain where `reportServiceCap` runs
+- [x] **T3.3** — `traceassembly/pipeline.go` · write the entries at drain where `reportServiceCap` runs
   (`:707,756-768`); keep or delete the WARN line per decision 1's answer (rule 11: delete what the change
   supersedes, state what remains) · proved by a worker test beside the existing drain tests, and the record
   read back in `test_browser_door_live.py` after T1.3's tenant is pushed over the cap.
@@ -178,16 +180,18 @@ option, this step is re-planned before implementation.**
 server door; neither lands in `metrics_gauge`; the dev prober's own readings keep flowing.
 **Blocked on open decision 4 (what happens to a refused reading); the recommendation's tasks follow.**
 
-- [ ] **T4.1** — `apps/workers/internal/pipeline/metricwriting/flatten.go` · a point whose metric name
+- [x] **T4.1** — `apps/workers/internal/pipeline/metricwriting/flatten.go` · a point whose metric name
   starts `synthetic.` or whose resource attributes carry a `synthetic.check.*` key is not written unless the
   envelope's door is `DOOR_SYNTHETIC`; the refusal is handled per decision 4 · proved by new cases in
   `flatten_test.go`: forged name under `DOOR_RUM` and `DOOR_OTLP` → not written; the same name under
   `DOOR_SYNTHETIC` → written; a non-synthetic browser gauge → written — seen failing first.
-- [ ] **T4.2** — `apps/api/tests/test_browser_door_live.py` · extend with the forged-reading case above,
+- [x] **T4.2** — `apps/api/tests/test_browser_door_live.py` · extend with the forged-reading case above,
   asserting against `metrics_gauge` through the real receiver and worker.
-- [ ] **T4.3** — whether the same guard must cover the evidence `logs` read at
+- [x] **T4.3** — whether the same guard must cover the evidence `logs` read at
   `synthetics/queries.py:322` is open decision 5; no task until it is answered, because widening the
-  approved scope is the founder's call.
+  approved scope is the founder's call. *Answered yes (decision 5); built:* `logwriting/flatten.go` drops and
+  counts a record whose resource claims `synthetic.check.*` outside `DOOR_SYNTHETIC`, proved by
+  `flatten_test.go` and `stages_test.go` (seen failing first) and the live test.
 
 ## New risks
 
@@ -213,11 +217,11 @@ server door; neither lands in `metrics_gauge`; the dev prober's own readings kee
 - [ ] Specification approval — **done**: the scope is the founder's, 2026-11-02 (foundation items 7 and 22)
 - [ ] Design approval — not applicable; the change record carries the design, inside the approved scope
 - [ ] **Plan approval — before the first edited file**
-- [ ] Implementation
-- [ ] Tests — each behavior's test seen red first
-- [ ] Review — `/review-diff`
+- [x] Implementation
+- [x] Tests — each behavior's test seen red first
+- [x] Review — `/review-diff`
 - [ ] Production-readiness assessment — with F28's, since its Step 4 waits on this
-- [ ] Documentation and status update
+- [x] Documentation and status update
 
 ## Libraries and research
 
@@ -245,4 +249,8 @@ reads Verified.
 
 ## Outcome
 
-Filled in when the work completes.
+Built 2026-11-07, all four steps, uncommitted for the coordinator's review. Validation, residual risks and what
+was not run are in [`status.md`](status.md). Where the code differed from this plan, mechanically: F28's
+`000038` took the migration number (this change's table is `000039`) and its version rollup already existed, so
+T1.3 asserts three tables and F28's interim empty-version branch is deleted (F28 D55). `just check` and
+`just chaos` were not run (the coordinator runs `just check`).

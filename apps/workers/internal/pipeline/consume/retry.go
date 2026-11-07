@@ -15,8 +15,11 @@ import (
 // and exiting would only discard whatever is in memory and re-consume them
 // anyway. Past the budget the outage is no longer brief, and ending the process
 // is the honest answer — a restart at least re-dials from scratch.
+//
+// RetryBudget is exported for a stage that retries through RetryWithin, so it can
+// spend the loop's budget without a loop of its own.
 const (
-	retryBudget      = 2 * time.Minute
+	RetryBudget      = 2 * time.Minute
 	retryFirstDelay  = 250 * time.Millisecond
 	retryMaxDelay    = 5 * time.Second
 	retryDelayFactor = 2
@@ -49,7 +52,7 @@ func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 // did not absorb. Measured, not assumed — do not remove it without reproducing
 // that.
 func (l *Loop[S]) Retry(ctx context.Context, what string, op func(context.Context) error) error {
-	return RetryWithin(ctx, l.log, l.now, what, retryBudget, op)
+	return RetryWithin(ctx, l.log, l.now, what, RetryBudget, op)
 }
 
 // RetryWithin is Retry under a budget the caller chooses. It is for a call whose

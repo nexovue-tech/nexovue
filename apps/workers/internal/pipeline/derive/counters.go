@@ -65,8 +65,8 @@ type Span struct {
 	SpanName string
 
 	// Version is the service.version the span's resource named, or empty. Only
-	// the version rollup reads it; its caller empties it for a door whose
-	// versions are not trusted (F28 D12).
+	// the version rollup reads it. A browser-door span, whose version anyone
+	// holding the page could choose, never reaches the counters (F28 D12, D55).
 	Version string
 
 	// TraceID and SpanID identify the span, and are what weights its duration
@@ -211,8 +211,9 @@ type Derived struct {
 	Points    []Point
 	Endpoints []EndpointStat
 	Services  []ServiceStat
-	// ServicesOverCap is what the per-tenant cap left out of Services.
-	ServicesOverCap ServiceCap
+	// ServicesOverCap is each tenant-minute the per-tenant cap left services
+	// out of Services in, in drain order.
+	ServicesOverCap []ServiceCap
 	// Versions splits Services by version, and sums to it per service-minute.
 	Versions []VersionStat
 	// VersionsFolded is what Versions counted under OtherVersion.

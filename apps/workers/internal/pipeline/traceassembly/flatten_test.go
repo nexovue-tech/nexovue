@@ -526,33 +526,3 @@ func TestSpanLinksAreFlattened(t *testing.T) {
 		t.Errorf("link attributes = %q, want the batch size", links[0].Attributes)
 	}
 }
-
-// AC17, before the browser-door change: a server span through the browser door
-// names a version anyone holding a page's public key can choose, so it counts
-// under no version. Through the secret-key door the version is kept. Every
-// other column is the same either way: only what the version rollup counts
-// changes. The browser-door change later keeps such spans out of both rollups
-// and deletes this branch (F28 D55).
-func TestABrowserDoorSpanCountsUnderNoVersion(t *testing.T) {
-	const receivedAt = 1_700_000_000
-	cases := map[nexovuev1.Door]string{
-		nexovuev1.Door_DOOR_OTLP:      "2026.08.1",
-		nexovuev1.Door_DOOR_RUM:       "",
-		nexovuev1.Door_DOOR_SYNTHETIC: "2026.08.1",
-	}
-	for door, want := range cases {
-		t.Run(door.String(), func(t *testing.T) {
-			row := flattenOne(t, marshalEnvelope(t, "1.27.0", spanOptions{
-				kind: tracepb.Span_SPAN_KIND_SERVER,
-				door: door,
-			}))
-
-			if got := row.countable(time.Unix(receivedAt, 0), 30, 0).Version; got != want {
-				t.Errorf("countable version = %q, want %q", got, want)
-			}
-			if row.DeploymentVersion != "2026.08.1" {
-				t.Errorf("DeploymentVersion = %q; the stored span keeps what was sent", row.DeploymentVersion)
-			}
-		})
-	}
-}

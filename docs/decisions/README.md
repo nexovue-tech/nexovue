@@ -29,6 +29,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-023 — The scheduler writes detection readings to ClickHouse, through an account that can insert into that one table only](ADR-023-the-scheduler-writes-detection-state-to-clickhouse-through-its-own-account.md) — with the F6 design, 2026-10-31
 - [ADR-024 — A case is a finding's columns, with one active case per service](ADR-024-a-case-is-a-findings-columns.md) — with the F22 design, 2026-11-02
 - [ADR-025 — Version numbers are counted before sampling, in their own rollup](ADR-025-version-numbers-are-counted-before-sampling-in-their-own-rollup.md) — with the F28 design, 2026-11-02; filed 2026-11-07
+- [ADR-026 — Going over the service cap is recorded in ClickHouse, and the cap keeps the busiest](ADR-026-going-over-the-service-cap-is-recorded-in-clickhouse.md) — with the browser-door change, 2026-11-07
 
 ## Earlier decisions, 0001–0112
 

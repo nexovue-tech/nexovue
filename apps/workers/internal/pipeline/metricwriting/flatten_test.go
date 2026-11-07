@@ -2,6 +2,7 @@ package metricwriting
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -494,4 +495,111 @@ func numberPointOf(t *testing.T, value any) *metricspb.NumberDataPoint {
 		t.Fatalf("numberPointOf got %T, which is not an OTLP number value", value)
 	}
 	return dataPoint
+}
+
+// A synthetic check's readings come only from the prober's door: a site key is
+// printed in its page and a secret key belongs to a customer's servers, and
+// either could otherwise write `synthetic.check.status` and make a down check
+// read up. A forged point is dropped and counted, never written; the rest of
+// the export is written (browser-door T4.1, decision 4).
+func TestASyntheticReadingIsWrittenOnlyFromTheProbersDoor(t *testing.T) {
+	status := func() *metricspb.Metric {
+		return metricOf(t, "synthetic.check.status", &metricspb.Metric_Gauge{
+			Gauge: &metricspb.Gauge{DataPoints: []*metricspb.NumberDataPoint{
+				numberPointOf(t, &metricspb.NumberDataPoint_AsInt{AsInt: 1}),
+				numberPointOf(t, &metricspb.NumberDataPoint_AsInt{AsInt: 1}),
+			}},
+		})
+	}
+	ordinary := func() *metricspb.Metric {
+		return metricOf(t, "page.load", &metricspb.Metric_Gauge{
+			Gauge: &metricspb.Gauge{DataPoints: []*metricspb.NumberDataPoint{
+				numberPointOf(t, &metricspb.NumberDataPoint_AsDouble{AsDouble: 0.4}),
+			}},
+		})
+	}
+	cases := map[nexovuev1.Door]struct {
+		wantNames   []string
+		wantRefused int
+	}{
+		nexovuev1.Door_DOOR_RUM:       {wantNames: []string{"page.load"}, wantRefused: 2},
+		nexovuev1.Door_DOOR_OTLP:      {wantNames: []string{"page.load"}, wantRefused: 2},
+		nexovuev1.Door_DOOR_SYNTHETIC: {wantNames: []string{"synthetic.check.status", "synthetic.check.status", "page.load"}},
+	}
+	for door, want := range cases {
+		t.Run(door.String(), func(t *testing.T) {
+			out := flattenThrough(t, door, request(status(), ordinary()))
+
+			var names []string
+			for _, row := range out.gauge {
+				names = append(names, row.MetricName)
+			}
+			if !slices.Equal(names, want.wantNames) {
+				t.Errorf("wrote %v, want %v", names, want.wantNames)
+			}
+			if out.syntheticRefused.Count != want.wantRefused {
+				t.Errorf("syntheticRefused = %d, want %d: a drop is counted, never silent",
+					out.syntheticRefused.Count, want.wantRefused)
+			}
+		})
+	}
+}
+
+// The check screens find a reading by its resource's `synthetic.check.id`, so a
+// point under a resource claiming to be a check is refused outside the prober's
+// door whatever its name, and every shape is refused alike.
+func TestAResourceClaimingACheckIsWrittenOnlyFromTheProbersDoor(t *testing.T) {
+	claiming := request(
+		metricOf(t, "anything.at.all", &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+			DataPoints: []*metricspb.NumberDataPoint{numberPointOf(t, &metricspb.NumberDataPoint_AsInt{AsInt: 1})},
+		}}),
+		metricOf(t, "anything.histogram", &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
+			DataPoints: []*metricspb.HistogramDataPoint{{Count: 1}},
+		}}),
+	)
+	claiming.ResourceMetrics[0].Resource.Attributes = append(claiming.ResourceMetrics[0].Resource.Attributes,
+		&commonpb.KeyValue{
+			Key:   "synthetic.check.id",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "check-1"}},
+		})
+
+	forged := flattenThrough(t, nexovuev1.Door_DOOR_OTLP, claiming)
+	if len(forged.sum) != 0 || len(forged.histogram) != 0 || forged.syntheticRefused.Count != 2 {
+		t.Errorf("through the secret-key door wrote %d sum and %d histogram rows, refused %d; "+
+			"want none written and 2 refused", len(forged.sum), len(forged.histogram), forged.syntheticRefused.Count)
+	}
+	prober := flattenThrough(t, nexovuev1.Door_DOOR_SYNTHETIC, claiming)
+	if len(prober.sum) != 1 || len(prober.histogram) != 1 || prober.syntheticRefused.Count != 0 {
+		t.Errorf("through the prober's door wrote %d sum and %d histogram rows, refused %d; "+
+			"want both written", len(prober.sum), len(prober.histogram), prober.syntheticRefused.Count)
+	}
+}
+
+// flattenThrough flattens a request as if it arrived through the given door.
+func flattenThrough(t *testing.T, door nexovuev1.Door, req *metricsvc.ExportMetricsServiceRequest) rows {
+	t.Helper()
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	message, err := proto.Marshal(&nexovuev1.Envelope{
+		TenantId:  testTenant,
+		ProjectId: testProject,
+		IngestId:  testIngest,
+		Door:      door,
+		Signal:    nexovuev1.Signal_SIGNAL_METRICS,
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("marshalling the envelope: %v", err)
+	}
+	decodedMessage, err := decodeEnvelope(message)
+	if err != nil {
+		t.Fatalf("decodeEnvelope() failed: %v", err)
+	}
+	out, err := decodedMessage.flatten(testMarks)
+	if err != nil {
+		t.Fatalf("flatten() failed: %v", err)
+	}
+	return out
 }

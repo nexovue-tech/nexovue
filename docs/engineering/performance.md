@@ -18,7 +18,8 @@ targets. A change that relaxes one of them is a design decision, not a detail.
 
 ## Storage is laid out for the read
 
-- Every ClickHouse table orders by `(tenant_id, project_id, …)`. Tenant first is what makes a
+- Every ClickHouse table orders by `(tenant_id, project_id, …)`, or by `(tenant_id, …)` where the row has no
+  project (`span_trace_lookup`, `services_over_cap_1m`, whose cap is per organization). Tenant first is what makes a
   tenant-scoped read a range scan instead of a full scan; it is a performance property and an
   isolation property at once.
 - Telemetry tables partition by `(toDate(received_at), retention_days)` and expire by TTL from
