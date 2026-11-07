@@ -87,5 +87,5 @@ dev stack, which must fail loudly when the stack is down.
 
 ## Status
 
-See [`status.md`](status.md). Proposed; waiting on founder approval of `plan.md` and the open
+See [`status.md`](status.md). Approved 2026-11-07; the founder answered the open
 decisions listed there.

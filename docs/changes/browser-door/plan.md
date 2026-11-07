@@ -1,6 +1,6 @@
 # Plan: browser-door — the browser door stops counting in the rollups
 
-> **Status:** Awaiting approval
+> **Status:** Approved by the founder, 2026-11-07, with open decisions 1 to 5 answered as recommended (`status.md`)
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order; tasks under
 > each step name the file that changes and the test that proves it, read from the code. **The founder approves

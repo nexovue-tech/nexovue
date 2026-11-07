@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-Proposed
+Approved (2026-11-07)
 
 ## Current task
 
@@ -23,10 +23,24 @@ None in progress. The change record and plan are written; no code has been edite
 
 ## Next action
 
-Founder approves `plan.md`, and answers open decisions 1 and 4 below (they shape plan Steps 3 and 4;
-Steps 1 and 2 are not blocked by them).
+Build plan Step 1, then Steps 2 to 4 in order.
 
-## Open decisions
+## Founder answers, 2026-11-07
+
+The founder approved `plan.md` and answered open decisions 1 to 5 **as recommended**:
+
+1. Going over the cap is recorded in **a small ClickHouse table** (migration at the next free number), one row
+   per tenant-minute with the dropped count, deduplication-token pattern of `000035`, listed in
+   `erasure/tables.py`. The WARN line stays as an operator pointer.
+2. "The busiest" is **requests in the drained tenant-minute, descending, name ascending as tie-break**; the
+   per-drain grain is accepted knowingly.
+3. **No rebuild and no backfill** of existing rollup rows.
+4. A forged `synthetic.*` reading is **dropped in the worker, the drop counted in a log line** (never silent),
+   and the `metricwriting/flatten.go` comment updated in the same change to state the exception and why.
+5. **Metrics and logs together:** the same door check guards `synthetic.check.*` evidence logs in
+   `logwriting`. This widens the approved scope by the founder's own decision.
+
+## Open decisions (answered 2026-11-07, kept for the record)
 
 1. **What "recorded" means for going over the cap.** The approved scope says only "going over the cap is
    recorded". Today it is a WARN log line naming one tenant per drain, plus an in-process counter that dies
@@ -91,8 +105,7 @@ Steps 1 and 2 are not blocked by them).
 
 ## Blocked
 
-- Plan Step 3 on open decision 1; plan Step 4 on open decision 4 (and T4.3 on decision 5). Steps 1 and 2
-  only await plan approval.
+Nothing. All five decisions answered 2026-11-07.
 
 ## Risks
 
@@ -139,3 +152,4 @@ Found while reading; recorded here rather than editing other features' documents
 ## Last updated
 
 2026-11-02 — record created; state Proposed; next action: founder approves `plan.md`.
+2026-11-07 — founder approved the plan and answered decisions 1 to 5 as recommended; state Approved.
