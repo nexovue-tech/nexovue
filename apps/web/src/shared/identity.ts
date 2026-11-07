@@ -13,11 +13,13 @@ import { apiClient } from "./api-client";
 export type Action =
   | "operate_checks"
   | "operate_alerts"
+  | "operate_cases"
   | "upload_source_maps"
   | "manage_channels"
   | "manage_check_secrets"
   | "configure_projects"
   | "configure_detection"
+  | "delete_any_case_note"
   | "manage_credentials"
   | "manage_api_tokens"
   | "manage_members"

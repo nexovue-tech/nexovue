@@ -1,6 +1,6 @@
 import { Link, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, isConflict } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
@@ -13,13 +13,13 @@ import { TrendChart } from "@/shared/components/TrendChart";
 import type { Quieting } from "@/shared/detection/api";
 import { useDetectionSettings, useQuietService } from "@/shared/detection/api";
 import { QUIET_CHOICES, quietDone, quietEffect } from "@/shared/detection/quiet";
-import { formatRelativeTime } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
 import { setSelectedProjectId, useSelection } from "@/shared/selection";
 
 import type { FindingDetail, FindingSignal, FindingSignalKind, SignalSeries } from "./api";
 import { useFinding, useFindingAction } from "./api";
+import { CaseSection } from "./CaseSection";
 import type { DoneAction } from "./finding-page";
 import {
   availableActions,
@@ -35,7 +35,6 @@ import {
   signalPlot,
   successSentence,
 } from "./finding-page";
-import { CLOSED_AS } from "./finding-words";
 
 const TONE_TEXT = {
   critical: "text-critical-text",
@@ -62,8 +61,9 @@ const PROSE = "max-w-prose";
  * says it is gone (AC40). Times are on the project's clock, named.
  *
  * What a person may do follows the API's table (FR23, AC39): a viewer sees no action,
- * a member may acknowledge, call a false alarm and snooze the service, an admin may
- * also set a new normal and mute it. Each confirms inline, as the rest of the console does (C11).
+ * a member may call a false alarm and snooze the service, an admin may also set a
+ * new normal and mute it. Taking the case replaced Acknowledge (F22, D47). Each
+ * confirms inline, as the rest of the console does (C11).
  */
 export function FindingScreen() {
   const { findingId } = useParams({ from: "/shell/findings/$findingId" });
@@ -72,7 +72,8 @@ export function FindingScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-4 pt-5 pb-10">
-      <Link to="/findings" className="text-ink-dim text-sm hover:text-ink">
+      {/* The feed is the front door now (FR1): back means `/`. */}
+      <Link to="/" className="text-ink-dim text-sm hover:text-ink">
         All findings
       </Link>
       {finding.isPending ? (
@@ -104,20 +105,93 @@ function FindingPage({
   zone?: string;
   onReload: () => void;
 }) {
+  const announcement = useChangeAnnouncements(finding);
   return (
     <div className="flex flex-col gap-8">
       <Header finding={finding} zone={zone} />
-      <Controls finding={finding} zone={zone} onReload={onReload} />
-      <Signals finding={finding} />
-      <Readings finding={finding} zone={zone} />
-      {finding.scope === "project" ? <Services finding={finding} /> : null}
-      <Incidents finding={finding} zone={zone} />
-      <Feedback finding={finding} />
+      {/* FR45, AC105: one always-present status region, at page level because the
+          case controls return nothing for a viewer. It announces only changes of
+          assignee, case state and signal state, never the actor's own act. */}
+      <p role="status" data-testid="page-status" className="sr-only">
+        {announcement.message}
+      </p>
+      {/* One DOM order, everywhere (D86, NFR8): work before evidence; the left
+          column at a wide window, stacked in the same order below it. */}
+      <div className="grid gap-8 lg:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-8">
+          <CaseSection
+            finding={finding}
+            zone={zone}
+            onReload={onReload}
+            onOwnAct={announcement.ownAct}
+          />
+          <section aria-label="The signal" className="flex flex-col gap-3">
+            <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">The signal</h2>
+            <Controls finding={finding} zone={zone} onReload={onReload} />
+          </section>
+        </div>
+        <div id="finding-evidence" className="flex min-w-0 flex-col gap-8">
+          <Signals finding={finding} />
+          <Readings finding={finding} zone={zone} />
+          {finding.scope === "project" ? <Services finding={finding} /> : null}
+          <Incidents finding={finding} zone={zone} />
+          <Feedback finding={finding} />
+        </div>
+      </div>
     </div>
   );
 }
 
-function Header({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+/** How long after a person's own act the status region stays quiet: their act
+ * moves focus instead of being announced (FR45). */
+const OWN_ACT_QUIET_MS = 5_000;
+
+function useChangeAnnouncements(finding: FindingDetail): {
+  message: string;
+  ownAct: () => void;
+} {
+  const [message, setMessage] = useState("");
+  const previous = useRef<
+    { state: string; caseState: string | null; assignee: string | null } | undefined
+  >(undefined);
+  const ownActAt = useRef(0);
+
+  useEffect(() => {
+    const now = {
+      state: finding.state,
+      caseState: finding.case_state,
+      assignee: finding.assignee_id ?? null,
+    };
+    const before = previous.current;
+    previous.current = now;
+    if (before === undefined) return;
+    if (Date.now() - ownActAt.current < OWN_ACT_QUIET_MS) return;
+    const changes: string[] = [];
+    if (before.state !== now.state) changes.push(`The signal is now ${now.state}.`);
+    if (before.caseState !== now.caseState) {
+      changes.push(
+        now.caseState == null ? "The case is gone." : `The case is now ${now.caseState}.`,
+      );
+    }
+    if (before.assignee !== now.assignee) {
+      changes.push(
+        now.assignee == null
+          ? "Nobody is assigned now."
+          : `Assigned to ${finding.assignee_name ?? "someone"} now.`,
+      );
+    }
+    if (changes.length > 0) setMessage(changes.join(" "));
+  }, [finding.state, finding.case_state, finding.assignee_id, finding.assignee_name]);
+
+  return {
+    message,
+    ownAct: () => {
+      ownActAt.current = Date.now();
+    },
+  };
+}
+
+function Header({ finding }: { finding: FindingDetail; zone?: string }) {
   return (
     <header className="flex flex-col gap-1">
       <p className="flex flex-wrap items-baseline gap-x-2 font-mono text-2xs uppercase tracking-caps">
@@ -129,7 +203,11 @@ function Header({ finding, zone }: { finding: FindingDetail; zone?: string }) {
         {finding.title}
       </h1>
       <p className="text-ink-dim text-sm">
-        <Subject finding={finding} /> · {describeState(finding, zone)}
+        <Subject finding={finding} />
+        {" · "}
+        <a href="#finding-evidence" className="underline-offset-2 hover:underline">
+          Evidence ↓
+        </a>
       </p>
       {finding.muted ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>
@@ -175,20 +253,6 @@ function ServiceLink({
       {service}
     </Link>
   );
-}
-
-function describeState(finding: FindingDetail, zone?: string): string {
-  const since = formatZonedTime(finding.started_at, { zone });
-  if (finding.state === "closed") {
-    const how = finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed";
-    return finding.closed_at ? `${how} at ${formatZonedTime(finding.closed_at, { zone })}` : how;
-  }
-  if (finding.state === "acknowledged") {
-    const who = finding.acknowledged_by_name ?? "Someone";
-    const when = finding.acknowledged_at ? ` ${formatRelativeTime(finding.acknowledged_at)}` : "";
-    return `Open since ${since}. ${who} acknowledged it${when}`;
-  }
-  return `Open since ${since}`;
 }
 
 type Armed = "false-alarm" | "new-normal" | Quieting;
@@ -280,16 +344,6 @@ function Controls({
   return (
     <section aria-label="What you can do" className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
-        {allowed.acknowledge ? (
-          <Button
-            variant="secondary"
-            pending={act.isPending && act.variables?.action === "acknowledge"}
-            pendingLabel="Acknowledging"
-            onClick={() => run("acknowledge")}
-          >
-            Acknowledge
-          </Button>
-        ) : null}
         {allowed.falseAlarm ? (
           <Button variant="secondary" onClick={() => setArmed("false-alarm")}>
             False alarm

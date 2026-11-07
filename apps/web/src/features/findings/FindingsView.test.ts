@@ -12,6 +12,8 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import type { OverviewPoint } from "@/shared/overview-plots";
+
 import type { ClosedReason, DetectionStatus, Finding, ProjectTotals } from "./api";
 import type { FindingsViewProps } from "./FindingsScreen";
 import { FindingsView } from "./FindingsScreen";
@@ -67,6 +69,15 @@ const FINDING: Finding = {
     },
   ],
   trend: [1, 2, 3, 5, 7, 8, 7],
+  case_state: null,
+  case_resolution: null,
+  case_opened_at: null,
+  case_resolved_at: null,
+  root_finding_id: null,
+  case_signal: "open",
+  case_severity: "warning",
+  open_joined_finding_id: null,
+  open_joined_since: null,
 };
 
 const closed = (reason: ClosedReason | null, id = "closed"): Finding => ({
@@ -425,6 +436,70 @@ describe("detection's line leads the feed (C18)", () => {
     expect(await readable({ detection: NOT_RUNNING, showingMuted: true })).not.toContain(
       "Detection",
     );
+  });
+});
+
+describe("FR3: the front door shows proof that telemetry arrived", () => {
+  const POINTS: OverviewPoint[] = [
+    {
+      bucket: "2026-09-13T10:00:00Z",
+      requests_per_minute: 8_000,
+      error_rate: 0.01,
+      p50_ms: 40,
+      p95_ms: 200,
+      p99_ms: 900,
+    },
+    {
+      bucket: "2026-09-13T10:01:00Z",
+      requests_per_minute: 8_800,
+      error_rate: 0.014,
+      p50_ms: 44,
+      p95_ms: 220,
+      p99_ms: 1_060,
+    },
+  ];
+
+  it("draws Overview's three charts under the summary when telemetry exists and the feed is empty (AC3)", async () => {
+    const text = await readable({ points: POINTS });
+
+    for (const panel of ["Rate", "Errors", "Duration"]) expect(text).toContain(panel);
+  });
+
+  it("links prominently to Overview (AC3)", async () => {
+    const container = await render({ points: POINTS });
+
+    expect(container.querySelector('a[href="/overview"]')).not.toBeNull();
+  });
+
+  it("keeps the charts out of the feed once a finding exists", async () => {
+    const text = await readable({ points: POINTS, findings: [FINDING] });
+
+    expect(text).not.toContain("Duration");
+  });
+
+  it("says nothing has reported in this window, with no readings and no charts (AC3)", async () => {
+    // `/services/overview` answers zeros with `service_count: 0`, the API's real
+    // shape. A screen of zeroes reads as an outage, so the readings and the
+    // charts go, and the words say how to start and to widen the window.
+    const container = await render({
+      totals: {
+        service_count: 0,
+        error_count: 0,
+        requests_per_minute: 0,
+        error_rate: 0,
+        p95_ms: 0,
+      },
+      checks: undefined,
+      points: [],
+    });
+    const text = (container.textContent ?? "").replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("Nothing has reported in this window");
+    expect(text).not.toContain("0 services reporting");
+    expect(text).not.toContain("Requests/min");
+    expect(text).not.toContain("Duration");
+    expect(text).toContain("widen");
+    expect(container.querySelector('a[href="/docs"]')).not.toBeNull();
   });
 });
 

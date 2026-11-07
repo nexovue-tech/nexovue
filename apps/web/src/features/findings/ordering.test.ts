@@ -19,6 +19,15 @@ const finding = (overrides: Partial<Finding> & { id: string }): Finding => ({
   acknowledged_at: null,
   signals: [],
   trend: [],
+  case_state: null,
+  case_resolution: null,
+  case_opened_at: null,
+  case_resolved_at: null,
+  root_finding_id: null,
+  case_signal: "open",
+  case_severity: "warning",
+  open_joined_finding_id: null,
+  open_joined_since: null,
   ...overrides,
 });
 

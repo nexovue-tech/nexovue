@@ -37,6 +37,13 @@ export function headlineFor(totals?: ProjectTotals, checks?: CheckCounts): Headl
     const what = checks.down === 1 ? "A check is" : `${checks.down} checks are`;
     return { title: `${what} down`, wrong: true };
   }
+  if (totals.service_count === 0) {
+    // `/services/overview` always answers totals, zeros included, so this — not
+    // the absent-totals branch above — is what a silent project really reads
+    // (AC3). The window, not "yet": a quiet hour is not a new project. After
+    // the down checks, because a probe's verdict stands even with no traces.
+    return { title: "Nothing has reported in this window", wrong: false };
+  }
   if (checks === undefined || checks.total === 0) {
     return { title: "Here is what this project reported", wrong: false };
   }

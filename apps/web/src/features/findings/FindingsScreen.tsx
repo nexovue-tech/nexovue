@@ -1,16 +1,21 @@
 import { Link } from "@tanstack/react-router";
+import { ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import { useDetectionSettings } from "@/shared/detection/api";
 import { formatDuration } from "@/shared/format/duration";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
+import type { OverviewPlot, OverviewPoint } from "@/shared/overview-plots";
+import { buildOverviewPlots } from "@/shared/overview-plots";
 import { useLiveWindow, useSelection } from "@/shared/selection";
+import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 
 import type { CheckCounts, DetectionStatus, Finding, FindingSeverity, ProjectTotals } from "./api";
 import { useCheckCounts, useDetectionStatus, useFindings, useProjectSummary } from "./api";
@@ -45,8 +50,9 @@ export function FindingsScreen() {
 
   const feed = useFindings(projectId, showingMuted, timeWindow);
   const summary = useProjectSummary(projectId, timeWindow);
-  // The checks read waits for the summary: four telemetry reads may be in flight and
-  // the fifth is refused rather than queued.
+  // The checks read waits for the summary: past the telemetry tier's in-flight cap
+  // — 4 per process at two API processes — a read waits in the limiter, and this
+  // screen must not spend the queue on itself (F20 plan, T1.8).
   const checks = useCheckCounts(projectId, timeWindow, summary.data !== undefined);
   const detection = useDetectionStatus(projectId, timeWindow);
   // Not waited for: the browser's clock serves until the project's is read.
@@ -67,7 +73,8 @@ export function FindingsScreen() {
         void summary.refetch();
         void detection.refetch();
       }}
-      totals={summary.data}
+      totals={summary.data?.totals}
+      points={summary.data?.points}
       checks={checks.data}
       detection={detection.data}
       zone={settings.data?.timezone}
@@ -89,6 +96,8 @@ export interface FindingsViewProps {
   error?: unknown;
   onRetry: () => void;
   totals?: ProjectTotals;
+  /** The buckets behind the totals, from the same answer: the empty feed's charts. */
+  points?: readonly OverviewPoint[];
   checks?: CheckCounts;
   detection?: DetectionStatus;
   /** The IANA zone times are read on: the browser's until the project names its own. */
@@ -106,6 +115,7 @@ export function FindingsView({
   error,
   onRetry,
   totals,
+  points = [],
   checks,
   detection,
   zone,
@@ -182,7 +192,7 @@ export function FindingsView({
               No finding is muted.
             </p>
           ) : (
-            <SummaryState totals={totals} checks={checks} />
+            <SummaryState totals={totals} points={points} checks={checks} />
           )}
           <MutedLink count={mutedCount} showing={showingMuted} onToggle={onToggleMuted} />
         </>
@@ -202,8 +212,22 @@ export function FindingsView({
  * the whole system. The numbers beneath it are there to be read, because nothing else
  * reads them yet.
  */
-function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: CheckCounts }) {
+function SummaryState({
+  totals,
+  points,
+  checks,
+}: {
+  totals?: ProjectTotals;
+  points: readonly OverviewPoint[];
+  checks?: CheckCounts;
+}) {
   const headline = headlineFor(totals, checks);
+  // `service_count` of zero is the honest signal: nothing reported in this
+  // window, rather than something reporting nothing. The zero readings and the
+  // charts go — a screen of zeroes reads as an outage — and the words say how
+  // to start, where the setup pages are, and that a quiet hour is not a new
+  // project (FR3, AC3).
+  const reporting = totals !== undefined && totals.service_count > 0;
 
   return (
     <section className="shrink-0 border-line border-t px-4 py-6">
@@ -216,7 +240,15 @@ function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: Che
       </h2>
 
       <p className="mt-2 text-ink-dim text-sm">
-        {totals ? (
+        {totals === undefined ? (
+          "Send a span, a log or a metric and this fills in."
+        ) : !reporting ? (
+          <>
+            No service has sent a span, a log or a metric in this window. Point an OpenTelemetry SDK
+            at your endpoint and the first one appears within about a minute — or widen the time
+            range if you expected something older.
+          </>
+        ) : (
           <>
             {formatCount(totals.service_count)} {plural(totals.service_count, "service")} reporting
             {checks && checks.total > 0
@@ -224,13 +256,25 @@ function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: Che
               : ""}
             {headline.wrong ? ". Synthetics has the failing ones." : ""}
           </>
-        ) : (
-          "Send a span, a log or a metric and this fills in."
         )}
       </p>
 
+      {totals !== undefined && !reporting ? (
+        <p className="mt-2 text-sm">
+          <a
+            href={SETUP_DOCS_PATH}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 font-medium text-brand-text underline-offset-2 hover:underline"
+          >
+            How to send your first telemetry
+            <ArrowUpRight size={12} aria-hidden="true" />
+          </a>
+        </p>
+      ) : null}
+
       {/* Overview's own summary. Nothing assesses these yet, so the reader has to. */}
-      {totals ? (
+      {reporting && totals ? (
         <dl className="mt-5 flex flex-wrap gap-x-8 gap-y-2 border-line-subtle border-t pt-4">
           <Reading term="Requests/min" value={formatRatePerMinute(totals.requests_per_minute)} />
           <Reading
@@ -241,9 +285,64 @@ function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: Che
           <Reading term="p95" value={formatDuration(totals.p95_ms)} />
         </dl>
       ) : null}
+
+      {/* Overview's three charts, from the same `/services/overview` answer the
+          summary already reads, so this costs no extra scan (FR3). The first
+          days of a trial show proof that telemetry arrived, and the sentence
+          still leads. */}
+      {reporting && points.length > 0 ? (
+        <>
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            {buildOverviewPlots(points).map((plot) => (
+              <FeedPanel key={plot.metric} plot={plot} />
+            ))}
+          </div>
+          <p className="mt-4 text-sm">
+            <Link
+              to="/overview"
+              className="font-medium text-brand-text underline-offset-2 hover:underline"
+            >
+              Open Overview for the whole system
+            </Link>
+          </p>
+        </>
+      ) : null}
     </section>
   );
 }
+
+/**
+ * One of the three charts, as Overview draws it, without the deploy rules: the
+ * deploys are their own read, and this screen must not add one for an empty feed.
+ */
+function FeedPanel({ plot }: { plot: OverviewPlot }) {
+  return (
+    <section className="rounded-sm border border-line p-3">
+      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{plot.label}</h3>
+      {plot.flatAtZero ? (
+        // Held at the chart's own height so the row of three stays level.
+        <p className="flex items-center text-ink-dim text-sm" style={{ height: CHART_HEIGHT }}>
+          {plot.zeroText}
+        </p>
+      ) : (
+        <TrendChart
+          label={plot.lines.map((line) => line.label)}
+          seriesToken={plot.seriesToken}
+          data={[plot.lines[0].data[0], ...plot.lines.map((line) => line.data[1])]}
+          formatValue={FEED_AXIS_FORMAT[plot.metric]}
+          description={`${plot.label} across this window.`}
+        />
+      )}
+    </section>
+  );
+}
+
+/** Each panel's own unit. A raw number on the axis says nothing. */
+const FEED_AXIS_FORMAT: Record<OverviewPlot["metric"], (value: number) => string> = {
+  rate: (value) => formatRatePerMinute(value),
+  errorRate: (value) => `${value.toFixed(1)}%`,
+  latency: (value) => formatDuration(value),
+};
 
 function Reading({
   term,

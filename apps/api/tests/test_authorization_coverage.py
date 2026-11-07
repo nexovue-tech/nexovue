@@ -48,6 +48,11 @@ UNGUARDED_IDENTITY: Final = "CurrentIdentity"
 # Mutating handlers that deliberately take no policy, each with the reason it is
 # safe. A name here is a decision, so adding one should be uncomfortable.
 EXEMPT: Final = {
+    # F22, AC25: a person may withdraw their own words, whatever their current
+    # role — an author made a viewer still deletes their own note. The service
+    # checks authorship, or DELETE_ANY_CASE_NOTE for everyone else, and a
+    # support view is already refused by method.
+    "delete_case_note",
     # Unauthenticated by design: there is no identity to judge. The HMAC
     # signature over the raw body is the gate, and door 4a's whole security
     # model rests on it rather than on a session.
@@ -167,6 +172,10 @@ POLICY_OF: Final = {
     # every working role's, as operating alerts is. A viewer may do none of them.
     "nexovue_api/findings/router.py:acknowledge_finding": "MayOperateAlerts",
     "nexovue_api/findings/router.py:mark_false_alarm": "MayOperateAlerts",
+    # F22 (FR34): working a case is every working role's. The note delete route
+    # is in EXEMPT instead: its gate is authorship, which no role names.
+    "nexovue_api/findings/router.py:change_case": "MayOperateCases",
+    "nexovue_api/findings/router.py:add_case_note": "MayOperateCases",
     "nexovue_api/detection/router.py:snooze_service": "MayOperateAlerts",
     # F6 (FR23, D11): what decides whether detection is heard at all, and what it
     # judges by, is an admin's.

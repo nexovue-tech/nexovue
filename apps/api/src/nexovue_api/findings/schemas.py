@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,47 @@ SignalName = Literal["slower", "failing", "traffic"]
 SignalUnit = Literal["ms", "%", "rpm"]
 # What a feed request asks for. `open` includes acknowledged findings.
 FeedState = Literal["open", "closed", "all"]
+
+# ---- the case (F22): whether people are working, apart from the signal.
+CaseState = Literal["investigating", "resolved"]
+CaseResolution = Literal[
+    "resolved", "false_alarm", "new_normal", "tracker_closed", "no_activity", "recovered_untouched"
+]
+# Whether the problem is measured now for the whole case: open if the root or
+# any joined finding is open (spec, *Words used here*).
+CaseSignal = Literal["open", "closed"]
+# Whether the assignment email will be tried (FR5); the screen says the true thing.
+EmailOutcome = Literal["will_try", "not_configured", "rate_limited", "none"]
+FindingEventKind = Literal[
+    "finding_opened",
+    "severity_raised",
+    "signal_joined",
+    "finding_closed",
+    "flapping_started",
+    "finding_joined_case",
+    "finding_left_case",
+    "case_started",
+    "acknowledged",
+    "assigned",
+    "unassigned",
+    "case_resolved",
+    "case_reopened",
+    "false_alarm",
+    "new_normal",
+    "note_added",
+    "note_deleted",
+    "link_added",
+    "link_removed",
+    "link_promoted",
+    "issue_created",
+    "issue_closed",
+    "issue_reopened",
+    "issue_gone",
+    "issue_moved",
+    "tracker_write_failed",
+    "explained",
+]
+EventActorKind = Literal["person", "system", "tracker"]
 
 
 class StoredSignal(BaseModel):
@@ -79,6 +120,20 @@ class Finding(BaseModel):
     signals: list[FindingSignal]
     # Up to the last 60 readings of the leading signal, oldest first; empty when none exist.
     trend: list[float]
+    # ---- the case (F22). Null throughout means nobody ever took it.
+    case_state: CaseState | None
+    case_resolution: CaseResolution | None
+    case_opened_at: datetime | None
+    case_resolved_at: datetime | None
+    # The case this finding joined (FR9, FR12); its page leads to the root.
+    root_finding_id: uuid.UUID | None
+    # Open if this finding or any open joined finding is open: the whole case's signal.
+    case_signal: CaseSignal
+    # The worse of this finding's severity and an open joined finding's (FR21).
+    case_severity: FindingSeverity
+    # The open joined finding, when one is open on a root (FR23's "came back").
+    open_joined_finding_id: uuid.UUID | None
+    open_joined_since: datetime | None
 
 
 class SignalPoint(BaseModel):
@@ -155,6 +210,20 @@ class FindingForMember(FindingDetail):
     feedback_reason: str | None
     # None when the finding is closed, or is a project's, which has no normal to move.
     new_normal: NewNormalPreview | None
+    # ---- the case, the person's half (F22 FR20): a token never sees these.
+    assignee_id: uuid.UUID | None
+    assignee_name: str | None
+    # When the current assignee took or was given the case: "Asha took this at
+    # 14:06" is a fact with its time (D76).
+    case_taken_at: datetime | None
+    # On a root with an open joined finding: whether the assignee has acted since
+    # it came back (FR12, AC100). None when nothing joined is open.
+    assignee_acted_since_join: bool | None
+    case_resolved_by_name: str | None
+    # FR48: whether to say "PagerDuty is not told" after Take this and resolve.
+    project_has_pagerduty: bool
+    # Whether this install can send the assignment email at all (FR5).
+    email_available: bool
 
 
 # Long enough for a sentence or two about why; bounded so a reason is not a document.
@@ -171,6 +240,82 @@ class FindingChanged(BaseModel):
 
     finding: FindingForMember
     resolved_to: list[str]
+
+
+class CaseChangeRequest(BaseModel):
+    """`PATCH /findings/{id}/case` (F22): start, take, assign, resolve, reopen.
+
+    `assignee_id` present means an assignment, and an explicit null unassigns;
+    absence means the field is not this call's business, which is why the service
+    reads `model_fields_set` rather than the values alone. The `expected_*`
+    fields carry what the page last showed, for FR4's 409.
+    """
+
+    case_state: CaseState | None = None
+    assignee_id: uuid.UUID | None = None
+    expected_assignee_id: uuid.UUID | None = None
+    expected_case_state: CaseState | None = None
+
+
+class CaseChanged(BaseModel):
+    """What a case action did: the finding as it now is, and whether an email will
+    be tried (FR5), so the screen can say the true thing."""
+
+    finding: FindingForMember
+    email_outcome: EmailOutcome
+
+
+# FR14: a note is plain text, not a document.
+NOTE_BODY_MAX_LENGTH = 4000
+
+
+class NoteRequest(BaseModel):
+    body: Annotated[str, Field(min_length=1, max_length=NOTE_BODY_MAX_LENGTH)]
+
+
+class CaseNote(BaseModel):
+    id: uuid.UUID
+    # Null once the author's user row is gone; the screen reads *Former member*.
+    author_id: uuid.UUID | None
+    author_name: str | None
+    body: str
+    created_at: datetime
+
+
+class NoteWritten(BaseModel):
+    """A note landed, on the root when written from a joined finding's page."""
+
+    note: CaseNote
+    finding: FindingForMember
+
+
+class TimelineEvent(BaseModel):
+    """One timeline row as an API token reads it: kinds and times only (FR20)."""
+
+    id: uuid.UUID
+    kind: FindingEventKind
+    at: datetime
+
+
+class TimelineEventForMember(TimelineEvent):
+    """A person's row: who did it, the typed detail, and a note's words.
+
+    `note_body` is joined from `finding_notes`, so a deleted note's text is gone
+    (AC19); during a support view it reads the fixed hidden sentence (D62).
+    """
+
+    actor_kind: EventActorKind
+    actor_id: uuid.UUID | None
+    actor_name: str | None
+    # Enums, ids and numbers only, by the writer's construction (AC24).
+    detail: dict[str, Any]
+    note_body: str | None
+
+
+class TimelineResponse(BaseModel):
+    events: list[TimelineEvent] | list[TimelineEventForMember]
+    # Pass back as `?before=` to read the next 100 older rows; null at the end.
+    next_before: str | None
 
 
 class FindingListResponse(BaseModel):

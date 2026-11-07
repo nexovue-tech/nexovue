@@ -19,15 +19,20 @@ from nexovue_platform.detection import (
     resolve_parameters,
 )
 from nexovue_platform.jobs import ENQUEUE
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import case, func, literal, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.data.postgres.base import UuidType as UuidColumn
 from nexovue_api.data.postgres.models import (
+    AlertRule,
+    AlertRuleChannel,
     BaselineShift,
     DetectionState,
     Finding,
+    FindingEvent,
     FindingIncident,
+    FindingNote,
     Incident,
     NotificationChannel,
     ServiceDetectionSettings,
@@ -99,17 +104,267 @@ async def find_finding(
 async def lock_finding(
     session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID
 ) -> Finding | None:
-    """The finding, locked until the transaction ends. The project job locks it the
-    same way while it judges, so a person's action and a run never interleave: the
-    second waits, then sees what the first did."""
+    """The finding, locked until the transaction ends, so a person's action and a
+    detection run never interleave: the second waits, then sees what the first did.
+
+    `FOR NO KEY UPDATE`, not `FOR UPDATE` (F22 D78): no person act changes a key
+    column, and `FOR UPDATE` would block the foreign key check a new joined
+    finding's insert takes on its root, which can deadlock against a detection
+    batch (AC101).
+    """
     statement = (
         select(Finding)
         .where(Finding.org_id == org_id, Finding.id == finding_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
         .execution_options(populate_existing=True)
     )
     found: Finding | None = await session.scalar(statement)
     return found
+
+
+async def find_row(
+    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID
+) -> Finding | None:
+    """The row with no lock, to learn its root before locking root-first (F22,
+    *Locks*): a case act locks the root, then the named finding when it must."""
+    statement = (
+        select(Finding)
+        .where(Finding.org_id == org_id, Finding.id == finding_id)
+        .execution_options(populate_existing=True)
+    )
+    found: Finding | None = await session.scalar(statement)
+    return found
+
+
+async def open_joined_finding(
+    session: AsyncSession, *, org_id: uuid.UUID, root_id: uuid.UUID
+) -> Finding | None:
+    """The open finding joined to this root, if one is (F22 FR23). F6 allows one
+    open finding per service and joins stay inside one scope and service, so at
+    most one row matches."""
+    statement = select(Finding).where(
+        Finding.org_id == org_id,
+        Finding.root_finding_id == root_id,
+        Finding.state == "open",
+    )
+    found: Finding | None = await session.scalar(statement)
+    return found
+
+
+async def lock_working_member(
+    session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID
+) -> User | None:
+    """The would-be assignee, `FOR SHARE` so a concurrent removal or demotion
+    waits until this assignment commits (F22 FR4). The caller re-checks the row."""
+    statement = (
+        select(User)
+        .where(User.org_id == org_id, User.id == user_id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    found: User | None = await session.scalar(statement)
+    return found
+
+
+async def active_case_on_scope(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    scope: str,
+    service_name: str | None,
+) -> Finding | None:
+    """The one finding holding this scope's active case (BR7): the row the partial
+    unique index just defended, read after it refused a second (AC14)."""
+    statement = select(Finding).where(
+        Finding.org_id == org_id,
+        Finding.project_id == project_id,
+        Finding.scope == scope,
+        Finding.service_name.is_(None)
+        if service_name is None
+        else Finding.service_name == service_name,
+        Finding.case_state == "investigating",
+    )
+    found: Finding | None = await session.scalar(statement)
+    return found
+
+
+async def assignment_email_sent_since(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    root_id: uuid.UUID,
+    assignee_id: uuid.UUID,
+    since: datetime,
+) -> bool:
+    """FR5's 5-minute limit, from `assigned` events alone (D91): one to this
+    recipient on this root, by someone else, since `since`. Read under the root's
+    lock, so two assignments at one moment cannot both pass."""
+    statement = select(func.count()).where(
+        FindingEvent.org_id == org_id,
+        FindingEvent.finding_id == root_id,
+        FindingEvent.kind == "assigned",
+        FindingEvent.at >= since,
+        FindingEvent.detail["assignee_id"].astext == str(assignee_id),
+        FindingEvent.actor_id.is_not(None),
+        FindingEvent.actor_id != assignee_id,
+    )
+    return bool(await session.scalar(statement))
+
+
+async def note_count(session: AsyncSession, *, org_id: uuid.UUID, root_id: uuid.UUID) -> int:
+    counted: int = (
+        await session.scalar(
+            select(func.count()).where(
+                FindingNote.org_id == org_id, FindingNote.finding_id == root_id
+            )
+        )
+        or 0
+    )
+    return counted
+
+
+async def find_note(
+    session: AsyncSession, *, org_id: uuid.UUID, root_id: uuid.UUID, note_id: uuid.UUID
+) -> FindingNote | None:
+    statement = select(FindingNote).where(
+        FindingNote.org_id == org_id,
+        FindingNote.finding_id == root_id,
+        FindingNote.id == note_id,
+    )
+    found: FindingNote | None = await session.scalar(statement)
+    return found
+
+
+async def lock_assigned_cases_skip_locked(
+    session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID
+) -> list[Finding]:
+    """A person's active cases, locked `FOR NO KEY UPDATE SKIP LOCKED` (AC10): a
+    row the detection job holds is skipped and healed by the next sweep, so
+    clearing an assignee can never deadlock against a batch."""
+    statement = (
+        select(Finding)
+        .where(
+            Finding.org_id == org_id,
+            Finding.assignee_id == user_id,
+            Finding.case_state == "investigating",
+        )
+        .with_for_update(key_share=True, skip_locked=True)
+        .execution_options(populate_existing=True)
+    )
+    return list(await session.scalars(statement))
+
+
+# The timeline's page (FR17): the newest rows first; `before` reads further back.
+TIMELINE_PAGE: Final = 100
+
+
+async def timeline(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    root_id: uuid.UUID,
+    before: tuple[datetime, uuid.UUID] | None,
+    limit: int = TIMELINE_PAGE,
+) -> list[tuple[FindingEvent, str | None]]:
+    """One case's timeline (NFR3): the root's events and its joined findings',
+    newest first, each with its note's words when it has one. A deleted note
+    joins to nothing, so its text is gone the moment the row is (AC19)."""
+    joined_findings = select(Finding.id).where(
+        Finding.org_id == org_id, Finding.root_finding_id == root_id
+    )
+    note_id = FindingEvent.detail["note_id"].astext.cast(UuidColumn)
+    statement = (
+        select(FindingEvent, FindingNote.body)
+        .outerjoin(
+            FindingNote,
+            (FindingNote.org_id == FindingEvent.org_id) & (FindingNote.id == note_id),
+        )
+        .where(
+            FindingEvent.org_id == org_id,
+            (FindingEvent.finding_id == root_id) | FindingEvent.finding_id.in_(joined_findings),
+        )
+        .order_by(FindingEvent.at.desc(), FindingEvent.id.desc())
+        .limit(limit)
+    )
+    if before is not None:
+        before_at, before_id = before
+        statement = statement.where(
+            tuple_(FindingEvent.at, FindingEvent.id)
+            < tuple_(literal(before_at), literal(before_id))
+        )
+    return [(event, body) for event, body in (await session.execute(statement)).all()]
+
+
+async def latest_assignment_at(
+    session: AsyncSession, *, org_id: uuid.UUID, root_id: uuid.UUID, assignee_id: uuid.UUID
+) -> datetime | None:
+    """When the current assignee took or was given the case (D76): the newest
+    `assigned` event naming them, read from the timeline rather than stored twice."""
+    found: datetime | None = await session.scalar(
+        select(func.max(FindingEvent.at)).where(
+            FindingEvent.org_id == org_id,
+            FindingEvent.finding_id == root_id,
+            FindingEvent.kind == "assigned",
+            FindingEvent.detail["assignee_id"].astext == str(assignee_id),
+        )
+    )
+    return found
+
+
+async def open_joined_of(
+    session: AsyncSession, *, org_id: uuid.UUID, root_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, Finding]:
+    """Each root's open joined finding, in one read, for the feed (F22 FR23)."""
+    if not root_ids:
+        return {}
+    statement = select(Finding).where(
+        Finding.org_id == org_id,
+        Finding.root_finding_id.in_(root_ids),
+        Finding.state == "open",
+    )
+    rows = await session.scalars(statement)
+    return {row.root_finding_id: row for row in rows if row.root_finding_id is not None}
+
+
+async def person_names(
+    session: AsyncSession, *, org_id: uuid.UUID, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """What the screen calls each person: their name, else their address."""
+    if not user_ids:
+        return {}
+    statement = select(User.id, User.name, User.email).where(
+        User.org_id == org_id, User.id.in_(user_ids)
+    )
+    return {row.id: row.name or row.email for row in (await session.execute(statement)).all()}
+
+
+async def project_has_pagerduty(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> bool:
+    """Whether an enabled rule of this project reaches a PagerDuty channel (FR48),
+    so the page can say the page there is not acknowledged by Take this."""
+    statement = (
+        select(func.count())
+        .select_from(AlertRule)
+        .join(
+            AlertRuleChannel,
+            (AlertRuleChannel.rule_id == AlertRule.id)
+            & (AlertRuleChannel.org_id == AlertRule.org_id),
+        )
+        .join(
+            NotificationChannel,
+            (NotificationChannel.id == AlertRuleChannel.channel_id)
+            & (NotificationChannel.org_id == AlertRuleChannel.org_id),
+        )
+        .where(
+            AlertRule.org_id == org_id,
+            AlertRule.project_id == project_id,
+            AlertRule.enabled,
+            NotificationChannel.kind == "pagerduty",
+        )
+    )
+    return bool(await session.scalar(statement))
 
 
 async def linked_incidents(
@@ -126,15 +381,6 @@ async def linked_incidents(
         .order_by(Incident.opened_at, Incident.id)
     )
     return list(await session.scalars(statement))
-
-
-async def person_name(
-    session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID
-) -> str | None:
-    """What the screen calls a person: their name, else their address."""
-    statement = select(User.name, User.email).where(User.org_id == org_id, User.id == user_id)
-    found = (await session.execute(statement)).one_or_none()
-    return None if found is None else found.name or found.email
 
 
 async def service_quiet(

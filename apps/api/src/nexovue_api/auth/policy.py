@@ -69,6 +69,7 @@ MayAdministerThePlatform = Annotated[Identity, Depends(_the_platform)]
 
 MayOperateChecks = Annotated[Identity, Depends(require(Action.OPERATE_CHECKS))]
 MayOperateAlerts = Annotated[Identity, Depends(require(Action.OPERATE_ALERTS))]
+MayOperateCases = Annotated[Identity, Depends(require(Action.OPERATE_CASES))]
 MayUploadSourceMaps = Annotated[Identity, Depends(require(Action.UPLOAD_SOURCE_MAPS))]
 MayManageChannels = Annotated[Identity, Depends(require(Action.MANAGE_CHANNELS))]
 MayManageCheckSecrets = Annotated[Identity, Depends(require(Action.MANAGE_CHECK_SECRETS))]

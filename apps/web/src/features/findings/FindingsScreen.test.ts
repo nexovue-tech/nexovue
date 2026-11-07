@@ -49,6 +49,7 @@ describe("the findings feed", () => {
             error_rate: 0,
             p95_ms: 100,
           },
+          points: [],
         }),
         "GET /synthetics/checks": json({ checks: [] }),
         [`GET /projects/${PROJECT_ID}/detection/status`]: json(NOT_RUNNING),

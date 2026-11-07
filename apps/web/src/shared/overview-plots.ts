@@ -14,7 +14,20 @@
 
 import type { PlotRows, SeriesToken } from "@/shared/components/TrendChart";
 
-import type { OverviewPoint } from "./api";
+/**
+ * One bucket of `/services/overview`'s answer. Declared here, beside what reads
+ * it, because both the Overview screen and the Findings feed draw these charts
+ * and `shared/` may not import a feature — each feature's `api.ts` imports the
+ * type from here instead.
+ */
+export interface OverviewPoint {
+  bucket: string;
+  requests_per_minute: number;
+  error_rate: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+}
 
 const MS_PER_SECOND = 1000;
 const PERCENT = 100;

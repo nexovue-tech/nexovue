@@ -303,6 +303,8 @@ and a read API has nobody to serve before that (D12).
   | Projects, sampling and masking configuration | ✓ | ✓ | ✗ | ✗ |
   | Anomaly detection: acknowledge a finding, mark it a false alarm, snooze a service for up to 4 hours (F6 FR23, D25) | ✓ | ✓ | ✓ | ✗ |
   | Anomaly detection: sensitivity, time zone, mutes, new normals, *anomaly finding* alert rules (F6 FR23) | ✓ | ✓ | ✗ | ✗ |
+  | Cases: take, assign, note, resolve, reopen, link an issue (F22 FR34) | ✓ | ✓ | ✓ | ✗ |
+  | Delete another person's case note (F22 BR16; an author may always delete their own, even as a viewer) | ✓ | ✓ | ✗ | ✗ |
   | Ingest keys, site keys, deploy webhook secrets, integrations | ✓ | ✓ | ✗ | ✗ |
   | API tokens (Stage 2) | ✓ | ✓ | ✗ | ✗ |
   | Invite, change roles, remove — up to their own role (BR3) | ✓ | ✓ | ✗ | ✗ |
@@ -363,7 +365,8 @@ and a read API has nobody to serve before that (D12).
   kept stable — not "every GET the console happens to call", which changes with every screen (D8).
   First list (design §3): services (list, one); traces (search, one); logs (search); metrics (catalogue,
   histogram, duration heatmap — there is no generic metric query); error groups (list, one); incidents
-  (list, one); checks (list, one, results, runs); deploys (list).
+  (list, one); checks (list, one, results, runs); deploys (list). F4's Step 1 added the service map
+  (`GET /service-map`), openly (F4 FR36, D21).
 - **FR18** — Row lists on the read surface (traces, logs, deploys, check runs, error groups) page by an
   opaque cursor and say whether there is another page. Bounded snapshots (services, metrics catalogue,
   incidents, checks) return everything up to their cap and say when they were cut (`truncated`).
@@ -381,8 +384,10 @@ and a read API has nobody to serve before that (D12).
   alike — not installed by the customer.
 - **FR32** — Its tools mirror the read surface (FR17) and nothing else: list services and their health;
   search traces and read one; search logs; query a metric; list error groups and read one; list incidents
-  and read one; list checks and their recent results; list deploys. Each tool has a description written
-  for a model and a bounded time window that defaults to the last hour.
+  and read one; list checks and their recent results; list deploys. F4's Step 1 added findings (list, one), the
+  service map and one service's detection state, and built the read-one tools for traces, error groups
+  and incidents this list already named (F4 FR35). Each tool has a description written for a model and a bounded time window that defaults to
+  the last hour and also takes an exact range of at most 7 days (F4 FR34).
 - **FR33** — A tool call is exactly a read-surface request made with the same token: the same project
   scope (BR11), the same rate limit (FR19), the same refusals. It updates the token's last used.
 - **FR34** — Every tool result is bounded — a row limit and a size limit per call, and it says when it

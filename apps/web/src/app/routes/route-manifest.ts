@@ -17,7 +17,7 @@
 /** Only paths that exist in the tree. Keeps the sidebar from pointing at nothing. */
 export type NavPath =
   | "/"
-  | "/findings"
+  | "/overview"
   | "/alerts"
   | "/services"
   | "/service-map"
@@ -46,13 +46,13 @@ export interface NavSection {
 
 export const NAV_SECTIONS: NavSection[] = [
   {
-    // Both first-class, per the founder's 2026-09-12 decision. Findings had no
-    // entry at all until now: it has been a route nothing in the running app
-    // navigated to, which is how a screen stays invisible while looking built.
+    // Both first-class, per the founder's 2026-09-12 decision — and the feed is
+    // the front door now that the insight engine exists (FD15, F20 D58):
+    // Findings holds `/`, Overview keeps its own entry at `/overview`.
     label: "Home",
     items: [
-      { path: "/", title: "Overview" },
-      { path: "/findings", title: "Findings" },
+      { path: "/", title: "Findings" },
+      { path: "/overview", title: "Overview" },
       // F21. Beside Findings: both answer "what is wrong", one found by us and one
       // declared by a rule the customer wrote.
       { path: "/alerts", title: "Alerts" },

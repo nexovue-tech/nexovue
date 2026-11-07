@@ -413,7 +413,8 @@ def test_detection_stopping_and_running_again_name_the_project() -> None:
         "nexovue's anomaly detection has not judged Production for 15 minutes, as of "
         "2026-09-19 14:03 UTC. No finding can open until it runs again.",
     )
-    assert message.link == "https://app.nexovue.test/findings"
+    # The feed is the front door now (F20 Step 1, FR1): the notice links to `/`.
+    assert message.link == "https://app.nexovue.test/"
     again = compose(dataclasses.replace(stopped, kind="running_again"), app_base_url="")
     assert again.summary == "[resolved] Detection is running again for Production"
     assert again.kind == "resolved"

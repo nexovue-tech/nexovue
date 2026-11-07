@@ -149,6 +149,11 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "reason": "the receiver answered 404",
             "link": "https://app.nexovue.com/settings/channels/1",
         },
+        Message.CASE_ASSIGNED: {
+            "service": "checkout",
+            "severity": "critical",
+            "link": "https://app.nexovue.com/findings/1",
+        },
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 

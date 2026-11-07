@@ -54,6 +54,9 @@ class Message(Enum):
     CHANNEL_FAILING = "channel_failing"
     # F26. A person invited into an organization; the link sets their password.
     INVITE = "invite"
+    # F22. Someone else assigned a person a case (FR5): the fact, the service in
+    # its strict form, the severity, a link — never a finding title or a note.
+    CASE_ASSIGNED = "case_assigned"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

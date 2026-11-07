@@ -77,6 +77,22 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
     ],
     incidents: [],
     services: [],
+    case_state: null,
+    case_resolution: null,
+    case_opened_at: null,
+    case_resolved_at: null,
+    root_finding_id: null,
+    case_signal: "open",
+    case_severity: "warning",
+    open_joined_finding_id: null,
+    open_joined_since: null,
+    assignee_id: null,
+    assignee_name: null,
+    case_taken_at: null,
+    assignee_acted_since_join: null,
+    case_resolved_by_name: null,
+    project_has_pagerduty: false,
+    email_available: false,
     acknowledged_by: null,
     acknowledged_by_name: null,
     feedback_reason: null,
@@ -119,6 +135,7 @@ export function stubApi(
   const handlers: Record<string, Handler> = {
     "GET /auth/me": json(identityFor(role)),
     "GET /findings/f-1": typeof found === "function" ? found : json(found),
+    "GET /findings/f-1/timeline": json({ events: [], next_before: null }),
     [`GET /projects/${PROJECT_ID}/detection`]: json({ sensitivity: "normal", timezone: "UTC" }),
     ...extra,
   };
@@ -157,9 +174,9 @@ export function mountFinding() {
   return mountAt("/findings/f-1", placeholder("Feed"));
 }
 
-/** The feed itself, at `/findings`, with each finding's page a placeholder. */
+/** The feed itself, at `/` — the front door (FR1) — each finding's page a placeholder. */
 export function mountFeed() {
-  return mountAt("/findings", FindingsScreen, placeholder("Finding"));
+  return mountAt("/", FindingsScreen, placeholder("Finding"));
 }
 
 const placeholder = (text: string) => () => createElement("p", null, text);
@@ -185,7 +202,7 @@ async function mountAt(
       }),
       createRoute({
         getParentRoute: () => shellRoute,
-        path: "/findings",
+        path: "/",
         component: feed,
       }),
       createRoute({

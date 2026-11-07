@@ -233,23 +233,22 @@ const shellRoute = createRoute({
 /* ------------------------------------------------------------------ the screens */
 
 /**
- * Overview holds `/` until the insight engine exists (OD2).
- *
- * Not "a dashboard became the front door": the founder's 2026-09-12 decision is
- * that insights and dashboards are both first-class, and the feed is still what
- * a person lands on once it is real. Until then `/` showing nothing was the
- * worse answer — a front door that says the product has not started.
+ * The Findings feed is the front door (FD15, F20 D58). The insight engine is
+ * real now (F6), so the founder's recorded decision applies: `/` is what a
+ * person lands on, and Overview keeps its own entry at `/overview`. The old
+ * `/findings` list address is gone rather than redirected — nexovue is
+ * pre-deployment, and only `/findings/$findingId` is linked from messages.
  */
-const overviewRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/",
-  component: OverviewScreen,
-});
-
 const findingsRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: "/findings",
+  path: "/",
   component: FindingsScreen,
+});
+
+const overviewRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/overview",
+  component: OverviewScreen,
 });
 
 // What every finding card and message links to (D12): one finding, its evidence and
@@ -679,8 +678,8 @@ const notFoundRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
-    overviewRoute,
     findingsRoute,
+    overviewRoute,
     findingRoute,
     alertsRoute,
     newRuleRoute,
@@ -756,7 +755,7 @@ function NotFound() {
           a drawer, and this screen used to leave a reader with nothing to press
           (`docs/quality/console-review-2026-09-20.md`). */}
       <Link to="/" className="mt-4 inline-block font-medium text-brand-text hover:underline">
-        Back to Overview
+        Back to Findings
       </Link>
     </section>
   );

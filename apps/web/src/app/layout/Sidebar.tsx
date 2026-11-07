@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 
 import { ArrowUpRight } from "lucide-react";
 
@@ -10,6 +10,9 @@ import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
 import { NAV_SECTIONS } from "../routes/route-manifest";
+
+/** How the active screen is marked: a rule down its left edge and a weight change. */
+const ACTIVE_ITEM = "border-brand bg-raised font-medium text-ink";
 
 /**
  * Navigation as an index, not a toolbar. No icons: a list of thirteen icons is thirteen
@@ -33,6 +36,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
   const sections = NAV_SECTIONS.filter((section) =>
     operator ? section.operatorOnly : !section.operatorOnly,
   );
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
 
   return (
     <nav
@@ -45,8 +49,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
     >
       <Link
         // Home is the platform area for nexovue's own operator: `/` is the
-        // customer Overview, which answers "no such project" to a role that
-        // holds none (`docs/changes/console-review-fixes/`).
+        // customer's Findings feed, which answers "no such project" to a role
+        // that holds none (`docs/changes/console-review-fixes/`).
         to={operator ? "/admin" : "/"}
         onClick={onNavigate}
         className="flex h-10 items-center border-line border-b px-4"
@@ -61,26 +65,35 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
               {section.label}
             </h2>
             <ul>
-              {section.items.map((item) => (
-                <li key={item.path}>
-                  <Link
-                    to={item.path}
-                    onClick={onNavigate}
-                    activeOptions={{ exact: item.path === "/" }}
-                    // `relative` holds the badge's sr-only words inside the link; without
-                    // it they escape the scroller and stretch the page.
-                    // Taller on a phone, where the sidebar is a drawer and these
-                    // are tap targets rather than a dense column to scan.
-                    className="relative flex min-h-11 items-center justify-between gap-2 border-transparent border-l-2 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink md:min-h-0 md:py-1"
-                    activeProps={{
-                      className: "border-brand bg-raised font-medium text-ink",
-                    }}
-                  >
-                    {item.title}
-                    {item.path === "/alerts" ? <OpenIncidentBadge /> : null}
-                  </Link>
-                </li>
-              ))}
+              {section.items.map((item) => {
+                // Findings holds `/`, which is matched exactly — so its entry
+                // must also light up on `/findings/$findingId`, the one screen
+                // of its area with an address of its own (AC55). Said here
+                // rather than through `activeOptions`, which has no way to say
+                // "exact, plus this other prefix".
+                const alsoActive = item.path === "/" && pathname.startsWith("/findings");
+                return (
+                  <li key={item.path}>
+                    <Link
+                      to={item.path}
+                      onClick={onNavigate}
+                      activeOptions={{ exact: item.path === "/" }}
+                      aria-current={alsoActive ? "page" : undefined}
+                      // `relative` holds the badge's sr-only words inside the link; without
+                      // it they escape the scroller and stretch the page.
+                      // Taller on a phone, where the sidebar is a drawer and these
+                      // are tap targets rather than a dense column to scan.
+                      className={`relative flex min-h-11 items-center justify-between gap-2 border-transparent border-l-2 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink md:min-h-0 md:py-1${
+                        alsoActive ? ` ${ACTIVE_ITEM}` : ""
+                      }`}
+                      activeProps={{ className: ACTIVE_ITEM }}
+                    >
+                      {item.title}
+                      {item.path === "/alerts" ? <OpenIncidentBadge /> : null}
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}

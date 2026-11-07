@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import Final
 
 import pytest
-from nexovue_platform import detection
+from nexovue_platform import cases, detection
 from nexovue_platform.alerts import model
 
 import nexovue_api
@@ -73,6 +73,12 @@ def _values(quoted: str) -> tuple[str, ...]:
         ("_SHIFT_REASONS", detection.SHIFT_REASONS),
         ("_SENSITIVITIES", detection.SENSITIVITIES),
         ("_INTAKE_REFUSAL_REASONS", detection.INTAKE_REFUSAL_REASONS),
+        # F22: the case vocabulary, frozen by 0051.
+        ("_CASE_STATES", detection.CASE_STATES),
+        ("_CASE_RESOLUTIONS", detection.CASE_RESOLUTIONS),
+        ("_FINDING_EVENT_KINDS", detection.FINDING_EVENT_KINDS),
+        ("_EVENT_ACTOR_KINDS", cases.EVENT_ACTOR_KINDS),
+        ("_EMAIL_OWED_KINDS", cases.CASE_EMAIL_KINDS),
     ],
 )
 def test_the_latest_migration_allows_exactly_the_vocabulary(

@@ -2,12 +2,106 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Step 1 is built** on the worktree branch `wt/f22` and awaits the coordinator's review and commit.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 1 on `feature/phase-2` (2026-11-07). Next: the judgeable check on the dev stack, then Step 2.
+
+
+## Step 1 built, 2026-11-02
+
+Plan tasks T1.0 to T1.12, exactly as written. What exists now:
+
+- **Migration 0051** (`a_finding_grows_into_a_case`): the case columns, checks and
+  partial unique indexes on `findings` (one active case per service and per
+  project), composite tenant keys (`UNIQUE (org_id, id)` on `users` and
+  `findings`, `UNIQUE (org_id, project_id, id)` on `findings`), and
+  `finding_events`, `finding_notes`, `finding_emails_owed`. Concurrent builds on
+  the tables with rows; roll-forward only (notes are people's words). The
+  composite-key risk against `test_deletion_live.py`'s catalog query did not
+  bite: the suite passes unchanged (25 passed).
+- **`nexovue_platform`**: `detection.py` gains `CASE_STATES`, `CASE_RESOLUTIONS`
+  (with `recovered_untouched`) and `FINDING_EVENT_KINDS` (with `explained`,
+  frozen by 0051 and held by `test_alert_vocabulary.py`); new `cases.py` with
+  `RECORD_FINDING_EVENT_SQL` + typed `finding_event_parameters()` (no free-form
+  detail, AC24), `RESOLVE_CASE_SQL`, `REOPEN_CASE_SQL`, `DETACH_OPEN_JOINED_SQL`,
+  `JOIN_OPEN_SQL`, `SET_WANTED_STATE_SQL`, `RECORD_CASE_AUDIT_SQL`; new
+  `connections.py` holding `strict_name()` early, because FR5's email needs the
+  strict form now (T4.1 grows the module and owns its gate suite).
+- **Actions**: `OPERATE_CASES` (working roles) and `DELETE_ANY_CASE_NOTE`
+  (owner, admin), through `permissions.py`, `policy.py`, the web `identity.ts`,
+  and the team spec's FR1 table.
+- **API**: new `findings/cases.py` (take, assign with FR4's expectations,
+  resolve with detach, reopen with rejoin, notes, `clear_assignee`), locks
+  `FOR NO KEY UPDATE` (D78), every operation committing before its view
+  (AC102); `PATCH /findings/{id}/case` (returns `email_outcome`),
+  `GET /findings/{id}/timeline` (persons all, tokens kinds and times, support
+  view hides note bodies), `POST`/`DELETE` notes (the delete on
+  `CurrentIdentity`, in `EXEMPT` with its reason); `acknowledge`,
+  `mark_false_alarm` and `accept_new_normal` call into `cases.py`;
+  `to_finding`/`_member_view` carry the case fields; `Reader.is_real_person`.
+  The assignment email (`Message.CASE_ASSIGNED`): strict name, severity, link,
+  nothing quoted, 5-minute limit read from `assigned` events under the root's
+  lock (D91).
+- **Members**: removal, account deletion and a move to viewer clear every
+  active assignment with a system `unassigned` event, `SKIP LOCKED` (AC10's
+  route half; the sweep half is T2.6's).
+- **Scheduler**: new `detection/events.py` — the job's timeline events written
+  beside the notify calls, with a read-only `spell_state()` so a flapping spell
+  (muted included) is one `flapping_started` row and F6's `flapping` column is
+  untouched (AC23); wired into `project_job` at the open, close, escalate, join
+  and adoption sites.
+- **Console**: the work-first finding page (D86) — `CaseSection`, `CaseLine`,
+  `Timeline`, `NoteBox`, `ReassignPanel`; the two labelled groups *The case*
+  and *The signal*; the Evidence jump link; the page-level status region with
+  own-act quieting; 30-second visible-page refresh; Copy as text; every
+  sentence from the spec's tables in `finding-page.ts`/`finding-words.ts`.
+  **Acknowledge is gone from the console (D47): Take this is the one button**,
+  and the API route stays.
+- **Tooling**: `just detection-fault --service <name> [--clear]`
+  (`tools/detection-seed/fault.py`) writes abnormal or normal rollup minutes so
+  the real project job opens and closes a finding; refuses non-localhost; no
+  direct `findings` insert.
+- **ADR-024 filed** (*A case is a finding's columns, with one active case per
+  service*), with the README index. The other two proposed ADRs (reconcile +
+  doorbell; `scheduler-connections`) stay in `design.md` until Step 3 starts,
+  since nothing built in Steps 1–2 rests on them and D97 numbers them when
+  written — the coordinator may overrule and file them now.
+
+### Validation run (read, not inferred)
+
+- `packages/py-platform/tests/test_finding_events.py` + `test_case_transitions.py`: **51 passed** (seen failing first: ImportError before the module existed).
+- `apps/api/tests/test_findings_cases_live.py` (new, Postgres live, ClickHouse replaced by a commit-witness stub that fails any read before the case transaction commits — AC102): **31 passed**, after three real defects the suite caught first (an autoflush outside the savepoint, the assignment email counting its own event against the 5-minute limit, an ISO cursor dying in a query string).
+- `apps/scheduler/tests/test_detection_events_live.py` (new): **5 passed** (first run failed on an open-findings unique clash, fixed in the test's own writes).
+- `tools/detection-seed/test_fault.py` (new): **4 passed**.
+- Existing suites rerun after the change: `test_deletion_live.py` 25, `test_findings_actions_live.py` + `test_findings_api_live.py` + `test_members_live.py` + `test_personal_data_live.py` + `test_db_session_commit_order.py` + `test_audit.py` **95 passed** (two grown: the token field list, the member-only fields), `test_detection_project_job_live.py` + scheduler tenancy structure **49 passed**, offline structure suites (`test_authorization_coverage`, `test_read_surface_structure`, `test_findings`, `test_api_conventions`, `test_postgres_tenancy_structure`) **1,917 passed**, `test_alert_vocabulary` + `test_migration_rules` + `test_setup_schema` + `test_erasure_inventory` green.
+- Web: **1,541 vitest tests passed** across the app (136 in `features/findings`, including the new state-sentence table and the AC18/AC104/AC106/AC132 screen tests); `tsc -b` and Biome clean on the app.
+- `uv run mypy .`: **no issues in 737 files**; `ruff check` clean.
+- Migration 0051 applied forward against live Postgres (including a re-run after a deliberate partial state); ClickHouse untouched by design.
+- **Not run:** `just check` (the coordinator runs it); T1.0's live run (the real
+  job opening, closing and reopening a finding over `detection-fault`) — it
+  needs the full dev stack judging, which this shared 16 GB machine was not to
+  carry; it is the judgeable check's first step. `just e2e`/chaos: not relevant
+  to this step.
+
+### Implementation notes and residual risks
+
+- **`Reader.is_real_person` is built directly** (`identity is not None and
+  impersonation is None`) because F3's `Reader.is_person` is not on the branch
+  yet; when F3 lands it becomes `is_person and impersonation is None`, as the
+  design words it. Semantics are identical today.
+- **`events.spell_state` counts openings over the plain hour window** (it does
+  not subtract at a previous spell's end as the notify guard does), so two
+  distinct spells inside one hour would write one `flapping_started`, not two.
+  One event per spell (D35) still holds; the edge is noted for T2.x review.
+- **Deadlock prevention is still reasoning** until T2.1's barrier test runs, as
+  the plan says.
+- The ClickHouse-read-under-lock proof covers the case routes; the three
+  existing actions commit before their views too, exercised by the same stub.
+- `findings/queries.person_name` (singular) was superseded by the bulk
+  `person_names` and deleted with this change, per the working rules.
 
 
 ## Completed
@@ -21,7 +115,12 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1. Step 7 (Jira) still waits on Atlassian's written answer. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+Coordinator review and commit of Step 1 (branch `wt/f22`). Then the judgeable
+check on the dev stack (`just detection-seed`, `just detection-fault --service
+checkout`, work the case, `--clear`), recorded here; then plan Step 2. Step 7
+(Jira) still waits on Atlassian's written answer. T0.1's question to Atlassian
+should be sent if it has not been. The two tracker ADRs are filed when Step 3
+starts.
 
 
 ## Open decisions

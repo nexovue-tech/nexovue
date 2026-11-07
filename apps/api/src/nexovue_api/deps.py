@@ -162,6 +162,17 @@ def get_optional_email_sender(
     return resources.email
 
 
+def get_email_availability(connection: HTTPConnection) -> bool:
+    """Whether this install can send mail at all, for screens that say so (F22 FR5).
+
+    Read tolerantly, like `_usage_for` in `auth/dependencies.py`: a page read
+    must never *require* the pools, and a test app without a lifespan reads
+    perfectly well and says no.
+    """
+    resources = getattr(getattr(connection.scope.get("app"), "state", None), "resources", None)
+    return getattr(resources, "email", None) is not None
+
+
 def get_session_store(resources: Annotated[Resources, Depends(get_resources)]) -> SessionStore:
     return resources.sessions
 
@@ -211,6 +222,8 @@ EmailDelivery = Annotated[EmailSender, Depends(get_email_sender)]
 # Optional, like the object store, and for one caller: signup must not fail
 # because mail could not go. Everything else uses EmailDelivery.
 OptionalEmail = Annotated[EmailSender | None, Depends(get_optional_email_sender)]
+# For read routes that only *say* whether mail can go: never requires the pools.
+EmailAvailable = Annotated[bool, Depends(get_email_availability)]
 
 
 def get_one_time_tokens(db: DbSession) -> OneTimeTokenStore:

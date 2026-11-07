@@ -20,6 +20,9 @@ class Action(StrEnum):
     OPERATE_CHECKS = "operate_checks"
     # Alert rules (including muting) and maintenance windows.
     OPERATE_ALERTS = "operate_alerts"
+    # Working a case on a finding (F22, FR34): take, assign, note, resolve,
+    # reopen, link an issue.
+    OPERATE_CASES = "operate_cases"
     UPLOAD_SOURCE_MAPS = "upload_source_maps"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
@@ -28,6 +31,10 @@ class Action(StrEnum):
     # Anomaly detection's sensitivity, mutes and new normals, and every *anomaly
     # finding* alert rule (F6 FR23, D11): what decides whether detection is heard.
     CONFIGURE_DETECTION = "configure_detection"
+    # Deleting another person's case note (F22, BR16). An author may always
+    # delete their own, even as a viewer: the one exception to the viewer rule,
+    # checked by the service on the route itself.
+    DELETE_ANY_CASE_NOTE = "delete_any_case_note"
     # Ingest keys, site keys, deploy webhook secrets and integrations.
     MANAGE_CREDENTIALS = "manage_credentials"
     # Read tokens for the organization's own data (F36, BR9).
@@ -50,11 +57,13 @@ _OWNERS: Final = frozenset({"owner"})
 ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.OPERATE_CHECKS: _EVERYONE_WHO_WORKS,
     Action.OPERATE_ALERTS: _EVERYONE_WHO_WORKS,
+    Action.OPERATE_CASES: _EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: _ADMINISTRATORS,
+    Action.DELETE_ANY_CASE_NOTE: _ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: _ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: _ADMINISTRATORS,
     Action.MANAGE_MEMBERS: _ADMINISTRATORS,

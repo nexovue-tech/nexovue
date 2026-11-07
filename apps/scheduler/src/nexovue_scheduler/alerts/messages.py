@@ -375,7 +375,9 @@ def _compose_project(notice: Notice, *, app_base_url: str) -> AlertMessage:
         severity=notice.severity,
         summary=f"[{'resolved' if notice.kind == 'running_again' else notice.severity}] {summary}",
         details=(sentence.format(**words),),
-        link=f"{base}/findings",
+        # The feed is the front door (F20 Step 1, FR1): the project's notice lands
+        # on `/`, and `test_alert_links.py` holds every link to the console's routes.
+        link=f"{base}/",
         rule_name="",
         manage_link=None,
     )
