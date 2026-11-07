@@ -33,7 +33,7 @@ from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Finding as FindingRow
 from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import queries
+from nexovue_api.findings import cases, queries
 from nexovue_api.findings.schemas import (
     FeedState,
     Finding,
@@ -53,6 +53,9 @@ from nexovue_api.findings.schemas import (
     SignalSeries,
     SignalUnit,
     StoredSignal,
+    TimelineEvent,
+    TimelineEventForMember,
+    TimelineResponse,
 )
 
 NOT_FOUND: Final = "No such finding."
@@ -128,9 +131,17 @@ async def list_findings(
     rows = rows[: queries.FEED_PAGE]
     trends = await _open_trends(repository, project_id=project_id, rows=rows, now=now)
     quiet = await queries.quiet_services(session, org_id=org_id, project_id=project_id, now=now)
+    open_joined = await queries.open_joined_of(
+        session, org_id=org_id, root_ids=[row.id for row in rows if row.case_state is not None]
+    )
     return FindingListResponse(
         findings=[
-            to_finding(row, trend=trends.get(row.id, []), quiet=quiet.get(row.service_name or ""))
+            to_finding(
+                row,
+                trend=trends.get(row.id, []),
+                quiet=quiet.get(row.service_name or ""),
+                open_joined=open_joined.get(row.id),
+            )
             for row in rows
         ],
         muted_count=await queries.muted_count(
@@ -149,6 +160,7 @@ async def get_finding(
     project_scope: uuid.UUID | None,
     for_member: bool,
     now: datetime,
+    email_available: bool = False,
 ) -> FindingDetail | FindingForMember:
     """One finding and its page. `project_scope` is a token's (BR11): a finding in
     another of the organization's projects is the same 404 as one that does not exist.
@@ -160,8 +172,10 @@ async def get_finding(
     if row is None or (project_scope is not None and row.project_id != project_scope):
         raise NotFoundError(NOT_FOUND)
     if for_member:
-        return await _member_view(session, repository, row, now=now)
-    detail, _ = await _detail(session, repository, row, now=now)
+        return await _member_view(
+            session, repository, row, now=now, email_available=email_available
+        )
+    detail, _, _ = await _detail(session, repository, row, now=now)
     return detail
 
 
@@ -173,8 +187,14 @@ async def acknowledge(
     finding_id: uuid.UUID,
     now: datetime,
 ) -> FindingChanged:
-    """FR19, AC33: who is handling it, and since when. It stays open."""
-    row = await _lock(session, org_id=actor.org_id, finding_id=finding_id)
+    """FR19, AC33: who is handling it, and since when. It stays open.
+
+    Under F22 (FR3, D20, AC60) it also starts or takes the case: the console
+    shows one button, **Take this**, and this route stays for the API. The
+    transaction commits before the view is built, so no ClickHouse read runs
+    under the row's lock (AC102).
+    """
+    row, root = await cases.lock_with_root(session, org_id=actor.org_id, finding_id=finding_id)
     if row.state != "open" or row.acknowledged_at is not None:
         raise ConflictError(ALREADY_HANDLED)
     row.acknowledged_by, row.acknowledged_at = actor.id, now
@@ -182,6 +202,8 @@ async def acknowledge(
         session, org_id=row.org_id, finding_id=row.id, actor_user_id=actor.id
     )
     await session.flush()
+    await cases.on_acknowledged(session, row, root, actor, now=now)
+    await session.commit()
     return FindingChanged(
         finding=await _member_view(session, repository, row, now=now), resolved_to=[]
     )
@@ -203,7 +225,7 @@ async def mark_false_alarm(
     Only someone who may configure detection returns its minutes to the normal (D28);
     the next project job holds its signals until they read normal again.
     """
-    row = await _lock(session, org_id=actor.org_id, finding_id=finding_id)
+    row, root = await cases.lock_with_root(session, org_id=actor.org_id, finding_id=finding_id)
     resolved_to: list[str] = []
     if row.state == "open":
         _close(row, reason="false_alarm", at=now)
@@ -230,6 +252,11 @@ async def mark_false_alarm(
     if returns_minutes:
         await queries.queue_baselines(session, org_id=row.org_id, project_id=row.project_id)
     await session.flush()
+    # F22 (BR6, AC8): on a root, "it was never a problem" resolves the case with
+    # that reason; on a joined finding the case stands. Committed before the
+    # view, so no ClickHouse read runs under the lock (AC102).
+    await cases.on_never_a_problem(session, row, root, actor, kind="false_alarm", now=now)
+    await session.commit()
     return FindingChanged(
         finding=await _member_view(session, repository, row, now=now), resolved_to=resolved_to
     )
@@ -247,7 +274,7 @@ async def accept_new_normal(
     it started, keeping the normal's daily and weekly shape. Refused until the level
     is known from enough readings. The finding closes with one *resolved*, and the
     service's normal is rebuilt at once, so judging continues with no learning gap."""
-    row = await _lock(session, org_id=actor.org_id, finding_id=finding_id)
+    row, root = await cases.lock_with_root(session, org_id=actor.org_id, finding_id=finding_id)
     if row.service_name is None:
         raise InvalidRequestError(NO_NORMAL_OF_ITS_OWN)
     if row.state != "open":
@@ -286,6 +313,8 @@ async def accept_new_normal(
     )
     await queries.queue_baselines(session, org_id=row.org_id, project_id=row.project_id)
     await session.flush()
+    await cases.on_never_a_problem(session, row, root, actor, kind="new_normal", now=now)
+    await session.commit()
     return FindingChanged(
         finding=await _member_view(session, repository, row, now=now), resolved_to=resolved_to
     )
@@ -320,8 +349,14 @@ async def _quiet(session: AsyncSession, row: FindingRow, *, now: datetime) -> bo
 
 async def _detail(
     session: AsyncSession, repository: TenantScopedRepository, row: FindingRow, *, now: datetime
-) -> tuple[FindingDetail, list[dict[str, Any]]]:
-    """The page, and the readings it was drawn from, newest first."""
+) -> tuple[FindingDetail, list[dict[str, Any]], FindingRow | None]:
+    """The page, the readings it was drawn from (newest first), and the open
+    joined finding when the row's case has one (F22)."""
+    open_joined = (
+        await queries.open_joined_finding(session, org_id=row.org_id, root_id=row.id)
+        if row.case_state is not None
+        else None
+    )
     signals = parse_signals(row.signals)
     quiet = (
         await queries.quiet_services(session, org_id=row.org_id, project_id=row.project_id, now=now)
@@ -342,7 +377,9 @@ async def _detail(
     )
     incidents = await queries.linked_incidents(session, org_id=row.org_id, finding_id=row.id)
     detail = FindingDetail(
-        **to_finding(row, trend=trend, signals=signals, quiet=quiet).model_dump(),
+        **to_finding(
+            row, trend=trend, signals=signals, quiet=quiet, open_joined=open_joined
+        ).model_dump(),
         series=[
             SignalSeries(
                 signal=signal,
@@ -365,13 +402,18 @@ async def _detail(
         ],
         services=list(row.services or []),
     )
-    return detail, readings
+    return detail, readings, open_joined
 
 
 async def _member_view(
-    session: AsyncSession, repository: TenantScopedRepository, row: FindingRow, *, now: datetime
+    session: AsyncSession,
+    repository: TenantScopedRepository,
+    row: FindingRow,
+    *,
+    now: datetime,
+    email_available: bool = False,
 ) -> FindingForMember:
-    detail, readings = await _detail(session, repository, row, now=now)
+    detail, readings, open_joined = await _detail(session, repository, row, now=now)
     started = _minute_of(row.started_at)
     since_start = [reading for reading in readings if _reading_minute(reading) >= started]
     preview = (
@@ -379,14 +421,133 @@ async def _member_view(
         if row.state == "open" and row.service_name is not None
         else None
     )
+    named = await queries.person_names(
+        session,
+        org_id=row.org_id,
+        user_ids=[
+            user_id
+            for user_id in (row.acknowledged_by, row.assignee_id, row.case_resolved_by)
+            if user_id is not None
+        ],
+    )
+    taken_at = (
+        await queries.latest_assignment_at(
+            session, org_id=row.org_id, root_id=row.id, assignee_id=row.assignee_id
+        )
+        if row.assignee_id is not None
+        else None
+    )
     return FindingForMember(
         **detail.model_dump(),
         acknowledged_by=row.acknowledged_by,
-        acknowledged_by_name=None
-        if row.acknowledged_by is None
-        else await queries.person_name(session, org_id=row.org_id, user_id=row.acknowledged_by),
+        acknowledged_by_name=named.get(row.acknowledged_by) if row.acknowledged_by else None,
         feedback_reason=row.feedback_reason,
         new_normal=preview,
+        assignee_id=row.assignee_id,
+        assignee_name=named.get(row.assignee_id) if row.assignee_id else None,
+        case_taken_at=taken_at,
+        assignee_acted_since_join=None
+        if open_joined is None or row.assignee_id is None
+        else bool(
+            row.assignee_acted_at is not None and row.assignee_acted_at >= open_joined.started_at
+        ),
+        case_resolved_by_name=named.get(row.case_resolved_by) if row.case_resolved_by else None,
+        project_has_pagerduty=await queries.project_has_pagerduty(
+            session, org_id=row.org_id, project_id=row.project_id
+        ),
+        email_available=email_available,
+    )
+
+
+async def member_view(
+    session: AsyncSession,
+    repository: TenantScopedRepository,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    now: datetime,
+    email_available: bool,
+) -> FindingForMember:
+    """The page after a case action, built after the action committed (AC102)."""
+    row = await queries.find_finding(session, org_id=org_id, finding_id=finding_id)
+    if row is None:
+        raise NotFoundError(NOT_FOUND)
+    return await _member_view(session, repository, row, now=now, email_available=email_available)
+
+
+# What a support view reads where a note's words would be (FR20, D62).
+HIDDEN_DURING_SUPPORT_VIEW: Final = "Hidden during support view"
+BAD_CURSOR: Final = "That is not a timeline position. Read the newest page and follow next_before."
+# The cursor's two halves: when and which, so paging never skips same-instant rows.
+_CURSOR_SEPARATOR: Final = "~"
+
+
+def _parse_before(before: str | None) -> tuple[datetime, uuid.UUID] | None:
+    if before is None:
+        return None
+    try:
+        at_part, id_part = before.split(_CURSOR_SEPARATOR, 1)
+        # A Unix timestamp, not ISO text: an ISO offset's `+` dies in a query string.
+        return datetime.fromtimestamp(float(at_part), UTC), uuid.UUID(id_part)
+    except ValueError as wrong:
+        raise InvalidRequestError(BAD_CURSOR) from wrong
+
+
+async def read_timeline(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    project_scope: uuid.UUID | None,
+    real_person: bool,
+    token: bool,
+    before: str | None,
+) -> TimelineResponse:
+    """FR16, FR17: one case's timeline, merged from the root and its joined
+    findings, newest first, 100 rows a page.
+
+    A person reads all of it; a token reads kinds and times alone (FR20, AC22);
+    a support view reads a person's shape with note bodies hidden (D62).
+    """
+    row = await queries.find_finding(session, org_id=org_id, finding_id=finding_id)
+    if row is None or (project_scope is not None and row.project_id != project_scope):
+        raise NotFoundError(NOT_FOUND)
+    root_id = row.root_finding_id or row.id
+    found = await queries.timeline(
+        session, org_id=org_id, root_id=root_id, before=_parse_before(before)
+    )
+    next_before = (
+        f"{found[-1][0].at.timestamp()}{_CURSOR_SEPARATOR}{found[-1][0].id}"
+        if len(found) == queries.TIMELINE_PAGE
+        else None
+    )
+    if token:
+        return TimelineResponse(
+            events=[TimelineEvent(id=event.id, kind=event.kind, at=event.at) for event, _ in found],
+            next_before=next_before,
+        )
+    named = await queries.person_names(
+        session,
+        org_id=org_id,
+        user_ids=list({event.actor_id for event, _ in found if event.actor_id is not None}),
+    )
+    return TimelineResponse(
+        events=[
+            TimelineEventForMember(
+                id=event.id,
+                kind=event.kind,
+                at=event.at,
+                actor_kind=event.actor_kind,
+                actor_id=event.actor_id,
+                actor_name=named.get(event.actor_id) if event.actor_id else None,
+                detail=event.detail,
+                note_body=None
+                if body is None
+                else (body if real_person else HIDDEN_DURING_SUPPORT_VIEW),
+            )
+            for event, body in found
+        ],
+        next_before=next_before,
     )
 
 
@@ -559,13 +720,21 @@ def false_finding_rate(*, false_alarms: int, services: int, days: int) -> float 
     return false_alarms / service_weeks if service_weeks else None
 
 
+def worse_severity(severity: str, other: str | None) -> str:
+    """The worse of two severities (FR21's case severity): critical beats warning."""
+    return "critical" if "critical" in (severity, other) else severity
+
+
 def to_finding(
     row: FindingRow,
     *,
     trend: list[float],
     signals: list[FindingSignal] | None = None,
     quiet: queries.ServiceQuiet | None = None,
+    open_joined: FindingRow | None = None,
 ) -> Finding:
+    """`open_joined` is the open finding joined to this row's case, when one is:
+    it decides the case signal and the case severity (F22, FR23)."""
     return Finding(
         service_snoozed_until=None if quiet is None else quiet.snoozed_until,
         service_muted_until=None if quiet is None else quiet.muted_until,
@@ -583,6 +752,17 @@ def to_finding(
         acknowledged_at=row.acknowledged_at,
         signals=parse_signals(row.signals) if signals is None else signals,
         trend=trend,
+        case_state=row.case_state,
+        case_resolution=row.case_resolution,
+        case_opened_at=row.case_opened_at,
+        case_resolved_at=row.case_resolved_at,
+        root_finding_id=row.root_finding_id,
+        case_signal="open" if row.state == "open" or open_joined is not None else "closed",
+        case_severity=worse_severity(
+            row.severity, None if open_joined is None else open_joined.severity
+        ),
+        open_joined_finding_id=None if open_joined is None else open_joined.id,
+        open_joined_since=None if open_joined is None else open_joined.started_at,
     )
 
 

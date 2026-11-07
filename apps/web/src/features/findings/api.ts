@@ -57,6 +57,20 @@ export interface FindingSignal {
   endpoint_last_week: number | null;
 }
 
+// ---- the case (F22): whether people are working, apart from the signal.
+export type CaseState = "investigating" | "resolved";
+export type CaseResolution =
+  | "resolved"
+  | "false_alarm"
+  | "new_normal"
+  | "tracker_closed"
+  | "no_activity"
+  | "recovered_untouched";
+/** Whether the problem is measured now for the whole case. */
+export type CaseSignal = "open" | "closed";
+/** Whether the assignment email will be tried (FR5); the screen says the truth. */
+export type EmailOutcome = "will_try" | "not_configured" | "rate_limited" | "none";
+
 export interface Finding {
   id: string;
   project_id: string;
@@ -83,6 +97,18 @@ export interface Finding {
   signals: FindingSignal[];
   /** A rollup behind the entity, drawn with the same sparkline as everywhere else. */
   trend: number[];
+  /** The case (F22). Null throughout means nobody ever took it. */
+  case_state: CaseState | null;
+  case_resolution: CaseResolution | null;
+  case_opened_at: string | null;
+  case_resolved_at: string | null;
+  /** The case this finding joined (FR12); its page leads to the root. */
+  root_finding_id: string | null;
+  case_signal: CaseSignal;
+  /** The worse of this finding's severity and an open joined finding's. */
+  case_severity: FindingSeverity;
+  open_joined_finding_id: string | null;
+  open_joined_since: string | null;
 }
 
 /** One judged minute of one signal, in the signal's unit. */
@@ -144,6 +170,58 @@ export interface FindingDetail extends Finding {
   feedback_reason?: string | null;
   /** Null when closed, or a project's finding, which has no normal of its own. */
   new_normal?: NewNormalPreview | null;
+  /** The case's people (FR20): a token never reads these. */
+  assignee_id?: string | null;
+  assignee_name?: string | null;
+  /** When the current assignee took or was given the case (D76). */
+  case_taken_at?: string | null;
+  /** On a root with an open joined finding: acted since it came back? (AC100). */
+  assignee_acted_since_join?: boolean | null;
+  case_resolved_by_name?: string | null;
+  /** FR48: whether to add the PagerDuty line after Take this and resolve. */
+  project_has_pagerduty?: boolean;
+  /** Whether this install can send the assignment email at all (FR5). */
+  email_available?: boolean;
+}
+
+/** One timeline row (FR16). A person's fields; a token gets kinds and times. */
+export type EventActorKind = "person" | "system" | "tracker";
+
+export interface TimelineEvent {
+  id: string;
+  kind: string;
+  at: string;
+  actor_kind?: EventActorKind;
+  actor_id?: string | null;
+  actor_name?: string | null;
+  /** Enums, ids and numbers only, by the writer's construction (AC24). */
+  detail?: Record<string, unknown>;
+  /** A note's words, joined live: a deleted note's text is gone (AC19). */
+  note_body?: string | null;
+}
+
+export interface TimelineResponse {
+  events: TimelineEvent[];
+  /** Pass back as `before` for the next 100 older rows; null at the end. */
+  next_before: string | null;
+}
+
+export interface CaseChanged {
+  finding: FindingDetail;
+  email_outcome: EmailOutcome;
+}
+
+export interface CaseNote {
+  id: string;
+  author_id: string | null;
+  author_name: string | null;
+  body: string;
+  created_at: string;
+}
+
+export interface NoteWritten {
+  note: CaseNote;
+  finding: FindingDetail;
 }
 
 /** What an action did: the finding as it now is, and who hears it close. */
@@ -326,13 +404,127 @@ export function useDetectionStatus(projectId: string | undefined, refresh: TimeW
 }
 
 export const findingQueryKey = (findingId: string) => ["findings", "one", findingId] as const;
+export const timelineQueryKey = (findingId: string) => ["findings", "timeline", findingId] as const;
+
+/**
+ * FR45: the page refreshes every 30 seconds, a guess, on a visible page only —
+ * react-query pauses the interval while the window is unfocused.
+ */
+export const PAGE_REFRESH_MS = 30_000;
 
 /** One finding and its page. */
 export function useFinding(findingId: string) {
   return useQuery({
     queryKey: findingQueryKey(findingId),
+    refetchInterval: PAGE_REFRESH_MS,
     queryFn: ({ signal }) =>
       apiClient.get<FindingDetail>(`findings/${encodeURIComponent(findingId)}`, { signal }),
+  });
+}
+
+/** The root's page, read when this page's finding joined a case (FR12). */
+export function useRootCase(rootId: string | null) {
+  return useQuery({
+    queryKey: findingQueryKey(rootId ?? ""),
+    enabled: rootId != null,
+    refetchInterval: PAGE_REFRESH_MS,
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingDetail>(`findings/${encodeURIComponent(rootId ?? "")}`, { signal }),
+  });
+}
+
+/** The case's timeline, newest first (FR17), refreshed with the page. */
+export function useTimeline(findingId: string) {
+  return useQuery({
+    queryKey: timelineQueryKey(findingId),
+    refetchInterval: PAGE_REFRESH_MS,
+    queryFn: ({ signal }) =>
+      apiClient.get<TimelineResponse>(`findings/${encodeURIComponent(findingId)}/timeline`, {
+        signal,
+      }),
+  });
+}
+
+/** Older timeline rows, fetched on Show earlier; appended by the caller. */
+export function fetchEarlierTimeline(findingId: string, before: string) {
+  return apiClient.get<TimelineResponse>(`findings/${encodeURIComponent(findingId)}/timeline`, {
+    searchParams: { before },
+  });
+}
+
+/** A working member the reassign picker may offer (FR4). Shapes are the members
+ * API's; declared here because a feature never imports another feature. */
+export interface AssignableMember {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  status: string;
+}
+
+export function useAssignableMembers(enabled: boolean) {
+  return useQuery({
+    queryKey: ["findings", "assignable-members"] as const,
+    enabled,
+    queryFn: ({ signal }) => apiClient.get<{ members: AssignableMember[] }>("members", { signal }),
+    // AC62: the picker never offers a viewer, a pending invitee or one removed.
+    select: (response) =>
+      response.members.filter((member) => member.role !== "viewer" && member.status === "active"),
+  });
+}
+
+export interface CaseChangeInput {
+  case_state?: CaseState;
+  assignee_id?: string | null;
+  expected_assignee_id?: string | null;
+  expected_case_state?: CaseState | null;
+}
+
+function refreshAfterCaseChange(
+  queryClient: ReturnType<typeof useQueryClient>,
+  findingId: string,
+  finding: FindingDetail,
+) {
+  // The response is the root's page; the acted-on page re-reads itself too.
+  queryClient.setQueryData(findingQueryKey(finding.id), finding);
+  void queryClient.invalidateQueries({ queryKey: findingQueryKey(findingId) });
+  void queryClient.invalidateQueries({ queryKey: timelineQueryKey(findingId) });
+  void queryClient.invalidateQueries({ queryKey: timelineQueryKey(finding.id) });
+  void queryClient.invalidateQueries({ queryKey: ["findings", "feed"] });
+}
+
+/** Take, assign, resolve or reopen (FR1 to FR6): `PATCH /findings/{id}/case`. */
+export function useCaseChange(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "case", findingId],
+    mutationFn: (input: CaseChangeInput) =>
+      apiClient.patch<CaseChanged>(`findings/${encodeURIComponent(findingId)}/case`, input),
+    onSuccess: (changed) => refreshAfterCaseChange(queryClient, findingId, changed.finding),
+  });
+}
+
+/** Write a note (FR14): it lands on the root, and may start the case. */
+export function useAddNote(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "note", findingId],
+    mutationFn: (body: string) =>
+      apiClient.post<NoteWritten>(`findings/${encodeURIComponent(findingId)}/notes`, { body }),
+    onSuccess: (written) => refreshAfterCaseChange(queryClient, findingId, written.finding),
+  });
+}
+
+/** Delete a note (FR15): the text is gone; the timeline keeps the fact. */
+export function useDeleteNote(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "note-delete", findingId],
+    mutationFn: (noteId: string) =>
+      apiClient.delete<FindingDetail>(
+        `findings/${encodeURIComponent(findingId)}/notes/${encodeURIComponent(noteId)}`,
+      ),
+    onSuccess: (finding) => refreshAfterCaseChange(queryClient, findingId, finding),
   });
 }
 

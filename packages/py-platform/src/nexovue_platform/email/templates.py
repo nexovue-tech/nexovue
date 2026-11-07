@@ -66,6 +66,13 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "If nothing is paid by {until}, {organization} moves to the free plan. "
         "Nothing you have already sent is deleted.",
     ),
+    Message.CASE_ASSIGNED: (
+        "A case on {service} was assigned to you",
+        "You were assigned a case on {service} ({severity}) in nexovue.\n\n"
+        "Open it:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence "
+        "and the notes.",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

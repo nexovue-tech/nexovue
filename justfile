@@ -104,6 +104,12 @@ detection-measure *args:
 detection-seed *args:
     uv run python tools/detection-seed/seed.py {{args}}
 
+# F22 plan T1.0: make one dev service read slower than normal (`--clear` to recover), so the real
+# project job opens and closes a finding - no row is inserted into findings.
+# Break or heal one dev service, for judging case management by hand
+detection-fault *args:
+    uv run python tools/detection-seed/fault.py {{args}}
+
 # F6 plan T8.2 (AC29): 200 projects, 2,000 services. In order: tenants, load (keep it running),
 # seed, then watch while the scheduler runs. `profile` times project jobs; `remove --yes` closes
 # the tenants. Each command's options: `just detection-scale <command> --help`.

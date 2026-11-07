@@ -15,13 +15,20 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Body, Query
+from nexovue_platform.connections import strict_name
+from nexovue_platform.email import EmailError, EmailSender, Message
 
-from nexovue_api.auth.dependencies import CurrentReader, TenantRepository
-from nexovue_api.auth.policy import MayConfigureDetection, MayOperateAlerts
-from nexovue_api.deps import DbSession
-from nexovue_api.findings import service
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
+from nexovue_api.auth.policy import MayConfigureDetection, MayOperateAlerts, MayOperateCases
+from nexovue_api.deps import AppSettings, DbSession, EmailAvailable, OptionalEmail
+from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.findings import cases, service
 from nexovue_api.findings.schemas import (
+    CaseChanged,
+    CaseChangeRequest,
+    CaseNote,
     FalseAlarmRequest,
     FeedState,
     FindingChanged,
@@ -29,8 +36,13 @@ from nexovue_api.findings.schemas import (
     FindingForMember,
     FindingListResponse,
     FindingStats,
+    NoteRequest,
+    NoteWritten,
+    TimelineResponse,
 )
 from nexovue_api.projects.service import require_readable_project
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/findings", tags=["findings"])
 
@@ -77,10 +89,14 @@ async def finding_stats(
 
 @router.get("/{finding_id}", summary="One finding, with its readings while they last")
 async def get_finding(
-    reader: CurrentReader, db: DbSession, repository: TenantRepository, finding_id: uuid.UUID
+    reader: CurrentReader,
+    db: DbSession,
+    repository: TenantRepository,
+    email_available: EmailAvailable,
+    finding_id: uuid.UUID,
 ) -> FindingForMember | FindingDetail:
-    """A signed-in person also sees who acknowledged it, the false alarm's reason, and
-    what a new normal would be."""
+    """A signed-in person also sees who acknowledged it, the case's people, the
+    false alarm's reason, and what a new normal would be."""
     return await service.get_finding(
         db,
         repository,
@@ -89,6 +105,151 @@ async def get_finding(
         project_scope=reader.project_scope,
         for_member=not reader.is_token,
         now=datetime.now(UTC),
+        email_available=email_available,
+    )
+
+
+@router.get("/{finding_id}/timeline", summary="A case's timeline, newest first")
+async def read_timeline(
+    reader: CurrentReader,
+    db: DbSession,
+    finding_id: uuid.UUID,
+    before: Annotated[str | None, Query(description="`next_before` from the previous page")] = None,
+) -> TimelineResponse:
+    """A person reads everything; an API token reads kinds and times alone (FR20)."""
+    return await service.read_timeline(
+        db,
+        org_id=reader.org_id,
+        finding_id=finding_id,
+        project_scope=reader.project_scope,
+        real_person=reader.is_real_person,
+        token=reader.is_token,
+        before=before,
+    )
+
+
+@router.patch("/{finding_id}/case", summary="Take, assign, resolve or reopen a case")
+async def change_case(
+    identity: MayOperateCases,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    settings: AppSettings,
+    finding_id: uuid.UUID,
+    request: CaseChangeRequest,
+) -> CaseChanged:
+    """One route for a person's case acts (FR1 to FR6). An act on a joined finding
+    changes the root, and the response is the root's page."""
+    now = datetime.now(UTC)
+    fields = request.model_fields_set
+    if "assignee_id" in fields:
+        change = await cases.assign(
+            db,
+            actor=identity.user,
+            finding_id=finding_id,
+            assignee_id=request.assignee_id,
+            expected_assignee_id=request.expected_assignee_id,
+            expectation_given="expected_assignee_id" in fields,
+            email_available=email is not None,
+            now=now,
+        )
+    elif request.case_state is not None:
+        change = await cases.set_case_state(
+            db, actor=identity.user, finding_id=finding_id, wanted=request.case_state, now=now
+        )
+    else:
+        raise InvalidRequestError("Say what to change: a case_state, or an assignee_id.")
+    # After the commit, so a failed send cannot fail the assignment (FR5).
+    if change.email.outcome == "will_try" and email is not None:
+        await _send_assignment_email(email, change.email, app_base_url=settings.app_base_url)
+    view = await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=change.root.id,
+        now=now,
+        email_available=email is not None,
+    )
+    return CaseChanged(finding=view, email_outcome=change.email.outcome)
+
+
+async def _send_assignment_email(
+    email: EmailSender, plan: cases.AssignmentEmail, *, app_base_url: str
+) -> None:
+    """FR5's one email: the fact, the service in its strict form, the severity and
+    a link — never a finding title or a note (D28)."""
+    assert plan.recipient_address is not None and plan.finding_id is not None
+    try:
+        await email.send(
+            to=plan.recipient_address,
+            message=Message.CASE_ASSIGNED,
+            data={
+                "service": strict_name(plan.service_name),
+                "severity": plan.severity,
+                "link": f"{app_base_url.rstrip('/')}/findings/{plan.finding_id}",
+            },
+            idempotency_key=f"case-assigned:{plan.finding_id}:{plan.recipient_address}",
+        )
+    except EmailError as failure:
+        logger.error("assignment mail refused; the assignment stands", error=str(failure))
+
+
+@router.post("/{finding_id}/notes", summary="Write a note on the case")
+async def add_case_note(
+    identity: MayOperateCases,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    finding_id: uuid.UUID,
+    request: NoteRequest,
+) -> NoteWritten:
+    """A note lands on the root, and starts a case with nobody assigned (D70)."""
+    now = datetime.now(UTC)
+    note, root = await cases.add_note(
+        db, actor=identity.user, finding_id=finding_id, body=request.body, now=now
+    )
+    view = await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=root.id,
+        now=now,
+        email_available=email is not None,
+    )
+    return NoteWritten(
+        note=CaseNote(
+            id=note.id,
+            author_id=identity.user.id,
+            author_name=identity.user.name or identity.user.email,
+            body=note.body,
+            created_at=note.created_at,
+        ),
+        finding=view,
+    )
+
+
+@router.delete("/{finding_id}/notes/{note_id}", summary="Delete a note; the text is gone")
+async def delete_case_note(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    finding_id: uuid.UUID,
+    note_id: uuid.UUID,
+) -> FindingForMember:
+    """The author — whatever their current role, which is why this takes
+    `CurrentIdentity` and the service decides (AC25) — or an owner or admin."""
+    now = datetime.now(UTC)
+    root = await cases.delete_note(
+        db, actor=identity.user, finding_id=finding_id, note_id=note_id, now=now
+    )
+    return await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=root.id,
+        now=now,
+        email_available=email is not None,
     )
 
 

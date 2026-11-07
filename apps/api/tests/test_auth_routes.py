@@ -276,6 +276,7 @@ async def test_me_says_what_the_person_may_do(user: User, organization: Organiza
     assert identity.json()["user"]["permissions"] == [
         "operate_checks",
         "operate_alerts",
+        "operate_cases",
         "upload_source_maps",
     ]
 

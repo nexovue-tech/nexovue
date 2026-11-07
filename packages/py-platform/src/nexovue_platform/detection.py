@@ -34,6 +34,56 @@ CLOSED_REASONS: Final = (
     "could_not_be_judged",
 )
 
+# A case on a finding (F22, BR1, BR2): whether people are working, apart from the
+# signal. Null on the row means no case; there is no separate case record.
+CASE_STATES: Final = ("investigating", "resolved")
+
+# How a case ended (F22 FR6, FR7, FR26, FR49): a person's resolve, "it was never a
+# problem", the synced issue closing, 90 idle days, or 72 untouched hours after
+# recovery. Migration 0051 spells its own frozen copy.
+CASE_RESOLUTIONS: Final = (
+    "resolved",
+    "false_alarm",
+    "new_normal",
+    "tracker_closed",
+    "no_activity",
+    "recovered_untouched",
+)
+
+# The timeline's vocabulary (F22 FR16), frozen in migration 0051 like the alert
+# kinds. `explained` is here from the start although F3 writes it (spec,
+# *Dependencies*), and F5 adds its own kinds with its own migration.
+FINDING_EVENT_KINDS: Final = (
+    "finding_opened",
+    "severity_raised",
+    # F6's meaning: a new signal or endpoint joined one finding (D29).
+    "signal_joined",
+    "finding_closed",
+    "flapping_started",
+    "finding_joined_case",
+    "finding_left_case",
+    "case_started",
+    "acknowledged",
+    "assigned",
+    "unassigned",
+    "case_resolved",
+    "case_reopened",
+    "false_alarm",
+    "new_normal",
+    "note_added",
+    "note_deleted",
+    "link_added",
+    "link_removed",
+    "link_promoted",
+    "issue_created",
+    "issue_closed",
+    "issue_reopened",
+    "issue_gone",
+    "issue_moved",
+    "tracker_write_failed",
+    "explained",
+)
+
 # Losing traffic, failing more and slower (FR1 to FR3), as the simulation names them.
 SIGNALS: Final = ("traffic", "failing", "slower")
 Signal = Literal["traffic", "failing", "slower"]

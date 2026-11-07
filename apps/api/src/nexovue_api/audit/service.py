@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Final
 
-from nexovue_platform import detection, erasure
+from nexovue_platform import cases, detection, erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -130,6 +130,14 @@ PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"
 # a mute or snooze decides whether anyone is woken (FR19 to FR22). Each records
 # its reason, and adoption is recorded by the scheduler as the system (FR21).
 FINDING_ACKNOWLEDGED: Final = "finding.acknowledged"
+# F22. A case's acts, written through the shared statement so a person's row and
+# the scheduler's differ only in the actor (AC103). Deleting a note is audited
+# because it destroys text; writing one is the timeline's to record (FD9).
+CASE_STARTED: Final = "case.started"
+CASE_ASSIGNED: Final = "case.assigned"
+CASE_RESOLVED: Final = "case.resolved"
+CASE_REOPENED: Final = "case.reopened"
+CASE_NOTE_DELETED: Final = "note.deleted"
 FINDING_FALSE_ALARM: Final = "finding.false_alarm"
 FINDING_NEW_NORMAL: Final = "finding.new_normal"
 FINDING_ADOPTED: Final = detection.ADOPTED_AUDIT_ACTION
@@ -858,6 +866,32 @@ def record_masking_rule_disabled(
         actor_user_id=actor_user_id,
         action=PROJECT_MASKING_RULE_DISABLED,
         target=masking_rule_target(project_id, rule),
+    )
+
+
+async def record_case_action(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    action: str,
+    finding_id: uuid.UUID,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """A case act (F22, AC77), in the caller's transaction, through the shared
+    statement the scheduler's sweeps also execute. `actor_user_id` is None when
+    the system acted, as the adoption entry already does."""
+    from sqlalchemy import text as sql_text
+
+    await db.execute(
+        sql_text(cases.RECORD_CASE_AUDIT_SQL),
+        cases.case_audit_parameters(
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            target=_target(FINDING_TARGET, finding_id),
+            detail=detail,
+        ),
     )
 
 

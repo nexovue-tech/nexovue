@@ -34,7 +34,6 @@ async function heading(container: HTMLElement) {
 }
 
 const ACTIONS = [
-  "Acknowledge",
   "False alarm",
   "This is the new normal",
   "Snooze this service",
@@ -99,19 +98,21 @@ describe("the finding page", () => {
     expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([]);
   });
 
-  it("offers a member acknowledge, false alarm and a snooze, but not the new normal or a mute (AC39, FR22)", async () => {
+  it("offers a member false alarm and a snooze, but not the new normal or a mute (AC39, FR22)", async () => {
     stubApi(finding(), { role: "member" });
     const { container } = await mountFinding();
 
     await heading(container);
     expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([
-      "Acknowledge",
       "False alarm",
       "Snooze this service",
     ]);
+    // D47: Take this replaced Acknowledge, in the case's own group.
+    expect(buttons(container)).toContain("Take this");
+    expect(buttons(container)).not.toContain("Acknowledge");
   });
 
-  it("offers an admin all five", async () => {
+  it("offers an admin all four", async () => {
     stubApi(finding(), { role: "admin" });
     const { container } = await mountFinding();
 
@@ -189,7 +190,10 @@ describe("the finding page", () => {
 
     await press(container, "False alarm");
     expect(readable(container)).toContain("only an admin's mark returns them");
-    const reason = container.querySelector("textarea");
+    // The note box is a textarea too (F22); the reason field is the capped one.
+    const reason = [...container.querySelectorAll("textarea")].find(
+      (field) => field.maxLength === 1000,
+    );
     if (!reason) throw new Error("no reason field");
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -224,17 +228,14 @@ describe("the finding page", () => {
       {
         role: "member",
         extra: {
-          "POST /findings/f-1/acknowledge": problem(
-            409,
-            "This finding has closed or was already acknowledged since you opened it.",
-          ),
+          "PATCH /findings/f-1/case": problem(409, "This case changed since you opened it."),
         },
       },
     );
     const { container } = await mountFinding();
     await heading(container);
 
-    await press(container, "Acknowledge");
+    await press(container, "Take this");
 
     await waitFor(
       () => readable(container).includes("It is shown as it is now."),
@@ -264,10 +265,7 @@ describe("the finding page", () => {
     expect(readable(container)).toContain("Services affected");
     expect(container.querySelector('a[href="/services/cart"]')).not.toBeNull();
     expect(readable(container)).not.toContain("The chart is no longer available");
-    expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([
-      "Acknowledge",
-      "False alarm",
-    ]);
+    expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual(["False alarm"]);
   });
 
   it("opens a project finding's services in the finding's own project", async () => {
@@ -448,5 +446,233 @@ describe("the finding page", () => {
     const status = container.querySelector('section[aria-label="What you can do"] [role="status"]');
     expect(status).not.toBeNull();
     expect(readable(status as Element)).toBe("");
+  });
+});
+
+describe("the case on the page (F22, T1.12)", () => {
+  const investigating = () =>
+    finding({
+      case_state: "investigating",
+      case_opened_at: minutesAgo(20),
+      case_taken_at: minutesAgo(20),
+      assignee_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0001",
+      assignee_name: "owner",
+    });
+
+  it("puts the work before the evidence, in one DOM order (D86)", async () => {
+    stubApi(finding(), { role: "member" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const text = readable(container);
+    expect(text.indexOf("The case")).toBeGreaterThan(-1);
+    expect(text.indexOf("The case")).toBeLessThan(text.indexOf("The signal"));
+    expect(text.indexOf("The signal")).toBeLessThan(text.indexOf("What moved"));
+    expect(container.querySelector('a[href="#finding-evidence"]')).not.toBeNull();
+  });
+
+  it("takes a finding with one click and lands focus on the case line", async () => {
+    const api = stubApi(finding(), {
+      role: "member",
+      extra: {
+        "PATCH /findings/f-1/case": json({
+          finding: investigating(),
+          email_outcome: "none",
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "Take this");
+
+    expect(api.to("PATCH", "/findings/f-1/case")[0]?.body).toEqual({
+      case_state: "investigating",
+    });
+    await waitFor(() => readable(container).includes("Yours."), "the done line");
+    const line = container.querySelector('[data-testid="case-line"]');
+    await waitFor(() => document.activeElement === line, "focus on the case line");
+  });
+
+  it("renders a note's hostile text as those exact characters, nothing clickable (AC18)", async () => {
+    const hostile = "<script>alert(1)</script> [link](https://evil.example) https://evil.example";
+    stubApi(investigating(), {
+      role: "member",
+      extra: {
+        "GET /findings/f-1/timeline": json({
+          events: [
+            {
+              id: "e1",
+              kind: "note_added",
+              at: minutesAgo(5),
+              actor_kind: "person",
+              actor_id: "someone-else",
+              actor_name: "Asha",
+              detail: { note_id: "n1" },
+              note_body: hostile,
+            },
+          ],
+          next_before: null,
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await waitFor(() => readable(container).includes("alert(1)"), "the note's text");
+    expect(readable(container)).toContain("[link](https://evil.example)");
+    expect(container.querySelector("script")).toBeNull();
+    const links = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "");
+    expect(links.some((href) => href.includes("evil.example"))).toBe(false);
+  });
+
+  it("sends a note with the button or Ctrl+Enter, and a failed send keeps the draft (AC104)", async () => {
+    let fail = true;
+    const api = stubApi(finding(), {
+      role: "member",
+      extra: {
+        "POST /findings/f-1/notes": (call) => {
+          if (fail) {
+            return new Response(JSON.stringify({ status: 400, detail: "refused" }), {
+              status: 400,
+              headers: { "content-type": "application/problem+json" },
+            });
+          }
+          return new Response(
+            JSON.stringify({
+              note: {
+                id: "n1",
+                author_id: "me",
+                author_name: "member",
+                body: (call.body as { body: string }).body,
+                created_at: minutesAgo(0),
+              },
+              finding: investigating(),
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const box = [...container.querySelectorAll("textarea")].find((f) => f.maxLength !== 1000);
+    if (!box) throw new Error("no note box");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(box, "tried restarting");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(container, "Add note");
+    await waitFor(() => readable(container).includes("It is still here"), "the kept draft line");
+    expect(box.value).toBe("tried restarting");
+
+    fail = false;
+    await act(async () => {
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+      );
+    });
+    await settle();
+    await waitFor(() => box.value === "", "the sent draft clearing");
+    expect(api.to("POST", "/findings/f-1/notes").length).toBe(2);
+  });
+
+  it("refuses a 4,001-character note inline, sending nothing (AC104)", async () => {
+    const api = stubApi(finding(), { role: "member" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const box = [...container.querySelectorAll("textarea")].find((f) => f.maxLength !== 1000);
+    if (!box) throw new Error("no note box");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(box, "x".repeat(4001));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(container, "Add note");
+
+    expect(readable(container)).toContain("at most 4000 characters");
+    expect(api.to("POST", "/findings/f-1/notes").length).toBe(0);
+  });
+
+  it("shows the empty-timeline sentence for a finding with no events (AC106)", async () => {
+    stubApi(finding(), { role: "viewer" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await waitFor(
+      () => readable(container).includes("No events for this finding."),
+      "the empty-timeline sentence",
+    );
+  });
+
+  it("reassigns through a panel with a Nobody option; choosing alone does not act (AC132)", async () => {
+    const patches: unknown[] = [];
+    const api = stubApi(investigating(), {
+      role: "owner",
+      extra: {
+        "GET /members": json({
+          members: [
+            {
+              id: "m1",
+              email: "ravi@example.test",
+              name: "Ravi",
+              role: "member",
+              status: "active",
+            },
+            { id: "v1", email: "v@example.test", name: "Viewer", role: "viewer", status: "active" },
+          ],
+        }),
+        "PATCH /findings/f-1/case": (call) => {
+          patches.push(call.body);
+          return new Response(
+            JSON.stringify({
+              finding: finding({
+                case_state: "investigating",
+                case_opened_at: minutesAgo(20),
+                assignee_id: "m1",
+                assignee_name: "Ravi",
+              }),
+              email_outcome: "not_configured",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "Reassign");
+    const select = await waitFor(() => container.querySelector("select"), "the picker");
+    const options = [...select.querySelectorAll("option")].map((o) => readable(o));
+    expect(options).toContain("Nobody");
+    expect(options).toContain("Ravi");
+    // AC62: the picker never offers a viewer.
+    expect(options).not.toContain("Viewer");
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      setter?.call(select, "m1");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(patches.length).toBe(0);
+
+    await press(container, "Assign");
+    // FR4: the call carries what the page last showed — the current assignee.
+    expect(patches).toEqual([
+      { assignee_id: "m1", expected_assignee_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0001" },
+    ]);
+    await waitFor(
+      () =>
+        readable(container).includes(
+          "Assigned to Ravi. Email is not set up here, so tell them yourself.",
+        ),
+      "the truthful email line",
+    );
+    expect(api.to("GET", "/members").length).toBeGreaterThan(0);
   });
 });

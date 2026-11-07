@@ -303,6 +303,8 @@ and a read API has nobody to serve before that (D12).
   | Projects, sampling and masking configuration | ✓ | ✓ | ✗ | ✗ |
   | Anomaly detection: acknowledge a finding, mark it a false alarm, snooze a service for up to 4 hours (F6 FR23, D25) | ✓ | ✓ | ✓ | ✗ |
   | Anomaly detection: sensitivity, time zone, mutes, new normals, *anomaly finding* alert rules (F6 FR23) | ✓ | ✓ | ✗ | ✗ |
+  | Cases: take, assign, note, resolve, reopen, link an issue (F22 FR34) | ✓ | ✓ | ✓ | ✗ |
+  | Delete another person's case note (F22 BR16; an author may always delete their own, even as a viewer) | ✓ | ✓ | ✗ | ✗ |
   | Ingest keys, site keys, deploy webhook secrets, integrations | ✓ | ✓ | ✗ | ✗ |
   | API tokens (Stage 2) | ✓ | ✓ | ✗ | ✗ |
   | Invite, change roles, remove — up to their own role (BR3) | ✓ | ✓ | ✗ | ✗ |

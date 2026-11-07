@@ -54,6 +54,14 @@ MEMBER_ONLY_FIELDS: Final = {
     "acknowledged_by_name",
     "feedback_reason",
     "new_normal",
+    # F22 FR20, AC22: a token reads a case's states and times, never its people.
+    "assignee_id",
+    "assignee_name",
+    "case_taken_at",
+    "assignee_acted_since_join",
+    "case_resolved_by_name",
+    "project_has_pagerduty",
+    "email_available",
 }
 SLOWER: Final[dict[str, Any]] = {
     "signal": "slower",

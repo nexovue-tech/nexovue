@@ -22,11 +22,16 @@ OWNERS = {"owner"}
 FR1 = {
     Action.OPERATE_CHECKS: EVERYONE_WHO_WORKS,
     Action.OPERATE_ALERTS: EVERYONE_WHO_WORKS,
+    # F22 FR34: working a case — take, assign, note, resolve, reopen, link an issue.
+    Action.OPERATE_CASES: EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: ADMINISTRATORS,
+    # F22 BR16: deleting another person's note. An author deletes their own
+    # through the route's own check, whatever their role, so no row covers that.
+    Action.DELETE_ANY_CASE_NOTE: ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: ADMINISTRATORS,
     Action.MANAGE_MEMBERS: ADMINISTRATORS,

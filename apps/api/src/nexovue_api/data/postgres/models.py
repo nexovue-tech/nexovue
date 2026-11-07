@@ -30,10 +30,14 @@ from nexovue_platform.alerts.model import (
     PROJECT_NOTIFICATION_KINDS,
     SEVERITIES,
 )
+from nexovue_platform.cases import CASE_EMAIL_KINDS, EVENT_ACTOR_KINDS, NOTE_MAX_LENGTH
 from nexovue_platform.detection import (
+    CASE_RESOLUTIONS,
+    CASE_STATES,
     CLOSED_REASONS,
     DEFAULT_SENSITIVITY,
     DEFAULT_TIMEZONE,
+    FINDING_EVENT_KINDS,
     FINDING_SCOPES,
     FINDING_STATES,
     INTAKE_REFUSAL_REASONS,
@@ -49,6 +53,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -278,6 +283,9 @@ class User(Base):
 
     __table_args__ = (
         Index("ix_users_org_id", "org_id"),
+        # So other tables can key on (org_id, id) and the database refuses a
+        # cross-tenant assignee, actor or author outright (F22, D34).
+        UniqueConstraint("org_id", "id", name="uq_users_org_id_id"),
         CheckConstraint(
             "(totp_secret IS NULL) = (totp_confirmed_at IS NULL)",
             name="totp_secret_and_confirmation_agree",
@@ -1565,6 +1573,28 @@ class Finding(Base):
     closed_at: Mapped[OptionalTimestamp]
     updated_at: Mapped[CreatedAt]
 
+    # ---- the case (F22, BR1, BR2): whether people are working, apart from `state`.
+    # Null means no case; there is no separate case record, by design.
+    case_state: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    case_resolution: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    # Composite keys to `users (org_id, id)`: a cross-tenant assignee is refused
+    # by the database itself (D34), and a deleted user clears only the column.
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    case_opened_at: Mapped[OptionalTimestamp]
+    case_resolved_at: Mapped[OptionalTimestamp]
+    # Who resolved it; null for the system or a tracker.
+    case_resolved_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # The last person's act, or entry to `investigating` by any route (D42, D74).
+    case_activity_at: Mapped[OptionalTimestamp]
+    # The first act beyond taking: a note, a link, a reassign, a reopen (FR49).
+    case_worked_at: Mapped[OptionalTimestamp]
+    # The assignee's last act, starting at the assignment (FR12's "has not acted").
+    assignee_acted_at: Mapped[OptionalTimestamp]
+    # When the 14-day idle warning started; null when none, reset by activity.
+    case_warned_at: Mapped[OptionalTimestamp]
+    # The case this finding joined (FR9); a finding holds a case or joins one.
+    root_finding_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+
     __table_args__ = (
         CheckConstraint(f"scope IN ({_quoted(FINDING_SCOPES)})", name="scope_is_known"),
         CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
@@ -1622,6 +1652,95 @@ class Finding(Base):
             "closed_at",
             postgresql_where=text("state = 'closed'"),
         ),
+        # ---- the case (F22, migration 0051).
+        UniqueConstraint("org_id", "id", name="uq_findings_org_id_id"),
+        UniqueConstraint("org_id", "project_id", "id", name="uq_findings_org_id_project_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "assignee_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (assignee_id)",
+            name="fk_findings_assignee_id_users",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "case_resolved_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (case_resolved_by)",
+            name="fk_findings_case_resolved_by_users",
+        ),
+        # A root is a finding of the same organization and project (AC72).
+        ForeignKeyConstraint(
+            ["org_id", "project_id", "root_finding_id"],
+            ["findings.org_id", "findings.project_id", "findings.id"],
+            ondelete="SET NULL (root_finding_id)",
+            name="fk_findings_root_finding_id_findings",
+        ),
+        CheckConstraint(
+            f"case_state IS NULL OR case_state IN ({_quoted(CASE_STATES)})",
+            name="case_state_is_known",
+        ),
+        CheckConstraint(
+            f"case_resolution IS NULL OR case_resolution IN ({_quoted(CASE_RESOLUTIONS)})",
+            name="case_resolution_is_known",
+        ),
+        CheckConstraint("(case_state IS NULL) = (case_opened_at IS NULL)", name="case_is_dated"),
+        CheckConstraint(
+            "(case_state IS NULL) = (case_activity_at IS NULL)", name="case_activity_is_dated"
+        ),
+        CheckConstraint(
+            "(case_state IS NOT DISTINCT FROM 'resolved') = (case_resolved_at IS NOT NULL)",
+            name="case_resolved_says_when",
+        ),
+        CheckConstraint(
+            "(case_state IS NOT DISTINCT FROM 'resolved') = (case_resolution IS NOT NULL)",
+            name="case_resolved_says_how",
+        ),
+        CheckConstraint(
+            "assignee_id IS NULL OR case_state IS NOT NULL", name="assignee_needs_a_case"
+        ),
+        # A finding holds a case or joins one, never both (BR1, BR7).
+        CheckConstraint(
+            "case_state IS NULL OR root_finding_id IS NULL", name="holds_or_joins_never_both"
+        ),
+        CheckConstraint("root_finding_id IS DISTINCT FROM id", name="never_its_own_root"),
+        # BR7, D21: one active case per service and one per project.
+        Index(
+            "uq_findings_project_service_active_case",
+            "project_id",
+            "service_name",
+            unique=True,
+            postgresql_where=text("scope = 'service' AND case_state = 'investigating'"),
+        ),
+        Index(
+            "uq_findings_project_active_case",
+            "project_id",
+            unique=True,
+            postgresql_where=text("scope = 'project' AND case_state = 'investigating'"),
+        ),
+        # The case filters read across the organization (FR22), the sweep reads
+        # active cases, and the open-joined rank reads by root.
+        Index(
+            "ix_findings_org_id_assignee_id",
+            "org_id",
+            "assignee_id",
+            postgresql_where=text("assignee_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_findings_org_id_case_resolved_at",
+            "org_id",
+            text("case_resolved_at DESC"),
+            postgresql_where=text("case_state = 'resolved'"),
+        ),
+        Index(
+            "ix_findings_org_id_active_case",
+            "org_id",
+            postgresql_where=text("case_state = 'investigating'"),
+        ),
+        Index(
+            "ix_findings_org_id_root_finding_id",
+            "org_id",
+            "root_finding_id",
+            postgresql_where=text("root_finding_id IS NOT NULL"),
+        ),
     )
 
 
@@ -1641,6 +1760,129 @@ class FindingIncident(Base):
     )
 
     __table_args__ = (Index("ix_finding_incidents_incident_id", "incident_id"),)
+
+
+class FindingEvent(Base):
+    """The timeline (F22, FR16): what happened to one finding, append-only.
+
+    `detail` is written only through `nexovue_platform.cases
+    .finding_event_parameters`, which admits enums, ids and numbers and refuses
+    free text (BR9, AC24). A person reads all of it; a token reads kinds and
+    times alone (FR20).
+    """
+
+    __tablename__ = "finding_events"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Where it happened: a joined finding's events merge into its root's timeline.
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    actor_kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_events_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "actor_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (actor_id)",
+            name="fk_finding_events_actor",
+        ),
+        CheckConstraint(f"kind IN ({_quoted(FINDING_EVENT_KINDS)})", name="kind_is_known"),
+        CheckConstraint(
+            f"actor_kind IN ({_quoted(EVENT_ACTOR_KINDS)})", name="actor_kind_is_known"
+        ),
+        Index(
+            "ix_finding_events_org_id_finding_id_at",
+            "org_id",
+            "finding_id",
+            text("at DESC"),
+            text("id DESC"),
+        ),
+    )
+
+
+class FindingNote(Base):
+    """What a person wrote on a case (F22, FR14): the organization's working record
+    (BR16). Shown as plain text, deletable by its author or an admin, never edited.
+    A delete is a real DELETE: a pasted secret must actually go."""
+
+    __tablename__ = "finding_notes"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Always the root: a note written on a joined finding's page lands here (FR12).
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    # Kept when a member is scrubbed; the screen reads *Former member*.
+    author_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_notes_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "author_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (author_id)",
+            name="fk_finding_notes_author",
+        ),
+        CheckConstraint(f"length(body) <= {NOTE_MAX_LENGTH}", name="a_note_is_not_a_document"),
+        Index(
+            "ix_finding_notes_org_id_finding_id_created_at",
+            "org_id",
+            "finding_id",
+            "created_at",
+        ),
+        # The personal-data export reads a person's own notes.
+        Index("ix_finding_notes_org_id_author_id", "org_id", "author_id"),
+    )
+
+
+class FindingEmailOwed(Base):
+    """One owed case email (F22, D90): the sweep deletes the row, commits, then
+    sends, so a crash loses an email and can never repeat one. A row per email,
+    because one column would lose a second email owed before the sweep runs. It
+    holds no name, address or text."""
+
+    __tablename__ = "finding_emails_owed"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_emails_owed_finding",
+        ),
+        CheckConstraint(f"kind IN ({_quoted(CASE_EMAIL_KINDS)})", name="kind_is_known"),
+        Index("ix_finding_emails_owed_at", "at"),
+    )
 
 
 # `org_id` leads the key of every table below that is upserted, so no conflict

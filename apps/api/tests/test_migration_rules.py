@@ -30,7 +30,9 @@ ENV: Final = VERSIONS.parent / "env.py"
 # 0020, 0022 and 0026 drop billing records; 0041 findings, with people's acknowledgements
 # and false-alarm reasons, and rules people wrote; 0044 the PagerDuty alert each delivered
 # notification went to; 0046 the services a closed project finding was about.
-ROLL_FORWARD_ONLY: Final = ("0020", "0022", "0026", "0041", "0044", "0046")
+# 0051 adds finding_notes and finding_events, people's words and the organization's
+# record of what happened to a case, which exist nowhere else.
+ROLL_FORWARD_ONLY: Final = ("0020", "0022", "0026", "0041", "0044", "0046", "0051")
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"
 

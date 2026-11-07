@@ -69,6 +69,15 @@ const FINDING: Finding = {
     },
   ],
   trend: [1, 2, 3, 5, 7, 8, 7],
+  case_state: null,
+  case_resolution: null,
+  case_opened_at: null,
+  case_resolved_at: null,
+  root_finding_id: null,
+  case_signal: "open",
+  case_severity: "warning",
+  open_joined_finding_id: null,
+  open_joined_since: null,
 };
 
 const closed = (reason: ClosedReason | null, id = "closed"): Finding => ({

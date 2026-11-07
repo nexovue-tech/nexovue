@@ -85,7 +85,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.alerts.incidents import SERVICE_KINDS
-from nexovue_scheduler.detection import JUDGE_PROJECT_TASK, notify
+from nexovue_scheduler.detection import JUDGE_PROJECT_TASK, events, notify
 from nexovue_scheduler.detection.baselines import (
     EXCLUDED_KEY,
     FAILING,
@@ -930,6 +930,18 @@ async def _keep_project_finding(
             services=sorted(decision.involved),
             at=now,
         )
+        # Beside the notify call, never inside it (F22 T1.10): a muted finding
+        # returns from notify before the flap guard, and still gets its event.
+        await events.finding_opened(
+            connection,
+            org_id=key["org_id"],
+            project_id=key["project_id"],
+            finding_id=finding_id,
+            scope="project",
+            service_name=None,
+            severity="critical",
+            at=now,
+        )
     elif decision.close is not None and row is not None:
         await connection.execute(
             _CLOSE,
@@ -944,6 +956,9 @@ async def _keep_project_finding(
         outcome.closed += 1
         outcome.notified += await notify.finding_closed(
             connection, row.id, org_id=key["org_id"], severity="critical", at=now
+        )
+        await events.finding_closed(
+            connection, org_id=key["org_id"], finding_id=row.id, reason=decision.close, at=now
         )
         return ProjectContext(pending=decision.pending)
     elif row is not None:
@@ -1116,6 +1131,16 @@ async def _keep_finding(
             outcome.notified += await notify.finding_opened(
                 connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
             )
+            await events.finding_opened(
+                connection,
+                org_id=key["org_id"],
+                project_id=key["project_id"],
+                finding_id=finding_id,
+                scope="service",
+                service_name=service,
+                severity=finding.severity,
+                at=now,
+            )
         else:
             assert finding_id is not None, "a finding the lifecycle kept open has a row"
             outcome.notified += await _notify_change(
@@ -1138,6 +1163,13 @@ async def _keep_finding(
             outcome.closed += 1
             outcome.notified += await notify.finding_closed(
                 connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+            )
+            await events.finding_closed(
+                connection,
+                org_id=key["org_id"],
+                finding_id=finding_id,
+                reason=change.closed,
+                at=now,
             )
             finding, finding_id = None, None
         if change.joined:
@@ -1372,6 +1404,9 @@ async def _adopt(
     outcome.notified += await notify.finding_adopted(
         connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
     )
+    await events.finding_closed(
+        connection, org_id=key["org_id"], finding_id=finding_id, reason="adopted", at=now
+    )
     # The rebuilt normal is asked for by the next run, which finds this one stale.
     return True
 
@@ -1391,6 +1426,9 @@ async def _notify_change(
         written += await notify.finding_escalated(
             connection, finding_id, org_id=key["org_id"], at=now
         )
+        await events.severity_raised(
+            connection, org_id=key["org_id"], finding_id=finding_id, at=now
+        )
     if change.joined:
         written += await notify.finding_joined(
             connection,
@@ -1398,6 +1436,13 @@ async def _notify_change(
             org_id=key["org_id"],
             severity=finding.severity,
             keys=len(finding.keys),
+            at=now,
+        )
+        await events.signal_joined(
+            connection,
+            org_id=key["org_id"],
+            finding_id=finding_id,
+            signal_count=len(finding.keys),
             at=now,
         )
     return written

@@ -68,6 +68,10 @@ def _reading(**fields: Any) -> dict[str, Any]:
     [
         (schemas.FindingScope, detection.FINDING_SCOPES),
         (schemas.ClosedReason, detection.CLOSED_REASONS),
+        # F22: the case vocabulary the console spells as literals.
+        (schemas.CaseState, detection.CASE_STATES),
+        (schemas.CaseResolution, detection.CASE_RESOLUTIONS),
+        (schemas.FindingEventKind, detection.FINDING_EVENT_KINDS),
         (schemas.SignalName, detection.SIGNALS),
         (schemas.FindingSeverity, SEVERITIES),
     ],
@@ -261,8 +265,21 @@ def test_a_row_maps_to_the_contract_the_web_client_reads() -> None:
         "acknowledged_at",
         "signals",
         "trend",
+        # F22: the case, null throughout until somebody takes it.
+        "case_state",
+        "case_resolution",
+        "case_opened_at",
+        "case_resolved_at",
+        "root_finding_id",
+        "case_signal",
+        "case_severity",
+        "open_joined_finding_id",
+        "open_joined_since",
     }
     assert wire["state"] == "acknowledged"
+    assert wire["case_state"] is None
+    assert wire["case_signal"] == "open"
+    assert wire["case_severity"] == "critical"
     # A row stored before the band and the week's comparison were kept reads them as None.
     assert wire["signals"] == [SLOWER | NOT_STORED_BEFORE | {"unit": "ms"}]
     assert wire["trend"] == [1.0, 2.0]

@@ -89,6 +89,11 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # a finding's links to incidents go with the finding.
     "findings": "projects",
     "finding_incidents": "findings",
+    # F22. A case is columns on its finding; its timeline, notes and owed emails
+    # go with the finding, and the finding with the project.
+    "finding_events": "findings",
+    "finding_notes": "findings",
+    "finding_emails_owed": "findings",
     "detection_state": "projects",
     "detection_project_runs": "projects",
     "detection_baselines": "projects",
