@@ -37,6 +37,7 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     DetectionState,
     Finding,
+    FindingNote,
     SessionRecord,
     User,
 )
@@ -276,6 +277,86 @@ async def test_the_export_is_cut_at_its_bound_and_says_so(
     assert len(export.activity) == 2
     assert export.truncated is True
     assert export.oldest_activity_at == export.activity[-1].at
+
+
+async def _note(
+    db: AsyncSession, acme: ProvisionedTenant, finding: Finding, author: User, body: str
+) -> FindingNote:
+    note = FindingNote(
+        org_id=acme.organization.id, finding_id=finding.id, author_id=author.id, body=body
+    )
+    db.add(note)
+    await db.flush()
+    return note
+
+
+async def _case_finding(db: AsyncSession, acme: ProvisionedTenant, service: str) -> Finding:
+    finding = Finding(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        scope="service",
+        service_name=service,
+        severity="warning",
+        title=f"{service} is slower than normal",
+        signals=[],
+        started_at=_now() - timedelta(hours=1),
+        case_state="investigating",
+        case_opened_at=_now(),
+        case_activity_at=_now(),
+    )
+    db.add(finding)
+    await db.flush()
+    return finding
+
+
+async def test_the_export_holds_the_notes_the_person_wrote_and_nobody_else_s(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F22 AC25, BR16: a person's notes are in their own export, in their words,
+    newest first, with which finding each is on; a colleague's are not."""
+    priya = await _join(db, acme, "member", "Priya")
+    checkout = await _case_finding(db, acme, "checkout")
+    cart = await _case_finding(db, acme, "cart")
+    first = await _note(db, acme, checkout, priya, "restarted the pods")
+    await _note(db, acme, checkout, acme.user, "the owner's own words")
+    db.add(
+        FindingNote(
+            org_id=acme.organization.id,
+            finding_id=cart.id,
+            author_id=priya.id,
+            body="cart is fine",
+            created_at=first.created_at + timedelta(seconds=1),
+        )
+    )
+    await db.flush()
+
+    export = await personal_data.export(db, user=priya, organization=acme.organization, now=_now())
+    body = export.model_dump(mode="json")
+
+    assert [(note["finding_id"], note["body"]) for note in body["notes_written"]] == [
+        (str(cart.id), "cart is fine"),
+        (str(checkout.id), "restarted the pods"),
+    ]
+    assert body["notes_truncated"] is False
+    assert "the owner's own words" not in json.dumps(body)
+
+
+async def test_the_notes_are_cut_at_their_own_bound_and_say_so(
+    db: AsyncSession, acme: ProvisionedTenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC25's truncation flag is the notes' own, apart from the activity's."""
+    monkeypatch.setattr(personal_data, "MAX_NOTES_EXPORTED", 2)
+    checkout = await _case_finding(db, acme, "checkout")
+    for index in range(3):
+        await _note(db, acme, checkout, acme.user, f"note {index}")
+
+    export = await personal_data.export(
+        db, user=acme.user, organization=acme.organization, now=_now()
+    )
+
+    assert len(export.notes_written) == 2
+    assert export.notes_truncated is True
+    assert export.truncated is False
 
 
 # ---- deleting your own account -------------------------------------------------------

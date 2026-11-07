@@ -12,9 +12,10 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { formatZonedTime } from "@/shared/format/zoned";
 import type { OverviewPoint } from "@/shared/overview-plots";
 
-import type { ClosedReason, DetectionStatus, Finding, ProjectTotals } from "./api";
+import type { ClosedReason, DetectionStatus, FeedFinding, Finding, ProjectTotals } from "./api";
 import type { FindingsViewProps } from "./FindingsScreen";
 import { FindingsView } from "./FindingsScreen";
 
@@ -301,9 +302,16 @@ describe("a closed finding names how it closed", () => {
     could_not_be_judged: "Closed: too quiet to judge for 6 hours",
   };
 
+  // The row's words: the filter's option *Resolved cases* (F22 FR22) is about cases,
+  // which a person resolves, and is not a claim about this finding.
+  const rowText = async (finding: Finding) =>
+    ((await render({ findings: [finding] })).querySelector("ul")?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+
   for (const [reason, words] of Object.entries(WORDS) as [ClosedReason, string][]) {
     it(`says "${words}" for ${reason}, never "Resolved"`, async () => {
-      const text = await readable({ findings: [closed(reason)] });
+      const text = await rowText(closed(reason));
 
       expect(text).toContain(words);
       expect(text).not.toMatch(/resolved/i);
@@ -311,7 +319,7 @@ describe("a closed finding names how it closed", () => {
   }
 
   it("still says it closed when the reason is missing", async () => {
-    const text = await readable({ findings: [closed(null)] });
+    const text = await rowText(closed(null));
 
     expect(text).toContain("Closed");
     expect(text).not.toMatch(/resolved/i);
@@ -509,5 +517,199 @@ describe("D12: a finding opens its own page", () => {
 
     expect(container.querySelector('a[href="/findings/f1"]')?.textContent).toBe(FINDING.title);
     expect(container.querySelector('a[href="/findings/f2"]')?.textContent).toBe(FINDING.title);
+  });
+});
+
+// ------------------------------------------------------- the case filters (F22 T2.4)
+
+const ASHA = "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0009";
+
+// Today, so the sentence's times carry no day (FR50): each test reads them through
+// the same zoned formatter the screen uses.
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+const CLOSED_AT = hoursAgo(0.5);
+const BACK_AT = hoursAgo(0.25);
+const at = (iso: string) => formatZonedTime(iso, { zone: "UTC" });
+
+const caseRow = (overrides: Partial<FeedFinding> = {}): FeedFinding => ({
+  ...FINDING,
+  id: "case-1",
+  state: "closed",
+  closed_reason: "recovered",
+  closed_at: CLOSED_AT,
+  severity: "warning",
+  case_severity: "warning",
+  case_state: "investigating",
+  case_opened_at: "2026-09-13T15:10:00Z",
+  case_signal: "closed",
+  assignee_id: ASHA,
+  assignee_name: "Asha",
+  case_taken_at: "2026-09-13T15:10:00Z",
+  project_name: "Staging",
+  trend: [],
+  ...overrides,
+});
+
+describe("a case filter reads differently from the feed (AC109, AC128, FR22)", () => {
+  it("shows no detection line, no summary and no muted link, and says it reads every project", async () => {
+    const text = await readable({
+      caseFilter: "active",
+      findings: [caseRow()],
+      mutedCount: 4,
+      detection: {
+        state: "not_running",
+        services_total: 2,
+        services_learning: 0,
+        services_judged: 2,
+        services_delayed: 0,
+        services_muted: 0,
+        earliest_judging_date: null,
+        not_running_since: "2026-09-13T14:02:00Z",
+        delayed_since: null,
+        open_findings: 0,
+        services_too_many: 0,
+        judged_service_limit: 500,
+      },
+    });
+
+    expect(text).toContain("Across all your projects");
+    expect(text).not.toContain("Detection has not run");
+    expect(text).not.toContain("Muted (4)");
+    expect(text).not.toContain("8,400");
+  });
+
+  it.each([
+    ["active", "No active cases in your organization."],
+    ["mine", "Nothing is assigned to you."],
+    ["resolved", "No resolved cases are kept."],
+  ] as const)(
+    "names the %s filter when it is empty, offers Show all, and never the summary",
+    async (filter, words) => {
+      const container = await render({ caseFilter: filter, findings: [] });
+      const text = (container.textContent ?? "").replace(/\s+/g, " ");
+
+      expect(text).toContain(words);
+      expect(text).not.toContain("synthetic checks are passing");
+      expect(text).not.toContain("services reporting");
+      expect([...container.querySelectorAll("button")].map((each) => each.textContent)).toContain(
+        "Show all",
+      );
+    },
+  );
+
+  it("says when it shows only the newest 200", async () => {
+    expect(
+      await readable({ caseFilter: "resolved", findings: [caseRow()], truncated: true }),
+    ).toContain("Showing the newest 200.");
+  });
+});
+
+describe("a case row is the full statement (FR23, design *The feed*)", () => {
+  it("states both questions in one sentence, names the project, and draws no sparkline", async () => {
+    const container = await render({ caseFilter: "active", findings: [caseRow()], zone: "UTC" });
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain(`Recovered at ${at(CLOSED_AT)}, still being investigated by Asha`);
+    expect(text).toContain("Warning");
+    expect(text).toContain("Staging");
+    expect(container.querySelector('[role="img"]')).toBeNull();
+    expect(text).not.toContain("Acked");
+  });
+
+  it("never reads Recovered for a root whose finding came back, at the worse severity (AC59)", async () => {
+    const back = caseRow({
+      case_signal: "open",
+      case_severity: "critical",
+      open_joined_finding_id: "returning",
+      open_joined_since: BACK_AT,
+      assignee_acted_since_join: true,
+    });
+    for (const filter of ["active", null] as const) {
+      const text = await readable({ caseFilter: filter, findings: [back], zone: "UTC" });
+      expect(text).toContain(`Came back at ${at(BACK_AT)} and is still open`);
+      expect(text).not.toContain("Recovered at");
+      expect(text).toContain("Critical");
+    }
+  });
+
+  it("warns in the last 14 days before an idle case ends itself (FR26)", async () => {
+    const idle = caseRow({
+      case_activity_at: "2026-07-29T16:00:00Z",
+      case_ends_on: "2026-10-27T16:00:00Z",
+      case_ends_by: "idle",
+    });
+    expect(await readable({ caseFilter: "active", findings: [idle], zone: "UTC" })).toContain(
+      "Ends by itself on 27 Oct, 16:00 UTC. Add a note to keep it going, or resolve it.",
+    );
+  });
+
+  it("offers Resolve on Active cases and Assigned to me only, to someone who may (AC91, FR52)", async () => {
+    const offered = async (overrides: Partial<FindingsViewProps>) =>
+      [
+        ...(
+          await render({ findings: [caseRow()], canResolve: true, ...overrides })
+        ).querySelectorAll("button"),
+      ]
+        .map((each) => each.textContent)
+        .includes("Resolve");
+
+    expect(await offered({ caseFilter: "active" })).toBe(true);
+    expect(await offered({ caseFilter: "mine" })).toBe(true);
+    expect(
+      await offered({ caseFilter: "resolved", findings: [caseRow({ case_state: "resolved" })] }),
+    ).toBe(false);
+    expect(await offered({ caseFilter: null })).toBe(false);
+    expect(await offered({ caseFilter: "active", canResolve: false })).toBe(false);
+  });
+
+  it("resolves at one tap with the signal closed, and asks first while it is open (FR6)", async () => {
+    const resolved: string[] = [];
+    const closed = await render({
+      caseFilter: "active",
+      findings: [caseRow()],
+      canResolve: true,
+      onResolve: (id) => resolved.push(id),
+    });
+    await act(async () => {
+      [...closed.querySelectorAll("button")]
+        .find((each) => each.textContent === "Resolve")
+        ?.click();
+    });
+    expect(resolved).toEqual(["case-1"]);
+
+    const open = await render({
+      caseFilter: "active",
+      findings: [caseRow({ id: "case-2", case_signal: "open", state: "open", closed_at: null })],
+      canResolve: true,
+      onResolve: (id) => resolved.push(id),
+    });
+    await act(async () => {
+      [...open.querySelectorAll("button")].find((each) => each.textContent === "Resolve")?.click();
+    });
+    expect(resolved).toEqual(["case-1"]);
+    expect(open.textContent).toContain("The signal is still open");
+  });
+});
+
+describe("the feed keeps working cases in sight (FR21, FR23)", () => {
+  it("says what comes first, in the new order's words", async () => {
+    expect(await readable()).toContain(
+      "Anything still wrong or still being worked comes before anything finished.",
+    );
+  });
+
+  it("gives a closed finding with an active case the full statement, not one quiet line", async () => {
+    const text = await readable({ findings: [caseRow()], zone: "UTC" });
+    expect(text).toContain(`Recovered at ${at(CLOSED_AT)}, still being investigated by Asha`);
+  });
+
+  it("links a joined finding to the case it is part of", async () => {
+    const container = await render({
+      findings: [{ ...closed("recovered", "joined-1"), root_finding_id: "root-1" }],
+    });
+    const link = [...container.querySelectorAll("a")].find(
+      (each) => each.textContent === "Part of a case",
+    );
+    expect(link?.getAttribute("href")).toBe("/findings/root-1");
   });
 });

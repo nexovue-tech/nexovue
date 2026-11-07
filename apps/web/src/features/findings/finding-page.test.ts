@@ -415,3 +415,132 @@ describe("a timeline row's words come from kinds and typed detail alone", () => 
     ).toBe("A note was deleted");
   });
 });
+
+// ------------------------------------------------ keeping and ending (F22 T2.7)
+
+import { caseEndingSentence, earlierCaseLine, keptSentence } from "./finding-page";
+
+describe("an active case says when it ends by itself (FR26, FR49)", () => {
+  it("an idle case says how long it has been quiet, when it ends, and what keeps it", () => {
+    const idle = investigating({
+      case_activity_at: "2026-08-18T18:00:00Z",
+      case_ends_on: "2026-11-16T18:00:00Z",
+      case_ends_by: "idle",
+    });
+    expect(caseEndingSentence(idle, ZONE, NOW)).toBe(
+      "No activity for 76 days. Ends by itself on 16 Nov, 18:00 UTC. Add a note to keep it going, or resolve it.",
+    );
+  });
+
+  it("an untouched recovered case says it ends unless someone adds something", () => {
+    const untouched = investigating({
+      state: "closed",
+      closed_at: "2026-11-02T15:04:00Z",
+      case_ends_on: "2026-11-05T15:04:00Z",
+      case_ends_by: "untouched",
+    });
+    expect(caseEndingSentence(untouched, ZONE, NOW)).toBe(
+      "Recovered. Ends by itself on 5 Nov, 15:04 UTC unless someone adds something.",
+    );
+  });
+
+  it("an end today says at what time, not on what day", () => {
+    const today = investigating({
+      case_ends_on: "2026-11-02T21:00:00Z",
+      case_ends_by: "untouched",
+    });
+    expect(caseEndingSentence(today, ZONE, NOW)).toBe(
+      "Recovered. Ends by itself at 21:00 UTC unless someone adds something.",
+    );
+  });
+
+  it("says nothing when the server names no end", () => {
+    expect(caseEndingSentence(investigating(), ZONE, NOW)).toBeNull();
+  });
+});
+
+describe("a finding with no case names the service's earlier one (FR9, FR13, AC15, AC68, AC95)", () => {
+  const earlier = {
+    id: "f-0",
+    case_state: "resolved" as const,
+    case_resolution: "resolved" as const,
+    case_resolved_at: "2026-11-01T16:10:00Z",
+    case_activity_at: "2026-11-01T16:10:00Z",
+  };
+
+  it("a quiet active case is named with when it was last touched; taking this joins it", () => {
+    const line = earlierCaseLine(
+      {
+        ...earlier,
+        case_state: "investigating",
+        case_resolution: null,
+        case_resolved_at: null,
+        case_activity_at: "2026-10-12T09:00:00Z",
+      },
+      ZONE,
+      NOW,
+    );
+    expect(line).toEqual({
+      sentence: "This service has a case nobody has touched since 12 Oct, 09:00 UTC",
+      reopenable: false,
+    });
+  });
+
+  it("a case a person resolved is a link only", () => {
+    for (const resolution of ["resolved", "false_alarm", "new_normal"] as const) {
+      const line = earlierCaseLine({ ...earlier, case_resolution: resolution }, ZONE, NOW);
+      expect(line.sentence).toBe("This service had a case resolved on 1 Nov, 16:10 UTC");
+      expect(line.reopenable).toBe(false);
+    }
+  });
+
+  it("a case that ended without a person's decision can be reopened, and says how it ended", () => {
+    for (const resolution of ["tracker_closed", "no_activity", "recovered_untouched"] as const) {
+      const line = earlierCaseLine({ ...earlier, case_resolution: resolution }, ZONE, NOW);
+      expect(line.reopenable).toBe(true);
+      expect(line.sentence).toBe(
+        `This service had a case that ended on 1 Nov, 16:10 UTC. ${resolutionWords(resolution, {
+          at: "1 Nov, 16:10 UTC",
+        })}`,
+      );
+    }
+  });
+
+  it("offers Reopen that case beside Take this only when it can be reopened", () => {
+    const reopenable = aCase({
+      earlier_case: { ...earlier, case_resolution: "no_activity" },
+    });
+    const personal = aCase({ earlier_case: earlier });
+    expect(caseActions(reopenable, { canOperateCases: true, viewerId: ME })).toMatchObject({
+      takeThis: true,
+      reopenEarlier: "f-0",
+    });
+    expect(caseActions(personal, { canOperateCases: true, viewerId: ME }).reopenEarlier).toBeNull();
+    expect(
+      caseActions(reopenable, { canOperateCases: false, viewerId: ME }).reopenEarlier,
+    ).toBeNull();
+  });
+});
+
+describe("a case says how long it is kept (FR24, FR27, AC112)", () => {
+  it("names the deletion date and the joined findings still kept", () => {
+    const resolved = aCase({
+      case_state: "resolved",
+      deletes_on: "2026-12-02T16:10:00Z",
+      joined_kept_count: 3,
+    });
+    expect(keptSentence(resolved, ZONE, NOW)).toBe(
+      "Kept until 2 Dec, 16:10 UTC. 3 later findings are still kept.",
+    );
+    expect(keptSentence({ ...resolved, joined_kept_count: 1 }, ZONE, NOW)).toBe(
+      "Kept until 2 Dec, 16:10 UTC. 1 later finding is still kept.",
+    );
+  });
+
+  it("an active case names only its kept findings, and a case with none says nothing", () => {
+    expect(keptSentence(investigating({ joined_kept_count: 2 }), ZONE, NOW)).toBe(
+      "2 later findings are still kept.",
+    );
+    expect(keptSentence(investigating({ joined_kept_count: 0 }), ZONE, NOW)).toBeNull();
+  });
+});

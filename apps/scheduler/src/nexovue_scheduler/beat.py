@@ -48,6 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
+from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.detection import (
     DETECTION_QUEUE,
@@ -94,6 +95,10 @@ BASELINE_SWEEP_ENTRY: Final = "sweep:detection-baselines"
 # The rows that lapse rather than being removed (ADR-020): sessions, links, results, jobs.
 EXPIRY_SWEEP_SECONDS: Final = 60
 EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
+
+# F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
+CASES_SWEEP_SECONDS: Final = 300
+CASES_SWEEP_ENTRY: Final = "sweep:cases"
 
 # A payment's grace period is days long; an hour late ending it costs nothing.
 GRACE_SWEEP_SECONDS: Final = 3600
@@ -412,6 +417,7 @@ class Beat:
             BASELINE_SWEEP_ENTRY: (SWEEP_BASELINES_TASK, BASELINE_SWEEP_SECONDS, DETECTION_QUEUE),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
+            CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
         }
         # A customer's own install charges nobody, so no payment has a grace period to end.
         if self._settings.nexovue_deployment == HOSTED:

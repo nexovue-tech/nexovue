@@ -12,6 +12,7 @@ import { parseNewRuleSearch } from "@/features/alerts/search";
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
 import { ERROR_FILTERS } from "@/features/errors/filters";
+import { parseFeedSearch } from "@/features/findings/feed-filter";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { llmCallFilters } from "@/features/llm-observability/filters";
@@ -243,6 +244,8 @@ const findingsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/",
   component: FindingsScreen,
+  // F22 FR22: the case filter lives in the address, so back returns to it (AC28).
+  validateSearch: parseFeedSearch,
 });
 
 const overviewRoute = createRoute({
@@ -257,6 +260,8 @@ const findingRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/findings/$findingId",
   component: FindingScreen,
+  // The feed filter it was opened from, which its back link returns to (AC128).
+  validateSearch: parseFeedSearch,
 });
 
 const servicesRoute = createRoute({

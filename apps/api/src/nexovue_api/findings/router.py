@@ -28,6 +28,7 @@ from nexovue_api.findings import cases, service
 from nexovue_api.findings.schemas import (
     CaseChanged,
     CaseChangeRequest,
+    CaseFilter,
     CaseNote,
     FalseAlarmRequest,
     FeedState,
@@ -49,15 +50,46 @@ router = APIRouter(prefix="/findings", tags=["findings"])
 ProjectId = Annotated[uuid.UUID, Query(description="Project to read findings from")]
 
 
-@router.get("", summary="Open, then acknowledged, then closed findings; at most 200")
+@router.get("", summary="Findings still wrong or still worked first, then the rest; at most 200")
 async def list_findings(
     reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
-    project_id: ProjectId,
+    project_id: Annotated[
+        uuid.UUID | None,
+        Query(
+            description="Project to read findings from. Required, except when a person "
+            "asks for a case filter, which reads every project of the organization"
+        ),
+    ] = None,
     state: Annotated[FeedState, Query(description="`open` includes acknowledged")] = "all",
     muted: Annotated[bool, Query(description="Read the muted findings instead")] = False,
+    case: Annotated[
+        CaseFilter | None,
+        Query(description="A case filter: roots with a case, muted included (F22 FR22)"),
+    ] = None,
 ) -> FindingListResponse:
+    now = datetime.now(UTC)
+    for_person = not reader.is_token
+    if case is not None:
+        # A person's filter reads the organization, so a named project is not used;
+        # a token's is proved readable first, the same 404 as `get_finding` (AC110).
+        token_project = (
+            None
+            if for_person or project_id is None
+            else await require_readable_project(db, reader=reader, project_id=project_id)
+        )
+        return await service.list_cases(
+            db,
+            org_id=reader.org_id,
+            which=case,
+            viewer_id=None if reader.identity is None else reader.identity.user.id,
+            token_project_id=None if token_project is None else token_project.id,
+            for_person=for_person,
+            now=now,
+        )
+    if project_id is None:
+        raise InvalidRequestError(service.NAME_A_PROJECT)
     project = await require_readable_project(db, reader=reader, project_id=project_id)
     return await service.list_findings(
         db,
@@ -66,7 +98,8 @@ async def list_findings(
         project_id=project.id,
         state=state,
         muted=muted,
-        now=datetime.now(UTC),
+        for_person=for_person,
+        now=now,
     )
 
 

@@ -51,6 +51,7 @@ async def _opened(
             scope="service",
             service_name=fields.pop("service_name", "checkout"),
             severity=fields.pop("severity", "warning"),
+            root_finding_id=fields.pop("root_finding_id", None),
             at=at,
         )
 

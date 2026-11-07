@@ -2,12 +2,185 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Step 1 is built** on the worktree branch `wt/f22` and awaits the coordinator's review and commit.
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Step 1 is on `feature/phase-2`** (commit 0094862). **Step 2 (2026-11-07) except T2.9, which waits on F3**: built on the worktree branch `wt/f22`, to be committed with T2.9 unticked (founder, 2026-11-07); T2.9 is built once F3 lands.
 
 
 ## Current task
 
-Step 1 on `feature/phase-2` (2026-11-07). Next: the judgeable check on the dev stack, then Step 2.
+Step 2 (2026-11-07) except T2.9, which waits on F3. Built on `wt/f22`, awaiting
+the coordinator's commit. Next: the
+judgeable checks of Steps 1 and 2 on a dev stack, then Step 3, which needs the
+founder's GitHub test organization first.
+
+
+## Step 2 built, 2026-11-07
+
+Plan tasks T2.1 to T2.8, T2.10 and T2.11, as written, with the notes below. T2.9
+waits on F3 (founder, 2026-11-07): F3's `evidence/gather.py` is not on the
+branch, and Step 2 is committed without it. **No migration:** every
+column, table and index Step 2 reads was created by 0051. ClickHouse untouched.
+
+- **T2.1, joining at birth.** `project_job._OPEN` sets `root_finding_id` from a
+  subquery: the same scope and service, a case a person acted on within
+  `CASE_JOIN_WINDOW` (7 days, now one constant in `nexovue_platform/cases.py`,
+  bound from the job's own clock). Both callers pass it, and
+  `events.finding_opened` writes `finding_joined_case` on the root unless the
+  opening falls in a flapping spell (FR18). **The API half was already built in
+  Step 1** (T1.5: detach on every resolve, `JOIN_OPEN_SQL` on start and reopen,
+  with tests); nothing more was needed there.
+- **T2.1, the barrier (AC101).** Two live tests drive the job's own statements
+  (`_OPEN_FINDING`, `_CLOSE`, `_OPEN`) in one transaction against a person
+  holding the root `FOR NO KEY UPDATE`: the job never waits, and the cycle
+  (person waits on the joined finding while the job's insert needs the root)
+  commits on both sides. **Run once with the person's lock as `FOR UPDATE`, as
+  a negative control: the first test timed out and the second raised
+  `DeadlockDetectedError`.** The job's real batch could not be used for the
+  close-then-open, because a run judges at most 2 minutes and a new finding
+  needs 5 minutes of sustain after the old one's 10 clear minutes.
+- **T2.2.** The tenancy test reads the new statements in `detection/events.py`,
+  `project_job.py` and `nexovue_platform/cases.py` with **no new exception**, and
+  now asserts those modules (and `nexovue_scheduler.cases`) are walked.
+  `cases_sweep`'s six first reads are named cross-tenant exceptions with their
+  reasons, as the design says (*Keeping and ending*); T4.6 adds
+  `sweep_connections`' and beat's.
+- **T2.3, the feed.** One rank, `CASE_RANK` and `CASE_SEVERITY_RANK` in
+  `findings/queries.py`, with `EXISTS` on an open joined finding; the console's
+  `orderFindings` follows the same rule, and **one shared fixture,
+  `features/findings/feed-order.fixture.json`, holds both** (AC27). It caught a
+  real defect while it was written: the console promoted an acknowledged open
+  finding with an active case to the first tier. The case filters are a separate
+  statement bound to `org_id`, joining projects and users, roots only, muted
+  included. A person's rows are a new `FindingFeedRow` naming the assignee, when
+  they took it and who resolved it, read in the one statement (AC71); a token's
+  rows stay plain `Finding`. `needsAttention` is deleted. F6's test "the feed
+  never carries the member-only fields" was narrowed to AC71's rule, since a
+  person's feed row now names the assignee. **F4's MCP `list_findings` tool
+  passes `for_person=False`**, so its rows still name nobody.
+- **T2.4, the screen.** *Show* filter (`SelectField`) in the address through
+  `validateSearch` on the feed and finding routes (`feed-filter.ts`, parsed in
+  one place); a case filter has its own query key with no project and waits on
+  nothing else; no detection line, summary or muted link; "Across all your
+  projects…"; zero results in each filter's words with **Show all**; "Showing the
+  newest 200."; the case row (full sentence, case severity in words, project, no
+  sparkline, no "Acked", the idle warning, Resolve on *Active cases* and
+  *Assigned to me*, one tap with the signal closed and a confirmation while it
+  is open); on *All*, a closed finding with an active case keeps the case row,
+  an open one states the case under its title, a joined one links "Part of a
+  case"; the new subtitle; "Back to Assigned to me" on the finding page.
+- **T2.5.** `_PAST_DERIVED_RETENTION` gains the two clauses, the first clause
+  unchanged so `ix_findings_closed_at` still serves it, no clause on a root.
+  AC30's test passed before the change: it pins behaviour the new clauses must
+  keep.
+- **T2.6, `cases_sweep`** (`nexovue_scheduler/cases.py`, every 5 minutes on
+  `light`, registered in `TASK_MODULES`): clears a removed or demoted assignee,
+  heals a missed join and a finding left on a resolved root, ends idle cases
+  (`no_activity`) and untouched ones (`recovered_untouched`) through one ending
+  that mirrors the API's (resolve, detach with events, event, audit naming
+  nobody), and starts the idle warning with its `idle_warning` row in
+  `finding_emails_owed` (new shared `RECORD_EMAIL_OWED_SQL`). **Every lock is
+  `SKIP LOCKED`, so the sweep never waits and cannot be half of a deadlock**; a
+  test holds a row and shows the sweep finishing at once and clearing it on the
+  next pass. The durations moved to `nexovue_platform/cases.py`
+  (`CASE_IDLE_LIMIT`, `CASE_IDLE_WARNING_AHEAD`, `CASE_UNTOUCHED_AFTER`), so the
+  page's "ends on" and the sweep read one definition.
+- **T2.7.** `FindingForMember` gains `earlier_case`, `case_activity_at`,
+  `case_ends_on`, `case_ends_by`, `deletes_on` and `joined_kept_count`;
+  `finding-page.ts` gains `caseEndingSentence`, `earlierCaseLine`,
+  `keptSentence` and `reopenEarlier`; `CaseSection.tsx` shows them, with
+  **Reopen that case** beside Take this when the earlier case ended without a
+  person's decision. **A person's take that joins a quiet case now restarts that
+  case's idle clock**, as the design's *Joining* says; Step 1's
+  `_join_existing_case` did not (test seen failing first).
+- **T2.8.** The export gains `notes_written`, newest first, with its own
+  `notes_truncated` flag, read one past the bound so the flag means a note was
+  left out.
+- **T2.10.** FR53's line on the finding page's linked alerts and the incident
+  page; BR16's sentence on account deletion and on the members screen's own
+  **Leave** confirmation (`shared/case-words.ts` holds both sentences, as two
+  features show each); the personal-data spec says so, and lists notes in the
+  export. **An admin's Remove of someone else** says "Notes {name} wrote stay, in
+  their own words, as your organization's record." (`notesStayFor` in the same
+  file; founder's option B, *Founder answers, 2026-11-07*). AC121 and AC122 are
+  satisfied.
+- **T2.11.** FR47's line, `Part of a case started <UTC>. Open it: <link>`, is
+  composed from the row as the message is claimed (`outbox._TAKEN` reads the
+  root) into `AlertMessage.case_line`, kept out of `details`; `dispatch.send`
+  adds it for people-read channels only, so PagerDuty and webhook bodies are
+  byte-equal with and without a case, and a finding detached before sending
+  carries none (live test).
+
+### Where the code needed more than the plan named
+
+- **T2.11 touches `alerts/outbox.py` and `alerts/dispatch.py`** besides
+  `messages.py`: "decided from the row when composed" needs the claim's read,
+  and "people-read channels only" needs the place that knows the channel. A
+  message batching several notices (a digest) carries no case line; each of its
+  lines is one notice's summary.
+- **T2.7's lines are drawn in `CaseSection.tsx`**, not listed in the plan.
+- **Fields beyond the design's list:** `case_ends_by` and `case_activity_at`
+  (FR26 and FR49 need different sentences, and "No activity for 76 days" needs
+  the last act), and `case_resolved_by_name` on a feed row ("Asha resolved the
+  case at 16:10" in *Resolved cases*).
+- **`render-harness.test-util.ts`** now records each call's query string and
+  takes a starting address, for the filter tests.
+
+### Validation run (read, not inferred)
+
+Against this worktree's own Postgres (port 25432) and ClickHouse (port 28123),
+migrated to 0051 and to ClickHouse's 37 migrations, torn down afterwards.
+
+- **Seen failing first, then passing:** the job's join tests (5 failed:
+  `CASE_JOIN_WINDOW` missing, `root_finding_id` None); the barrier's negative
+  control (above); AC29's retention test (kept rows deleted); the sweep suite
+  (ImportError); the beat entry (ImportError); the platform's owed-email
+  statement (AttributeError); the feed tests (6 failed); the T2.7 page tests (8
+  failed with `_keeping` blanked); the clock restart (assert on
+  `case_activity_at`); the export's notes (KeyError, AttributeError); FR47's
+  tests (ImportError, then assertions); `ordering.test.ts` (3 failed, then the
+  fixture's real defect); `finding-page.test.ts` T2.7 (10 failed);
+  `FindingsScreen.test.ts` (2 failed: the summary's 503 hid the list);
+  `FindingsView.test.ts` (13 failed); the back link and earlier case on the page
+  (3 failed against the committed `FindingScreen.tsx`/`CaseSection.tsx`); the
+  four T2.10 lines (4 failed); the admin-removal sentence (1 failed: the
+  confirmation had no notes line for Priya).
+- `apps/scheduler/tests`: **4,881 passed, 3 failed** — the 3 are
+  `test_alert_telemetry_live.py`, which needs the seeded dev project
+  (`just seed`); four suites needing Kafka, SeaweedFS or DNS were left out
+  (`test_connect_guard`, `test_detection_failure_live`,
+  `test_detection_settle_live`, `test_erasure_live`). None is touched here.
+- `apps/api/tests`, every offline suite: **3,872 passed, 1 skipped**. Live:
+  `test_findings_api_live` (31), `test_findings_cases_live` (32),
+  `test_findings_actions_live`, `test_personal_data_live` (10),
+  `test_members_live`, `test_deletion_live`, `test_mcp_live`, `test_admin_live`,
+  `test_alert_defaults_live`, `test_audit_read_live`,
+  `test_detection_status_api_live`, `test_db_session_commit_order`: **229
+  passed** together.
+- `packages/py-platform/tests`: **135 passed**.
+- Web: **1,587 vitest tests passed** in 138 files; `tsc -b` clean; Biome clean on
+  every touched file (one warning remains in untouched
+  `connection-health.ts`). After the admin-removal sentence (2026-11-07):
+  the whole web suite **1,588 passed** in 138 files,
+  `pnpm -r --if-present run typecheck` clean, Biome clean on the three touched
+  files.
+- `uv run mypy .`: no issues in 741 files; `ruff check` and `ruff format` clean.
+- **Not run:** `just check` (the coordinator runs it); the judgeable checks of
+  Steps 1 and 2 on a full dev stack, including T1.0's live half;
+  `test_anomaly_detection_migration_live.py`; the four suites above.
+
+### Implementation notes and residual risks
+
+- **The untouched end ignores links for now:** `finding_links` arrives at T4.2,
+  and T4.3 proves a link stops the untouched end.
+- **The idle warning owes its email; nothing sends it until T4.6,** and the
+  synced issue's comment request also lands then.
+- **"Warned in this spell" is `case_warned_at < case_activity_at`**, so the
+  sweep warns once per idle spell whether or not every act clears the marker.
+  `take` and acknowledging set `case_activity_at` without clearing
+  `case_warned_at`; with this condition that changes nothing.
+- **The feed's joined count and "ends on" are read per row set,** two small
+  statements beside the feed's one; the case filters read no ClickHouse at all.
+  Not measured.
+- `spell_state`'s one-hour edge (Step 1) is unchanged.
 
 
 ## Step 1 built, 2026-11-02
@@ -115,17 +288,54 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-Coordinator review and commit of Step 1 (branch `wt/f22`). Then the judgeable
-check on the dev stack (`just detection-seed`, `just detection-fault --service
-checkout`, work the case, `--clear`), recorded here; then plan Step 2. Step 7
-(Jira) still waits on Atlassian's written answer. T0.1's question to Atlassian
-should be sent if it has not been. The two tracker ADRs are filed when Step 3
-starts.
+Coordinator review and commit of Step 2 (branch `wt/f22`), with T2.9 unticked.
+Then the judgeable checks of Steps 1 and 2 on a dev stack
+(`just detection-seed`, `just detection-fault --service checkout`, take, note,
+`--clear`, the fault again, *Active cases*, an untouched case's end line),
+recorded here. Step 3 needs the founder's GitHub test organization (D93), asked
+for at the time. T2.9 is built once F3's `evidence/gather.py` exists. Step 7
+(Jira) still waits on Atlassian's written answer; T0.1's question should be sent
+if it has not been. The two tracker ADRs are filed when Step 3 starts.
 
 
 ## Open decisions
 
-**None for the founder.** Items 1 and 3 were approved on 2026-11-02, as recommended; item 2 is foundation item 6 (*Founder answers, 2026-11-02*, below). Step 7 now waits on Atlassian's written answer, not on the founder.
+None for the founder. Items 1 and 3 of the founder decisions were approved on
+2026-11-02, as recommended; item 2 is foundation item 6 (*Founder answers,
+2026-11-02*, below). Step 7 waits on Atlassian's written answer, not on the
+founder.
+
+## Founder answers, 2026-11-07
+
+**1. BR16's sentence when an admin removes someone else (T2.10, AC122, FR54).
+Founder answer, 2026-11-07: option B.** Built that day: an admin's **Remove**
+says "Notes {name} wrote stay, in their own words, as your organization's
+record.", with the removed person's name as plain text; the leaver's own
+**Leave** and account deletion keep the first-person sentence. `spec.md` BR16
+and FR54 and the personal-data spec carry it; AC122 is satisfied.
+
+The question as it was put:
+
+The spec gives one sentence for "the member removal and account deletion
+screens": "Notes you wrote stay, in your own words, as your organization's
+record. Delete any you want gone before you leave." It is addressed to the
+person leaving. On the members screen the same confirmation serves an admin
+removing a colleague (`features/members/MembersScreen.tsx:228`, `{isSelf ?
+"Leave" : "Remove"}`, one `RemoveConfirmation`), and the person removed never
+sees it. Built: the sentence on account deletion and on one's own **Leave**.
+Not built: anything on an admin's **Remove** of someone else.
+
+- *Option A:* the literal sentence there too. It tells the admin to delete
+  notes "before you leave", which is wrong.
+- *Option B (recommended):* a third-person fact for the admin: "Notes {name}
+  wrote stay, in their own words, as your organization's record." It keeps
+  BR16's meaning and states nothing false; it is a new line, so it needs the
+  founder's word.
+- *Option C:* nothing on an admin's removal; read FR54 as the leaver's screens.
+
+**2. Committing Step 2 without T2.9. Founder answer, 2026-11-07:** Step 2 is
+committed now with T2.9 unticked, waiting on F3, because F3's
+`evidence/gather.py` is not on the branch. T2.9 is finished when F3 lands.
 
 ## Blocked
 

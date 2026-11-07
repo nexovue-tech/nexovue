@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from nexovue_scheduler.beat import (
     ATTEMPT_PRUNE_ENTRY,
     BASELINE_SWEEP_ENTRY,
+    CASES_SWEEP_ENTRY,
     DELIVERY_SWEEP_ENTRY,
     DETECTION_SWEEP_ENTRY,
     ERASURE_ENTRY,
@@ -32,7 +33,9 @@ from nexovue_scheduler.beat import (
     _start_offset,
     _unchanged,
 )
+from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck
+from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.settings import Settings
 
@@ -181,6 +184,19 @@ def test_detection_is_swept_every_minute_and_its_normal_hourly_on_its_own_queue(
     assert normal.interval_seconds == 3600
     # A sweep not started before the next is due is dropped, not queued behind it.
     assert judging.request.expires_seconds == 60
+
+
+def test_cases_are_swept_every_five_minutes_on_light_by_a_registered_task() -> None:
+    """F22 T2.6: `cases_sweep` ends idle and untouched cases and heals races. It
+    holds mail's settings, so it runs on `light`, never on a connections queue;
+    beat names it, and a worker must be able to run it."""
+    sweep = _scheduler()._sweep_entries()[CASES_SWEEP_ENTRY]
+
+    assert sweep.request.task == CASES_SWEEP_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 300
+    assert sweep.request.expires_seconds == 300
+    assert CASES_SWEEP_TASK in registry.registered()
 
 
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:

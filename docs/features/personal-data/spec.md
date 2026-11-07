@@ -48,7 +48,8 @@ platform operator, who has no customer data of their own here.
 
 - **Export holds the person's data only**: their profile; their sessions (device and network, when and
   where); the audit entries they caused; the API tokens they created; the invitations they sent and
-  received. Never another person's data, never the organization's telemetry.
+  received; the case notes they wrote, in their own words (F22 AC25), bounded on their own with a
+  `notes_truncated` flag. Never another person's data, never the organization's telemetry.
 - **Deleting an account is the member removal that already exists** (sessions ended, email freed,
   set-password state cleared), plus: their **name becomes "Former member"**, and **their email is
   replaced by their user id in every audit entry**. The audit entries stay: they are the
@@ -57,6 +58,9 @@ platform operator, who has no customer data of their own here.
   or delete the organization.
 - **An admin removing someone scrubs the same way**, so removal is never kinder to history than
   self-deletion.
+- **Case notes stay after a person leaves** (F22 BR16): they are the organization's working record,
+  in the person's own words, with the author read as *Former member*. A person may delete their own
+  notes first; afterwards, an owner or admin can.
 - API tokens a person created stay the organization's (ADR-017, BR9); the export lists them.
 
 ## Functional requirements
@@ -98,8 +102,14 @@ sessions, what you did, and the tokens you made.
 
 Delete your account                       [ Delete account… ]
 Removes you from <Organization>. What you did stays in the
-audit log, without your name or address.
+audit log, without your name or address. Notes you wrote stay,
+in your own words, as your organization's record. Delete any you
+want gone before you leave.
 ```
+
+The members screen's **Leave** confirmation carries the same last two sentences (F22 BR16, FR54). An
+owner or admin removing someone else reads, instead, *"Notes {name} wrote stay, in their own words, as
+your organization's record."*
 
 **Delete account…** opens a confirmation: the password field (and a code when two-factor is on), the
 sentence *"This cannot be undone."*, and a red **Delete my account** button. On success the person is

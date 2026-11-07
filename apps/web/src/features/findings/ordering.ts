@@ -1,8 +1,14 @@
-import type { Finding, FindingSeverity, FindingState } from "./api";
+import type { Finding, FindingSeverity } from "./api";
 
 /**
- * The order the feed is read in, which F1 AC1.5 fixes: **open, then acknowledged, then
- * closed; then severity, then recency.**
+ * The order the feed is read in (F1 AC1.5, F22 FR21): **open and unacknowledged, or a
+ * case whose finding came back and is open; then acknowledged; then closed with an
+ * active case; then the rest closed. Within a tier, the case's severity, then
+ * recency.**
+ *
+ * The server ranks by the same rule (`findings/queries.py`, `CASE_RANK`), and
+ * `feed-order.fixture.json` holds the two to one test set (AC27), because a feed
+ * the two sort differently reorders under the reader's eyes on every refresh.
  *
  * Pure and separate from the screen because it is the part that can be wrong without
  * looking wrong. A feed sorted by recency alone buries a critical finding from an hour
@@ -10,11 +16,20 @@ import type { Finding, FindingSeverity, FindingState } from "./api";
  */
 
 /** Lower sorts first. Acknowledged is still open — somebody saw it, nobody fixed it. */
-const BY_STATE: Record<FindingState, number> = {
-  open: 0,
-  acknowledged: 1,
-  closed: 2,
-};
+function tierOf(finding: Finding): number {
+  if (finding.state === "open") return 0;
+  // A recovered root whose joined finding is open: never "recovered" (AC59).
+  if (
+    finding.state === "closed" &&
+    finding.case_state === "investigating" &&
+    finding.case_signal === "open"
+  ) {
+    return 0;
+  }
+  if (finding.state === "acknowledged") return 1;
+  if (finding.case_state === "investigating") return 2;
+  return 3;
+}
 
 const BY_SEVERITY: Record<FindingSeverity, number> = {
   critical: 0,
@@ -39,17 +54,13 @@ function instantOf(finding: Finding): number {
 
 export function orderFindings(findings: readonly Finding[]): Finding[] {
   return [...findings].sort((left, right) => {
-    const byState = BY_STATE[left.state] - BY_STATE[right.state];
-    if (byState !== 0) return byState;
+    const byTier = tierOf(left) - tierOf(right);
+    if (byTier !== 0) return byTier;
 
-    const bySeverity = BY_SEVERITY[left.severity] - BY_SEVERITY[right.severity];
+    // The worse of the row's and an open joined finding's (FR21).
+    const bySeverity = BY_SEVERITY[left.case_severity] - BY_SEVERITY[right.case_severity];
     if (bySeverity !== 0) return bySeverity;
 
     return instantOf(right) - instantOf(left);
   });
-}
-
-/** Whether anything still needs somebody. Closed findings do not count. */
-export function needsAttention(findings: readonly Finding[]): boolean {
-  return findings.some((finding) => finding.state !== "closed");
 }

@@ -1,0 +1,154 @@
+{
+  "about": "F22 AC27: one test set the server's rank (apps/api/tests/test_findings_api_live.py) and the console's orderFindings (ordering.test.ts) must both put in expected_order. Every combination of signal state, acknowledgement, case state and an open joined finding. Times are minutes before the test's now; a finding with a root joined that root's case.",
+  "findings": [
+    {
+      "id": "open-critical",
+      "service": "a",
+      "state": "open",
+      "acknowledged": false,
+      "severity": "critical",
+      "case_state": null,
+      "started_minutes_ago": 90
+    },
+    {
+      "id": "open-warning-new",
+      "service": "b",
+      "state": "open",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": null,
+      "started_minutes_ago": 2
+    },
+    {
+      "id": "open-case-nobody",
+      "service": "c",
+      "state": "open",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": "investigating",
+      "started_minutes_ago": 20
+    },
+    {
+      "id": "open-resolved-case",
+      "service": "d",
+      "state": "open",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": "resolved",
+      "started_minutes_ago": 40
+    },
+    {
+      "id": "acked-critical-case",
+      "service": "e",
+      "state": "open",
+      "acknowledged": true,
+      "severity": "critical",
+      "case_state": "investigating",
+      "started_minutes_ago": 1
+    },
+    {
+      "id": "acked-warning",
+      "service": "f",
+      "state": "open",
+      "acknowledged": true,
+      "severity": "warning",
+      "case_state": null,
+      "started_minutes_ago": 30
+    },
+    {
+      "id": "acked-resolved-case",
+      "service": "g",
+      "state": "open",
+      "acknowledged": true,
+      "severity": "warning",
+      "case_state": "resolved",
+      "started_minutes_ago": 50
+    },
+    {
+      "id": "closed-active-case",
+      "service": "h",
+      "state": "closed",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": "investigating",
+      "started_minutes_ago": 300,
+      "closed_minutes_ago": 200
+    },
+    {
+      "id": "closed-resolved-case",
+      "service": "i",
+      "state": "closed",
+      "acknowledged": false,
+      "severity": "critical",
+      "case_state": "resolved",
+      "started_minutes_ago": 100,
+      "closed_minutes_ago": 8
+    },
+    {
+      "id": "closed-plain",
+      "service": "j",
+      "state": "closed",
+      "acknowledged": false,
+      "severity": "critical",
+      "case_state": null,
+      "started_minutes_ago": 100,
+      "closed_minutes_ago": 10
+    },
+    {
+      "id": "root-warning-return",
+      "service": "k",
+      "state": "closed",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": "investigating",
+      "started_minutes_ago": 600,
+      "closed_minutes_ago": 500
+    },
+    {
+      "id": "root-critical-return",
+      "service": "l",
+      "state": "closed",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": "investigating",
+      "started_minutes_ago": 700,
+      "closed_minutes_ago": 550
+    },
+    {
+      "id": "return-warning",
+      "service": "k",
+      "state": "open",
+      "acknowledged": false,
+      "severity": "warning",
+      "case_state": null,
+      "root": "root-warning-return",
+      "started_minutes_ago": 4
+    },
+    {
+      "id": "return-critical",
+      "service": "l",
+      "state": "open",
+      "acknowledged": false,
+      "severity": "critical",
+      "case_state": null,
+      "root": "root-critical-return",
+      "started_minutes_ago": 6
+    }
+  ],
+  "expected_order": [
+    "return-critical",
+    "open-critical",
+    "root-critical-return",
+    "open-warning-new",
+    "return-warning",
+    "open-case-nobody",
+    "open-resolved-case",
+    "root-warning-return",
+    "acked-critical-case",
+    "acked-warning",
+    "acked-resolved-case",
+    "closed-active-case",
+    "closed-resolved-case",
+    "closed-plain"
+  ]
+}

@@ -28,6 +28,7 @@ from nexovue_api.profile.schemas import (
     ExportedApiToken,
     ExportedInvitationReceived,
     ExportedInvitationSent,
+    ExportedNote,
     ExportedOrganization,
     ExportedProfile,
     ExportedSession,
@@ -36,6 +37,8 @@ from nexovue_api.profile.schemas import (
 
 # Years of activity still answers in seconds at this bound (spec, NFR).
 MAX_ACTIVITY_ENTRIES: Final = 10_000
+# The same bound for case notes (F22 AC25): at most 4,000 characters each.
+MAX_NOTES_EXPORTED: Final = 10_000
 
 SOLE_OWNER_REFUSAL: Final = (
     "You are this organization's only owner. "
@@ -53,6 +56,11 @@ async def export(
         db, org_id=organization.id, user_id=user.id, limit=MAX_ACTIVITY_ENTRIES
     )
     truncated = len(entries) == MAX_ACTIVITY_ENTRIES
+    # One more than the bound, so the flag says a note was left out, not that the
+    # bound was reached.
+    notes = await queries.notes_written(
+        db, org_id=organization.id, user_id=user.id, limit=MAX_NOTES_EXPORTED + 1
+    )
     return PersonalDataExport(
         exported_at=now,
         profile=ExportedProfile(
@@ -110,6 +118,13 @@ async def export(
             )
             for invited in await queries.invited_by(db, org_id=organization.id, user_id=user.id)
         ],
+        notes_written=[
+            ExportedNote(
+                id=note.id, finding_id=note.finding_id, body=note.body, created_at=note.created_at
+            )
+            for note in notes[:MAX_NOTES_EXPORTED]
+        ],
+        notes_truncated=len(notes) > MAX_NOTES_EXPORTED,
     )
 
 

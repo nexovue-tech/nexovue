@@ -13,6 +13,8 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { NOTES_STAY } from "@/shared/case-words";
+
 import type { Action } from "@/shared/identity";
 
 import type { Member } from "./api";
@@ -226,6 +228,36 @@ describe("the Members screen", () => {
     expect(owner.querySelector("select")).toBeNull();
     expect(buttons(owner)).toEqual([]);
     expect(optionsIn(row(container, "Priya"))).not.toContain("Owner");
+  });
+
+  it("says, as a person leaves, that the notes they wrote stay (F22 BR16, AC122)", async () => {
+    stubApi("owner");
+    const container = await mount();
+
+    const own = row(container, "Raj");
+    const leave = [...own.querySelectorAll("button")].find((each) => each.textContent === "Leave");
+    await act(async () => leave?.click());
+
+    expect(own.textContent).toContain(NOTES_STAY);
+    expect(own.textContent).not.toContain("in their own words");
+  });
+
+  it("tells an admin removing someone else that the person's notes stay (F22 BR16, AC122)", async () => {
+    stubApi("admin");
+    const container = await mount();
+
+    const priya = row(container, "Priya");
+    const remove = [...priya.querySelectorAll("button")].find(
+      (each) => each.textContent === "Remove",
+    );
+    await act(async () => remove?.click());
+
+    // The founder's wording, 2026-11-07: a fact for the admin, in the third person.
+    expect(priya.textContent).toContain(
+      "Notes Priya wrote stay, in their own words, as your organization's record.",
+    );
+    // Never the leaver's sentence: it would tell the admin to act "before you leave".
+    expect(priya.textContent).not.toContain(NOTES_STAY);
   });
 
   it("says when an invite's email did not go", async () => {

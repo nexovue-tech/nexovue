@@ -1,8 +1,9 @@
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, isConflict } from "@/shared/api-client";
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -20,6 +21,7 @@ import { setSelectedProjectId, useSelection } from "@/shared/selection";
 import type { FindingDetail, FindingSignal, FindingSignalKind, SignalSeries } from "./api";
 import { useFinding, useFindingAction } from "./api";
 import { CaseSection } from "./CaseSection";
+import { backLinkLabel, parseFeedSearch } from "./feed-filter";
 import type { DoneAction } from "./finding-page";
 import {
   availableActions,
@@ -67,14 +69,20 @@ const PROSE = "max-w-prose";
  */
 export function FindingScreen() {
   const { findingId } = useParams({ from: "/shell/findings/$findingId" });
+  // The feed filter this page was opened from (F22 AC128): back returns to it, by name.
+  const fromFilter = parseFeedSearch(useSearch({ strict: false })).case;
   const finding = useFinding(findingId);
   const settings = useDetectionSettings(finding.data?.project_id);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-4 pt-5 pb-10">
-      {/* The feed is the front door now (FR1): back means `/`. */}
-      <Link to="/" className="text-ink-dim text-sm hover:text-ink">
-        All findings
+      {/* The feed is the front door now (FR1): back means `/`, with its filter. */}
+      <Link
+        to="/"
+        search={fromFilter === undefined ? {} : { case: fromFilter }}
+        className="text-ink-dim text-sm hover:text-ink"
+      >
+        {backLinkLabel(fromFilter)}
       </Link>
       {finding.isPending ? (
         <SkeletonRows rows={5} label="Loading the finding" />
@@ -653,6 +661,8 @@ function Incidents({ finding, zone }: { finding: FindingDetail; zone?: string })
           </li>
         ))}
       </ul>
+      {/* F22 FR53, D58: a linked alert is a rule's record and cannot become a case. */}
+      <p className={`text-ink-dim text-sm ${PROSE}`}>{CASE_IS_NOT_AN_ALERT}</p>
     </section>
   );
 }

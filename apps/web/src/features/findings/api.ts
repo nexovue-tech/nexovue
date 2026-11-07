@@ -70,6 +70,8 @@ export type CaseResolution =
 export type CaseSignal = "open" | "closed";
 /** Whether the assignment email will be tried (FR5); the screen says the truth. */
 export type EmailOutcome = "will_try" | "not_configured" | "rate_limited" | "none";
+/** How an active case ends by itself (FR26, FR49), when the screen should say so. */
+export type CaseEndsBy = "idle" | "untouched";
 
 export interface Finding {
   id: string;
@@ -157,8 +159,43 @@ export interface NewNormalPreview {
   signals: ProposedShift[];
 }
 
+/**
+ * What a person reads of a case beyond a token (FR20), shared by the page and a feed
+ * row, so the one case sentence reads the same in both (FR23).
+ */
+export interface CasePeople {
+  assignee_id?: string | null;
+  assignee_name?: string | null;
+  /** When the current assignee took or was given the case (D76). */
+  case_taken_at?: string | null;
+  /** On a root with an open joined finding: acted since it came back? (AC100). */
+  assignee_acted_since_join?: boolean | null;
+  case_resolved_by_name?: string | null;
+  /** The case's last person's act. */
+  case_activity_at?: string | null;
+  /** When an active case ends by itself, set only while the screen should say so. */
+  case_ends_on?: string | null;
+  case_ends_by?: CaseEndsBy | null;
+}
+
+/** A feed row as a person reads it (FR23, AC71): who has the case, and its project. */
+export interface FeedFinding extends Finding, CasePeople {
+  /** Named in the case filters, which read every project. */
+  project_name?: string;
+}
+
+/** The service's latest other case, for a finding that holds none (FR9, FR13). */
+export interface EarlierCase {
+  id: string;
+  case_state: CaseState;
+  case_resolution: CaseResolution | null;
+  case_resolved_at: string | null;
+  /** The last person's act on it. */
+  case_activity_at: string;
+}
+
 /** One finding as its page reads it (FR31). */
-export interface FindingDetail extends Finding {
+export interface FindingDetail extends Finding, CasePeople {
   /** Empty once the readings have expired, and always for a project finding (AC40). */
   series: SignalSeries[];
   incidents: LinkedIncident[];
@@ -170,18 +207,16 @@ export interface FindingDetail extends Finding {
   feedback_reason?: string | null;
   /** Null when closed, or a project's finding, which has no normal of its own. */
   new_normal?: NewNormalPreview | null;
-  /** The case's people (FR20): a token never reads these. */
-  assignee_id?: string | null;
-  assignee_name?: string | null;
-  /** When the current assignee took or was given the case (D76). */
-  case_taken_at?: string | null;
-  /** On a root with an open joined finding: acted since it came back? (AC100). */
-  assignee_acted_since_join?: boolean | null;
-  case_resolved_by_name?: string | null;
   /** FR48: whether to add the PagerDuty line after Take this and resolve. */
   project_has_pagerduty?: boolean;
   /** Whether this install can send the assignment email at all (FR5). */
   email_available?: boolean;
+  /** On a finding with no case and none joined: the service's latest other case. */
+  earlier_case?: EarlierCase | null;
+  /** When a resolved case's closed finding will be deleted (FR27). */
+  deletes_on?: string | null;
+  /** How many findings that joined this case are still kept (FR24). */
+  joined_kept_count?: number;
 }
 
 /** One timeline row (FR16). A person's fields; a token gets kinds and times. */
@@ -232,7 +267,7 @@ export interface FindingChanged {
 }
 
 export interface FindingsResponse {
-  findings: Finding[];
+  findings: FeedFinding[];
   /** How many findings the feed is leaving out because somebody muted them. */
   muted_count: number;
   /** True when there were more than the feed's 200, and only the first 200 came. */
@@ -260,6 +295,45 @@ export function useFindings(projectId: string | undefined, muted: boolean, refre
         searchParams: { project_id: projectId, state: "all", muted },
         signal,
       }),
+  });
+}
+
+/** The feed's case filters (FR22); `all` is the plain feed. */
+export type CaseFilter = "active" | "mine" | "resolved";
+
+/**
+ * A case filter (FR22, AC109): its own read, with its own key and no project,
+ * because it reads every project of the organization and no telemetry. It waits
+ * on nothing else, so a failing summary can never hide the case list at 3 a.m.
+ */
+export function useCaseFeed(filter: CaseFilter | null, refresh: TimeWindow) {
+  return useQuery({
+    ...liveOptions(refresh),
+    queryKey: ["findings", "cases", filter ?? ""] as const,
+    enabled: filter !== null,
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingsResponse>("findings", {
+        searchParams: { case: filter ?? undefined },
+        signal,
+      }),
+  });
+}
+
+/** A case row's Resolve (FR52): the case as the feed shows it, resolved. */
+export function useResolveFromFeed() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "case", "resolve-in-feed"],
+    mutationFn: (findingId: string) =>
+      apiClient.patch<CaseChanged>(`findings/${encodeURIComponent(findingId)}/case`, {
+        case_state: "resolved",
+      }),
+    onSuccess: (changed) => {
+      queryClient.setQueryData(findingQueryKey(changed.finding.id), changed.finding);
+      void queryClient.invalidateQueries({ queryKey: ["findings", "cases"] });
+      void queryClient.invalidateQueries({ queryKey: ["findings", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: timelineQueryKey(changed.finding.id) });
+    },
   });
 }
 
@@ -491,6 +565,7 @@ function refreshAfterCaseChange(
   void queryClient.invalidateQueries({ queryKey: timelineQueryKey(findingId) });
   void queryClient.invalidateQueries({ queryKey: timelineQueryKey(finding.id) });
   void queryClient.invalidateQueries({ queryKey: ["findings", "feed"] });
+  void queryClient.invalidateQueries({ queryKey: ["findings", "cases"] });
 }
 
 /** Take, assign, resolve or reopen (FR1 to FR6): `PATCH /findings/{id}/case`. */

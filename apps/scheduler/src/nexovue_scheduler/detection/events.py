@@ -37,6 +37,7 @@ from nexovue_scheduler.detection.notify import _LAST_FINDING, _OPENINGS_SINCE
 # frozen vocabulary, so an insert cannot abort detection's transaction (AC24).
 JOB_EVENT_KINDS: Final = (
     "finding_opened",
+    "finding_joined_case",
     "severity_raised",
     "signal_joined",
     "finding_closed",
@@ -118,9 +119,15 @@ async def finding_opened(
     scope: str,
     service_name: str | None,
     severity: str,
+    root_finding_id: uuid.UUID | None,
     at: datetime,
 ) -> None:
-    """One `finding_opened`, or the spell's one `flapping_started`, or nothing."""
+    """One `finding_opened`, or the spell's one `flapping_started`, or nothing.
+
+    A finding that joined a case at birth also appears on that case's timeline as
+    `finding_joined_case`, on the root — unless it opened inside a flapping spell,
+    whose openings and joinings are not listed one by one (AC12, FR18).
+    """
     keys = {
         "org_id": org_id,
         "project_id": project_id,
@@ -137,6 +144,15 @@ async def finding_opened(
     await _write(
         connection, "finding_opened", org_id=org_id, finding_id=finding_id, severity=severity, at=at
     )
+    if root_finding_id is not None:
+        await _write(
+            connection,
+            "finding_joined_case",
+            org_id=org_id,
+            finding_id=root_finding_id,
+            joined_finding_id=finding_id,
+            at=at,
+        )
 
 
 async def severity_raised(

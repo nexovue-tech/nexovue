@@ -66,6 +66,7 @@ from zoneinfo import ZoneInfo
 
 from nexovue_platform.alerts.model import service_subject
 from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
+from nexovue_platform.cases import CASE_JOIN_WINDOW
 from nexovue_platform.detection import (
     ADOPTED_AUDIT_ACTION,
     ADOPTION_AFTER_DAYS,
@@ -275,14 +276,25 @@ _OPEN_PROJECT_FINDING: Final = text(
     FOR UPDATE
     """
 )
+# A new finding joins its scope's active case at birth (F22 FR9, FR10): the same
+# scope and service, a case a person acted on since `join_since`. The two active-case
+# indexes say at most one row answers. Joining sets no case column of its own, so
+# traffic can never hold a case open (D42). The casts give the values one type,
+# since each is bound both as a column and in a comparison.
 _OPEN: Final = text(
     """
     INSERT INTO findings
         (org_id, project_id, scope, service_name, severity, muted, title, signals, services,
-         started_at)
+         started_at, root_finding_id)
     VALUES (:org_id, :project_id, :scope, :service_name, :severity, :muted, :title,
-            CAST(:signals AS jsonb), CAST(:services AS jsonb), :started_at)
-    RETURNING id
+            CAST(:signals AS jsonb), CAST(:services AS jsonb), :started_at,
+            (SELECT active.id FROM findings AS active
+             WHERE active.org_id = :org_id AND active.project_id = :project_id
+               AND active.scope = CAST(:scope AS varchar)
+               AND active.service_name IS NOT DISTINCT FROM CAST(:service_name AS varchar)
+               AND active.case_state = 'investigating'
+               AND active.case_activity_at > :join_since))
+    RETURNING id, root_finding_id
     """
 )
 _UPDATE: Final = text(
@@ -905,7 +917,7 @@ async def _keep_project_finding(
             datetime.fromisoformat(phases[name][TRAFFIC]["unusual_since"])
             for name in decision.involved
         )
-        finding_id = (
+        opened = (
             await connection.execute(
                 _OPEN,
                 {
@@ -918,9 +930,11 @@ async def _keep_project_finding(
                     "signals": json.dumps([signal]),
                     "services": json.dumps(sorted(decision.involved)),
                     "started_at": started,
+                    "join_since": now - CASE_JOIN_WINDOW,
                 },
             )
-        ).scalar_one()
+        ).one()
+        finding_id = opened.id
         outcome.opened += 1
         outcome.notified += await notify.finding_opened(
             connection,
@@ -940,6 +954,7 @@ async def _keep_project_finding(
             scope="project",
             service_name=None,
             severity="critical",
+            root_finding_id=opened.root_finding_id,
             at=now,
         )
     elif decision.close is not None and row is not None:
@@ -1125,7 +1140,9 @@ async def _keep_finding(
         _name_evidence(detection, service, finding, change.worsened, judged)
         if change.opened:
             finding.muted = muted
-            finding_id = await _open(connection, key, service, finding, zone)
+            finding_id, root_finding_id = await _open(
+                connection, key, service, finding, zone, now=now
+            )
             since = finding.started_at
             outcome.opened += 1
             outcome.notified += await notify.finding_opened(
@@ -1139,6 +1156,7 @@ async def _keep_finding(
                 scope="service",
                 service_name=service,
                 severity=finding.severity,
+                root_finding_id=root_finding_id,
                 at=now,
             )
         else:
@@ -1469,8 +1487,11 @@ async def _open(
     service: str,
     finding: OpenFinding,
     zone: ZoneInfo,
-) -> uuid.UUID:
-    finding_id: uuid.UUID = (
+    *,
+    now: datetime,
+) -> tuple[uuid.UUID, uuid.UUID | None]:
+    """The new finding's id, and the case it joined at birth, if any (F22 FR9)."""
+    opened = (
         await connection.execute(
             _OPEN,
             {
@@ -1482,11 +1503,12 @@ async def _open(
                 "signals": json.dumps(finding.signals()),
                 "services": "[]",
                 "started_at": finding.started_at,
+                "join_since": now - CASE_JOIN_WINDOW,
             },
         )
-    ).scalar_one()
+    ).one()
     finding.dirty = False
-    return finding_id
+    return opened.id, opened.root_finding_id
 
 
 def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:

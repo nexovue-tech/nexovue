@@ -255,6 +255,8 @@ def _row(kind: str) -> SimpleNamespace:
         signals=[],
         closed_reason=None,
         adopted_shifts=[],
+        case_root_id=None,
+        case_opened_at=None,
     )
 
 

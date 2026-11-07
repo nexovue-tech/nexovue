@@ -3,6 +3,8 @@
 import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
+
 import {
   buttons,
   finding,
@@ -674,5 +676,96 @@ describe("the case on the page (F22, T1.12)", () => {
       "the truthful email line",
     );
     expect(api.to("GET", "/members").length).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------------- back to its list; the earlier case (F22)
+
+describe("the back link returns to the list it came from (AC128)", () => {
+  it("names the filter and carries it back", async () => {
+    stubApi(finding());
+    const { container } = await mountFinding("?case=mine");
+    await heading(container);
+
+    const back = [...container.querySelectorAll("a")].find(
+      (link) => readable(link) === "Back to Assigned to me",
+    );
+    expect(back?.getAttribute("href")).toBe("/?case=mine");
+  });
+
+  it("reads All findings when it came from no filter", async () => {
+    stubApi(finding());
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect([...container.querySelectorAll("a")].map((link) => readable(link))).toContain(
+      "All findings",
+    );
+  });
+});
+
+describe("a finding with no case names the service's earlier one (FR13, AC95)", () => {
+  const ended = {
+    id: "f-0",
+    case_state: "resolved" as const,
+    case_resolution: "no_activity" as const,
+    case_resolved_at: "2026-11-01T16:10:00Z",
+    case_activity_at: "2026-08-03T16:10:00Z",
+  };
+
+  it("links it, and offers Reopen that case beside Take this, which reopens that case", async () => {
+    const api = stubApi(finding({ earlier_case: ended }), {
+      extra: {
+        "PATCH /findings/f-0/case": json({
+          finding: finding({ id: "f-0", case_state: "investigating" }),
+          email_outcome: "none",
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const named = [...container.querySelectorAll("a")].find((link) =>
+      readable(link).startsWith("This service had a case that ended on"),
+    );
+    expect(named?.getAttribute("href")).toBe("/findings/f-0");
+    expect(buttons(container)).toEqual(expect.arrayContaining(["Take this", "Reopen that case"]));
+
+    await press(container, "Reopen that case");
+    expect(api.to("PATCH", "/findings/f-0/case").map((call) => call.body)).toEqual([
+      { case_state: "investigating" },
+    ]);
+  });
+
+  it("offers only a link after a person's own resolve", async () => {
+    stubApi(finding({ earlier_case: { ...ended, case_resolution: "resolved" } }));
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect(readable(container)).toContain("This service had a case resolved on");
+    expect(buttons(container)).not.toContain("Reopen that case");
+  });
+});
+
+describe("the linked alerts say a case is not an alert (F22 FR53, AC121)", () => {
+  it("carries the line where linked alerts are listed", async () => {
+    stubApi(
+      finding({
+        incidents: [
+          {
+            id: "inc-1",
+            rule_name: "Checkout errors",
+            condition_kind: "service_error_rate",
+            opened_at: minutesAgo(40),
+            resolved_at: null,
+          },
+        ],
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const section = container.querySelector('section[aria-labelledby="finding-incidents"]');
+    expect(readable(section as Element)).toContain(CASE_IS_NOT_AN_ALERT);
   });
 });

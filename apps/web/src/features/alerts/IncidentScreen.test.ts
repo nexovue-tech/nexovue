@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
+
 import {
   alertReads,
   incident,
@@ -130,5 +132,15 @@ describe("the incident page", () => {
       "the row's link to its incident",
     );
     expect(details.textContent).toBe("Details");
+  });
+});
+
+describe("a case is not an alert (F22 FR53, AC121)", () => {
+  it("says a linked alert is a rule's own record and cannot become a case", async () => {
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+
+    expect(readable(container)).toContain(CASE_IS_NOT_AN_ALERT);
   });
 });

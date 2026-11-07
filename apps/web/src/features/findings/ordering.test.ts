@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { Finding } from "./api";
-import { needsAttention, orderFindings } from "./ordering";
+import orderFixture from "./feed-order.fixture.json";
+import { orderFindings } from "./ordering";
 
 const finding = (overrides: Partial<Finding> & { id: string }): Finding => ({
   project_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a00aa",
@@ -25,9 +26,10 @@ const finding = (overrides: Partial<Finding> & { id: string }): Finding => ({
   case_resolved_at: null,
   root_finding_id: null,
   case_signal: "open",
-  case_severity: "warning",
   open_joined_finding_id: null,
   open_joined_since: null,
+  // As the API sends it: the row's own severity unless a joined finding is worse.
+  case_severity: overrides.severity ?? "warning",
   ...overrides,
 });
 
@@ -123,20 +125,86 @@ describe("F1 AC1.5: open, then acknowledged, then closed; then severity, then re
   });
 });
 
-describe("whether anything needs somebody", () => {
-  it("is false when every finding is closed", () => {
-    expect(needsAttention([finding({ id: "a", state: "closed" })])).toBe(false);
+interface OrderFixtureEntry {
+  id: string;
+  service: string;
+  state: "open" | "closed";
+  acknowledged: boolean;
+  severity: Finding["severity"];
+  case_state: Finding["case_state"];
+  started_minutes_ago: number;
+  closed_minutes_ago?: number;
+  root?: string;
+}
+
+const FIXTURE_NOW = Date.parse("2026-11-02T14:00:00Z");
+const minutesAgo = (minutes: number) => new Date(FIXTURE_NOW - minutes * 60_000).toISOString();
+
+/** Each fixture row as the API would send it, its case fields derived as `to_finding` does. */
+function asSent(entries: readonly OrderFixtureEntry[]): Finding[] {
+  const openReturns = new Map(
+    entries
+      .filter((entry) => entry.root !== undefined && entry.state === "open")
+      .map((entry) => [entry.root as string, entry]),
+  );
+  return entries.map((entry) => {
+    const back = openReturns.get(entry.id);
+    return finding({
+      id: entry.id,
+      service_name: entry.service,
+      severity: entry.severity,
+      state: entry.state === "closed" ? "closed" : entry.acknowledged ? "acknowledged" : "open",
+      started_at: minutesAgo(entry.started_minutes_ago),
+      closed_at:
+        entry.closed_minutes_ago === undefined ? null : minutesAgo(entry.closed_minutes_ago),
+      case_state: entry.case_state,
+      root_finding_id: entry.root ?? null,
+      case_signal: entry.state === "open" || back !== undefined ? "open" : "closed",
+      case_severity: back?.severity === "critical" ? "critical" : entry.severity,
+      open_joined_finding_id: back?.id ?? null,
+      open_joined_since: back ? minutesAgo(back.started_minutes_ago) : null,
+    });
+  });
+}
+
+describe("F22 FR21, AC27: the console's order is the server's", () => {
+  it("puts the shared test set in the server's order", () => {
+    // `test_findings_api_live.py` holds the server's rank to this same file.
+    const entries = orderFixture.findings as OrderFixtureEntry[];
+    // Reversed first, so the result cannot be the input order by luck.
+    expect(ids(orderFindings(asSent(entries).reverse()))).toEqual(orderFixture.expected_order);
   });
 
-  it("is false when there are no findings at all", () => {
-    expect(needsAttention([])).toBe(false);
+  it("keeps a recovered root whose finding came back in the open tier, at the worse severity", () => {
+    // AC59: never "Recovered" as the current state while a joined finding is open.
+    const ordered = orderFindings([
+      finding({ id: "acked", state: "acknowledged", severity: "critical" }),
+      finding({
+        id: "came-back",
+        state: "closed",
+        closed_at: "2026-09-13T01:00:00Z",
+        case_state: "investigating",
+        case_signal: "open",
+        case_severity: "critical",
+        open_joined_finding_id: "returning",
+      }),
+    ]);
+
+    expect(ids(ordered)).toEqual(["came-back", "acked"]);
   });
 
-  it("is true while one is open", () => {
-    expect(needsAttention([finding({ id: "a" })])).toBe(true);
-  });
+  it("puts a closed finding with an active case above every other closed one", () => {
+    const ordered = orderFindings([
+      finding({ id: "just-fixed", state: "closed", closed_at: "2026-09-13T11:59:00Z" }),
+      finding({
+        id: "still-worked",
+        state: "closed",
+        closed_at: "2026-09-10T11:00:00Z",
+        case_state: "investigating",
+        case_signal: "closed",
+      }),
+    ]);
 
-  it("is true while one is merely acknowledged", () => {
-    expect(needsAttention([finding({ id: "a", state: "acknowledged" })])).toBe(true);
+    expect(ids(ordered)).toEqual(["still-worked", "just-fixed"]);
   });
 });

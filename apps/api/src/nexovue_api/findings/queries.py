@@ -19,8 +19,10 @@ from nexovue_platform.detection import (
     resolve_parameters,
 )
 from nexovue_platform.jobs import ENQUEUE
-from sqlalchemy import case, func, literal, or_, select, text, tuple_
+from sqlalchemy import String, case, func, literal, or_, select, text, tuple_
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.base import UuidType as UuidColumn
@@ -35,6 +37,9 @@ from nexovue_api.data.postgres.models import (
     FindingNote,
     Incident,
     NotificationChannel,
+    Organization,
+    Plan,
+    Project,
     ServiceDetectionSettings,
     User,
 )
@@ -46,15 +51,109 @@ FEED_PAGE: Final = 200
 # How many readings a trend draws: an hour, one reading a judged minute.
 TREND_POINTS: Final = 60
 
-# Feed order (F1 AC1.5): open, then acknowledged, then closed; critical first; then
-# newest first, a closed finding by when it closed.
-_STATE_RANK: Final = case(
-    (Finding.state == "closed", 2),
-    (Finding.acknowledged_at.is_not(None), 1),
-    else_=0,
+# ------------------------------------------------------------------ the feed
+
+# The one rank (F1 AC1.5, F22 FR21), shared by the feed, its case filters and
+# AC27's test set, which the console's `orderFindings` must agree with: open and
+# unacknowledged, or a root whose case has an open joined finding; acknowledged;
+# closed with an active case; other closed. Then the case's severity — the worse
+# of the row's and an open joined finding's — then newest first, a closed
+# finding by when it closed. Each `EXISTS` is served by the partial index on
+# `(org_id, root_finding_id)`.
+_JOINED = aliased(Finding, name="joined")
+
+
+def _open_joined(*, critical: bool = False) -> Any:
+    found = select(1).where(
+        _JOINED.org_id == Finding.org_id,
+        _JOINED.root_finding_id == Finding.id,
+        _JOINED.state == "open",
+    )
+    if critical:
+        found = found.where(_JOINED.severity == "critical")
+    return found.exists()
+
+
+CASE_RANK: Final = case(
+    ((Finding.state == "open") & Finding.acknowledged_at.is_(None), 0),
+    (_open_joined() & (Finding.case_state == "investigating"), 0),
+    (Finding.state == "open", 1),
+    (Finding.case_state == "investigating", 2),
+    else_=3,
 )
-_SEVERITY_RANK: Final = case((Finding.severity == "critical", 0), else_=1)
+CASE_SEVERITY_RANK: Final = case(
+    ((Finding.severity == "critical") | _open_joined(critical=True), 0), else_=1
+)
 _RECENCY: Final = func.coalesce(Finding.closed_at, Finding.started_at)
+FEED_ORDER: Final = (CASE_RANK, CASE_SEVERITY_RANK, _RECENCY.desc(), Finding.id)
+
+# When the current assignee took or was given the case (D76): the newest
+# `assigned` event naming them, read in the feed's statement (AC71).
+_TAKEN_AT: Final = (
+    select(func.max(FindingEvent.at))
+    .where(
+        FindingEvent.org_id == Finding.org_id,
+        FindingEvent.finding_id == Finding.id,
+        FindingEvent.kind == "assigned",
+        FindingEvent.detail["assignee_id"].astext == sql_cast(Finding.assignee_id, String),
+    )
+    .scalar_subquery()
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedRow:
+    """One feed row with what a person's row names, from the one statement."""
+
+    finding: Finding
+    assignee_name: str | None
+    case_taken_at: datetime | None
+    case_resolved_by_name: str | None
+    project_name: str
+
+
+_ASSIGNEE = aliased(User, name="assignee")
+_RESOLVER = aliased(User, name="resolver")
+
+
+def _feed_statement(org_id: uuid.UUID) -> Any:
+    """Findings of `org_id` with their project's name, who has the case and when
+    they took it, and who resolved it: a person's row needs no second read (AC71)."""
+    return (
+        select(
+            Finding,
+            func.coalesce(_ASSIGNEE.name, _ASSIGNEE.email).label("assignee_name"),
+            _TAKEN_AT.label("case_taken_at"),
+            func.coalesce(_RESOLVER.name, _RESOLVER.email).label("case_resolved_by_name"),
+            Project.name.label("project_name"),
+        )
+        .join(
+            Project,
+            (Project.org_id == Finding.org_id) & (Project.id == Finding.project_id),
+        )
+        .outerjoin(
+            _ASSIGNEE,
+            (_ASSIGNEE.org_id == Finding.org_id) & (_ASSIGNEE.id == Finding.assignee_id),
+        )
+        .outerjoin(
+            _RESOLVER,
+            (_RESOLVER.org_id == Finding.org_id) & (_RESOLVER.id == Finding.case_resolved_by),
+        )
+        .where(Finding.org_id == org_id, Project.deleted_at.is_(None))
+    )
+
+
+def _feed_rows(result: Any) -> list[FeedRow]:
+    return [
+        FeedRow(
+            finding=row.Finding,
+            assignee_name=row.assignee_name,
+            case_taken_at=row.case_taken_at,
+            case_resolved_by_name=row.case_resolved_by_name,
+            project_name=row.project_name,
+        )
+        for row in result
+    ]
 
 
 async def feed(
@@ -65,18 +164,47 @@ async def feed(
     state: str | None,
     muted: bool,
     limit: int,
-) -> list[Finding]:
+) -> list[FeedRow]:
     """One project's findings in feed order. `state` None reads every state."""
     statement = (
-        select(Finding)
-        .where(Finding.org_id == org_id, Finding.project_id == project_id)
-        .where(Finding.muted.is_(muted))
-        .order_by(_STATE_RANK, _SEVERITY_RANK, _RECENCY.desc(), Finding.id)
+        _feed_statement(org_id)
+        .where(Finding.project_id == project_id, Finding.muted.is_(muted))
+        .order_by(*FEED_ORDER)
         .limit(limit)
     )
     if state is not None:
         statement = statement.where(Finding.state == state)
-    return list(await session.scalars(statement))
+    return _feed_rows(await session.execute(statement))
+
+
+async def case_feed(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    which: str,
+    assignee_id: uuid.UUID | None,
+    project_id: uuid.UUID | None,
+    limit: int,
+) -> list[FeedRow]:
+    """A case filter (F22 FR22): roots holding a case, muted included, across the
+    organization, or one project for a token. A joined finding holds no case of
+    its own, so it is never a row here. *Resolved cases* reads newest first; the
+    other two in the feed's rank."""
+    statement = _feed_statement(org_id).limit(limit)
+    if project_id is not None:
+        statement = statement.where(Finding.project_id == project_id)
+    if which == "resolved":
+        return _feed_rows(
+            await session.execute(
+                statement.where(Finding.case_state == "resolved").order_by(
+                    Finding.case_resolved_at.desc(), Finding.id
+                )
+            )
+        )
+    statement = statement.where(Finding.case_state == "investigating").order_by(*FEED_ORDER)
+    if which == "mine":
+        statement = statement.where(Finding.assignee_id == assignee_id)
+    return _feed_rows(await session.execute(statement))
 
 
 async def muted_count(
@@ -325,6 +453,76 @@ async def open_joined_of(
     )
     rows = await session.scalars(statement)
     return {row.root_finding_id: row for row in rows if row.root_finding_id is not None}
+
+
+async def latest_joined_closes(
+    session: AsyncSession, *, org_id: uuid.UUID, root_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, datetime]:
+    """Each root's latest-closing joined finding, in one read: with the root's own
+    close, when an untouched case's 72 hours start (FR49)."""
+    if not root_ids:
+        return {}
+    statement = (
+        select(Finding.root_finding_id, func.max(Finding.closed_at))
+        .where(
+            Finding.org_id == org_id,
+            Finding.root_finding_id.in_(root_ids),
+            Finding.closed_at.is_not(None),
+        )
+        .group_by(Finding.root_finding_id)
+    )
+    return {
+        root: closed
+        for root, closed in (await session.execute(statement)).tuples()
+        if root is not None and closed is not None
+    }
+
+
+async def joined_count(session: AsyncSession, *, org_id: uuid.UUID, root_id: uuid.UUID) -> int:
+    """How many findings that joined this case are still kept (FR24): each keeps
+    its own retention, so the ones the sweep deleted are simply not counted."""
+    counted: int = (
+        await session.scalar(
+            select(func.count()).where(Finding.org_id == org_id, Finding.root_finding_id == root_id)
+        )
+        or 0
+    )
+    return counted
+
+
+async def earlier_case(session: AsyncSession, finding: Finding) -> Finding | None:
+    """The scope's latest other case, opened by a finding that started before this
+    one (FR9, FR13): an active one this finding missed joining, or a resolved one.
+    Served by the organization-wide active and resolved case indexes."""
+    statement = (
+        select(Finding)
+        .where(
+            Finding.org_id == finding.org_id,
+            Finding.project_id == finding.project_id,
+            Finding.scope == finding.scope,
+            Finding.service_name.is_(None)
+            if finding.service_name is None
+            else Finding.service_name == finding.service_name,
+            Finding.case_state.is_not(None),
+            Finding.id != finding.id,
+            Finding.started_at < finding.started_at,
+        )
+        .order_by(Finding.case_opened_at.desc(), Finding.id.desc())
+        .limit(1)
+    )
+    found: Finding | None = await session.scalar(statement)
+    return found
+
+
+async def derived_retention_days(session: AsyncSession, *, org_id: uuid.UUID) -> int | None:
+    """The organization's plan's derived retention, as `project_retention` reads it
+    (migration 0005): how long a resolved case's finding is kept (FR25)."""
+    found: int | None = await session.scalar(
+        select(Plan.derived_retention_days)
+        .join(Organization, Organization.plan == Plan.slug)
+        .where(Organization.id == org_id, Organization.deleted_at.is_(None))
+    )
+    return found
 
 
 async def person_names(
@@ -618,18 +816,31 @@ async def quiet_services(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, now: datetime
 ) -> dict[str, ServiceQuiet]:
     """The project's services that are snoozed or muted right now, by name."""
+    quiet = await quiet_services_of(session, org_id=org_id, project_ids=[project_id], now=now)
+    return {service: found for (_, service), found in quiet.items()}
+
+
+async def quiet_services_of(
+    session: AsyncSession, *, org_id: uuid.UUID, project_ids: list[uuid.UUID], now: datetime
+) -> dict[tuple[uuid.UUID, str], ServiceQuiet]:
+    """The services of these projects snoozed or muted right now, by project and
+    name, in one read: the case filters' rows span projects (F22 FR22)."""
+    if not project_ids:
+        return {}
     settings = ServiceDetectionSettings
     rows = await session.execute(
-        select(settings.service_name, settings.snoozed_until, settings.muted_until).where(
+        select(
+            settings.project_id, settings.service_name, settings.snoozed_until, settings.muted_until
+        ).where(
             settings.org_id == org_id,
-            settings.project_id == project_id,
+            settings.project_id.in_(project_ids),
             or_(settings.snoozed_until > now, settings.muted_until > now),
         )
     )
     return {
-        name: ServiceQuiet(
+        (project, name): ServiceQuiet(
             snoozed_until=snoozed if snoozed is not None and snoozed > now else None,
             muted_until=muted if muted is not None and muted > now else None,
         )
-        for name, snoozed, muted in rows
+        for project, name, snoozed, muted in rows
     }

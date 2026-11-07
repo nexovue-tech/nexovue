@@ -35,6 +35,12 @@ CaseResolution = Literal[
 CaseSignal = Literal["open", "closed"]
 # Whether the assignment email will be tried (FR5); the screen says the true thing.
 EmailOutcome = Literal["will_try", "not_configured", "rate_limited", "none"]
+# The feed's case filters (FR22): roots only, muted included, across a person's
+# organization. `mine` is a person's alone.
+CaseFilter = Literal["active", "mine", "resolved"]
+# How an active case will end by itself, when the page and row should say so:
+# 90 days without a person's act (FR26), or 72 hours after recovery untouched (FR49).
+CaseEndsBy = Literal["idle", "untouched"]
 FindingEventKind = Literal[
     "finding_opened",
     "severity_raised",
@@ -200,6 +206,19 @@ class NewNormalPreview(BaseModel):
     signals: list[ProposedShift]
 
 
+class EarlierCase(BaseModel):
+    """The service's latest other case (FR9, FR13), for a finding that holds none:
+    a quiet active case that taking this joins, or a resolved one it can name,
+    and reopen when it ended without a person's decision (AC95)."""
+
+    id: uuid.UUID
+    case_state: CaseState
+    case_resolution: CaseResolution | None
+    case_resolved_at: datetime | None
+    # The last person's act on it: "nobody has touched since 12 Oct".
+    case_activity_at: datetime
+
+
 class FindingForMember(FindingDetail):
     """A signed-in person's view of one finding. An API token never sees these fields:
     they name a person and quote what they wrote (design 2.1, item 8), or prepare an
@@ -224,6 +243,20 @@ class FindingForMember(FindingDetail):
     project_has_pagerduty: bool
     # Whether this install can send the assignment email at all (FR5).
     email_available: bool
+    # ---- keeping and ending (F22 T2.7)
+    # On a finding with no case of its own and none joined: the service's latest
+    # other case, so the page can name it (FR9, FR13; AC15, AC68, AC95).
+    earlier_case: EarlierCase | None
+    # The case's last person's act; with `case_ends_on`, "No activity for 76 days".
+    case_activity_at: datetime | None
+    # When an active case ends by itself, set only when the page should say so:
+    # from 14 days before an idle end, or from recovery for an untouched case.
+    case_ends_on: datetime | None
+    case_ends_by: CaseEndsBy | None
+    # When a resolved case's closed finding will be deleted (FR27, AC112).
+    deletes_on: datetime | None
+    # How many findings that joined this case are still kept (FR24, AC112).
+    joined_kept_count: int
 
 
 # Long enough for a sentence or two about why; bounded so a reason is not a document.
@@ -318,8 +351,27 @@ class TimelineResponse(BaseModel):
     next_before: str | None
 
 
+class FindingFeedRow(Finding):
+    """A person's feed row (F22 FR23, AC71): who has the case, read in the feed's
+    one statement, and the case's end in its last days. An API token's rows are
+    plain `Finding`s, naming nobody."""
+
+    assignee_id: uuid.UUID | None
+    assignee_name: str | None
+    case_taken_at: datetime | None
+    assignee_acted_since_join: bool | None
+    # "Asha resolved the case at 16:10", in *Resolved cases*.
+    case_resolved_by_name: str | None
+    case_activity_at: datetime | None
+    case_ends_on: datetime | None
+    case_ends_by: CaseEndsBy | None
+    # The row's project, for the case filters, which read every project.
+    project_name: str
+
+
 class FindingListResponse(BaseModel):
-    findings: list[Finding]
+    # A person's rows first: the union serializes each list by its own items' type.
+    findings: list[FindingFeedRow] | list[Finding]
     # How many findings in the asked-for state the feed leaves out because they are muted.
     muted_count: int
     # F36, AC20: a capped list says when the cap bit.

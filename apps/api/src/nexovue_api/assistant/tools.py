@@ -680,6 +680,8 @@ def register(mcp: MCPServer) -> None:
                 project_id=call.project_id,
                 state=cast(FeedState, state),
                 muted=muted,
+                # A tool's caller is a token's reach: rows name nobody (F22 FR20).
+                for_person=False,
                 now=datetime.now(UTC),
             )
         rows = [finding.model_dump() for finding in answer.findings]

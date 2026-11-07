@@ -58,6 +58,12 @@ STATEMENTS: Final[dict[str, tuple[str, dict[str, Any]]]] = {
             at=AT,
         ),
     ),
+    "email_owed": (
+        cases.RECORD_EMAIL_OWED_SQL,
+        cases.email_owed_parameters(
+            org_id=ORG, finding_id=uuid.uuid4(), kind="idle_warning", at=AT
+        ),
+    ),
     "audit": (
         cases.RECORD_CASE_AUDIT_SQL,
         cases.case_audit_parameters(
@@ -120,3 +126,9 @@ def test_the_audit_detail_is_rendered_json_and_the_actor_may_be_nobody() -> None
     _, parameters = STATEMENTS["audit"]
     assert parameters["actor_user_id"] is None
     assert parameters["detail"] == '{"resolution": "no_activity"}'
+
+
+def test_an_unknown_owed_email_is_refused() -> None:
+    """D90: only the three case emails may be owed; nothing else can queue mail."""
+    with pytest.raises(ValueError, match="kind"):
+        cases.email_owed_parameters(org_id=ORG, finding_id=uuid.uuid4(), kind="digest", at=AT)

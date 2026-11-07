@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform.alerts.model import SEVERITIES
@@ -38,6 +38,17 @@ CASE_EMAIL_KINDS: Final = ("tracker_closed", "tracker_closed_signal_open", "idle
 # FR14's caps, enforced at the edge and by the database alike.
 NOTE_MAX_LENGTH: Final = 4000
 NOTES_PER_CASE: Final = 500
+
+# FR9, D45: a new finding joins its scope's active case only if a person acted on
+# that case this recently, so a forgotten case cannot swallow a new failure. A
+# guess. The job's insert and the sweep's healing read the same window.
+CASE_JOIN_WINDOW: Final = timedelta(days=7)
+
+# How a case ends by silence (BR13, FR26, FR49), read by the sweep that ends it
+# and by the page that says when it will. Each is a guess (D9, D42, D71).
+CASE_IDLE_LIMIT: Final = timedelta(days=90)
+CASE_IDLE_WARNING_AHEAD: Final = timedelta(days=14)
+CASE_UNTOUCHED_AFTER: Final = timedelta(hours=72)
 
 # A tracker failure as an enum spelling, never a response's words.
 _FAILURE_PATTERN_LENGTH: Final = 64
@@ -333,6 +344,24 @@ def set_wanted_state_parameters(
         "comment_wanted": comment_wanted,
         "at": at,
     }
+
+
+# One owed case email (D90, AC94): a row per email, so a second owed before the
+# sweep sends cannot overwrite the first. It holds no name, address or text; the
+# sweep deletes it before sending, so a crash loses an email rather than repeating
+# one. The sweep's idle warning and the tracker sync both owe them.
+RECORD_EMAIL_OWED_SQL: Final = """
+INSERT INTO finding_emails_owed (org_id, finding_id, kind, at)
+VALUES (:org_id, :finding_id, :kind, :at)
+"""
+
+
+def email_owed_parameters(
+    *, org_id: Any, finding_id: Any, kind: str, at: datetime
+) -> dict[str, Any]:
+    if kind not in CASE_EMAIL_KINDS:
+        raise ValueError(f"kind must be one of {CASE_EMAIL_KINDS}, got {kind!r}")
+    return {"org_id": str(org_id), "finding_id": str(finding_id), "kind": kind, "at": at}
 
 
 # The audit row every case writer adds in its own transaction (FD9, AC77). The

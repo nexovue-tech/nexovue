@@ -109,6 +109,8 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
 export interface ApiCall {
   method: string;
   path: string;
+  /** The query string as sent, `?case=mine`, or empty. */
+  search: string;
   body: unknown;
 }
 type Handler = (call: ApiCall) => Response | Promise<Response>;
@@ -147,6 +149,7 @@ export function stubApi(
       const call = {
         method,
         path,
+        search: url.search,
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       };
       calls.push(call);
@@ -170,13 +173,17 @@ export function unmountAll() {
   vi.unstubAllGlobals();
 }
 
-export function mountFinding() {
-  return mountAt("/findings/f-1", placeholder("Feed"));
+/** The finding page; `search` is the feed filter it was opened from (AC128). */
+export function mountFinding(search = "") {
+  return mountAt(`/findings/f-1${search}`, placeholder("Feed"));
 }
 
-/** The feed itself, at `/` — the front door (FR1) — each finding's page a placeholder. */
-export function mountFeed() {
-  return mountAt("/", FindingsScreen, placeholder("Finding"));
+/**
+ * The feed itself, at `/` — the front door (FR1) — each finding's page a placeholder;
+ * `search` is the address's filter (`?case=mine`).
+ */
+export function mountFeed(search = "") {
+  return mountAt(`/${search}`, FindingsScreen, placeholder("Finding"));
 }
 
 const placeholder = (text: string) => () => createElement("p", null, text);
@@ -238,7 +245,8 @@ async function mountAt(
     ),
   );
   await settle();
-  return { container };
+  // The router too, so a test can read where a link or a choice took the page.
+  return { container, router };
 }
 
 export async function settle() {

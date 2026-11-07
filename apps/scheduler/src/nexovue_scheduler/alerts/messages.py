@@ -13,7 +13,7 @@ Discord with a colour, Teams as a card, PagerDuty as an event (FR17).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -42,6 +42,15 @@ class AlertMessage:
     link: str
     rule_name: str
     manage_link: str | None
+    # F22 FR47: a finding that is part of a case says so, to people only. Kept out
+    # of `details`, which every machine payload carries byte for byte.
+    case_line: str | None = None
+
+    def for_people(self) -> AlertMessage:
+        """The message as a channel people read shows it: with its case line."""
+        if self.case_line is None:
+            return self
+        return replace(self, details=(*self.details, self.case_line), case_line=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +334,12 @@ def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
         link=f"{base}/findings/{subject.id}",
         rule_name=rule_name,
         manage_link=f"{base}/alerts/rules/{subject.rule_id}" if subject.rule_id else None,
+        case_line=None
+        if subject.case is None
+        else (
+            f"Part of a case started {_moment(subject.case.opened_at)}. "
+            f"Open it: {base}/findings/{subject.case.root_id}"
+        ),
     )
 
 

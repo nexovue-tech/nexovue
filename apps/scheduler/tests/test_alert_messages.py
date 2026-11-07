@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 
+from nexovue_scheduler.alerts import payloads
+from nexovue_scheduler.alerts.dispatch import message_for
 from nexovue_scheduler.alerts.messages import compose, compose_batch, describe_duration
-from nexovue_scheduler.alerts.outbox import Notice, Subject
+from nexovue_scheduler.alerts.outbox import CaseOfSubject, Notice, Subject
 
 OPENED_AT = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
 CHECK_ID = uuid.uuid4()
@@ -418,3 +422,90 @@ def test_detection_stopping_and_running_again_name_the_project() -> None:
     again = compose(dataclasses.replace(stopped, kind="running_again"), app_base_url="")
     assert again.summary == "[resolved] Detection is running again for Production"
     assert again.kind == "resolved"
+
+
+# ------------------------------------------------- part of a case (F22 FR47, AC120)
+
+CASE_OPENED_AT = datetime(2026, 10, 31, 14, 2, tzinfo=UTC)
+ROOT_ID = uuid.uuid4()
+JOINED_FINDING_ID = uuid.uuid4()
+APP = "https://app.nexovue.test/"
+
+
+def _case_notice(kind: str = "opened", *, joined: bool) -> Notice:
+    return Notice(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind=kind,
+        severity="warning",
+        created_at=OPENED_AT,
+        attempts=0,
+        pagerduty_key="finding:key",
+        subject=Subject(
+            kind="finding",
+            id=JOINED_FINDING_ID,
+            key="service:checkout",
+            label="checkout",
+            opened_at=OPENED_AT,
+            closed_at=None,
+            rule_id=RULE_ID,
+            rule_name="Findings",
+            condition_kind="anomaly_finding",
+            detail={"title": "checkout is 4x slower than normal since 14:02 UTC", "signals": []},
+            case=CaseOfSubject(root_id=ROOT_ID, opened_at=CASE_OPENED_AT) if joined else None,
+        ),
+    )
+
+
+def test_a_joined_finding_s_message_names_its_case_for_people_only() -> None:
+    """FR47: one fixed line, the case's start in the message's UTC form and a link
+    nexovue built, read from the row when composed. It is the people's line: the
+    message's own details, which machines receive, are the same with or without."""
+    joined = compose(_case_notice(joined=True), app_base_url=APP)
+    alone = compose(_case_notice(joined=False), app_base_url=APP)
+
+    line = f"Part of a case started 2026-10-31 14:02 UTC. Open it: {APP}findings/{ROOT_ID}"
+    assert joined.case_line == line
+    assert joined.details == alone.details
+    assert joined.for_people().details == (*alone.details, line)
+    assert alone.case_line is None and alone.for_people() == alone
+
+
+@pytest.mark.parametrize("kind", sorted(READ_BY_PEOPLE))
+def test_every_channel_people_read_carries_the_line(kind: str) -> None:
+    """AC120: the rendered line on each people-read channel."""
+    message = compose(_case_notice(joined=True), app_base_url=APP)
+    rendered = message_for(kind, message)
+    assert rendered.details[-1].startswith("Part of a case started 2026-10-31 14:02 UTC.")
+    if kind in ("slack", "discord", "teams"):
+        body = getattr(payloads, kind)(rendered).decode()
+        escaped = getattr(payloads, f"{kind}_text")(rendered.details[-1])
+        assert json.dumps(escaped, ensure_ascii=False)[1:-1] in body
+
+
+def test_pagerduty_and_webhooks_are_byte_equal_with_and_without_a_case() -> None:
+    """AC120, FR47: no machine's payload changes by a byte because of a case."""
+    bodies = []
+    for joined in (True, False):
+        message = compose(_case_notice(joined=joined), app_base_url=APP)
+        bodies.append(
+            (
+                payloads.pagerduty(
+                    message_for("pagerduty", message),
+                    routing_key="routing",
+                    dedup_key="finding:key",
+                    subject="checkout",
+                    app_base_url=APP,
+                ),
+                payloads.webhook(
+                    message_for("webhook", message),
+                    subject_kind="finding",
+                    subject_id="same",
+                    subject="checkout",
+                    opened_at=OPENED_AT,
+                    resolved_at=None,
+                    sent_at=OPENED_AT,
+                ),
+            )
+        )
+    assert bodies[0] == bodies[1]

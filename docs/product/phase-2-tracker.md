@@ -18,7 +18,7 @@ server; see foundation, *What A and B change*).
 | — | [Browser-door change](../changes/browser-door/status.md) (owned by F28) | Done | — | Yes, 2026-11-07 | No | No | After deploy |
 | 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | Step 1a (2026-11-07); cost gate passed on demo data ([report](../research/release-rollup-cost-2026-11-07.md)). Step 1b waits on the buyer round (foundation item 8) | No | After deploy |
 | 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | Yes | Yes | No | No | After deploy |
-| 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | Step 1 (2026-11-07) | No | After deploy |
+| 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | Step 1 (2026-11-07); Step 2 (2026-11-07) except T2.9, which waits on F3 | No | After deploy |
 | 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ wait on F3 and the buyer round | No | After deploy |
 | 5 Fix | [F5 AI solution](../features/ai-solution/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | Yes | Yes | No | No | After deploy |

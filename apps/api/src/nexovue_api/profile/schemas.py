@@ -254,6 +254,16 @@ class ExportedActivity(BaseModel):
     detail: dict[str, Any] | None
 
 
+class ExportedNote(BaseModel):
+    """A case note the person wrote (F22 AC25, BR16), in their own words, and the
+    finding it is on. It stays the organization's record after they leave."""
+
+    id: uuid.UUID
+    finding_id: uuid.UUID
+    body: str
+    created_at: datetime
+
+
 class ExportedApiToken(BaseModel):
     """No prefix: it carries characters of the token itself."""
 
@@ -271,7 +281,8 @@ class PersonalDataExport(BaseModel):
     """Everything nexovue holds about one person as a person (spec, BR1).
 
     `activity` is newest first and bounded; `truncated` says it was cut, and
-    `oldest_activity_at` how far back it reaches.
+    `oldest_activity_at` how far back it reaches. `notes_written` is bounded on
+    its own, with `notes_truncated`.
     """
 
     exported_at: datetime
@@ -284,3 +295,6 @@ class PersonalDataExport(BaseModel):
     oldest_activity_at: datetime | None
     api_tokens: list[ExportedApiToken]
     invitations_sent: list[ExportedInvitationSent]
+    # Newest first and bounded on their own: `notes_truncated` says they were cut.
+    notes_written: list[ExportedNote]
+    notes_truncated: bool

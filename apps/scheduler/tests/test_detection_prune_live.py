@@ -188,3 +188,98 @@ async def test_install_wide_records_and_shifts_go_once_no_normal_reads_them(
         await connection.execute(
             text("DELETE FROM detection_events WHERE id = ANY(:ids)"), {"ids": events}
         )
+
+
+# ------------------------------------------------------- a case keeps its finding (F22 T2.5)
+
+
+async def _give_case(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    finding: uuid.UUID,
+    *,
+    resolved_ago: timedelta | None,
+) -> None:
+    """A case on `finding`, active when `resolved_ago` is None, else resolved then."""
+    now = datetime.now(UTC)
+    opened = now - (resolved_ago or DAY) - DAY
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE findings SET case_state = 'investigating', case_opened_at = :opened, "
+                "case_activity_at = :opened WHERE org_id = :org_id AND id = :id"
+            ),
+            {"org_id": tenant.org_id, "id": finding, "opened": opened},
+        )
+        if resolved_ago is not None:
+            await connection.execute(
+                text(
+                    "UPDATE findings SET case_state = 'resolved', case_resolution = 'resolved', "
+                    "case_resolved_at = :at WHERE org_id = :org_id AND id = :id"
+                ),
+                {"org_id": tenant.org_id, "id": finding, "at": now - resolved_ago},
+            )
+
+
+async def _join(
+    engine: AsyncEngine, tenant: AlertTenant, joined: uuid.UUID, root: uuid.UUID
+) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE findings SET root_finding_id = :root WHERE org_id = :org_id AND id = :id"),
+            {"org_id": tenant.org_id, "id": joined, "root": root},
+        )
+
+
+async def test_a_case_keeps_its_finding_until_retention_passes_after_it_ends(
+    engine: AsyncEngine, project: AlertTenant
+) -> None:
+    """AC29, FR24, FR25: a closed finding with an active case survives its retention;
+    a resolved one goes once retention has passed since `case_resolved_at`, not
+    since it closed; one with no case keeps today's rule."""
+    past = FREE_DERIVED + DAY
+    active = await _finding(engine, project, closed_ago=past, service="active")
+    await _give_case(engine, project, active, resolved_ago=None)
+    resolved_lately = await _finding(engine, project, closed_ago=past, service="lately")
+    await _give_case(engine, project, resolved_lately, resolved_ago=FREE_DERIVED - DAY)
+    resolved_long_ago = await _finding(engine, project, closed_ago=past + DAY, service="long-ago")
+    await _give_case(engine, project, resolved_long_ago, resolved_ago=past)
+    no_case = await _finding(engine, project, closed_ago=past, service="no-case")
+
+    await expiry.sweep(engine)
+
+    remaining = await _remaining(
+        engine, "findings", [active, resolved_lately, resolved_long_ago, no_case]
+    )
+    assert remaining == {active, resolved_lately}
+
+
+async def test_a_joined_finding_keeps_its_own_clock_and_outlives_its_root(
+    engine: AsyncEngine, project: AlertTenant
+) -> None:
+    """AC30, FR24, FR27, D43: a closed joined finding past its own retention goes even
+    while its root's case is active, so one case cannot pin an unbounded set of rows;
+    and deleting a root leaves its joined findings standing, with no root."""
+    past = FREE_DERIVED + DAY
+    root = await _finding(engine, project, closed_ago=DAY, service="checkout")
+    await _give_case(engine, project, root, resolved_ago=None)
+    old_joined = await _finding(engine, project, closed_ago=past, service="checkout")
+    await _join(engine, project, old_joined, root)
+
+    resolved_root = await _finding(engine, project, closed_ago=past + DAY, service="cart")
+    await _give_case(engine, project, resolved_root, resolved_ago=past)
+    young_joined = await _finding(engine, project, closed_ago=DAY, service="cart")
+    await _join(engine, project, young_joined, resolved_root)
+
+    await expiry.sweep(engine)
+
+    remaining = await _remaining(
+        engine, "findings", [root, old_joined, resolved_root, young_joined]
+    )
+    assert remaining == {root, young_joined}
+    async with engine.connect() as connection:
+        orphan = await connection.execute(
+            text("SELECT root_finding_id FROM findings WHERE org_id = :org_id AND id = :id"),
+            {"org_id": project.org_id, "id": young_joined},
+        )
+        assert orphan.scalar_one() is None

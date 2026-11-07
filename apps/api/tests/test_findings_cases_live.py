@@ -17,7 +17,7 @@ import socket
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
 
@@ -577,6 +577,42 @@ async def test_taking_a_closed_finding_joins_the_open_findings_active_case(
     # The answer is the case that holds the service, which keeps its assignee.
     assert answer.json()["finding"]["id"] == str(open_row.id)
     assert answer.json()["finding"]["assignee_id"] == str(acme.member.id)
+
+
+async def test_taking_a_finding_beside_a_quiet_case_joins_it_and_restarts_its_clock(
+    db: AsyncSession, acme: Team
+) -> None:
+    """AC68's act half (design, *Joining*): a finding that opened past the 7-day
+    window stands alone; taking it joins that quiet case, and the act is a
+    person's act on that case, so its idle clock starts again."""
+    quiet_since = datetime.now(UTC) - timedelta(days=12)
+    quiet = await _finding(
+        db,
+        acme,
+        state="closed",
+        case_state="investigating",
+        case_opened_at=quiet_since,
+        case_activity_at=quiet_since,
+        assignee_id=acme.member.id,
+    )
+    standalone = await _finding(db, acme, state="open")
+
+    taken = await _call(
+        db,
+        acme,
+        acme.admin,
+        "PATCH",
+        f"/findings/{standalone.id}/case",
+        {"case_state": "investigating"},
+    )
+
+    assert taken.status_code == 200, taken.text
+    standalone = await _fresh(db, standalone)
+    quiet = await _fresh(db, quiet)
+    assert standalone.root_finding_id == quiet.id and standalone.case_state is None
+    assert quiet.assignee_id == acme.member.id
+    assert quiet.case_activity_at is not None
+    assert quiet.case_activity_at > quiet_since + timedelta(days=11)
 
 
 async def test_acting_on_a_joined_finding_changes_the_root_and_never_its_own_case(

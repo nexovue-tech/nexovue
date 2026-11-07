@@ -1,5 +1,5 @@
 import { Link, useParams } from "@tanstack/react-router";
-
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
@@ -89,6 +89,8 @@ function IncidentDetail({ incident }: { incident: Incident }) {
             Ended: <Moment iso={incident.resolved_at} />
           </p>
         ) : null}
+        {/* F22 FR53, D58: an incident is a rule's record, never a case. */}
+        <p className="max-w-prose text-ink-dim text-sm">{CASE_IS_NOT_AN_ALERT}</p>
         <p className="text-ink-dim text-sm">
           Rule:{" "}
           {incident.rule_id ? (

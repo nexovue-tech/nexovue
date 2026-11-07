@@ -27,6 +27,7 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.detection.coordinator",
     "nexovue_scheduler.detection.project_job",
     "nexovue_scheduler.detection.baselines",
+    "nexovue_scheduler.cases",
 )
 
 _TASKS: dict[str, Callable[..., None]] = {}

@@ -9,7 +9,13 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import ApiToken, AuditLogEntry, SessionRecord, User
+from nexovue_api.data.postgres.models import (
+    ApiToken,
+    AuditLogEntry,
+    FindingNote,
+    SessionRecord,
+    User,
+)
 
 
 async def live_sessions(
@@ -35,6 +41,20 @@ async def activity(
         select(AuditLogEntry)
         .where(AuditLogEntry.org_id == org_id, AuditLogEntry.actor_user_id == user_id)
         .order_by(AuditLogEntry.at.desc(), AuditLogEntry.id.desc())
+        .limit(limit)
+    )
+    return list(await session.scalars(statement))
+
+
+async def notes_written(
+    session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, limit: int
+) -> list[FindingNote]:
+    """The case notes this person wrote, newest first (F22 AC25), served by
+    `ix_finding_notes_org_id_author_id`."""
+    statement = (
+        select(FindingNote)
+        .where(FindingNote.org_id == org_id, FindingNote.author_id == user_id)
+        .order_by(FindingNote.created_at.desc(), FindingNote.id.desc())
         .limit(limit)
     )
     return list(await session.scalars(statement))

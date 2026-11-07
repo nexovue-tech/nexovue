@@ -1,8 +1,11 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 
+import { Button } from "@/shared/components/Button";
+import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
 import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
@@ -12,13 +15,31 @@ import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
+import { useCan, useSession } from "@/shared/identity";
 import type { OverviewPlot, OverviewPoint } from "@/shared/overview-plots";
 import { buildOverviewPlots } from "@/shared/overview-plots";
 import { useLiveWindow, useSelection } from "@/shared/selection";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 
-import type { CheckCounts, DetectionStatus, Finding, FindingSeverity, ProjectTotals } from "./api";
-import { useCheckCounts, useDetectionStatus, useFindings, useProjectSummary } from "./api";
+import type {
+  CaseFilter,
+  CheckCounts,
+  DetectionStatus,
+  FeedFinding,
+  FindingSeverity,
+  ProjectTotals,
+} from "./api";
+import {
+  useCaseFeed,
+  useCheckCounts,
+  useDetectionStatus,
+  useFindings,
+  useProjectSummary,
+  useResolveFromFeed,
+} from "./api";
+import type { FeedChoice } from "./feed-filter";
+import { ACROSS_PROJECTS, FEED_CHOICES, NO_CASES, parseFeedSearch } from "./feed-filter";
+import { caseEndingSentence, caseSentence } from "./finding-page";
 import { CLOSED_AS } from "./finding-words";
 import { detectionHeadlineFor, headlineFor } from "./headline";
 import { orderFindings } from "./ordering";
@@ -39,32 +60,72 @@ import { orderFindings } from "./ordering";
  * screen's error state like any other: a status we could not read must not leave the
  * checks' line standing alone as if nothing had been asked.
  *
- * Muted findings stay out of the feed. A quiet link under it opens them instead, because
- * the feed has no filters and inventing one for a single toggle would be a second
- * control to learn.
+ * Muted findings stay out of the feed. A quiet link under it opens them instead.
+ *
+ * **The case filters are a different read** (F22 FR22, design *The feed*): *Active
+ * cases*, *Assigned to me* and *Resolved cases* read every project, muted findings
+ * included, with their own query and no telemetry, so a failed summary at 3 a.m. can
+ * never hide the case list (AC109). They show no detection line, no summary and no
+ * muted link, and the filter lives in the address (AC28).
  */
 export function FindingsScreen() {
   const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
   const [showingMuted, setShowingMuted] = useState(false);
+  const navigate = useNavigate();
+  const caseFilter = parseFeedSearch(useSearch({ strict: false })).case ?? null;
+  // The plain feed's reads name the project; a case filter's reads none of them.
+  const feedProject = caseFilter === null ? projectId : undefined;
 
-  const feed = useFindings(projectId, showingMuted, timeWindow);
-  const summary = useProjectSummary(projectId, timeWindow);
+  const feed = useFindings(feedProject, showingMuted, timeWindow);
+  const summary = useProjectSummary(feedProject, timeWindow);
   // The checks read waits for the summary: past the telemetry tier's in-flight cap
   // — 4 per process at two API processes — a read waits in the limiter, and this
   // screen must not spend the queue on itself (F20 plan, T1.8).
-  const checks = useCheckCounts(projectId, timeWindow, summary.data !== undefined);
-  const detection = useDetectionStatus(projectId, timeWindow);
+  const checks = useCheckCounts(feedProject, timeWindow, summary.data !== undefined);
+  const detection = useDetectionStatus(feedProject, timeWindow);
+  const cases = useCaseFeed(caseFilter, timeWindow);
   // Not waited for: the browser's clock serves until the project's is read.
   const settings = useDetectionSettings(projectId);
+  const session = useSession();
+  const canResolve = useCan("operate_cases") && !session.data?.support_view;
+  const resolve = useResolveFromFeed();
 
+  const choose = (choice: FeedChoice) => {
+    void navigate({ to: "/", search: choice === "all" ? {} : { case: choice } });
+  };
+  const shared = {
+    caseFilter,
+    onChoose: choose,
+    viewerId: session.data?.user.id ?? null,
+    canResolve,
+    onResolve: (findingId: string) => resolve.mutate(findingId),
+    resolvingId: resolve.isPending ? (resolve.variables ?? null) : null,
+    resolveError: resolve.error,
+    showingMuted,
+    onToggleMuted: () => setShowingMuted((showing) => !showing),
+  };
+
+  if (caseFilter !== null) {
+    return (
+      <FindingsView
+        {...shared}
+        findings={cases.data?.findings ?? []}
+        truncated={cases.data?.truncated ?? false}
+        mutedCount={0}
+        isPending={cases.isPending}
+        isError={cases.isError}
+        error={cases.error}
+        onRetry={() => void cases.refetch()}
+      />
+    );
+  }
   return (
     <FindingsView
+      {...shared}
       findings={feed.data?.findings ?? []}
       truncated={feed.data?.truncated ?? false}
       mutedCount={feed.data?.muted_count ?? 0}
-      showingMuted={showingMuted}
-      onToggleMuted={() => setShowingMuted((showing) => !showing)}
       isPending={feed.isPending || summary.isPending || detection.isPending}
       isError={feed.isError || summary.isError || detection.isError}
       error={feed.error ?? summary.error ?? detection.error}
@@ -83,7 +144,18 @@ export function FindingsScreen() {
 }
 
 export interface FindingsViewProps {
-  findings: readonly Finding[];
+  findings: readonly FeedFinding[];
+  /** A case filter (FR22), or null for the plain feed. */
+  caseFilter?: CaseFilter | null;
+  onChoose?: (choice: FeedChoice) => void;
+  /** The reader, so their own case reads "You took this". */
+  viewerId?: string | null;
+  /** May resolve a case from its row (FR52): a working role, not in a support view. */
+  canResolve?: boolean;
+  onResolve?: (findingId: string) => void;
+  /** The row whose Resolve is in flight. */
+  resolvingId?: string | null;
+  resolveError?: unknown;
   /** True when the API held more than it sent: the feed says it is the first 200. */
   truncated?: boolean;
   /** How many findings are muted, and so left out of the feed. */
@@ -106,6 +178,13 @@ export interface FindingsViewProps {
 
 export function FindingsView({
   findings,
+  caseFilter = null,
+  onChoose = () => {},
+  viewerId = null,
+  canResolve = false,
+  onResolve = () => {},
+  resolvingId = null,
+  resolveError,
   truncated = false,
   mutedCount,
   showingMuted,
@@ -120,20 +199,54 @@ export function FindingsView({
   detection,
   zone,
 }: FindingsViewProps) {
-  const ordered = orderFindings(findings);
+  // Resolved cases arrive newest-resolved first, and keep that order (FR22).
+  const ordered = caseFilter === "resolved" ? [...findings] : orderFindings(findings);
   const detectionLine = detectionHeadlineFor(detection, { zone });
+  const rowContext: RowContext = {
+    caseFilter,
+    viewerId,
+    zone,
+    canResolve: canResolve && (caseFilter === "active" || caseFilter === "mine"),
+    onResolve,
+    resolvingId,
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Findings</h1>
-        <p className="mt-1 text-ink-dim text-sm">
-          Things that need you, newest first. Anything still wrong comes before anything already
-          fixed.
+        <p className="mt-1 max-w-prose text-ink-dim text-sm">
+          Things that need you, newest first. Anything still wrong or still being worked comes
+          before anything finished.
         </p>
+        <div className="mt-3">
+          <SelectField
+            label="Show"
+            value={caseFilter ?? "all"}
+            options={FEED_CHOICES}
+            optionLabel={(choice) => choice.label}
+            onChange={(id) => onChoose(id as FeedChoice)}
+          />
+        </div>
+        {caseFilter !== null ? (
+          <p className="mt-2 max-w-prose text-ink-dim text-sm">{ACROSS_PROJECTS}</p>
+        ) : null}
       </header>
 
-      {isPending ? (
+      {caseFilter !== null ? (
+        <CaseList
+          rows={ordered}
+          filter={caseFilter}
+          context={rowContext}
+          truncated={truncated}
+          isPending={isPending}
+          isError={isError}
+          error={error}
+          resolveError={resolveError}
+          onRetry={onRetry}
+          onShowAll={() => onChoose("all")}
+        />
+      ) : isPending ? (
         // Statements, not rows: the feed is sentences, and a skeleton shaped like a
         // table would promise the wrong screen.
         <div className="px-4">
@@ -175,7 +288,7 @@ export function FindingsView({
               <ul className="shrink-0 border-line border-t">
                 {ordered.map((found) => (
                   <li key={found.id}>
-                    <FindingRow finding={found} />
+                    <FindingRow finding={found} context={rowContext} />
                   </li>
                 ))}
               </ul>
@@ -406,12 +519,27 @@ const SEVERITY_TEXT: Record<FindingSeverity, string> = {
   warning: "text-warning-text",
 };
 
-/** The card's sentence, which opens the finding's own page (D12). */
-function FindingLink({ finding }: { finding: Finding }) {
+/** What every row needs beside its finding: the filter it is shown under, and who reads it. */
+interface RowContext {
+  caseFilter: CaseFilter | null;
+  viewerId: string | null;
+  zone?: string;
+  /** Resolve is offered on this list's rows (FR52). */
+  canResolve: boolean;
+  onResolve: (findingId: string) => void;
+  resolvingId: string | null;
+}
+
+/**
+ * The card's sentence, which opens the finding's own page (D12). It carries the filter,
+ * so the page's back link returns to the same list and names it (AC128).
+ */
+function FindingLink({ finding, filter }: { finding: FeedFinding; filter: CaseFilter | null }) {
   return (
     <Link
       to="/findings/$findingId"
       params={{ findingId: finding.id }}
+      search={filter === null ? {} : { case: filter }}
       className="underline-offset-2 hover:underline"
     >
       {finding.title}
@@ -419,9 +547,185 @@ function FindingLink({ finding }: { finding: Finding }) {
   );
 }
 
+/** A joined finding names the case it is part of (design, *The feed*). */
+function PartOfACase({ finding }: { finding: FeedFinding }) {
+  if (finding.root_finding_id == null) return null;
+  return (
+    <>
+      {" · "}
+      <Link
+        to="/findings/$findingId"
+        params={{ findingId: finding.root_finding_id }}
+        className="text-brand-text underline-offset-2 hover:underline"
+      >
+        Part of a case
+      </Link>
+    </>
+  );
+}
+
 /** What a card is about. A project finding has no single service: it spans several. */
-function subjectOf(finding: Finding): string {
+function subjectOf(finding: FeedFinding): string {
   return finding.service_name ?? "This project";
+}
+
+/** A case filter's list: rows, its own empty sentence, its own failure (AC109, AC128). */
+function CaseList({
+  rows,
+  filter,
+  context,
+  truncated,
+  isPending,
+  isError,
+  error,
+  resolveError,
+  onRetry,
+  onShowAll,
+}: {
+  rows: readonly FeedFinding[];
+  filter: CaseFilter;
+  context: RowContext;
+  truncated: boolean;
+  isPending: boolean;
+  isError: boolean;
+  error?: unknown;
+  resolveError?: unknown;
+  onRetry: () => void;
+  onShowAll: () => void;
+}) {
+  if (isPending) {
+    return (
+      <div className="px-4">
+        <SkeletonRows rows={3} label="Loading cases" />
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="px-4">
+        <InlineFailure title="The cases could not be loaded" error={error} onRetry={onRetry} />
+      </div>
+    );
+  }
+  if (rows.length === 0) {
+    return (
+      <div className="shrink-0 border-line border-t px-4 py-6">
+        <p className="max-w-prose text-ink text-sm">{NO_CASES[filter]}</p>
+        <Button variant="secondary" className="mt-3" onClick={onShowAll}>
+          Show all
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <>
+      {resolveError ? (
+        <div className="px-4 pb-3">
+          <InlineFailure title="That case was not resolved" error={resolveError} />
+        </div>
+      ) : null}
+      <ul className="shrink-0 border-line border-t">
+        {rows.map((found) => (
+          <li key={found.id}>
+            <CaseRow finding={found} context={context} />
+          </li>
+        ))}
+      </ul>
+      {truncated ? (
+        <p className="shrink-0 px-4 pt-3 text-ink-dim text-xs">Showing the newest 200.</p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A case row: the full statement shape (design, *The feed*), never a closed row's one
+ * quiet truncated line. The title, then both questions in one sentence (FR23), the
+ * case's severity in a word, the project in a case filter, the idle warning in its
+ * last 14 days (FR26), and Resolve where FR52 offers it. No sparkline: a case filter
+ * reads no telemetry (NFR3). No "Acked" (D47).
+ */
+function CaseRow({ finding, context }: { finding: FeedFinding; context: RowContext }) {
+  const [confirming, setConfirming] = useState(false);
+  const sentence = caseSentence({
+    finding,
+    root: finding,
+    viewerId: context.viewerId,
+    zone: context.zone,
+  });
+  const warning =
+    finding.case_ends_by === "idle" ? caseEndingSentence(finding, context.zone) : null;
+  const resolving = context.resolvingId === finding.id;
+  return (
+    <article className="flex gap-3 border-line-subtle border-b px-4 py-3">
+      <span className="flex w-2 shrink-0 justify-center pt-1.5">
+        <span
+          aria-hidden="true"
+          className={`size-1.5 rounded-full ${
+            finding.case_severity === "critical" ? "bg-critical-solid" : "bg-warning-solid"
+          }`}
+        />
+      </span>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-ink text-sm">
+          <FindingLink finding={finding} filter={context.caseFilter} />
+        </h3>
+        <p className="mt-1 max-w-prose text-ink text-sm">{sentence}</p>
+        <p className="mt-0.5 font-mono text-2xs text-ink-dim">
+          <span className={SEVERITY_TEXT[finding.case_severity]}>
+            {SEVERITY_WORD[finding.case_severity]}
+          </span>
+          {" · "}
+          {subjectOf(finding)}
+          {context.caseFilter !== null && finding.project_name ? ` · ${finding.project_name}` : ""}
+          <PartOfACase finding={finding} />
+        </p>
+        {warning !== null ? (
+          <p className="mt-1 max-w-prose text-sm text-warning-text">{warning}</p>
+        ) : null}
+        {context.canResolve && finding.case_state === "investigating" ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <Button
+              variant="secondary"
+              className="min-h-11 w-full max-w-xs justify-center sm:w-auto"
+              pending={resolving}
+              pendingLabel="Resolving"
+              onClick={() => {
+                // FR6: one tap with the signal closed; while it is open, say so first.
+                if (finding.case_signal === "open") setConfirming(true);
+                else context.onResolve(finding.id);
+              }}
+            >
+              Resolve
+            </Button>
+            {confirming ? (
+              <ConfirmPanel label="Resolve">
+                <p className="max-w-prose">
+                  The signal is still open: the problem is still being measured. Resolving says the
+                  work is done anyway.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    pending={resolving}
+                    pendingLabel="Resolving"
+                    onClick={() => {
+                      setConfirming(false);
+                      context.onResolve(finding.id);
+                    }}
+                  >
+                    Resolve anyway
+                  </Button>
+                  <Button variant="secondary" onClick={() => setConfirming(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </ConfirmPanel>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
 }
 
 /**
@@ -432,13 +736,18 @@ function subjectOf(finding: Finding): string {
  * engine reports no impact figure, so neither has a line here.
  *
  * A closed finding is one quiet line naming how it closed: no sparkline, nothing to do.
+ * One whose case is still being worked keeps the full case row, in its own tier (FR21),
+ * and an open finding with a case states both questions under its title (FR23).
  */
-function FindingRow({ finding }: { finding: Finding }) {
+function FindingRow({ finding, context }: { finding: FeedFinding; context: RowContext }) {
+  if (finding.state === "closed" && finding.case_state === "investigating") {
+    return <CaseRow finding={finding} context={context} />;
+  }
   if (finding.state === "closed") {
     return (
       <div className="border-line-subtle border-b px-4 py-2 text-sm">
         <p className="truncate text-ink-dim">
-          <FindingLink finding={finding} />
+          <FindingLink finding={finding} filter={null} />
         </p>
         <p className="mt-0.5 text-2xs text-ink-dim">
           {finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed"}
@@ -446,6 +755,7 @@ function FindingRow({ finding }: { finding: Finding }) {
           <span className="font-mono">
             {finding.closed_at ? formatRelativeTime(finding.closed_at) : UNKNOWN}
           </span>
+          <PartOfACase finding={finding} />
         </p>
       </div>
     );
@@ -467,13 +777,24 @@ function FindingRow({ finding }: { finding: Finding }) {
       <div className="min-w-0 flex-1">
         {/* The title is the product: a sentence, not a metric expression. */}
         <h3 className="text-ink text-sm">
-          <FindingLink finding={finding} />
+          <FindingLink finding={finding} filter={null} />
         </h3>
+        {finding.case_state !== null ? (
+          <p className="mt-0.5 max-w-prose text-ink text-sm">
+            {caseSentence({
+              finding,
+              root: finding,
+              viewerId: context.viewerId,
+              zone: context.zone,
+            })}
+          </p>
+        ) : null}
         {/* The severity in a word as well as the dot's colour (design principle 6). */}
         <p className="mt-0.5 font-mono text-2xs text-ink-dim">
           <span className={SEVERITY_TEXT[finding.severity]}>{SEVERITY_WORD[finding.severity]}</span>
           {" · "}
           {subject}
+          <PartOfACase finding={finding} />
         </p>
       </div>
 
@@ -490,7 +811,10 @@ function FindingRow({ finding }: { finding: Finding }) {
             : finding.service_snoozed_until !== null
               ? "Snoozed · "
               : null}
-          {finding.state === "acknowledged" ? "Acked" : formatRelativeTime(finding.started_at)}
+          {/* D47: a case says who has it; "Acked" stays only on a finding with no case. */}
+          {finding.state === "acknowledged" && finding.case_state === null
+            ? "Acked"
+            : formatRelativeTime(finding.started_at)}
         </span>
       </div>
     </article>

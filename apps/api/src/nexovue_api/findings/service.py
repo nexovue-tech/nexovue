@@ -14,9 +14,15 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
+from nexovue_platform.cases import (
+    CASE_IDLE_LIMIT,
+    CASE_IDLE_WARNING_AHEAD,
+    CASE_UNTOUCHED_AFTER,
+)
 from nexovue_platform.detection import (
     SHIFT_READINGS,
     SHIFT_READINGS_NEEDED,
@@ -35,10 +41,14 @@ from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import cases, queries
 from nexovue_api.findings.schemas import (
+    CaseEndsBy,
+    CaseFilter,
+    EarlierCase,
     FeedState,
     Finding,
     FindingChanged,
     FindingDetail,
+    FindingFeedRow,
     FindingForMember,
     FindingListResponse,
     FindingSignal,
@@ -103,6 +113,15 @@ _STORED_STATE: Final[dict[FeedState, str | None]] = {
 _STORED_SIGNALS: Final = TypeAdapter(list[StoredSignal])
 
 
+# A case filter's refusals (F22 FR22, BR14, AC110): a token is no person, and a
+# token that reads every project must still name one.
+NO_CASES_OF_ITS_OWN: Final = "An API token is assigned nothing, so it cannot ask for case=mine."
+NAME_A_PROJECT: Final = "Name a project_id: the feed reads one project."
+NAME_A_PROJECT_FOR_CASES: Final = (
+    "Name a project_id: an API token reads the case filters one project at a time."
+)
+
+
 async def list_findings(
     session: AsyncSession,
     repository: TenantScopedRepository,
@@ -111,12 +130,14 @@ async def list_findings(
     project_id: uuid.UUID,
     state: FeedState,
     muted: bool,
+    for_person: bool,
     now: datetime,
 ) -> FindingListResponse:
-    """The feed in F1 AC1.5's order, at most `FEED_PAGE` findings.
+    """The feed in F22 FR21's rank, at most `FEED_PAGE` findings.
 
     Only open findings carry a trend here, read in one statement: a closed
     finding's trend is on its own page, where its readings end when it closed.
+    A person's rows name who has the case (AC71); a token's name nobody.
     """
     stored_state = _STORED_STATE[state]
     rows = await queries.feed(
@@ -129,26 +150,123 @@ async def list_findings(
     )
     truncated = len(rows) > queries.FEED_PAGE
     rows = rows[: queries.FEED_PAGE]
-    trends = await _open_trends(repository, project_id=project_id, rows=rows, now=now)
-    quiet = await queries.quiet_services(session, org_id=org_id, project_id=project_id, now=now)
-    open_joined = await queries.open_joined_of(
-        session, org_id=org_id, root_ids=[row.id for row in rows if row.case_state is not None]
+    trends = await _open_trends(
+        repository, project_id=project_id, rows=[row.finding for row in rows], now=now
     )
     return FindingListResponse(
-        findings=[
-            to_finding(
-                row,
-                trend=trends.get(row.id, []),
-                quiet=quiet.get(row.service_name or ""),
-                open_joined=open_joined.get(row.id),
-            )
-            for row in rows
-        ],
+        findings=await _feed_findings(
+            session, org_id=org_id, rows=rows, trends=trends, for_person=for_person, now=now
+        ),
         muted_count=await queries.muted_count(
             session, org_id=org_id, project_id=project_id, state=stored_state
         ),
         truncated=truncated,
     )
+
+
+async def list_cases(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    which: CaseFilter,
+    viewer_id: uuid.UUID | None,
+    token_project_id: uuid.UUID | None,
+    for_person: bool,
+    now: datetime,
+) -> FindingListResponse:
+    """A case filter (F22 FR22, design *The feed*): a separate read, bound to the
+    organization, with no telemetry — no trend, no ClickHouse — so a failing
+    telemetry read can never hide the case list (NFR3, AC109).
+
+    A person reads every project; a token reads the one project the router proved
+    it may read, and is refused `mine` and a missing project (AC110).
+    """
+    if not for_person:
+        if which == "mine":
+            raise InvalidRequestError(NO_CASES_OF_ITS_OWN)
+        if token_project_id is None:
+            raise InvalidRequestError(NAME_A_PROJECT_FOR_CASES)
+    rows = await queries.case_feed(
+        session,
+        org_id=org_id,
+        which=which,
+        assignee_id=viewer_id,
+        project_id=None if for_person else token_project_id,
+        limit=queries.FEED_PAGE + 1,
+    )
+    truncated = len(rows) > queries.FEED_PAGE
+    rows = rows[: queries.FEED_PAGE]
+    return FindingListResponse(
+        findings=await _feed_findings(
+            session, org_id=org_id, rows=rows, trends={}, for_person=for_person, now=now
+        ),
+        # A case filter includes muted findings, so it leaves none out.
+        muted_count=0,
+        truncated=truncated,
+    )
+
+
+async def _feed_findings(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    rows: Sequence[queries.FeedRow],
+    trends: dict[uuid.UUID, list[float]],
+    for_person: bool,
+    now: datetime,
+) -> list[FindingFeedRow] | list[Finding]:
+    """Feed rows as a person or a token reads them, with each case's open joined
+    finding and, for a person, when an untouched case ends (FR23, FR49)."""
+    findings = [row.finding for row in rows]
+    quiet = await queries.quiet_services_of(
+        session,
+        org_id=org_id,
+        project_ids=sorted({finding.project_id for finding in findings}),
+        now=now,
+    )
+    roots = [finding.id for finding in findings if finding.case_state is not None]
+    open_joined = await queries.open_joined_of(session, org_id=org_id, root_ids=roots)
+    plain = [
+        to_finding(
+            row.finding,
+            trend=trends.get(row.finding.id, []),
+            quiet=quiet.get((row.finding.project_id, row.finding.service_name or "")),
+            open_joined=open_joined.get(row.finding.id),
+        )
+        for row in rows
+    ]
+    if not for_person:
+        return plain
+    closes = await queries.latest_joined_closes(
+        session,
+        org_id=org_id,
+        root_ids=[f.id for f in findings if f.case_state == "investigating"],
+    )
+    feed_rows: list[FindingFeedRow] = []
+    for row, finding in zip(rows, plain, strict=True):
+        ends_on, ends_by = case_ending(
+            row.finding,
+            open_joined=open_joined.get(row.finding.id),
+            latest_joined_close=closes.get(row.finding.id),
+            now=now,
+        )
+        feed_rows.append(
+            FindingFeedRow(
+                **finding.model_dump(),
+                assignee_id=row.finding.assignee_id,
+                assignee_name=row.assignee_name,
+                case_taken_at=row.case_taken_at,
+                assignee_acted_since_join=acted_since_join(
+                    row.finding, open_joined.get(row.finding.id)
+                ),
+                case_resolved_by_name=row.case_resolved_by_name,
+                case_activity_at=row.finding.case_activity_at,
+                case_ends_on=ends_on,
+                case_ends_by=ends_by,
+                project_name=row.project_name,
+            )
+        )
+    return feed_rows
 
 
 async def get_finding(
@@ -437,6 +555,7 @@ async def _member_view(
         if row.assignee_id is not None
         else None
     )
+    keeping = await _keeping(session, row, open_joined=open_joined, now=now)
     return FindingForMember(
         **detail.model_dump(),
         acknowledged_by=row.acknowledged_by,
@@ -446,17 +565,121 @@ async def _member_view(
         assignee_id=row.assignee_id,
         assignee_name=named.get(row.assignee_id) if row.assignee_id else None,
         case_taken_at=taken_at,
-        assignee_acted_since_join=None
-        if open_joined is None or row.assignee_id is None
-        else bool(
-            row.assignee_acted_at is not None and row.assignee_acted_at >= open_joined.started_at
-        ),
+        assignee_acted_since_join=acted_since_join(row, open_joined),
         case_resolved_by_name=named.get(row.case_resolved_by) if row.case_resolved_by else None,
         project_has_pagerduty=await queries.project_has_pagerduty(
             session, org_id=row.org_id, project_id=row.project_id
         ),
         email_available=email_available,
+        earlier_case=keeping.earlier_case,
+        case_activity_at=row.case_activity_at,
+        case_ends_on=keeping.ends_on,
+        case_ends_by=keeping.ends_by,
+        deletes_on=keeping.deletes_on,
+        joined_kept_count=keeping.joined_kept_count,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _Keeping:
+    """What a page says about a case's end and its keeping (F22 T2.7)."""
+
+    earlier_case: EarlierCase | None
+    ends_on: datetime | None
+    ends_by: CaseEndsBy | None
+    deletes_on: datetime | None
+    joined_kept_count: int
+
+
+async def _keeping(
+    session: AsyncSession, row: FindingRow, *, open_joined: FindingRow | None, now: datetime
+) -> _Keeping:
+    """The earlier case a finding holding none can name (FR9, FR13), when an active
+    case ends by itself (FR26, FR49), when a resolved one is deleted (FR27), and
+    how many joined findings are kept (FR24)."""
+    earlier = (
+        await queries.earlier_case(session, row)
+        if row.case_state is None and row.root_finding_id is None
+        else None
+    )
+    closes = (
+        await queries.latest_joined_closes(session, org_id=row.org_id, root_ids=[row.id])
+        if row.case_state == "investigating"
+        else {}
+    )
+    ends_on, ends_by = case_ending(
+        row, open_joined=open_joined, latest_joined_close=closes.get(row.id), now=now
+    )
+    return _Keeping(
+        earlier_case=None
+        if earlier is None or earlier.case_state is None or earlier.case_activity_at is None
+        else EarlierCase(
+            id=earlier.id,
+            case_state=earlier.case_state,
+            case_resolution=earlier.case_resolution,
+            case_resolved_at=earlier.case_resolved_at,
+            case_activity_at=earlier.case_activity_at,
+        ),
+        ends_on=ends_on,
+        ends_by=ends_by,
+        deletes_on=await _deletes_on(session, row),
+        joined_kept_count=0
+        if row.case_state is None
+        else await queries.joined_count(session, org_id=row.org_id, root_id=row.id),
+    )
+
+
+async def _deletes_on(session: AsyncSession, row: FindingRow) -> datetime | None:
+    """FR25, FR27: a resolved case's closed finding goes once its project's derived
+    retention has passed after the later of its close and the case's end, as
+    `detection/retention.py` deletes it. An open finding is never deleted."""
+    if row.case_state != "resolved" or row.closed_at is None or row.case_resolved_at is None:
+        return None
+    days = await queries.derived_retention_days(session, org_id=row.org_id)
+    if days is None:
+        return None
+    return max(row.closed_at, row.case_resolved_at) + timedelta(days=days)
+
+
+def acted_since_join(row: FindingRow, open_joined: FindingRow | None) -> bool | None:
+    """On a root with an open joined finding: whether the assignee has acted since
+    it came back (FR12, AC100). None when nothing joined is open or nobody has it."""
+    if open_joined is None or row.assignee_id is None:
+        return None
+    return row.assignee_acted_at is not None and row.assignee_acted_at >= open_joined.started_at
+
+
+def case_ending(
+    row: FindingRow,
+    *,
+    open_joined: FindingRow | None,
+    latest_joined_close: datetime | None,
+    now: datetime,
+) -> tuple[datetime | None, CaseEndsBy | None]:
+    """When an active case ends by itself, and why, if the page should say so now.
+
+    Untouched (FR49): taken and nothing more, with the root and every joined
+    finding closed; said from recovery, ending 72 hours after the last close.
+    Idle (FR26): 90 days after the last person's act; said from 14 days before.
+    The `cases_sweep` ends each at these same instants. The sooner one is named.
+    """
+    if row.case_state != "investigating" or row.case_activity_at is None:
+        return None, None
+    endings: list[tuple[datetime, CaseEndsBy]] = []
+    if (
+        row.case_worked_at is None
+        and row.state == "closed"
+        and row.closed_at is not None
+        and open_joined is None
+    ):
+        last_close = max(row.closed_at, latest_joined_close or row.closed_at)
+        endings.append((last_close + CASE_UNTOUCHED_AFTER, "untouched"))
+    idle_end = row.case_activity_at + CASE_IDLE_LIMIT
+    if now >= idle_end - CASE_IDLE_WARNING_AHEAD:
+        endings.append((idle_end, "idle"))
+    if not endings:
+        return None, None
+    return min(endings)
 
 
 async def member_view(

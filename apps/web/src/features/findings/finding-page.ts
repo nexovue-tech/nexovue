@@ -8,7 +8,10 @@ import { formatRelativeTime } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 
 import type {
+  CasePeople,
+  EarlierCase,
   EmailOutcome,
+  Finding,
   FindingChanged,
   FindingDetail,
   FindingSignal,
@@ -187,11 +190,14 @@ export function signalPlot(series: SignalSeries): SignalPlot {
  * drawing, so each row of the state table can be read and tested on its own.
  */
 
+/** What the case sentence reads: a page's finding or a person's feed row. */
+export type CaseFacts = Finding & CasePeople;
+
 export interface CaseView {
   /** The row the page shows. */
-  finding: FindingDetail;
+  finding: CaseFacts;
   /** The case row: the root when the page's finding joined one, else the same. */
-  root: FindingDetail;
+  root: CaseFacts;
   viewerId: string | null;
   zone?: string;
   now?: number;
@@ -200,13 +206,13 @@ export interface CaseView {
 const time = (iso: string | null | undefined, zone?: string, now?: number) =>
   iso ? formatZonedTime(iso, { zone, now }) : "";
 
-function investigatedBy(root: FindingDetail, viewerId: string | null) {
+function investigatedBy(root: CaseFacts, viewerId: string | null) {
   if (root.assignee_id == null) return "still being investigated, nobody assigned";
   const name = root.assignee_id === viewerId ? "you" : (root.assignee_name ?? "Former member");
   return `still being investigated by ${name}`;
 }
 
-function howItEnded(root: FindingDetail, zone?: string, now?: number): string {
+function howItEnded(root: CaseFacts, zone?: string, now?: number): string {
   if (root.case_resolution == null) return "";
   return `${resolutionWords(root.case_resolution, {
     by: root.case_resolved_by_name,
@@ -214,7 +220,7 @@ function howItEnded(root: FindingDetail, zone?: string, now?: number): string {
   })}.`;
 }
 
-function signalWords(finding: FindingDetail, zone?: string, now?: number): string {
+function signalWords(finding: CaseFacts, zone?: string, now?: number): string {
   if (finding.state !== "closed") return `Open since ${time(finding.started_at, zone, now)}`;
   const how = finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed";
   return finding.closed_at ? `${how} at ${time(finding.closed_at, zone, now)}` : how;
@@ -267,7 +273,7 @@ export function caseSentence({ finding, root, viewerId, zone, now }: CaseView): 
 }
 
 /** The joined page's lead (FR12): where the case is, and what moved here. */
-export function joinedLeadLine(root: FindingDetail, zone?: string, now?: number): string {
+export function joinedLeadLine(root: CaseFacts, zone?: string, now?: number): string {
   if (root.case_state === "resolved") {
     return `Part of a case resolved on ${time(root.case_resolved_at, zone, now)}`;
   }
@@ -283,6 +289,8 @@ export interface CaseActions {
   reassign: boolean;
   reopen: boolean;
   note: boolean;
+  /** The earlier case **Reopen that case** reopens, beside Take this (FR13, AC95). */
+  reopenEarlier: string | null;
 }
 
 const NO_CASE_ACTIONS: CaseActions = {
@@ -292,6 +300,7 @@ const NO_CASE_ACTIONS: CaseActions = {
   reassign: false,
   reopen: false,
   note: false,
+  reopenEarlier: null,
 };
 
 export function caseActions(
@@ -299,7 +308,15 @@ export function caseActions(
   { canOperateCases, viewerId }: { canOperateCases: boolean; viewerId: string | null },
 ): CaseActions {
   if (!canOperateCases) return NO_CASE_ACTIONS;
-  if (root.case_state == null) return { ...NO_CASE_ACTIONS, takeThis: true, note: true };
+  if (root.case_state == null) {
+    const earlier = root.earlier_case;
+    return {
+      ...NO_CASE_ACTIONS,
+      takeThis: true,
+      note: true,
+      reopenEarlier: earlier != null && earlierCaseLine(earlier).reopenable ? earlier.id : null,
+    };
+  }
   if (root.case_state === "resolved") return { ...NO_CASE_ACTIONS, reopen: true, note: true };
   const mine = root.assignee_id != null && root.assignee_id === viewerId;
   const someoneElses = root.assignee_id != null && !mine;
@@ -310,7 +327,79 @@ export function caseActions(
     reassign: true,
     reopen: false,
     note: true,
+    reopenEarlier: null,
   };
+}
+
+/** "at 21:00 UTC" for an instant today, "on 16 Nov, 18:00 UTC" for another day (FR50). */
+function whenWords(iso: string, zone?: string, now?: number): string {
+  const said = time(iso, zone, now);
+  return TODAY_ONLY.test(said) ? `at ${said}` : `on ${said}`;
+}
+const TODAY_ONLY = /^\d{2}:\d{2} /;
+const DAY_MS = 86_400_000;
+
+/**
+ * When an active case ends by itself, in the spec's words (FR26, FR49), or null
+ * when the server names no end: it sets one only while the screen should say so.
+ */
+export function caseEndingSentence(root: CaseFacts, zone?: string, now?: number): string | null {
+  if (root.case_ends_on == null || root.case_ends_by == null) return null;
+  const ends = whenWords(root.case_ends_on, zone, now);
+  if (root.case_ends_by === "untouched") {
+    return `Recovered. Ends by itself ${ends} unless someone adds something.`;
+  }
+  const quiet =
+    root.case_activity_at == null
+      ? null
+      : Math.floor(((now ?? Date.now()) - Date.parse(root.case_activity_at)) / DAY_MS);
+  const days = quiet == null ? "" : `No activity for ${quiet} days. `;
+  return `${days}Ends by itself ${ends}. Add a note to keep it going, or resolve it.`;
+}
+
+/** An earlier case ended by a person's own decision, which only a link names (AC95). */
+const PERSON_ENDED = new Set(["resolved", "false_alarm", "new_normal"]);
+
+/**
+ * The service's earlier case, named on a finding that holds none (FR9, FR13):
+ * a quiet active one taking this joins, or a resolved one. One that ended
+ * without a person's decision can be reopened from here.
+ */
+export function earlierCaseLine(
+  earlier: EarlierCase,
+  zone?: string,
+  now?: number,
+): { sentence: string; reopenable: boolean } {
+  if (earlier.case_state === "investigating") {
+    return {
+      sentence: `This service has a case nobody has touched since ${time(earlier.case_activity_at, zone, now)}`,
+      reopenable: false,
+    };
+  }
+  const resolvedAt = time(earlier.case_resolved_at, zone, now);
+  const resolution = earlier.case_resolution;
+  if (resolution == null || PERSON_ENDED.has(resolution)) {
+    return { sentence: `This service had a case resolved on ${resolvedAt}`, reopenable: false };
+  }
+  return {
+    sentence: `This service had a case that ended on ${resolvedAt}. ${resolutionWords(resolution, {
+      at: resolvedAt,
+    })}`,
+    reopenable: true,
+  };
+}
+
+/** How long a case is kept (FR24, FR27, AC112), or null when there is nothing to say. */
+export function keptSentence(root: FindingDetail, zone?: string, now?: number): string | null {
+  const parts: string[] = [];
+  if (root.deletes_on != null) parts.push(`Kept until ${time(root.deletes_on, zone, now)}.`);
+  const kept = root.joined_kept_count ?? 0;
+  if (kept > 0) {
+    parts.push(
+      kept === 1 ? "1 later finding is still kept." : `${kept} later findings are still kept.`,
+    );
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 export type CaseAction = "take" | "assign" | "unassign" | "resolve" | "reopen";

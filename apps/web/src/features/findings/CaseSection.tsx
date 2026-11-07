@@ -12,7 +12,15 @@ import type { EmailOutcome, FindingDetail } from "./api";
 import { useCaseChange, useRootCase } from "./api";
 import { CaseLine } from "./CaseLine";
 import type { CaseAction } from "./finding-page";
-import { caseActions, caseDoneSentence, joinedLeadLine, SIGNAL_NAMES } from "./finding-page";
+import {
+  caseActions,
+  caseDoneSentence,
+  caseEndingSentence,
+  earlierCaseLine,
+  joinedLeadLine,
+  keptSentence,
+  SIGNAL_NAMES,
+} from "./finding-page";
 import { NoteBox } from "./NoteBox";
 import { ReassignPanel } from "./ReassignPanel";
 import { Timeline } from "./Timeline";
@@ -45,6 +53,8 @@ export function CaseSection({
   const viewerId = session.data?.user.id ?? null;
   const rootQuery = useRootCase(finding.root_finding_id);
   const change = useCaseChange(finding.id);
+  // FR13: Reopen that case acts on the earlier case, not on this finding.
+  const reopenEarlier = useCaseChange(finding.earlier_case?.id ?? finding.id);
   const [armed, setArmed] = useState<"resolve" | "reassign" | null>(null);
   const [done, setDone] = useState("");
   const [changedMeanwhile, setChangedMeanwhile] = useState("");
@@ -94,6 +104,9 @@ export function CaseSection({
   };
 
   const leadingSignal = finding.signals[0]?.signal;
+  const earlier = isJoined ? null : (finding.earlier_case ?? null);
+  const ending = caseEndingSentence(root, zone);
+  const kept = keptSentence(root, zone);
 
   return (
     <section aria-label="The case" className="flex flex-col gap-3">
@@ -117,6 +130,20 @@ export function CaseSection({
         </p>
       ) : null}
       <CaseLine ref={line} view={{ finding: root, root, viewerId, zone }} />
+      {earlier != null ? (
+        // FR9, FR13: the service's earlier case, named and linked.
+        <p className={`text-ink text-sm ${PROSE}`}>
+          <Link
+            to="/findings/$findingId"
+            params={{ findingId: earlier.id }}
+            className="font-medium text-brand-text underline-offset-2 hover:underline"
+          >
+            {earlierCaseLine(earlier, zone).sentence}
+          </Link>
+        </p>
+      ) : null}
+      {ending != null ? <p className={`text-ink text-sm ${PROSE}`}>{ending}</p> : null}
+      {kept != null ? <p className={`text-ink-dim text-sm ${PROSE}`}>{kept}</p> : null}
 
       {canOperate ? (
         <div className="flex flex-col gap-2">
@@ -128,6 +155,30 @@ export function CaseSection({
               onClick={() => run("take", { case_state: "investigating" })}
             >
               Take this
+            </Button>
+          ) : null}
+          {actions.reopenEarlier != null ? (
+            <Button
+              variant="secondary"
+              className={CASE_ACTION}
+              pending={reopenEarlier.isPending}
+              pendingLabel="Reopening"
+              onClick={() => {
+                setDone("");
+                onOwnAct();
+                reopenEarlier.mutate(
+                  { case_state: "investigating" },
+                  {
+                    onSuccess: () => {
+                      setDone(caseDoneSentence("reopen"));
+                      onReload();
+                      landOnTheLine();
+                    },
+                  },
+                );
+              }}
+            >
+              Reopen that case
             </Button>
           ) : null}
           {actions.takeOverFrom != null ? (
@@ -246,6 +297,9 @@ export function CaseSection({
       ) : null}
       {change.isError && !isConflict(change.error) ? (
         <InlineFailure title="That did not go through" error={change.error} />
+      ) : null}
+      {reopenEarlier.isError ? (
+        <InlineFailure title="That case could not be reopened" error={reopenEarlier.error} />
       ) : null}
 
       {inSupportView ? (

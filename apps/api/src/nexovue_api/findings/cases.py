@@ -243,6 +243,9 @@ async def _join_existing_case(
     if root.case_state != "investigating":
         raise ConflictError(CHANGED_MEANWHILE)
     row.root_finding_id = root.id
+    # A person joining a finding to the case is an act on that case: its idle clock
+    # starts again (design, *Joining*; AC68), unlike a finding joining by itself.
+    root.case_activity_at = at
     await session.flush()
     await _event(
         session, "finding_joined_case", root, at=at, joined_finding_id=row.id, **_person(actor)
@@ -252,7 +255,6 @@ async def _join_existing_case(
     if assign_actor and root.assignee_id is None:
         root.assignee_id = actor.id
         root.assignee_acted_at = at
-        root.case_activity_at = at
         await _event(session, "assigned", root, at=at, assignee_id=actor.id, **_person(actor))
         await _audit(session, audit.CASE_ASSIGNED, root, actor, {"assignee_id": str(actor.id)})
     return root

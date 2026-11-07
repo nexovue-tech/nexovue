@@ -189,6 +189,27 @@ CROSS_TENANT_STATEMENTS: Final = (
         "a connector by its own id, from `_ACTIVE_INTEGRATIONS`; the poll that reports it "
         "carries no organization to bind",
     ),
+    # Cases (F22 T2.6): each step's first read finds the cases that need it in
+    # every organization; each case is then its own transaction, binding its own
+    # `org_id` (design, *Keeping and ending*).
+    _across(
+        "cases",
+        "_CLEARABLE_ASSIGNEES",
+        f"{_SWEEP}: active cases whose assignee left or became a viewer (AC10)",
+    ),
+    _across("cases", "_MISSED_JOINS", f"{_SWEEP}: open findings that missed their join (AC17)"),
+    _across(
+        "cases",
+        "_LEFT_ON_RESOLVED",
+        f"{_SWEEP}: open findings left on a resolved root (AC17)",
+    ),
+    _across("cases", "_IDLE_CASES", f"{_SWEEP}: active cases idle for 90 days (BR13)"),
+    _across(
+        "cases",
+        "_UNTOUCHED_CASES",
+        f"{_SWEEP}: untouched cases 72 hours after recovery (FR49)",
+    ),
+    _across("cases", "_DUE_WARNINGS", f"{_SWEEP}: active cases owed their idle warning (FR26)"),
     # Billing and erasure.
     _across("billing", "_END_LAPSED_GRACE", f"{_SWEEP}: subscriptions whose grace ended"),
     _across(
@@ -429,6 +450,12 @@ def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
     modules = {statement.module for statement in SCHEDULER_STATEMENTS}
     assert "nexovue_scheduler.detection.project_job" in modules
     assert "nexovue_platform.detection" in modules
+    # F22 T2.2: the case writers are walked, so their statements are held too.
+    assert {
+        "nexovue_platform.cases",
+        "nexovue_scheduler.detection.events",
+        "nexovue_scheduler.cases",
+    } <= modules
 
 
 def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None:

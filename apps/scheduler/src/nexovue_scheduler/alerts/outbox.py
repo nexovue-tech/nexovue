@@ -279,6 +279,7 @@ _TAKEN: Final = text(
            incidents.resolved_at, incidents.detail,
            findings.scope, findings.service_name, findings.title, findings.signals,
            findings.started_at, findings.closed_at, findings.closed_reason,
+           case_root.id AS case_root_id, case_root.case_opened_at AS case_opened_at,
            projects.name AS project_name,
            finding_rule.id AS finding_rule_id, finding_rule.name AS finding_rule_name,
            coalesce(notifications.dedup_key, {_OWN_KEY}) AS pagerduty_key,
@@ -291,6 +292,10 @@ _TAKEN: Final = text(
         ON incidents.id = notifications.incident_id AND incidents.org_id = notifications.org_id
     LEFT JOIN findings
         ON findings.id = notifications.finding_id AND findings.org_id = notifications.org_id
+    -- The case the finding is part of now, read as it is sent (F22 FR47): a finding
+    -- that left its case after this row was written names none.
+    LEFT JOIN findings AS case_root
+        ON case_root.id = findings.root_finding_id AND case_root.org_id = findings.org_id
     -- A finding's rows name no rule: one rule of its kind that sends to this channel
     -- names the message, while one exists.
     LEFT JOIN LATERAL (
@@ -423,9 +428,19 @@ class Subject:
     rule_name: str | None
     condition_kind: str
     detail: dict[str, Any]
+    # A finding's case, kept apart from `detail` so no machine payload can carry it.
+    case: CaseOfSubject | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "label", one_line(self.label))
+
+
+@dataclass(frozen=True, slots=True)
+class CaseOfSubject:
+    """The case a finding is part of when its message is composed (F22 FR47)."""
+
+    root_id: uuid.UUID
+    opened_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -703,6 +718,9 @@ def _subject(row: Any) -> Subject:
                 "project": row.project_name,
                 "adopted_shifts": row.adopted_shifts or [],
             },
+            case=None
+            if row.case_root_id is None or row.case_opened_at is None
+            else CaseOfSubject(root_id=row.case_root_id, opened_at=row.case_opened_at),
         )
     # Detection stopping and running again: the project is the subject (D24).
     return Subject(
