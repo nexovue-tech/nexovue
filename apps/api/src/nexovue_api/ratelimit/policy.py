@@ -259,7 +259,29 @@ TELEMETRY_PATHS: Final = (
     # F28: the comparison reads the version rollup. The list and a release read Postgres,
     # and share the tier as one prefix (design, *Rate limits*).
     f"{API_PREFIX}/releases",
+    # F20 D41: the dashboard batch, on a prefix of its own, so `/dashboards`, which reads
+    # Postgres only and must answer while ClickHouse is down, stays on the default tier.
+    f"{API_PREFIX}/dashboard-panels",
 )
+
+# F20. One dashboard is one request and many scans, each charged (`ratelimit/charge.py`),
+# so its limits are counted in scans. Every value here is a guess until plan T5.7
+# measures it (design, *Performance and scale*).
+#
+# The most scans one batch read may run. A definition whose worst case is over it is
+# refused at save, and a stored one over a lowered cap reads `over_limit` past it.
+MAX_SCANS_PER_READ: Final = 40
+# The fastest a dashboard refreshes: rollups change by the minute (`rollup.py`).
+REFRESH_FLOOR_SECONDS: Final = 30
+# The processes an install is sized for. The limiter gives each its share
+# (`limiter.py`), and a dashboard at the cap and floor must fit one person's (NFR3).
+LARGEST_SUPPORTED_API_INSTANCES: Final = 2
+# A batch's whole budget, counted from the request's arrival: slot waits, Postgres,
+# process-cap waits and scans (D25). The margin covers assembling and the network,
+# and the console aborts at their sum.
+PANEL_READ_DEADLINE_SECONDS: Final = 20
+PANEL_READ_MARGIN_SECONDS: Final = 5
+PANEL_READ_CLIENT_TIMEOUT_SECONDS: Final = PANEL_READ_DEADLINE_SECONDS + PANEL_READ_MARGIN_SECONDS
 
 # Probes must answer while the API is being hammered; that is the whole point
 # of them. They are also what an orchestrator uses to decide to restart us.

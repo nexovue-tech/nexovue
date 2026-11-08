@@ -27,6 +27,8 @@ FR1 = {
     Action.UPLOAD_SOURCE_MAPS: EVERYONE_WHO_WORKS,
     # F19 D20: reliability targets — create, change, disable, delete, restore.
     Action.CONFIGURE_SLOS: EVERYONE_WHO_WORKS,
+    # F20 BR7: dashboards — create, change, delete, restore, and read a draft.
+    Action.EDIT_DASHBOARDS: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
     Action.MANAGE_CONNECTIONS: ADMINISTRATORS,
@@ -36,6 +38,8 @@ FR1 = {
     # F22 BR16: deleting another person's note. An author deletes their own
     # through the route's own check, whatever their role, so no row covers that.
     Action.DELETE_ANY_CASE_NOTE: ADMINISTRATORS,
+    # F20 FR68, D47: removing a dashboard or one version at once, for a pasted secret.
+    Action.PURGE_DASHBOARDS: ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: ADMINISTRATORS,
     Action.MANAGE_MEMBERS: ADMINISTRATORS,

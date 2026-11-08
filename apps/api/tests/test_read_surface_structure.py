@@ -145,3 +145,34 @@ def test_every_surface_route_is_a_get(key: str) -> None:
     ]
     assert methods, f"{key} carries no route decorator"
     assert set(methods) == {"get"}, f"{key} serves {sorted(set(methods))}, not only GET"
+
+
+# F20 (AC9, D9): no API token reaches a dashboard route. `TenantRepository` itself depends
+# on `CurrentReader`, so a panels handler that dropped its gate would still read as
+# guarded to the rule above; each F20 handler must name its gate instead.
+DASHBOARD_ROUTERS: Final = ("nexovue_api/dashboards/", "nexovue_api/dashboardpanels/")
+DASHBOARD_GATES: Final = ("CurrentIdentity", "MayEditDashboards", "MayPurgeDashboards")
+
+
+def _dashboard_handlers() -> list[tuple[str, ast.AsyncFunctionDef | ast.FunctionDef]]:
+    return [
+        (key, node)
+        for key, node, decorators in _handlers()
+        if key.startswith(DASHBOARD_ROUTERS) and any("router." in d for d in decorators)
+    ]
+
+
+def test_the_dashboard_handlers_were_found() -> None:
+    """A rule that parsed nothing passes for the wrong reason."""
+    assert len(_dashboard_handlers()) >= 8
+
+
+@pytest.mark.parametrize("key", [key for key, _ in _dashboard_handlers()])
+def test_every_dashboard_handler_names_a_person_gate(key: str) -> None:
+    node = dict(_dashboard_handlers())[key]
+    annotations = _annotations(node)
+
+    assert any(gate in annotations for gate in DASHBOARD_GATES), (
+        f"{key} names none of {DASHBOARD_GATES}, so an API token may reach it"
+    )
+    assert READER not in annotations, f"{key} takes a {READER}: a token would reach it"

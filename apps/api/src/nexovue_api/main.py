@@ -33,6 +33,9 @@ from nexovue_api.checksecrets import router as check_secrets_router
 from nexovue_api.clientlogs import router as client_logs_router
 from nexovue_api.connections import router as connections_router
 from nexovue_api.connections import test_router as connection_tests_router
+from nexovue_api.dashboardpanels import router as dashboard_panels_router
+from nexovue_api.dashboardpanels.service import PanelReads
+from nexovue_api.dashboards import router as dashboards_router
 from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.detection import router as detection_router
@@ -102,6 +105,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Dependencies read configuration from here, so a test that builds the app
     # with explicit settings gets those and not whatever the environment holds.
     app.state.settings = settings
+    # F20: the dashboard batch's process caps and kept answers, in memory and per
+    # process like the limiter's counts. A share per organization only where more than
+    # one can exist (D26).
+    app.state.dashboard_reads = PanelReads.for_install(
+        shared_by_organizations=settings.is_hosted or settings.signup_enabled
+    )
 
     install_middleware(app, settings)
     install_error_handlers(app)
@@ -148,6 +157,10 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(findings_router.router)
     versioned.include_router(slos_router.router)
     versioned.include_router(slo_readings_router.router)
+    # F20: Postgres-only on the default tier, and the batch on the telemetry tier, under
+    # separate prefixes so no route order is load-bearing (D41).
+    versioned.include_router(dashboards_router.router)
+    versioned.include_router(dashboard_panels_router.router)
     versioned.include_router(detection_router.router)
     versioned.include_router(channels_router.router)
     versioned.include_router(channel_tests_router.router)

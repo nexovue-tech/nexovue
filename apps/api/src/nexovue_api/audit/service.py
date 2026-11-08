@@ -17,6 +17,7 @@ when, and nothing that grants access to anything.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
@@ -78,6 +79,14 @@ SLO_CREATED: Final = "slo.created"
 SLO_TARGET_CHANGED: Final = "slo.target_changed"
 SLO_DELETED: Final = "slo.deleted"
 SLO_RESTORED: Final = "slo.restored"
+# F20 (FR27). A dashboard's title, panel count, version and a hash of its definition,
+# and the hosts its links point at: enough to match an entry to an exported file, and
+# never the definition, whose notes may hold a pasted secret (AC13).
+DASHBOARD_CREATED: Final = "dashboard.created"
+DASHBOARD_UPDATED: Final = "dashboard.updated"
+DASHBOARD_DELETED: Final = "dashboard.deleted"
+DASHBOARD_RESTORED: Final = "dashboard.restored"
+DASHBOARD_PURGED: Final = "dashboard.purged"
 CHECK_CREATED: Final = "check.created"
 CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
@@ -192,6 +201,7 @@ API_TOKEN_TARGET: Final = "api_token"
 SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
 SLO_TARGET: Final = "slo"
+DASHBOARD_TARGET: Final = "dashboard"
 CHECK_SECRET_TARGET: Final = "check_secret"
 MAINTENANCE_WINDOW_TARGET: Final = "maintenance_window"
 NOTIFICATION_CHANNEL_TARGET: Final = "notification_channel"
@@ -693,6 +703,109 @@ def record_slo_deleted(db: AsyncSession, *, target: SloTarget, actor_user_id: uu
 
 def record_slo_restored(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
     _record_slo(db, SLO_RESTORED, target=target, actor_user_id=actor_user_id)
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardFacts:
+    """What a dashboard's audit entry says about it (FR27): never its definition."""
+
+    title: str
+    panel_count: int
+    version: int
+    definition_sha256: str
+    link_hosts: tuple[str, ...]
+
+
+def _record_dashboard(
+    db: AsyncSession,
+    action: str,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+    before: DashboardFacts | None = None,
+) -> None:
+    detail: dict[str, Any] = {
+        "title": facts.title,
+        "panel_count": facts.panel_count,
+        "version": facts.version,
+        "definition_sha256": facts.definition_sha256,
+    }
+    hosts_before = set(before.link_hosts) if before else set()
+    hosts_after = set(facts.link_hosts)
+    if added := sorted(hosts_after - hosts_before):
+        detail["link_hosts_added"] = added
+    if removed := sorted(hosts_before - hosts_after):
+        detail["link_hosts_removed"] = removed
+    if before is not None and before.title != facts.title:
+        detail["previous_title"] = before.title
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(DASHBOARD_TARGET, dashboard_id),
+        detail=detail,
+    )
+
+
+def record_dashboard_created(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+) -> None:
+    _record_dashboard(
+        db,
+        DASHBOARD_CREATED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+    )
+
+
+def record_dashboard_updated(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+    before: DashboardFacts,
+) -> None:
+    """A rename records the old title; links added or removed record their hosts."""
+    _record_dashboard(
+        db,
+        DASHBOARD_UPDATED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+        before=before,
+    )
+
+
+def record_dashboard_deleted(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+) -> None:
+    _record_dashboard(
+        db,
+        DASHBOARD_DELETED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+        before=facts,
+    )
 
 
 def record_check_created(db: AsyncSession, *, check: Check, actor_user_id: uuid.UUID) -> None:

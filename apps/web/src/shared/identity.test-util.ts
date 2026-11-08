@@ -16,6 +16,7 @@ const WORK: Action[] = [
   "operate_cases",
   "upload_source_maps",
   "configure_slos",
+  "edit_dashboards",
 ];
 const ADMINISTER: Action[] = [
   ...WORK,
@@ -25,6 +26,7 @@ const ADMINISTER: Action[] = [
   "configure_projects",
   "configure_detection",
   "delete_any_case_note",
+  "purge_dashboards",
   "manage_credentials",
   "manage_api_tokens",
   "manage_members",

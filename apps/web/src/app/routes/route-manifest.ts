@@ -20,6 +20,7 @@ export type NavPath =
   | "/overview"
   | "/alerts"
   | "/slos"
+  | "/dashboards"
   | "/services"
   | "/service-map"
   | "/traces"
@@ -61,6 +62,9 @@ export const NAV_SECTIONS: NavSection[] = [
       // F19 (D22): after Alerts. It answers "are we meeting our target", as those two
       // answer "what is wrong". "SLO" appears here so it can be found (D16).
       { path: "/slos", title: "Targets (SLOs)" },
+      // F20: reached on purpose, by someone who knows what they want to watch; the feed
+      // stays the front door (design, *What it deliberately is not*).
+      { path: "/dashboards", title: "Dashboards" },
     ],
   },
   {

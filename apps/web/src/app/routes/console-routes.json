@@ -7,6 +7,8 @@
   "/alerts/incidents/$incidentId",
   "/alerts/rules/$ruleId",
   "/alerts/rules/new",
+  "/dashboards",
+  "/dashboards/$dashboardId",
   "/docs",
   "/docs/$",
   "/errors",

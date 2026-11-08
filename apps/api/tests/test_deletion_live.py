@@ -52,6 +52,8 @@ from nexovue_api.data.postgres.models import (
     CheckVariable,
     Connection,
     ConnectionRepository,
+    Dashboard,
+    DashboardVersion,
     DeployEvent,
     DetectionBaseline,
     DetectionProjectRun,
@@ -170,6 +172,9 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "job_results",
     "connections",
     "connection_repositories",
+    # F20: dashboards belong to the organization, and their versions go with them.
+    "dashboards",
+    "dashboard_versions",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -243,6 +248,9 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     # F22: the organization's GitHub connection, holding a sealed key, and what it reaches.
     "connections": 1,
     "connection_repositories": ROWS_PER_TABLE,
+    # F20 (AC12): live dashboards and one deleted one, each with a kept version.
+    "dashboards": ROWS_PER_TABLE,
+    "dashboard_versions": ROWS_PER_TABLE,
 }
 
 
@@ -487,6 +495,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
         await _write_alert_rows(db, tenant, index, now)
     await _write_detection_project_rows(db, tenant, now)
     await _write_connection_rows(db, tenant)
+    await _write_dashboard_rows(db, tenant, now)
     db.add_all(
         [
             *(
@@ -782,6 +791,34 @@ async def _write_connection_rows(db: AsyncSession, tenant: Tenant) -> None:
             for index in range(ROWS_PER_TABLE)
         ]
     )
+
+
+async def _write_dashboard_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """F20 (AC12): dashboards hang off the organization alone, so a project's deletion
+    leaves them; the last is deleted, which must not save it from the organization's."""
+    for index in range(ROWS_PER_TABLE):
+        dashboard = Dashboard(
+            org_id=tenant.org_id,
+            title=f"dashboard {index}",
+            definition={"schema_version": 1, "panels": []},
+            version=2,
+            created_by=tenant.user_id,
+            updated_by=tenant.user_id,
+            deleted_at=now if index == ROWS_PER_TABLE - 1 else None,
+        )
+        db.add(dashboard)
+        await db.flush()
+        db.add(
+            DashboardVersion(
+                dashboard_id=dashboard.id,
+                org_id=tenant.org_id,
+                version=1,
+                title=dashboard.title,
+                definition={"schema_version": 1, "panels": []},
+                saved_by=tenant.user_id,
+                saved_at=now,
+            )
+        )
     await db.flush()
 
 

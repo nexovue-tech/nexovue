@@ -10,6 +10,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
 import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import { useDetectionSettings } from "@/shared/detection/api";
+import { detectionHeadlineFor, headlineFor } from "@/shared/detection/headline";
 import { formatDuration } from "@/shared/format/duration";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
@@ -41,7 +42,6 @@ import type { FeedChoice } from "./feed-filter";
 import { ACROSS_PROJECTS, FEED_CHOICES, NO_CASES, parseFeedSearch } from "./feed-filter";
 import { caseEndingSentence, caseSentence } from "./finding-page";
 import { CLOSED_AS } from "./finding-words";
-import { detectionHeadlineFor, headlineFor } from "./headline";
 import { orderFindings } from "./ordering";
 
 /**

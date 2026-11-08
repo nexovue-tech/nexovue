@@ -181,6 +181,11 @@ POLICY_OF: Final = {
     "nexovue_api/slos/router.py:change_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:delete_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:restore_slo": "MayConfigureSlos",
+    # F20: dashboards, every working role's (BR7, foundation section 5). Purge, an
+    # owner's or an admin's, joins with its route (plan T7.7).
+    "nexovue_api/dashboards/router.py:create_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:replace_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:delete_dashboard": "MayEditDashboards",
     "nexovue_api/detection/router.py:snooze_service": "MayOperateAlerts",
     # F6 (FR23, D11): what decides whether detection is heard at all, and what it
     # judges by, is an admin's.

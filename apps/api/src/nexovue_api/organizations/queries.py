@@ -25,6 +25,7 @@ from nexovue_api.data.postgres.models import (
     BillingSubscription,
     BillingWebhookDelivery,
     Connection,
+    Dashboard,
     Job,
     JobResult,
     NotificationChannel,
@@ -102,6 +103,11 @@ async def delete_jobs(session: AsyncSession, org_id: uuid.UUID) -> int:
     return await _rows_deleted(session, delete(Job).where(Job.org_id == org_id))
 
 
+async def delete_dashboards(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's dashboards, deleted ones too. Their versions go by cascade."""
+    return await _rows_deleted(session, delete(Dashboard).where(Dashboard.org_id == org_id))
+
+
 async def delete_job_results(session: AsyncSession, org_id: uuid.UUID) -> int:
     """What a Run now or a send test found, not yet collected."""
     return await _rows_deleted(session, delete(JobResult).where(JobResult.org_id == org_id))
@@ -124,6 +130,7 @@ DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitabl
     "jobs": delete_jobs,
     "job_results": delete_job_results,
     "connections": delete_connections,
+    "dashboards": delete_dashboards,
     "users": delete_users,
     "projects": delete_projects,
 }

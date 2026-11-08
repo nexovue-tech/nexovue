@@ -27,6 +27,9 @@ class Action(StrEnum):
     # Reliability targets (F19, D20): create, change, disable, delete, restore.
     # Every change is visible to all and a deletion can be undone for 30 days.
     CONFIGURE_SLOS = "configure_slos"
+    # Dashboards (F20, BR7): create, change, delete, restore, and read a draft.
+    # Any working role may change any dashboard, because a version remains to go back to.
+    EDIT_DASHBOARDS = "edit_dashboards"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
     # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
@@ -41,6 +44,9 @@ class Action(StrEnum):
     # delete their own, even as a viewer: the one exception to the viewer rule,
     # checked by the service on the route itself.
     DELETE_ANY_CASE_NOTE = "delete_any_case_note"
+    # Removing a dashboard or one of its versions at once, past every way back (F20,
+    # FR68, D47): the answer to a pasted secret, so it is an administrator's.
+    PURGE_DASHBOARDS = "purge_dashboards"
     # Ingest keys, site keys, deploy webhook secrets and integrations.
     MANAGE_CREDENTIALS = "manage_credentials"
     # Read tokens for the organization's own data (F36, BR9).
@@ -66,12 +72,14 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.OPERATE_CASES: _EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: _EVERYONE_WHO_WORKS,
     Action.CONFIGURE_SLOS: _EVERYONE_WHO_WORKS,
+    Action.EDIT_DASHBOARDS: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: _ADMINISTRATORS,
     Action.DELETE_ANY_CASE_NOTE: _ADMINISTRATORS,
+    Action.PURGE_DASHBOARDS: _ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: _ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: _ADMINISTRATORS,
     Action.MANAGE_MEMBERS: _ADMINISTRATORS,

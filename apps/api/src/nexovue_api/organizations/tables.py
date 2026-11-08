@@ -50,6 +50,9 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     # F22. Tracker connections belong to the organization. Before `users`, whom a
     # setup names; their sealed keys go with the row.
     "connections",
+    # F20. Dashboards belong to the organization, not a project (BR1), so a project's
+    # deletion leaves them. Before `users`, whom their owner and editor columns name.
+    "dashboards",
     "users",
     "projects",
 )
@@ -124,6 +127,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # on purpose — `models.UserRecoveryCode` argues why — so it is reached here
     # through the person it belongs to, and `users` is deleted directly above.
     "user_recovery_codes": "users",
+    # F20. A dashboard's kept versions go with it.
+    "dashboard_versions": "dashboards",
     # F36. Keyed by token, carrying no `org_id`: the token it names carries one,
     # and the counters die with it.
     "api_token_usage_daily": "api_tokens",

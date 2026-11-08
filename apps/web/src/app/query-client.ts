@@ -11,6 +11,11 @@
  *   429  toast, honouring Retry-After
  *   5xx  toast, and retry with backoff
  *   offline  the shell banner covers it; no toast on top of it
+ *
+ * One exception, declared by the query rather than guessed here: a query's `meta` may
+ * name statuses its own screen says in words, and those raise no toast. The dashboard
+ * batch says a 503 and a 429 on the page (F20, AC61, AC145); a toast repeating every
+ * refresh on a wall display would be noise over the real message.
  */
 
 import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
@@ -20,6 +25,21 @@ import { logger } from "@/shared/logger";
 import { clearSession, rememberReturnTo } from "@/shared/session";
 import { showToast } from "@/shared/toast/toast-store";
 
+/** Failures a screen may say in its own words, named for what they mean, not by status. */
+export type OwnWords = "unavailable" | "rate-limited";
+
+/** What a query may declare about its own failures. */
+export interface ApiQueryMeta extends Record<string, unknown> {
+  /** Failures this query's screen states say itself: no toast for them. */
+  ownWords?: readonly OwnWords[];
+}
+
+declare module "@tanstack/react-query" {
+  interface Register {
+    queryMeta: ApiQueryMeta;
+  }
+}
+
 const STALE_TIME_MS = 30_000;
 const MAX_SERVER_ERROR_RETRIES = 2;
 
@@ -27,6 +47,12 @@ const HTTP_UNAUTHORIZED = 401;
 const HTTP_FORBIDDEN = 403;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR_FLOOR = 500;
+const HTTP_SERVICE_UNAVAILABLE = 503;
+
+const STATUS_OF: Record<OwnWords, number> = {
+  unavailable: HTTP_SERVICE_UNAVAILABLE,
+  "rate-limited": HTTP_TOO_MANY_REQUESTS,
+};
 
 /**
  * The screens where nobody is signed in yet, so a 401 is an answer rather than a lapse.
@@ -49,7 +75,11 @@ function describeWait(seconds: number | undefined): string {
 }
 
 /** Returns true when the error has been fully dealt with and needs no further UI. */
-function handleApiFailure(error: unknown, operation: string): void {
+function handleApiFailure(
+  error: unknown,
+  operation: string,
+  ownWords: readonly OwnWords[] = [],
+): void {
   if (!(error instanceof ApiError)) {
     logger.error(`${operation} failed`, error);
     return;
@@ -77,6 +107,9 @@ function handleApiFailure(error: unknown, operation: string): void {
 
   // 403 is a property of the screen, not a passing event: the route boundary renders it.
   if (status === HTTP_FORBIDDEN) return;
+
+  // A rate limit or an outage the screen states in its own words (`ApiQueryMeta`).
+  if (ownWords.some((words) => STATUS_OF[words] === status)) return;
 
   if (status === HTTP_TOO_MANY_REQUESTS) {
     showToast("Rate limited by the API.", {
@@ -108,7 +141,8 @@ function shouldRetry(failureCount: number, error: unknown): boolean {
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     queryCache: new QueryCache({
-      onError: (error, query) => handleApiFailure(error, `Query ${String(query.queryKey[0])}`),
+      onError: (error, query) =>
+        handleApiFailure(error, `Query ${String(query.queryKey[0])}`, query.meta?.ownWords),
     }),
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) =>

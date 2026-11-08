@@ -103,6 +103,14 @@ const SlosScreen = lazyRouteComponent(() => import("@/features/slos/SlosScreen")
 const SloScreen = lazyRouteComponent(() => import("@/features/slos/SloScreen"), "SloScreen");
 const NewSloScreen = lazyRouteComponent(() => import("@/features/slos/SloForm"), "NewSloScreen");
 const EditSloScreen = lazyRouteComponent(() => import("@/features/slos/SloForm"), "EditSloScreen");
+const DashboardListScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardListScreen"),
+  "DashboardListScreen",
+);
+const DashboardScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardScreen"),
+  "DashboardScreen",
+);
 const AuditScreen = lazyRouteComponent(() => import("@/features/audit/AuditScreen"), "AuditScreen");
 const AcceptInviteScreen = lazyRouteComponent(
   () => import("@/features/auth/AcceptInviteScreen"),
@@ -496,6 +504,24 @@ const editSloRoute = createRoute({
   component: EditSloScreen,
 });
 
+// F20: dashboards. The builder's `/dashboards/new` and `.../edit` arrive with plan Step 3.
+const dashboardsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards",
+  component: DashboardListScreen,
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/$dashboardId",
+  component: DashboardRoute,
+});
+
+function DashboardRoute() {
+  const { dashboardId } = dashboardRoute.useParams();
+  return <DashboardScreen dashboardId={dashboardId} />;
+}
+
 const profilesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/profiles",
@@ -792,6 +818,8 @@ const routeTree = rootRoute.addChildren([
     newSloRoute,
     sloRoute,
     editSloRoute,
+    dashboardsRoute,
+    dashboardRoute,
     servicesRoute,
     serviceRoute,
     serviceMapRoute,

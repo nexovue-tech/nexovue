@@ -1,10 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-
 import { apiClient } from "@/shared/api-client";
 import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
+import type { DetectionStatus, ProjectTotals } from "@/shared/detection/headline";
 import type { OverviewPoint } from "@/shared/overview-plots";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
+
+// The headline's shapes moved to `shared/` with it (F20, T2.18); the feed still names them here.
+export type {
+  CheckCounts,
+  DetectionState,
+  DetectionStatus,
+  ProjectTotals,
+} from "@/shared/detection/headline";
 
 /**
  * The feed, and the reads its healthy state is made of.
@@ -337,15 +345,6 @@ export function useResolveFromFeed() {
   });
 }
 
-export interface ProjectTotals {
-  service_count: number;
-  error_count: number;
-  requests_per_minute: number;
-  /** A fraction, not a percentage: 0.05 is one call in twenty. */
-  error_rate: number;
-  p95_ms: number;
-}
-
 interface ServiceOverviewResponse {
   totals: ProjectTotals;
   /** The same buckets Overview draws. The feed draws them too, from this one answer. */
@@ -364,11 +363,6 @@ interface CheckSummary {
 }
 
 /** What the screen knows about this project's checks. */
-export interface CheckCounts {
-  total: number;
-  passing: number;
-  down: number;
-}
 
 interface CheckListResponse {
   checks: CheckSummary[];
@@ -430,30 +424,6 @@ export function useCheckCounts(
 }
 
 /** What detection is doing for a project, decided by the API, never inferred here. */
-export type DetectionState =
-  | "learning"
-  | "judging"
-  | "data_delayed"
-  | "not_running"
-  | "no_services"
-  | "too_many_services";
-
-export interface DetectionStatus {
-  state: DetectionState;
-  services_total: number;
-  services_learning: number;
-  services_judged: number;
-  services_delayed: number;
-  services_muted: number;
-  /** A day on the project's calendar (`2026-11-03`), or null when nothing is learning. */
-  earliest_judging_date: string | null;
-  not_running_since: string | null;
-  delayed_since: string | null;
-  open_findings: number;
-  /** Services past the cap, which are not judged; a project judges at most the limit. */
-  services_too_many: number;
-  judged_service_limit: number;
-}
 
 /**
  * Whether detection is judging this project, for the line above the checks

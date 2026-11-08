@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CheckCounts, DetectionStatus, ProjectTotals } from "./api";
+import type { CheckCounts, DetectionStatus, ProjectTotals } from "./headline";
 import { detectionHeadlineFor, headlineFor } from "./headline";
 
 /**

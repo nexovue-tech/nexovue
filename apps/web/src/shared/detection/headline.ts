@@ -2,8 +2,6 @@ import { UNKNOWN } from "@/shared/format/number";
 import type { ZonedOptions } from "@/shared/format/zoned";
 import { formatCalendarDay, formatZonedTime } from "@/shared/format/zoned";
 
-import type { CheckCounts, DetectionStatus, ProjectTotals } from "./api";
-
 /**
  * What the screen is allowed to say about the project's health. Two lines, from two
  * sources, and neither speaks for more than it saw.
@@ -19,9 +17,55 @@ import type { CheckCounts, DetectionStatus, ProjectTotals } from "./api";
  * the whole system is healthy (`docs/changes/findings-false-all-clear/bug.md`), and no
  * line on this screen ever says "All systems normal" on its own.
  *
+ * In `shared/` because the feed and a dashboard both say it (F20, FR63), and neither may
+ * import the other; its types came with it, since `shared/` may not import a feature.
+ *
  * Errors are deliberately not a headline. A nonzero error rate is normal for most
  * services, and deciding when it is not is the engine's job.
  */
+
+/** The project's RED totals the checks' line reads (`/services/overview`). */
+export interface ProjectTotals {
+  service_count: number;
+  error_count: number;
+  requests_per_minute: number;
+  /** A fraction, not a percentage: 0.05 is one call in twenty. */
+  error_rate: number;
+  p95_ms: number;
+}
+
+/** What the checks said in the window (`/synthetics/checks`). */
+export interface CheckCounts {
+  total: number;
+  passing: number;
+  down: number;
+}
+
+export type DetectionState =
+  | "learning"
+  | "judging"
+  | "data_delayed"
+  | "not_running"
+  | "no_services"
+  | "too_many_services";
+
+/** Detection's status for a project (`detection/schemas.py`, `ProjectDetectionStatus`). */
+export interface DetectionStatus {
+  state: DetectionState;
+  services_total: number;
+  services_learning: number;
+  services_judged: number;
+  services_delayed: number;
+  services_muted: number;
+  /** A day on the project's calendar (`2026-11-03`), or null when nothing is learning. */
+  earliest_judging_date: string | null;
+  not_running_since: string | null;
+  delayed_since: string | null;
+  open_findings: number;
+  /** Services past the cap, which are not judged; a project judges at most the limit. */
+  services_too_many: number;
+  judged_service_limit: number;
+}
 
 export interface Headline {
   title: string;

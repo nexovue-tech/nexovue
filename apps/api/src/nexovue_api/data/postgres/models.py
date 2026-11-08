@@ -2986,3 +2986,113 @@ class ReleaseSyncState(Base):
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
     )
     synced_through: Mapped[RequiredTimestamp]
+
+
+# F20. What a dashboard may hold is checked by `dashboards/definition.py`, the one way
+# a definition enters; these are the bounds the database also holds.
+DASHBOARD_TITLE_MAX_LENGTH: Final = 120
+DASHBOARD_DESCRIPTION_MAX_LENGTH: Final = 500
+
+
+class Dashboard(Base):
+    """A saved dashboard (F20, BR1): one checked JSON definition, owned by the organization
+    and shown against whichever project the reader names.
+
+    Soft-deleted for 30 days (FR51). `panel_count`, `service_names` and `uses_picker` are
+    written at save from the compiled definition, so lists never read the JSON (AC96).
+    `created_by` and `updated_by` survive a member's removal, which scrubs the person
+    rather than deleting the row, so the owner reads "Former member" (FR38)."""
+
+    __tablename__ = "dashboards"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # The optimistic lock: a save names the version it was based on (FR19).
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # Written by a batch read at most hourly, never by a support view (FR37).
+    last_viewed_at: Mapped[OptionalTimestamp]
+    panel_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    service_names: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    uses_picker: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    panels_not_reading: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+    deleted_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_dashboards_org_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_dashboards_created_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "updated_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (updated_by)",
+            name="fk_dashboards_updated_by",
+        ),
+        CheckConstraint("jsonb_typeof(definition) = 'object'", name="definition_is_an_object"),
+        CheckConstraint(
+            f"char_length(title) BETWEEN 1 AND {DASHBOARD_TITLE_MAX_LENGTH}",
+            name="title_length",
+        ),
+        CheckConstraint(
+            f"char_length(description) <= {DASHBOARD_DESCRIPTION_MAX_LENGTH}",
+            name="description_length",
+        ),
+        # BR12: no two live dashboards share a title, ignoring case.
+        Index(
+            "uq_dashboards_live_title",
+            "org_id",
+            text("lower(title)"),
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_dashboards_org_id_last_viewed_at", "org_id", "last_viewed_at"),
+        Index("ix_dashboards_service_names", "service_names", postgresql_using="gin"),
+    )
+
+
+class DashboardVersion(Base):
+    """A version a save replaced (F20, FR51): who saved it and when, so "Restore this
+    version" is an ordinary save. Trimmed only past the newest 20 and older than 30 days."""
+
+    __tablename__ = "dashboard_versions"
+
+    dashboard_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    saved_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    saved_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "dashboard_id"],
+            ["dashboards.org_id", "dashboards.id"],
+            ondelete="CASCADE",
+            name="fk_dashboard_versions_dashboard",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "saved_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (saved_by)",
+            name="fk_dashboard_versions_saved_by",
+        ),
+        CheckConstraint("jsonb_typeof(definition) = 'object'", name="definition_is_an_object"),
+    )
