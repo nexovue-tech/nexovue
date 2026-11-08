@@ -78,7 +78,8 @@ init({
   siteKey: "nvp_live_xxxxxxxxxxxxxxxxxxxxxx",
   endpoint: "https://ingest.nexovue.com",
   serviceName: "storefront",
-  serviceVersion: "1.4.0",
+  // Your bundler's build id, so each build is its own version; never a fixed value.
+  serviceVersion: import.meta.env.VITE_BUILD_VERSION,
 });
 ```
 
@@ -110,7 +111,7 @@ nobody records.
 | `siteKey` | required | The `nvp_live_` key |
 | `endpoint` | required | The receiver origin, absolute `http` or `https` |
 | `serviceName` | the page's hostname | What the property is called in nexovue |
-| `serviceVersion` | none | Joins the telemetry to a release |
+| `serviceVersion` | none | Joins the telemetry and its source maps to a build. Set it from your build id. A browser never makes a release on its own: releases come from your servers' traffic and your CI |
 | `route` | none | The route template this page belongs to, such as `/products/{id}` |
 | `captureQueryAndFragment` | `false` | Lets the query string and fragment leave the page |
 | `flushIntervalMs` | 10000 | How often a batch is sent |

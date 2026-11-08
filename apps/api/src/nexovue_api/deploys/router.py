@@ -1,7 +1,7 @@
 """Deploy notifications: one public door, two signed-in reads.
 
 ``POST /deploys/webhook/{project_id}`` is the only unauthenticated write in the
-control plane. Two consequences shape this module:
+control plane (F28's batch envelope, design *Routes*). Two consequences shape this module:
 
 * the body is read as **raw bytes**, not as a parsed model — a signature is over
   the bytes that arrived, and a pydantic body parameter would have FastAPI
@@ -15,7 +15,9 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from nexovue_platform.checks.sealing import SealedBox
+from pydantic import AwareDatetime
 
 from nexovue_api.auth.dependencies import CurrentReader
 from nexovue_api.auth.policy import MayManageCredentials
@@ -23,42 +25,69 @@ from nexovue_api.deploys import service, signatures
 from nexovue_api.deploys.schemas import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
+    DeployBatchAnswer,
     DeployEventListResponse,
-    DeployEventSummary,
+    MintedWebhookSecretResponse,
     WebhookSecretsResponse,
 )
-from nexovue_api.deps import DbSession
+from nexovue_api.deps import AppSettings, DbSession
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.projects.service import refuse_out_of_scope
+from nexovue_api.ratelimit.limiter import Decision, RateLimiter
+from nexovue_api.ratelimit.policy import DEPLOYS_ACCEPTED
 
 router = APIRouter(prefix="/deploys", tags=["deploys"])
 
-# A deploy notification is a handful of fields. Anything larger is not one, and
-# buffering it to find that out would be the attack rather than the defence.
-MAX_BODY_BYTES: Final = 64 * 1024
+# F28 FR6 (a starting guess): room for 100 items with every field at its limit in plain
+# ASCII. An unauthenticated caller chooses how much it sends, so the bound comes first.
+MAX_BODY_BYTES: Final = 512 * 1024
 
-BODY_TOO_LARGE_DETAIL: Final = f"A deploy notification must be at most {MAX_BODY_BYTES} bytes."
+BODY_TOO_LARGE_DETAIL: Final = "A deploy request must be at most 512 KiB; send fewer items."
+
+# Whose hourly allowance a batch spends (FR13): the project's, once signed.
+_LIMIT_SCOPE: Final = "project"
+
+
+def _secret_box(settings: AppSettings) -> SealedBox:
+    return service.secret_box(settings.credential_keys)
+
+
+DeploySecretBox = Annotated[SealedBox, Depends(_secret_box)]
+
+
+def _rate_limiter(request: Request) -> RateLimiter:
+    """The middleware's limiter, which the lifespan puts on the app: the hourly count is
+    the route's, once the signature has held, so it cannot be the middleware's (FR13)."""
+    limiter: RateLimiter = request.app.state.rate_limiter
+    return limiter
+
+
+DeployLimiter = Annotated[RateLimiter, Depends(_rate_limiter)]
 
 
 @router.post(
     "/webhook/{project_id}",
-    status_code=status.HTTP_201_CREATED,
-    summary="Record a deploy, signed with the project's deploy secret",
+    summary="Record a batch of deploys, signed with one of the project's deploy secrets",
 )
-async def receive_deploy(
+async def receive_deploys(
     db: DbSession,
     request: Request,
     project_id: uuid.UUID,
-) -> DeployEventSummary:
+    box: DeploySecretBox,
+    limiter: DeployLimiter,
+) -> DeployBatchAnswer:
+    async def charge(cost: int) -> Decision:
+        return await limiter.consume(
+            scope=_LIMIT_SCOPE, identity=str(project_id), quota=DEPLOYS_ACCEPTED, cost=cost
+        )
+
     return await service.record_from_webhook(
         db,
         project_id=project_id,
         body=await _bounded_body(request),
         signature=request.headers.get(signatures.SIGNATURE_HEADER),
-        # The sender's id for this delivery. GitHub's signature carries no
-        # timestamp, so this is the only thing that makes a captured request
-        # distinguishable from a genuine retry.
-        delivery_id=request.headers.get(signatures.DELIVERY_HEADER),
+        box=box,
+        charge=charge,
     )
 
 
@@ -78,49 +107,69 @@ async def list_deploys(
 
 @router.get(
     "/webhook-secrets",
-    summary="The deploy secrets this project's webhook will accept",
+    summary="The deploy secrets this project accepts, and what its intake last saw",
 )
 async def read_webhook_secrets(
-    # The secrets themselves, so a credential action even though it only reads.
+    # A credential's settings, though no value is ever read back (F28 D7).
     identity: MayManageCredentials,
     db: DbSession,
     project_id: uuid.UUID,
 ) -> WebhookSecretsResponse:
-    return await service.webhook_secrets(
-        db,
-        org_id=identity.org_id,
-        project_id=project_id,
-        actor_user_id=identity.user.id,
-    )
+    return await service.webhook_secrets(db, org_id=identity.org_id, project_id=project_id)
 
 
 @router.post(
     "/webhook-secrets",
     status_code=status.HTTP_201_CREATED,
-    summary="Mint a deploy secret, leaving existing ones live",
+    summary="Mint a deploy secret, shown this once, leaving existing ones live",
 )
 async def create_webhook_secret(
     identity: MayManageCredentials,
     db: DbSession,
     project_id: uuid.UUID,
-) -> WebhookSecretsResponse:
+    box: DeploySecretBox,
+) -> MintedWebhookSecretResponse:
     return await service.create_webhook_secret(
-        db, org_id=identity.org_id, project_id=project_id, actor_user_id=identity.user.id
+        db,
+        org_id=identity.org_id,
+        project_id=project_id,
+        actor_user_id=identity.user.id,
+        box=box,
     )
 
 
 @router.delete(
     "/webhook-secrets/{secret_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Withdraw a deploy secret",
+    summary="Withdraw a deploy secret, and optionally remove what it sent since a time",
 )
 async def revoke_webhook_secret(
     identity: MayManageCredentials,
     db: DbSession,
     secret_id: uuid.UUID,
+    remove_since: Annotated[AwareDatetime | None, Query()] = None,
 ) -> None:
     await service.revoke_webhook_secret(
-        db, org_id=identity.org_id, secret_id=secret_id, actor_user_id=identity.user.id
+        db,
+        org_id=identity.org_id,
+        secret_id=secret_id,
+        actor_user_id=identity.user.id,
+        remove_since=remove_since,
+    )
+
+
+@router.delete(
+    "/{deploy_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove one deploy, and work out its release again",
+)
+async def delete_deploy(
+    identity: MayManageCredentials,
+    db: DbSession,
+    deploy_id: uuid.UUID,
+) -> None:
+    await service.remove_deploy(
+        db, org_id=identity.org_id, deploy_id=deploy_id, actor_user_id=identity.user.id
     )
 
 

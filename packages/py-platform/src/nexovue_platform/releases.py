@@ -43,6 +43,9 @@ OTHER_VERSION: Final = "__other__"
 NO_VERSION: Final = ""
 # `releases.service_name` and `releases.version` (`models.NAME_MAX_LENGTH`).
 NAME_MAX_LENGTH: Final = 200
+# One cap on both doors (FR56, a starting guess): past it, a project evicts before it
+# creates, so a new real version always appears.
+RELEASES_PER_PROJECT: Final = 50_000
 
 # ---------------------------------------------------------- floors and rules
 

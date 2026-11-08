@@ -34,6 +34,7 @@ ENV: Final = VERSIONS.parent / "env.py"
 # record of what happened to a case, which exist nowhere else.
 # 0054 holds releases and their periods, which outlive the version rollup's 35 days.
 # 0056 adds dashboards and their versions, what people built (F20).
+# 0057 deletes clear-text deploy secrets, and holds deploys' states, commits and links.
 ROLL_FORWARD_ONLY: Final = (
     "0020",
     "0022",
@@ -46,6 +47,7 @@ ROLL_FORWARD_ONLY: Final = (
     "0053",
     "0054",
     "0056",
+    "0057",
 )
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"

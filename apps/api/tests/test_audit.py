@@ -205,6 +205,71 @@ def test_a_system_action_records_no_actor(organization: Organization) -> None:
     assert entry.actor_user_id is None
 
 
+def test_a_deploy_batch_is_one_entry_naming_its_secret_count_and_first_deploy(
+    organization: Organization,
+) -> None:
+    """F28 T2.4: one row per accepted request, replacing a row per deploy, with what an
+    investigation needs to find the deploys again. No actor: a secret signed it."""
+    db = RecordingDbSession()
+    project_id, secret_id, first_deploy = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+    audit.record_deploy_batch_recorded(
+        db,  # type: ignore[arg-type]
+        org_id=organization.id,
+        project_id=project_id,
+        secret_id=secret_id,
+        count=100,
+        first_deploy_id=first_deploy,
+    )
+
+    (entry,) = db.entries
+    assert entry.action == audit.DEPLOY_BATCH_RECORDED == "deploy.batch_recorded"
+    assert entry.actor_user_id is None
+    assert entry.target == f"{audit.PROJECT_TARGET}:{project_id}"
+    assert entry.detail == {
+        "secret_id": str(secret_id),
+        "count": 100,
+        "first_deploy_id": str(first_deploy),
+    }
+
+
+def test_removing_deploys_records_who_and_which_secret_and_since_when(
+    organization: Organization, user: User
+) -> None:
+    db = RecordingDbSession()
+    project_id, secret_id = uuid.uuid4(), uuid.uuid4()
+    since = datetime(2026, 11, 8, 9, 30, tzinfo=UTC)
+
+    audit.record_deploys_removed(
+        db,  # type: ignore[arg-type]
+        org_id=organization.id,
+        project_id=project_id,
+        actor_user_id=user.id,
+        count=3,
+        deploy_id=None,
+        secret_id=secret_id,
+        since=since,
+    )
+
+    (entry,) = db.entries
+    assert entry.action == audit.DEPLOY_REMOVED == "deploy.removed"
+    assert entry.actor_user_id == user.id
+    assert entry.detail == {
+        "count": 3,
+        "deploy_id": None,
+        "secret_id": str(secret_id),
+        "since": since.isoformat(),
+    }
+
+
+def test_nothing_records_a_deploy_secret_as_viewed_now_none_can_be() -> None:
+    """Secrets are shown once (D7), so the "viewed" entry and its per-deploy sibling
+    are gone, not left unused."""
+    assert not hasattr(audit, "DEPLOY_WEBHOOK_SECRET_VIEWED")
+    assert not hasattr(audit, "record_deploy_webhook_secret_viewed")
+    assert not hasattr(audit, "DEPLOY_RECORDED")
+
+
 # --------------------------------------------------------- through the endpoints
 
 

@@ -31,12 +31,14 @@ from typing import Any, Final
 
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
+    DEPLOY_WEBHOOK_PURPOSE,
     NOTIFICATION_CHANNEL_PURPOSE,
     ConfiguredKeys,
     SealedBox,
     SealError,
     channel_secret_owner,
     check_secret_owner,
+    deploy_webhook_owner,
     keyring_from,
     sealed_key_id,
 )
@@ -173,6 +175,21 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
     _connection_column("sealed_credential", CONNECTION_CREDENTIAL_PURPOSE),
     _connection_column("sealed_webhook_secret", CONNECTION_WEBHOOK_SECRET_PURPOSE),
     _connection_column("sealed_manifest_code", CONNECTION_MANIFEST_CODE_PURPOSE),
+    # F28 D7: deploy secrets, under the credential key, bound to project and row.
+    SealedColumn(
+        name="project_webhook_secrets.sealed_secret",
+        purpose=DEPLOY_WEBHOOK_PURPOSE,
+        keys=lambda keys: keys.credential,
+        page=text(
+            "SELECT id AS pk, project_id, sealed_secret AS sealed FROM project_webhook_secrets "
+            "WHERE id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE project_webhook_secrets SET sealed_secret = :new "
+            "WHERE id = :pk AND sealed_secret = :old"
+        ),
+        owner=lambda row: deploy_webhook_owner(str(row.project_id), str(row.pk)),
+    ),
 )
 
 

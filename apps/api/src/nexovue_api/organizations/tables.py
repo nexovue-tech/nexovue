@@ -115,6 +115,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "releases": "projects",
     "release_periods": "releases",
     "release_sync_state": "projects",
+    # F28 T2.1: what the Deploys section shows of the project's intake.
+    "deploy_intake_state": "projects",
     "detection_state": "projects",
     "detection_project_runs": "projects",
     "detection_baselines": "projects",

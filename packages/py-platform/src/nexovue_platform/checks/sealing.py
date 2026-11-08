@@ -177,3 +177,13 @@ NOTIFICATION_CHANNEL_PURPOSE: Final = "notification-channel"
 
 def channel_secret_owner(org_id: str, channel_id: str) -> str:
     return f"{org_id}:{channel_id}"
+
+
+# F28, design 2 (D7): a deploy webhook's signing secret. The credential key, which only
+# the API holds, under its own purpose, bound to the project and the secret's own id, so
+# a sealed value copied to another row or project fails to open.
+DEPLOY_WEBHOOK_PURPOSE: Final = "deploy-webhook"
+
+
+def deploy_webhook_owner(project_id: str, secret_id: str) -> str:
+    return f"{project_id}:{secret_id}"

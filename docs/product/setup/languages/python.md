@@ -52,10 +52,16 @@ it.
 
 ```
 OTEL_SERVICE_NAME=checkout
+OTEL_RESOURCE_ATTRIBUTES=service.version=$GIT_SHA
 OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.nexovue.com
 OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=nvk_live_xxxxxxxxxxxxxxxxxxxxxx
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ```
+
+`service.version` comes from your build — the image tag or commit your deploy already
+knows, put into the variable where you deploy, never a fixed value such as `latest`. It is
+how releases appear in nexovue with no other setup; [deploys.md](../deploys.md) shows it
+for Kubernetes, Docker and systemd.
 
 ### 4. Start through the launcher
 

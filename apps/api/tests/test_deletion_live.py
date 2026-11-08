@@ -55,6 +55,7 @@ from nexovue_api.data.postgres.models import (
     Dashboard,
     DashboardVersion,
     DeployEvent,
+    DeployIntakeState,
     DetectionBaseline,
     DetectionProjectRun,
     DetectionState,
@@ -73,6 +74,7 @@ from nexovue_api.data.postgres.models import (
     NotificationChannel,
     Organization,
     PlanGrant,
+    ProjectWebhookSecret,
     ServiceDetectionSettings,
     ServiceLastSeen,
     SessionRecord,
@@ -145,6 +147,7 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "integrations",
     "deploy_events",
     "project_webhook_secrets",
+    "deploy_intake_state",
     "source_maps",
     "usage_daily",
     "usage_daily_services",
@@ -180,10 +183,11 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
 # What the fixture writes, per tenant, spelled out rather than counted at run
 # time. Written out because it is the "before" half of the evidence: a fixture
 # that quietly stopped writing to a table would make the deletion of that table
-# unprovable while every assertion still passed. `users`, `projects`, `api_keys`
-# and `project_webhook_secrets` are one each because `provision_tenant` makes
-# one of each; `audit_log` is four because it records the organization, the
-# minted key, the owners channel and the default alert rule — all under the
+# unprovable while every assertion still passed. `users`, `projects` and `api_keys`
+# are one each because `provision_tenant` makes one of each; `project_webhook_secrets`
+# and `deploy_intake_state` one each, written below; `audit_log` is four because it
+# records the organization, the minted key, the owners channel and the default alert
+# rule — all under the
 # tenant, so all deleted; the request's own entry is tenantless. Alert channels, rules
 # and their links are one more than written, for the same reason: every tenant is
 # created with an owners channel and a default rule sending to it (F21).
@@ -233,6 +237,7 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "organizations": 1,
     "project_first_traces": 1,
     "project_webhook_secrets": 1,
+    "deploy_intake_state": 1,
     "projects": 1,
     "site_keys": ROWS_PER_TABLE,
     "source_maps": MAPS_PER_TENANT,
@@ -428,6 +433,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
                     service_name="checkout",
                     deployed_at=datetime.now(UTC),
                     source="manual",
+                    delivery_id=f"delivery-{index}",
                 ),
                 UsageDaily(
                     org_id=tenant.org_id,
@@ -578,6 +584,25 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
                 expires_at=later,
             ),
         ]
+    )
+
+    # F28: signup mints no deploy secret (it is shown once, when a person mints it), so
+    # one is written here; and the intake row the Deploys section reads.
+    secret = ProjectWebhookSecret(
+        org_id=tenant.org_id,
+        project_id=tenant.project_id,
+        sealed_secret=b"\x02sealed",
+        secret_hint="abcd",
+    )
+    db.add(secret)
+    await db.flush()
+    db.add(
+        DeployIntakeState(
+            org_id=tenant.org_id,
+            project_id=tenant.project_id,
+            last_check_at=later,
+            last_refusal_secret_id=secret.id,
+        )
     )
 
     # No model declares this table, so it is written the way the worker does.

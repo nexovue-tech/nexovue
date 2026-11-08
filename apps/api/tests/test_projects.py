@@ -103,7 +103,10 @@ class Tenant:
         ]
         self.webhook_secrets = [
             ProjectWebhookSecret(
-                org_id=self.organization.id, project_id=self.project.id, secret="s" * 32
+                org_id=self.organization.id,
+                project_id=self.project.id,
+                sealed_secret=b"\x02sealed",
+                secret_hint="ssss",
             )
         ]
         for door in self.api_keys + self.site_keys + self.webhook_secrets:

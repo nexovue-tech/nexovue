@@ -78,7 +78,7 @@ and reach only the documented read API.**
 | `GET /checks/{check_id}` | One check |
 | `GET /synthetics/checks` | Check results in a window |
 | `GET /synthetics/checks/{check_id}/runs` | One check's recent runs |
-| `GET /deploys` | Recent deploys, newest first |
+| `GET /deploys` | Recent deploys, newest first. Sending them is a signed step in your pipeline, not a token: see [deploys.md](deploys.md) |
 | `GET /releases` | A project's releases with a period in the time window, newest first: each version of each service, when its period started, whether it was seen in traffic, reported by your CI, or both, and whether it is serving, replaced or idle. Filter by `service` and `version`; page with `cursor` |
 | `GET /releases/{release_id}` | One release: when it was first and last seen and reported, and each period it served, with the version it replaced and whether it came back |
 | `GET /releases/{release_id}/comparison` | One period of a release against the version it replaced, over 1, 6 or 24 hours from its start (`window`), up to the last minute every part of the pipeline has counted: side by side during the rollout, before and after once it finished, each with its counts and a plain reading, or the reason it cannot compare. It compares numbers; it does not say why they moved |

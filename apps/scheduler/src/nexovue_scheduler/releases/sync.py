@@ -74,7 +74,7 @@ RUN_BOUND: Final = timedelta(hours=6)
 # What a later run reads again before its new minutes: the 60-minute rule's reach.
 REREAD: Final = timedelta(minutes=60)
 NEW_RELEASES_PER_RUN: Final = 200
-RELEASES_PER_PROJECT: Final = 50_000
+RELEASES_PER_PROJECT: Final = releases.RELEASES_PER_PROJECT
 # A job not started within a minute is overtaken by the next sweep's.
 JOB_EXPIRES_SECONDS: Final = 60
 SOFT_LIMIT_SECONDS: Final = 40

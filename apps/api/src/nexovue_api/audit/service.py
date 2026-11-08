@@ -30,7 +30,6 @@ from nexovue_api.data.postgres.models import (
     ApiToken,
     AuditLogEntry,
     Check,
-    DeployEvent,
     Integration,
     NotificationChannel,
     Organization,
@@ -126,8 +125,9 @@ SESSION_DENIED: Final = "session.denied"
 # and failing to. A refusal is the more interesting of the two.
 ADMIN_MODE_ENTERED: Final = "admin_mode.entered"
 ADMIN_MODE_REFUSED: Final = "admin_mode.refused"
-DEPLOY_RECORDED: Final = "deploy.recorded"
-DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
+# F28: one entry per accepted webhook request, and one when a person removes deploys.
+DEPLOY_BATCH_RECORDED: Final = "deploy.batch_recorded"
+DEPLOY_REMOVED: Final = "deploy.removed"
 # The two halves of P1-77, both tenantless so they outlive the tenant. The
 # scheduler writes the second when the nightly erasure is proved (ADR-014).
 ORGANIZATION_DELETION_REQUESTED: Final = erasure.DELETION_REQUESTED_ACTION
@@ -209,7 +209,6 @@ ALERT_RULE_TARGET: Final = "alert_rule"
 PROJECT_CHECKS_TARGET: Final = "project"
 INTEGRATION_TARGET: Final = "integration"
 WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
-DEPLOY_TARGET: Final = "deploy"
 PROJECT_TARGET: Final = "project"
 FINDING_TARGET: Final = detection.FINDING_AUDIT_TARGET
 CONNECTION_TARGET: Final = "connection"
@@ -917,41 +916,62 @@ def record_maintenance_window_changed(
     )
 
 
-def record_deploy_recorded(db: AsyncSession, *, event: DeployEvent) -> None:
-    """A deploy arrived over the public webhook.
-
-    No actor: the caller proved it holds the project's deploy secret, which says
-    the request came from that project's CI and nothing at all about which
-    person is behind it. Recorded anyway, because this is the one write in the
-    control plane the internet can reach, and a burst of them is worth seeing.
-
-    Only refused notifications are absent from this log: writing a row for every
-    unsigned POST would let anyone fill the table from outside.
-    """
-    _add(
-        db,
-        org_id=event.org_id,
-        actor_user_id=None,
-        action=DEPLOY_RECORDED,
-        target=_target(DEPLOY_TARGET, event.id),
-    )
-
-
-def record_deploy_webhook_secret_viewed(
-    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, actor_user_id: uuid.UUID
+def record_deploy_batch_recorded(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    secret_id: uuid.UUID,
+    count: int,
+    first_deploy_id: uuid.UUID,
 ) -> None:
-    """Somebody read a project's deploy secrets.
+    """A webhook request stored new deploys (F28 T2.4).
 
-    Reading a credential is worth a trail even though it changes nothing: it is
-    what an account takeover does before it starts forging deploys. The target
-    is the project — the secret itself is never recorded.
+    One entry per request rather than per deploy, naming the secret that signed it,
+    how many it stored and the first, so an investigation can find them again. No
+    actor: the caller proved it holds a deploy secret, which says nothing about which
+    person is behind it. A refused or repeated request writes nothing here, or anyone
+    on the internet could fill the table.
     """
     _add(
         db,
         org_id=org_id,
-        actor_user_id=actor_user_id,
-        action=DEPLOY_WEBHOOK_SECRET_VIEWED,
+        actor_user_id=None,
+        action=DEPLOY_BATCH_RECORDED,
         target=_target(PROJECT_TARGET, project_id),
+        detail={
+            "secret_id": str(secret_id),
+            "count": count,
+            "first_deploy_id": str(first_deploy_id),
+        },
+    )
+
+
+def record_deploys_removed(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    count: int,
+    deploy_id: uuid.UUID | None,
+    secret_id: uuid.UUID | None,
+    since: datetime | None,
+) -> None:
+    """A person removed deploys (F28 D37, AC61): one by id, or everything a withdrawn
+    secret signed since a time."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=DEPLOY_REMOVED,
+        target=_target(PROJECT_TARGET, project_id),
+        detail={
+            "count": count,
+            "deploy_id": None if deploy_id is None else str(deploy_id),
+            "secret_id": None if secret_id is None else str(secret_id),
+            "since": None if since is None else since.isoformat(),
+        },
     )
 
 

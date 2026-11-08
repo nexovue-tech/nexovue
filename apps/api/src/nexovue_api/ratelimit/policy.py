@@ -121,10 +121,17 @@ TOKEN_TIER: Final = Tier(
 
 # The one unauthenticated write in the control plane. It shared the default tier,
 # which meant anything on the internet could consume the quota signed-in users
-# need. Its own, tighter allowance: a deploy is an occasional event, and no CI
-# system pushes sixty a minute.
+# need. Its own, tighter allowance, per address and counted before anything is
+# verified: sixty requests a minute. A request now carries up to 100 deploys (F28
+# FR6), so this bounds requests, not deploys; deploys are bounded by the quota below.
 WEBHOOK_PREFIX: Final = "/api/v1/deploys/webhook/"
 WEBHOOK_TIER: Final = Tier(quota=Quota(name="deploy-webhook", limit=60, window_seconds=60))
+# F28 FR13: newly stored deploys per project per clock hour, counted in Postgres by the
+# route once the signature has held, and only for new items, so neither an outsider nor
+# a replayed capture spends a project's allowance. A starting guess.
+DEPLOYS_ACCEPTED: Final = Quota(
+    name="deploy-accepted", limit=1_000, window_seconds=3_600, exact=True
+)
 
 # F18. Each of these makes our infrastructure do work somebody else chose, so each
 # has its own allowance rather than a share of the one signed-in screens need.

@@ -139,6 +139,8 @@ TIMEZONE_NAME_LENGTH: Final = 64
 # truncates to this before writing, so an absurd name is stored as a service
 # rather than failing the flush that carried it.
 SERVICE_NAME_LENGTH: Final = 255
+# The last characters of a deploy secret, shown so one can be told from another.
+SECRET_HINT_LENGTH: Final = 8
 
 # A receiver's hostname, which names it in `intake_refusals`; DNS allows 253.
 RECEIVER_ID_LENGTH: Final = 255
@@ -794,7 +796,9 @@ class Integration(Base):
 
 class DeployEvent(Base):
     """Door 4a lands here, not in ClickHouse: volume is tiny and the insight
-    engine joins these against findings and cases."""
+    engine joins these against findings and cases. F28's envelope (0057): each item
+    signs its own id and time, says how the rollout went, and names the release it
+    filed under and the secret that signed it."""
 
     __tablename__ = "deploy_events"
 
@@ -809,32 +813,45 @@ class DeployEvent(Base):
     # a foreign key.
     version: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # The sender's claim, bounded at the door (FR8); `created_at` is when it arrived.
     deployed_at: Mapped[RequiredTimestamp]
     source: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
-    # The sender's own id for this delivery. Unique per project under a partial
-    # index, which is what makes a replayed request fail rather than store a
-    # second deploy — GitHub's signature scheme carries no timestamp, so a
-    # captured request stays valid forever without this.
-    delivery_id: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
+    # The sender's own id for this item, inside the signed body (D6), unique per
+    # project: a captured body sent again stores nothing, whatever its headers say.
+    delivery_id: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     # `metadata` is taken on a declarative class, so the attribute differs from
-    # the column name.
+    # the column name. Masked before it is stored (FR9).
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    state: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'finished'")
+    )
+    # Lower-case hex, 40 or 64 characters, checked at the door.
+    commit_sha: Mapped[str | None] = mapped_column(String(SHA256_HEX_LENGTH), nullable=True)
+    # https only, no credentials, query or fragment; rendered, never fetched.
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Kept when the release is evicted or the secret goes, so the deploy outlives both.
+    release_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("releases.id", ondelete="SET NULL"), nullable=True
+    )
+    webhook_secret_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("project_webhook_secrets.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (
-        # Migration 0007's, declared here so the model and the schema agree.
-        Index(
-            "uq_deploy_events_project_id_delivery_id",
-            "project_id",
-            "delivery_id",
-            unique=True,
-            postgresql_where=text("delivery_id IS NOT NULL"),
-        ),
+        Index("uq_deploy_events_project_id_delivery_id", "project_id", "delivery_id", unique=True),
         Index(
             "ix_deploy_events_org_id_project_id_deployed_at", "org_id", "project_id", "deployed_at"
         ),
+        # The retention sweep's (design 3), which would otherwise scan the table.
+        Index("ix_deploy_events_created_at", "created_at"),
+        # A release's deploys, for recalculating it, and its eviction's SET NULL.
+        Index("ix_deploy_events_release_id", "release_id"),
+        # What one secret signed since a time (D37).
+        Index("ix_deploy_events_webhook_secret_id_created_at", "webhook_secret_id", "created_at"),
+        CheckConstraint(f"state IN ({_quoted(DEPLOY_STATES)})", name="state_is_known"),
     )
 
 
@@ -846,8 +863,10 @@ class ProjectWebhookSecret(Base):
     silently stop deploys arriving. Many rows per project, so a rotation can
     overlap — create the new one, update CI, revoke the old.
 
-    Stored as it will be used. HMAC verification has to recompute the digest CI
-    computed, so there is no hashing here that would still allow that.
+    Sealed (F28 D7): HMAC verification needs the value itself, so it is encrypted
+    rather than hashed, under the credential key, bound to this project and this
+    row's id (`deploy_webhook_owner`). Shown once, at creation; afterwards only its
+    last characters, so a person can tell one from another.
     """
 
     __tablename__ = "project_webhook_secrets"
@@ -859,12 +878,41 @@ class ProjectWebhookSecret(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    sealed_secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    secret_hint: Mapped[str] = mapped_column(String(SECRET_HINT_LENGTH), nullable=False)
     created_at: Mapped[CreatedAt]
+    last_used_at: Mapped[OptionalTimestamp]
     revoked_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         Index("ix_webhook_secrets_project_id_revoked_at", "project_id", "revoked_at"),
+    )
+
+
+class DeployIntakeState(Base):
+    """What the Deploys section shows of a project's intake (F28 design 2, D22): when a
+    deploy and a dry-run check last arrived, and the last refusal a signed sender
+    earned. One small row per project. An unsigned refusal is never recorded, or an
+    outsider could fill it."""
+
+    __tablename__ = "deploy_intake_state"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    last_check_at: Mapped[OptionalTimestamp]
+    last_deploy_at: Mapped[OptionalTimestamp]
+    last_refusal_at: Mapped[OptionalTimestamp]
+    # 1-based, as the refusal named it; null for a refusal of the whole body.
+    last_refusal_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_refusal_field: Mapped[str | None] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=True
+    )
+    last_refusal_secret_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("project_webhook_secrets.id", ondelete="SET NULL"), nullable=True
     )
 
 

@@ -1,6 +1,6 @@
 """Re-sealing after a rotation, against real Postgres (readiness blocker 8).
 
-One tenant with a value in each of the four sealed columns, all sealed under an
+One tenant with a value in each of the five sealed columns, all sealed under an
 "old" key. With the old key previous and a new key current, `reseal` must move
 every one to the new key and each must still open to the same plaintext. The
 command runs across the whole database, as it does in production; every other
@@ -25,6 +25,7 @@ import pytest
 from live import require_stack
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
+    DEPLOY_WEBHOOK_PURPOSE,
     NOTIFICATION_CHANNEL_PURPOSE,
     ConfiguredKeys,
     Keyring,
@@ -32,6 +33,7 @@ from nexovue_platform.checks.sealing import (
     channel_secret_owner,
     check_secret_owner,
     decode_key,
+    deploy_webhook_owner,
     generate_key,
     key_id,
     sealed_key_id,
@@ -42,11 +44,12 @@ from nexovue_platform.connections import (
     CONNECTION_WEBHOOK_SECRET_PURPOSE,
     connection_secret_owner,
 )
-from sqlalchemy import text
+from sqlalchemy import LargeBinary, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from nexovue_api import keys
 from nexovue_api.auth.encryption import TOTP_PURPOSE
+from nexovue_api.data.postgres.base import Base
 from nexovue_api.signup.service import provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -94,6 +97,7 @@ class _Tenant:
     project_id: uuid.UUID
     channel_id: uuid.UUID
     connection_id: uuid.UUID
+    deploy_secret_id: uuid.UUID
 
 
 def _box(key: str, purpose: str) -> SealedBox:
@@ -185,6 +189,22 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
                 },
             },
         )
+        deploy_secret = (await connection.execute(text("SELECT uuidv7()"))).scalar_one()
+        await connection.execute(
+            text(
+                "INSERT INTO project_webhook_secrets "
+                "(id, org_id, project_id, sealed_secret, secret_hint) "
+                "VALUES (:id, :org, :project, :sealed, 'PXP')"
+            ),
+            {
+                "id": deploy_secret,
+                "org": org,
+                "project": project,
+                "sealed": _box(OLD_CREDENTIAL, DEPLOY_WEBHOOK_PURPOSE).seal(
+                    PLAINTEXT, owner=deploy_webhook_owner(str(project), str(deploy_secret))
+                ),
+            },
+        )
     try:
         yield _Tenant(
             org_id=org,
@@ -192,6 +212,7 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
             project_id=project,
             channel_id=channel,
             connection_id=connection_id,
+            deploy_secret_id=deploy_secret,
         )
     finally:
         async with engine.begin() as connection:
@@ -211,13 +232,16 @@ async def _sealed(engine: AsyncEngine, tenant: _Tenant) -> dict[str, bytes]:
                         AS channel_secret,
                       (SELECT totp_secret FROM users WHERE id = :user) AS totp,
                       (SELECT sealed_secret FROM totp_enrolments WHERE user_id = :user)
-                        AS enrolment
+                        AS enrolment,
+                      (SELECT sealed_secret FROM project_webhook_secrets WHERE id = :deploy)
+                        AS deploy_secret
                     """
                 ),
                 {
                     "project": tenant.project_id,
                     "channel": tenant.channel_id,
                     "user": tenant.user_id,
+                    "deploy": tenant.deploy_secret_id,
                 },
             )
         ).one()
@@ -239,6 +263,8 @@ async def test_reseal_moves_every_value_to_the_current_key_and_each_still_opens(
     assert sealed_key_id(after["channel_secret"]) == key_id(decode_key(NEW_CHECK))
     assert sealed_key_id(after["totp"]) == key_id(decode_key(NEW_CREDENTIAL))
     assert sealed_key_id(after["enrolment"]) == key_id(decode_key(NEW_CREDENTIAL))
+    # F28 AC3: a deploy secret is re-sealed too, which fails if it leaves SEALED_COLUMNS.
+    assert sealed_key_id(after["deploy_secret"]) == key_id(decode_key(NEW_CREDENTIAL))
     rotated = {
         "check": SealedBox(
             Keyring(current=decode_key(NEW_CHECK)), purpose=CHECK_SECRET_PURPOSE
@@ -252,6 +278,10 @@ async def test_reseal_moves_every_value_to_the_current_key_and_each_still_opens(
         "totp": _box(NEW_CREDENTIAL, TOTP_PURPOSE).open(after["totp"], owner=str(tenant.user_id)),
         "enrolment": _box(NEW_CREDENTIAL, TOTP_PURPOSE).open(
             after["enrolment"], owner=str(tenant.user_id)
+        ),
+        "deploy_secret": _box(NEW_CREDENTIAL, DEPLOY_WEBHOOK_PURPOSE).open(
+            after["deploy_secret"],
+            owner=deploy_webhook_owner(str(tenant.project_id), str(tenant.deploy_secret_id)),
         ),
     }
     assert set(rotated.values()) == {PLAINTEXT}
@@ -343,3 +373,18 @@ async def test_a_value_in_the_format_before_key_ids_is_reported_and_never_touche
     totp = next(report for report in reports if report.name == "users.totp_secret")
     assert totp.counts[keys.UNREADABLE] >= 1
     assert (await _sealed(engine, tenant))["totp"] == version_one
+
+
+def test_every_binary_column_is_a_sealed_column_the_rotation_reseals() -> None:
+    """The foundation's checklist: a sealed column left out of `SEALED_COLUMNS` fails
+    nothing else, and its values would stay under a key about to be dropped (F28 AC3).
+    Every binary column in the schema holds a sealed value, so each must be listed."""
+    binary = {
+        f"{table.name}.{column.name}"
+        for table in Base.metadata.sorted_tables
+        for column in table.columns
+        if isinstance(column.type, LargeBinary)
+    }
+
+    assert "project_webhook_secrets.sealed_secret" in binary
+    assert binary <= {column.name for column in keys.SEALED_COLUMNS}

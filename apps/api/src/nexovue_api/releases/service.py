@@ -15,6 +15,9 @@ from __future__ import annotations
 import base64
 import binascii
 import uuid
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -383,3 +386,186 @@ def _block(block: method.Block) -> BlockView:
         failure_share=_reading(block.failure_share),
         p95=_reading(block.p95),
     )
+
+
+# ---------------------------------------------------------- filing what is reported
+#
+# F28 design 3, *From the webhook*, and D37's removal. One rule for a period's start
+# (FR42): a report opens a period, `start_basis` reported, only for a release that has
+# none; a period once counted is never moved by a report. On a service that sends no
+# version in traffic, reports alone decide its periods (FR19): a newer report ends what
+# served before it, and an ended version reported again later than every other start
+# comes back. A service with versions in traffic is the sync's to end and return.
+# Only a deploy that went out counts (founder, 2026-11-09): a `failed` or `rolled_back`
+# report is filed and its state shown, but it opens no period, ends none and brings no
+# version back, since it did not replace what was running.
+
+OPENS_A_PERIOD: Final = frozenset({"started", "finished"})
+
+
+@dataclass(frozen=True, slots=True)
+class FiledReport:
+    """A stored deploy, filed under its release."""
+
+    service_name: str
+    release_id: uuid.UUID
+    deployed_at: datetime
+    state: str
+
+
+async def make_room(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    keys: Sequence[tuple[str, str]],
+) -> int:
+    """Evict before creating, so a project over the cap still takes a new release (FR56).
+    Answers how many were evicted."""
+    existing = await queries.existing_releases(
+        session, org_id=org_id, project_id=project_id, keys=keys
+    )
+    new = len(set(keys) - existing)
+    if not new:
+        return 0
+    held = await queries.release_count(session, org_id=org_id, project_id=project_id)
+    excess = held + new - method.RELEASES_PER_PROJECT
+    if excess <= 0:
+        return 0
+    return await queries.evict_releases(
+        session, org_id=org_id, project_id=project_id, keep=keys, excess=excess
+    )
+
+
+async def place_periods(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, filed: Sequence[FiledReport]
+) -> None:
+    """Open or return the periods these reports call for, service by service in name
+    order, each service's reports in the order they claim to have happened. A report of
+    a deploy that did not go out calls for none."""
+    by_service: dict[str, list[FiledReport]] = defaultdict(list)
+    for report in filed:
+        if report.state in OPENS_A_PERIOD:
+            by_service[report.service_name].append(report)
+    for service_name in sorted(by_service):
+        await queries.lock_service_periods(
+            session, org_id=org_id, project_id=project_id, service_name=service_name
+        )
+        sends_versions = await queries.service_sends_versions(
+            session, org_id=org_id, project_id=project_id, service_name=service_name
+        )
+        for report in sorted(by_service[service_name], key=lambda one: one.deployed_at):
+            await _place_one(
+                session,
+                org_id=org_id,
+                project_id=project_id,
+                report=report,
+                sends_versions=sends_versions,
+            )
+
+
+async def _place_one(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    report: FiledReport,
+    sends_versions: bool,
+) -> None:
+    on = queries.ServiceRelease(org_id, project_id, report.service_name, report.release_id)
+    latest = await queries.latest_period(session, org_id=org_id, release_id=report.release_id)
+    if latest is None:
+        is_return = False
+    elif latest.ended_at is None or sends_versions:
+        return
+    else:
+        others_latest = await queries.latest_other_start(session, on)
+        if others_latest is None or report.deployed_at <= others_latest:
+            return
+        is_return = True
+    ended_at = None
+    if not sends_versions:
+        ended_at = await queries.next_other_start(session, on, after=report.deployed_at)
+        await queries.end_open_periods_before(session, on, at=report.deployed_at)
+    await queries.open_reported_period(
+        session,
+        on,
+        started_at=report.deployed_at,
+        ended_at=ended_at,
+        previous_version=await queries.version_before(session, on, before=report.deployed_at),
+        is_return=is_return,
+    )
+
+
+async def recalculate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    affected: Sequence[tuple[str, uuid.UUID]],
+) -> None:
+    """After deploys are removed (D37, AC61): each affected release's reported facts are
+    worked out again from the deploys left, a release nothing supports is deleted, and
+    the periods that reports decided are rebuilt from those that remain."""
+    by_service: dict[str, set[uuid.UUID]] = defaultdict(set)
+    for service_name, release_id in affected:
+        by_service[service_name].add(release_id)
+    for service_name in sorted(by_service):
+        await queries.lock_service_periods(
+            session, org_id=org_id, project_id=project_id, service_name=service_name
+        )
+        survivors = [
+            release_id
+            for release_id in sorted(by_service[service_name])
+            if await _restate(session, org_id=org_id, release_id=release_id)
+        ]
+        if await queries.service_sends_versions(
+            session, org_id=org_id, project_id=project_id, service_name=service_name
+        ):
+            for release_id in survivors:
+                await queries.delete_reported_periods(session, org_id=org_id, release_id=release_id)
+            refile = [
+                row
+                for row in await queries.reports_on_service(
+                    session, org_id=org_id, project_id=project_id, service_name=service_name
+                )
+                if row.release_id in survivors
+            ]
+        else:
+            await queries.delete_service_periods(
+                session, org_id=org_id, project_id=project_id, service_name=service_name
+            )
+            refile = list(
+                await queries.reports_on_service(
+                    session, org_id=org_id, project_id=project_id, service_name=service_name
+                )
+            )
+        await place_periods(
+            session,
+            org_id=org_id,
+            project_id=project_id,
+            filed=[
+                FiledReport(service_name, row.release_id, row.deployed_at, row.state)
+                for row in refile
+            ],
+        )
+
+
+async def _restate(session: AsyncSession, *, org_id: uuid.UUID, release_id: uuid.UUID) -> bool:
+    """Work a release's reported facts out again; False when it was deleted."""
+    reports = await queries.reports_of(session, org_id=org_id, release_id=release_id)
+    if not reports and await queries.delete_unseen_release(
+        session, org_id=org_id, release_id=release_id
+    ):
+        return False
+    latest = reports[-1] if reports else None
+    await queries.set_reported(
+        session,
+        org_id=org_id,
+        release_id=release_id,
+        first=reports[0].deployed_at if reports else None,
+        last=None if latest is None else latest.deployed_at,
+        count=len(reports),
+        state=None if latest is None else latest.state,
+    )
+    return True

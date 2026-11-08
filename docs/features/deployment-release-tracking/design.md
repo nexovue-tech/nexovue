@@ -346,6 +346,7 @@ traffic it is the reported time, with `start_basis` `reported`. A webhook never 
 4. `INSERT ... ON CONFLICT DO NOTHING` on `delivery_id` for deploys, and one savepoint is no longer needed per item.
 5. `INSERT ... ON CONFLICT (project_id, service_name, version) DO UPDATE` on `releases`, by the rule above.
 6. If the version has no period: open one, `start_basis` `reported`. If its latest period has ended, and the service sends no version in traffic, and this `deployed_at` is later than the latest other period's start: open one, as a return (FR19). A service with versions in traffic ignores this step: the sync decides.
+   *Founder decision, 2026-11-09:* only a report whose `state` is `started` or `finished` takes this step. A `failed` or `rolled_back` report is stored, filed under its release and its state shown, but opens no period, ends none and brings no version back, since that deploy did not replace what was running. Working periods out again after `DELETE /deploys/{id}` or a withdrawn secret's removal follows the same rule. A release reported only as failed therefore has no period, and the list, which shows releases by period, leaves it out; its own page shows its facts.
 7. One `deploy.batch_recorded` audit row. Update `deploy_intake_state`.
 
 Apply the release cap (FR56): past 50,000, evict before creating.

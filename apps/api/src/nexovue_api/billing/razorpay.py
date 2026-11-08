@@ -74,7 +74,7 @@ CANCEL_NOW: Final = 0
 # https://razorpay.com/docs/webhooks/validate-test/
 SIGNATURE_HEADER: Final = "x-razorpay-signature"
 # Unique per delivery, so a redelivery is distinguishable from a second event —
-# the property `X-GitHub-Delivery` gives door 4a and `x-idempotency-header` gives
+# the property the signed `delivery_id` gives door 4a and `x-idempotency-header` gives
 # the other processor.
 DELIVERY_HEADER: Final = "x-razorpay-event-id"
 

@@ -2,28 +2,151 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02. Plan Step 1a (the version
-rollup and its cost measurement) is on `feature/phase-2`, and its cost gate passed on demo data
-(2026-11-07). **Step 1b is on `feature/phase-2` (2026-11-08);** the buyer round no
-longer gates it (foundation item 27). Step 2 is next.
+**In development. Step 2 is on `feature/phase-2` (2026-11-08).** The founder approved the specification, design and
+plan on 2026-11-02. Step 1a (the version rollup and its cost measurement) and Step 1b (releases from traffic and the
+comparison by version) are on `feature/phase-2`. Step 2 (a person can set it up) is built in the worktree, not
+committed; T2.10's timed new person is not yet run (founder tests after Phase 2). Step 3 is next.
 
 
 ## Current task
 
-**Step 1b is on `feature/phase-2`** (*Step 1b, built 2026-11-08*, below). Step 1a is on
-`feature/phase-2` (2026-11-07). The cost gate's verdict is in
-[`docs/research/release-rollup-cost-2026-11-07.md`](../../research/release-rollup-cost-2026-11-07.md).
+**Step 2 is on `feature/phase-2`** (*Step 2, built 2026-11-08*, below): migration **`0057`**
+(re-chained at commit), **ADR-033**. Step 1b is on `feature/phase-2` (*Step 1b*, below), and Step 1a's cost gate
+passed on demo data ([report](../../research/release-rollup-cost-2026-11-07.md)).
 
-**The gate passed on demo data, development machine, not a server figure** (T1.7, AC21). Demo traffic, 50 services
-with a rollout an hour, 3 repeats of 30 minutes: rows 1.096× `service_stats_1m` (bound 3×), steady rows 1.000× (1.5×),
-worker peak memory −0.3% (+15%), disk per request 1.101× (2×); `side_by_side` on 81 of 84 rollouts. Churn, 40 services
-with 70 new versions a minute each, one 15-minute pair: worker peak 151 MiB against `GOMEMLIMIT` 1,088 MiB, and totals
-exact, with every service's versions folded into `__other__` and every request conserved. The design's churn row is its
-own (`GOMEMLIMIT`, totals exact), so churn's ratios (21× rows, +15.8% memory, 2.065× disk) are reported for information,
-not judged against the demo's bounds. The tool first judged churn against the demo's ratios, and counted folding as
-inexact totals; both were fixed in `release_measure.py`, tests first. The alert evaluation start delay row cannot be
-measured before Step 1b. `sizing.md` is unchanged: no worker memory growth on the demo.
+## Step 2, built 2026-11-08
 
+A person can set it up (plan T2.1 to T2.9; T2.10 below). What exists now, read from the code:
+
+- **The record** (T2.1): Postgres migration `0057_deploy_envelope_and_sealed_secrets` (revision "0057", down
+  revision "0054" for now: 0055 and 0056 are held by parallel work, so the coordinator re-chains it). `deploy_events`
+  gains `state`, `commit_sha`, `url`, `release_id` and `webhook_secret_id` (both `ON DELETE SET NULL`), `delivery_id`
+  NOT NULL at 200 with a plain unique key, and indexes on `created_at`, `release_id` and `(webhook_secret_id,
+  created_at)`; `project_webhook_secrets` swaps `secret` for `sealed_secret`, `secret_hint`, `last_used_at`;
+  `deploy_intake_state` is new, in `organizations/tables.py`. Indexes are built concurrently and the new keys and
+  check validated after `NOT VALID`. Existing secrets and id-less deploys are deleted (pre-deployment). Roll
+  forward only, listed in `test_migration_rules.py`.
+- **The webhook** (T2.2): `POST /deploys/webhook/{project_id}` takes `{"deploys": [...], "dry_run": false}`, 1 to
+  100 items, 512 KiB ("at most 512 KiB; send fewer items"). Order: open the live secrets, verify over the raw bytes
+  (`signatures.matching_secret`, constant time over all), mark the secret used, then parse. Every FR9 check, with
+  one 422 naming item and field; a signed refusal is recorded in `deploy_intake_state` and committed before the 422
+  unwinds (the precedent is sign-in's refusal). Repeats answer with what they stored. New items are charged to the
+  project's exact hourly quota (`DEPLOYS_ACCEPTED`, 1,000 per 3,600 s) by a conditional update, so a refused batch
+  charges nothing; then evict past 50,000 (now `nexovue_platform.releases.RELEASES_PER_PROJECT`, shared with the
+  sync), insert in (service, version) order `ON CONFLICT DO NOTHING`, file each under its release by the start
+  rule, place periods, one `deploy.batch_recorded`. `metadata` is masked by `nexovue_platform.masking`, the port of
+  the worker's default rules, held with Go to `packages/contracts/fixtures/metadata-masking.json`. Each answer:
+  `deploy_id`, `release_id`, `repeated`, `known`, `version_seen`, `recent_versions`.
+- **Secrets** (T2.3): sealed under `CREDENTIAL_ENCRYPTION_KEY`, purpose `deploy-webhook`, owner
+  `project_id:secret_id` (the id read from `uuidv7()` first); in `SEALED_COLUMNS`; shown once in
+  `MintedWebhookSecretResponse`; at most 5 live, under a project row lock. A seal that will not open is no match,
+  logged by id. Without the key, minting and the webhook answer 503.
+- **Audit** (T2.4): `deploy.webhook_secret_viewed` and `deploy.recorded` are gone; `deploy.batch_recorded` (secret,
+  count, first deploy) and `deploy.removed` (who, and the deploy or the secret and time) are new.
+- **Rate limit comment** (T2.5) corrected: the address tier bounds requests; the new quota bounds deploys.
+- **The console** (T2.6): *Deploys* in project settings for `manage_credentials` only: URL, secrets with ending,
+  created and used, mint (disabled at 5, with why), a minted secret shown once with `UnsavedChanges`, withdraw with
+  inline confirmation and "also remove what it sent since", numbered rotation steps, `Tabs` of recipes, a
+  `role=status` intake line polled every 5 seconds for 10 minutes, the release-cap sentence, current versions. The
+  non-admin sentence names deploy secrets.
+- **Setup** (T2.7): `docs/product/setup/deploys.md` (both ways in, `service.version` for Helm, Kustomize, Docker and
+  systemd, one project per environment, the three recipes, the body's rules and the 7-day limit, clear text,
+  reachability, sampling, rotation and removal, a post-deploy comparison read), with entries in `index.md`,
+  `api.md` and `troubleshooting.md`; Kubernetes, EC2, the four language pages, `browser.md` and onboarding now set
+  `service.version` from a build variable. The Kubernetes block also declared its variables after the line using
+  them, against its own ordering rule: fixed.
+- **The demo** (T2.8): `tools/otel-demo/doors.py` sends one batch for both services, minting a secret for the run and
+  withdrawing it after.
+- **Removing** (T2.9): `DELETE /deploys/{id}` and `DELETE /deploys/webhook-secrets/{id}?remove_since=`, both
+  `MayManageCredentials` (in `POLICY_OF`), each recalculating: a release's reported facts are worked out again from
+  the deploys left, one nothing supports is deleted, and report-decided periods are rebuilt.
+- **ADR-033** filed (the design's third proposed ADR).
+- **T2.10, the timed new person: not yet run, founder tests after Phase 2** (foundation item 28). The five-minute
+  claim is not withdrawn here: AC1 makes that the outcome only if nobody is found, which is the founder's to
+  decide.
+
+**Readings made while building** (none blocking; each open to overrule):
+
+- **On a service that sends no version in traffic, a newer report ends the period it replaces**, at the new start
+  (a `started` or `finished` one only: *Founder answer, 2026-11-09*);
+  a report arriving late for an earlier time opens a period ending where the next one starts; periods are placed in
+  claimed-time order within a batch. The design names only the return rule; without these, AC59's "v1, v2, v1" had no
+  v1 period to end. A service with versions in traffic is still the sync's alone to end and return.
+- **Names are stored exactly as sent, not stripped.** The old schema stripped whitespace; Python counts U+0085, a C1
+  control, as whitespace, so `v1\u0085` was accepted as `v1` while the worker folds it. Found by the new test holding
+  the door to `release-names.json`.
+- **An unknown field is refused** (named as "unknown field"), not ignored as before, so a misspelt `commit_sha`
+  shows in CI's output.
+- **The webhook answers 200**, with `stored` and per-item `repeated`, rather than 201: a batch can store some, all or
+  none.
+- **Signup no longer mints a deploy secret**: shown once, one minted there could never be read. `first-accounts.md`
+  and two billing comments that described door 4a's old header id are corrected.
+- **The section's current versions come from `GET /deploys/webhook-secrets`**, the one endpoint it polls; the design
+  names the list, not its route.
+- **Recipes sign with `python3` reading the secret from the environment**: `openssl dgst -hmac` takes the key as a
+  process argument, which FR14 forbids. They `set +e`, give each attempt 10 seconds and the retries 30, warn, and
+  exit 0, and leaving out `NEXOVUE_DRY_RUN` means a real deploy.
+- **A charge is spent before the insert**, in its own transaction: two copies of one body racing can each be charged,
+  and a deploy transaction that fails afterwards does not refund. Bounded by the batch size.
+
+**Tests, each seen failing first** (outputs kept in the session's scratch space):
+
+- `test_platform_masking.py` (26): collection failed on the missing module, then passed. Go
+  `mask/metadata_fixture_test.go` passed against the worker as written; with one fixture case altered it failed
+  naming the case, then the fixture was restored.
+- `test_deletion_live.py` (25): with `deploy_intake_state` left out of the inventory it failed naming it; restored,
+  passed.
+- `test_ratelimit.py` (+3), `test_keys_live.py` (+1, and the reseal case now covering deploy secrets): each failed
+  against the previous `limiter.py`/`policy.py`/`keys.py`, then passed.
+- `test_audit.py` (+3): failed on the missing functions, then passed.
+- `test_deploys.py` (134): the previous suite failed against the new code as expected; the new one was checked by
+  removal: without the time bound 2 failed, without the refusal's commit 1, without masking 1. Its name-fixture
+  test failed twice on U+0085 (above) before the fix.
+- `test_deploys_live.py` (30): written after the service, passed first run; checked by removal: the limiter's
+  condition (1 failed), the return rule (2), ending the previous period (1), recalculation (3), claimed-time order
+  (1).
+- **Founder answer of 2026-11-09, built the same day** (`releases/service.place_periods`, the one place every report
+  reaches a period, from the webhook and from recalculation after `DELETE /deploys/{id}` and a withdrawn secret's
+  removal): `test_deploys_live.py` now 39. Eight new cases, `failed` and `rolled_back` each: no period and the open one
+  left open on a service with no version in traffic and on one with versions in traffic; no return; recalculation
+  after a removal skips it. The opening case runs for `started` and `finished`. With the existing removal case's
+  expectation corrected (a lone failed report keeps no period), 9 failed against the code as built and 39 passed
+  after, on this session's own Postgres (port 25432, since torn down).
+- `test_authorization_coverage.py`: failed on the unplaced `delete_deploy` and the renamed `receive_deploys`, then
+  passed. `test_postgres_tenancy_structure.py`: failed on three period statements whose `org_id` sat in a helper,
+  then passed with it in each statement. `test_cross_service_contracts.py` failed on the eviction written as raw
+  SQL in a module that also holds ClickHouse SQL; rewritten in SQLAlchemy Core, passed.
+- `test_deploy_recipes.py` (53): against the original Kubernetes page the version check failed; with `exit 0`
+  replaced in the curl recipe, its three exit tests failed.
+- Web: `DeploysSection.test.ts` (15): with the section ungated 2 failed, with the guard off 1, with the secret as an
+  argument 3. `DetectionSection.test.ts` gained the Deploys stub its owner render now needs.
+
+**Counts.** Offline, with live suites left out (`NEXOVUE_SKIP_LIVE_TESTS=1`): `apps/api`, `packages/py-platform`,
+`apps/scheduler`, `packages/contracts`: 9,347 passed, 4 skipped. Live, on this session's own Postgres (port 25432,
+since torn down): `test_deploys_live.py`, `test_keys_live.py`, `test_deletion_live.py`: 59 passed. Go: the `mask`
+package's new test passed. Web: `features/projects`, `shared/components`, `features/onboarding`: 227 passed.
+`uv run mypy .` (798 files), `ruff check`, `ruff format --check`, `pnpm typecheck`, `biome check` on the changed web
+files and `verify-tokens.js`: clean. HMAC cost: 5 secret openings and 5 HMAC-SHA256 over 512 KiB, 1.82 ms median
+(3.06 ms max) per request on this machine (4 vCPU Xeon at 2.1 GHz), about 0.11 s of CPU a minute at the 60-a-minute
+address limit.
+
+**Not run:** `just check` (the coordinator's); `test_releases_live.py` and `test_release_sync_live.py`, which need
+ClickHouse (the sync's only change is reading the shared cap constant); the recipes on a hosted runner (no reachable
+address); the full dev stack (T2.8 ran against an API started locally on this session's Postgres); Design QA at 375px;
+T2.10.
+
+**Residual risks** (recorded, not fixed):
+
+- **Two copies of the recipes**: `deploys-api.ts` renders them for the console and `deploys.md` holds them for the
+  page. `test_deploy_recipes.py` runs the page's, and `DeploysSection.test.ts` checks the console's; a change to one
+  that misses the other is caught only where it breaks a check.
+- **AC51 races a sync-shaped writer**, the sync's own upsert statement in its order, not the scheduler job itself,
+  which the API's tests cannot import.
+- **"Remove since" is entered in the browser's time**, labelled so; the design's rule is the project's zone. Design
+  QA should judge it.
+- **A recipe's JSON is built with `printf`**: a service or version containing `"` or `\` makes an invalid body,
+  refused with a warning. Telemetry names rarely do; the page does not yet say so.
+- **Deploys that fail on the server after charging** do not refund the hour's allowance (above).
 ## Step 1b, built 2026-11-08
 
 A release compared by version, on real traffic (plan T1.8 to T1.16). What exists now, read from the code:
@@ -185,8 +308,9 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
-Coordinator: review and commit Step 1b (migration `0054`, ADR-029; renumber either if F22 took it). Then Step 2, a
-person can set it up. `docs/architecture/database.md` gains the three tables in T5.7, as planned.
+Coordinator: review and commit Step 2 (re-chain migration `0057` after 0055 and 0056; ADR-033). Then Step 3, markers
+that can be read. T2.10's timed new person is the founder's, after Phase 2. `docs/architecture/database.md` gains the
+new tables in T5.7, as planned.
 
 
 ## Open decisions
@@ -640,7 +764,34 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-08
+2026-11-09: Step 2 committed to `feature/phase-2`; the founder's answer on failed and rolled-back reports built into it.
+
+## Founder answer, 2026-11-09
+
+**Does a report of a `failed` or `rolled_back` deploy open a period?** The design's
+step 6 opened one for a version with none, whatever its state, and that was built first; AC57 says only that
+`rolled_back` on a *seen* version sets its state. So a version first reported as `failed`, never seen, gets a
+reported period, appears on `/releases` as starting then, and on a service with no version in traffic ends the
+period before it. Options: keep it (as built: the sender said it was deployed, and the release page shows the
+state); or open periods only for `started` and `finished`, keeping the release and its state with no period, so a
+failed deploy never reads as serving. **Recommendation: the second**, since a failed deploy did not replace what was
+running; it is a small change in `releases/service.place_periods` and its live tests. **Founder answer, 2026-11-09:
+started and finished only.** Built: such a report is stored and its state shown, but opens no period, ends none and
+brings no version back (design, *From the webhook*, step 6; tests under *Step 2, built 2026-11-08*).
+
+Left as they are, found in the self-review, none blocking (each open to overrule):
+
+- **`first_reported_at` still counts a failed report.** It is the release's reported fact, so it stays, but two
+  readers lean on it: the sync's `already_running` (`_first_on_service`: a version reported, even as failed, before
+  its first counted minute is not "already running"), and the comparison's time-based fallback on a service with no
+  version in traffic (`choose_method`'s `reported_at`: a version reported failed at 10:00, then finished at 11:00,
+  is compared from 10:00 while its period starts at 11:00). Neither opens or ends a period. The second is the one
+  worth changing (compare from the period's start); not done here, since it is the comparison's rule, not the
+  founder's question.
+- **A `started` report then a `failed` one for the same version** keeps the period `started` opened: the answer
+  says which reports open periods, not that a later failure closes one.
+- **`OPENS_A_PERIOD` names the states as plain strings** beside `deploys/schemas.DeployState`; a new state added
+  there would open no period until listed here.
 
 ## Founder approval, 2026-11-02
 

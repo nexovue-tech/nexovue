@@ -39,6 +39,8 @@ const GUARDED = [
   "features/projects/CheckSecretsSection.tsx",
   "features/projects/CheckVariablesSection.tsx",
   "features/projects/MaintenanceWindowsSection.tsx",
+  // F28 FR2: a just-minted deploy secret, shown once.
+  "features/projects/DeploysSection.tsx",
   "features/synthetics/CheckForm.tsx",
   "features/synthetics/ImportScreen.tsx",
   "features/alerts/RuleEditor.tsx",

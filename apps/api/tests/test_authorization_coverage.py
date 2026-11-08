@@ -56,7 +56,7 @@ EXEMPT: Final = {
     # Unauthenticated by design: there is no identity to judge. The HMAC
     # signature over the raw body is the gate, and door 4a's whole security
     # model rests on it rather than on a session.
-    "receive_deploy",
+    "receive_deploys",
     # Unauthenticated: it is how an account comes into existence.
     "sign_up",
     # Unauthenticated: the console reporting its own errors, which a sign-in
@@ -146,7 +146,7 @@ EXEMPT: Final = {
     # in a query string.
     "symbolicate",
     # Unauthenticated by design: the processor calls it, and the signature over
-    # the raw body is the gate (`billing/`), as for `receive_deploy`.
+    # the raw body is the gate (`billing/`), as for `receive_deploys`.
     "receive_billing_event",
     # Unauthenticated: the browser returns here from the processor's checkout,
     # and nothing it carries is trusted — payment is confirmed only by the
@@ -247,6 +247,8 @@ POLICY_OF: Final = {
     "nexovue_api/apikeys/router.py:revoke_site_key": "MayManageCredentials",
     "nexovue_api/deploys/router.py:create_webhook_secret": "MayManageCredentials",
     "nexovue_api/deploys/router.py:revoke_webhook_secret": "MayManageCredentials",
+    # F28 AC61: removing a deploy is the credential holder's, as withdrawing its secret is.
+    "nexovue_api/deploys/router.py:delete_deploy": "MayManageCredentials",
     "nexovue_api/integrations/router.py:create_integration": "MayManageCredentials",
     "nexovue_api/integrations/router.py:delete_integration": "MayManageCredentials",
     "nexovue_api/billing/router.py:start_checkout": "MayCommitSpend",
