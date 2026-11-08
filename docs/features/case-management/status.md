@@ -7,8 +7,7 @@
 
 ## Current task
 
-Step 2 (2026-11-07) except T2.9, which waits on F3. Built on `wt/f22`, awaiting
-the coordinator's commit. Next: the
+Step 2 (2026-11-07) except T2.9, which waits on F3. On `feature/phase-2` (commit 631c027). Next: the
 judgeable checks of Steps 1 and 2 on a dev stack, then Step 3, which needs the
 founder's GitHub test organization first.
 
@@ -288,7 +287,7 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-Coordinator review and commit of Step 2 (branch `wt/f22`), with T2.9 unticked.
+Step 2 is committed (631c027) with T2.9 unticked; T2.9 is built when F3's evidence job lands. Step 3 waits on the founder's free GitHub test organization (foundation decision 23).
 Then the judgeable checks of Steps 1 and 2 on a dev stack
 (`just detection-seed`, `just detection-fault --service checkout`, take, note,
 `--clear`, the fault again, *Active cases*, an untouched case's end line),

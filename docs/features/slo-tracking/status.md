@@ -6,7 +6,7 @@
 
 ## Current task
 
-Plan Step 1, *A real figure on a real screen, with no alerts*: built in worktree `wt/f19`, not committed. T1.1 to T1.10 are done; T1.11 is done but for its `metrics_gauge` helper (*Open decisions*, 1).
+Plan Step 1, *A real figure on a real screen, with no alerts*: on `feature/phase-2` (commit b246b62, 2026-11-08). T1.1 to T1.11 are done; T1.11's `metrics_gauge` rows moved to T2.3 (founder, 2026-11-08).
 
 ## Completed
 
@@ -20,7 +20,7 @@ Plan Step 1, *A real figure on a real screen, with no alerts*: built in worktree
 
 ## Next action
 
-The coordinator reviews Step 1's diff and commits it as `F19 Step 1: a real figure on a real screen, with no alerts`, after `just check` (not run here, by instruction) and the founder's answer to *Open decisions* 1. Then the founder judges Step 1 on the dev stack with the demo running (plan, Step 1's *Judgeable*), which was not done here.
+Step 1 is committed (b246b62; `just check` passed). Step 2 is being built. The founder judges Step 1 on the dev stack with the demo running (plan, Step 1's *Judgeable*), which was not done here.
 
 ## Step 1, built 2026-11-07
 

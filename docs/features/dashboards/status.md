@@ -2,12 +2,12 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is built and validated, 2026-11-02**, on the worktree branch `wt/f20`, uncommitted: the coordinator reviews the diff and commits. Steps 2 to 11 are not started.
+**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is on `feature/phase-2`, 2026-11-02** (commit 44795cb). Steps 2 to 11 are not started.
 
 
 ## Current task
 
-Step 1 done, awaiting the coordinator's review and commit. Nothing else in flight.
+Step 1 done and committed (44795cb). Nothing else in flight.
 
 
 ## Completed
@@ -40,7 +40,7 @@ Step 1 done, awaiting the coordinator's review and commit. Nothing else in fligh
 
 ## Next action
 
-The coordinator reviews Step 1's diff and commits. Then Step 2 waits on the buyer round (the foundation's founder decision 8) and founder decision 1. **Still owed from "implementation start": the design's 3 proposed ADRs in `docs/decisions/`, numbered then** — they concern Step 2+'s dashboard infrastructure and were not filed with Step 1, which was built alone under D58 by a session scoped to Step 1's tasks only.
+Step 1 is committed (44795cb). Step 2 waits on the buyer round (the foundation's founder decision 8) and founder decision 1. **Still owed from "implementation start": the design's 3 proposed ADRs in `docs/decisions/`, numbered then** — they concern Step 2+'s dashboard infrastructure and were not filed with Step 1, which was built alone under D58 by a session scoped to Step 1's tasks only.
 
 
 ## Open decisions

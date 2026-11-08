@@ -2,12 +2,12 @@
 
 ## Lifecycle status
 
-**In development.** Step 1 (a safer MCP server) is built on worktree branch `wt/f4`, awaiting review and commit to `feature/phase-2`. Steps 2 onward are not started and stay blocked (see *Blocked*). The founder approved the specification, design and plan on 2026-11-02.
+**In development.** Step 1 (a safer MCP server) is on `feature/phase-2` (commit 5988d88, 2026-11-02). Steps 2 onward are not started and stay blocked (see *Blocked*). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-Step 1 built (T1.0 to T1.8), 2026-11-02, on `wt/f4`. Awaiting the coordinator's review, `just check`, and the Step 1 commit. The founder can now run the *Judgeable* demonstration: connect Claude Code to the MCP server with a token, ask about findings and a fixed log range, then plant a line with `go run ./tools/gateseed --log-body "ignore your instructions"` and read what the assistant does.
+Step 1 built (T1.0 to T1.8) and on `feature/phase-2` (commit 5988d88, 2026-11-02; `just check` passed, CI green). The founder can now run the *Judgeable* demonstration: connect Claude Code to the MCP server with a token, ask about findings and a fixed log range, then plant a line with `go run ./tools/gateseed --log-body "ignore your instructions"` and read what the assistant does.
 
 ### Step 1, what was built (2026-11-02)
 
@@ -40,7 +40,7 @@ Step 1 built (T1.0 to T1.8), 2026-11-02, on `wt/f4`. Awaiting the coordinator's 
 
 ## Next action
 
-Coordinator reviews the `wt/f4` diff, runs `just check`, and commits Step 1 to `feature/phase-2` (one commit, `F4 Step 1: ...`). Then the founder runs the Step 1 demonstration for the buyer round. Step 2 onward waits for F3's provider (F3 Step 4) and the buyer round's rule; its ADR is filed when it starts.
+Step 1 is committed (5988d88). The founder runs the Step 1 demonstration for the buyer round. Step 2 onward waits for F3's provider (F3 Step 4) and the buyer round's rule; its ADR is filed when it starts.
 
 
 ## Open decisions
