@@ -253,7 +253,7 @@ Spec wording throughout, from `features/dashboards/spec.md:696`. Ask about what 
   service picker, no public links, or no histograms on a dashboard?" **[F20, `features/dashboards/spec.md:696`; D9, D39 behind it, `:638`, `:668`]**
   Must ask. Write which of the five items they named, and which they would reject over.
 - **Q37.** "What would you do with your existing dashboards?" asked **with T2.0's mapping in hand** (section 6, item 4).
-  **[F20, `features/dashboards/spec.md:696`]** Must ask once T2.0 exists; if not, see *Not checked*, item 6.
+  **[F20, `features/dashboards/spec.md:696`]** Must ask; T2.0 now exists (section 6, item 4).
 
 (Q2 above is F20's second question, asked in Part 1 where it fits.)
 
@@ -400,9 +400,9 @@ Rules for the template: only what the person said; no names or company details; 
    with the state names. Keep it to the figure, because showing the form or state names would stop the person qualifying
    as AC38's tester.
 4. **F20 board mapping, T2.0.** `features/dashboards/plan.md:157` and `features/dashboards/spec.md:696` say it "goes into the
-   buyer conversations". It is a report, `docs/research/f20-board-mapping-2026-11.md`, stating what share of ten real dashboards
-   maps to a panel kind, and what is lost. **It is not written yet** (the file does not exist in the repository on 2026-11-08).
-   The coordinator will produce it. Until then, Q37 cannot be asked as written. Do not describe its figures from memory.
+   buyer conversations". It is written: `docs/research/f20-board-mapping-2026-11.md` (2026-11-08). It maps the OpenTelemetry
+   Demo's ten sample dashboards (143 panels; sample boards, not a buyer's) to F20's panel kinds and says what is lost. Its
+   section *For the buyer conversations* gives the words to use for Q37. Use only its figures, never from memory.
 5. **F20 Step 1** moved `/` to the Findings feed straight after F6 (`product/phase-2-foundation.md:522`). The documents do not
    ask for it to be shown; mentioned only because it exists.
 6. **Nothing from F28, F22, F3 or the product's other screens** is required to be shown.
@@ -428,8 +428,8 @@ Things I could not find, or where documents disagree. I did not choose; each nee
    My gloss (a page you go and look at, as opposed to being alerted) is a reading, not a quote. F28's design may define it; I read only the spec and status.
 5. **F5 "pass the screen" and "more than half".** Not defined which answers pass the screen (`features/ai-solution/spec.md:778`).
    "More than half" has no table of counts for 5 to 8, and the denominator is "those who pass the screen", not everyone, unlike F4 and F20.
-6. **F20 T2.0 is not written.** `docs/research/f20-board-mapping-2026-11.md` does not exist; Q37 is meant to be asked with it.
-   The F19 month mock does not exist either; neither does a made version of any other thing to show.
+6. **F20 T2.0 is written** (`docs/research/f20-board-mapping-2026-11.md`, 2026-11-08, not yet reviewed by the founder); Q37 is asked with it.
+   The F19 month mock does not exist yet; nor does a made version of any other thing to show.
 7. **F20 "Record that answer against the sales line"** (`features/dashboards/spec.md:696`). It does not say whether to read the sales line
    to the buyer. The sales line (`features/dashboards/spec.md:596`) is a claim marked unproven, and the foundation bars some of
    these kinds of claim. I treated it as a founder note and did not put it in the buyer script.

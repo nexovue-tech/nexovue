@@ -12,6 +12,7 @@ Step 1 done and committed (44795cb). Nothing else in flight.
 
 ## Completed
 
+- **2026-11-08. T2.0 written** ([`docs/research/f20-board-mapping-2026-11.md`](../../research/f20-board-mapping-2026-11.md)): ten sample boards, 143 panels (matches the plan); 7 map to a panel kind, 68 partly, 68 not offered; 40 of the 75 that map or partly map need Step 8's `metric_series`. Internal research, not yet reviewed by the founder.
 - **2026-11-02. Plan Step 1 built (T1.1 to T1.9).** What changed, read from the diff:
   - `apps/web/src/app/router.tsx`: `/` serves `FindingsScreen`; `overviewRoute` at `/overview`; the `/findings` list route deleted; the stale OD2 comment rewritten; the 404 screen says "Back to Findings" (T1.1, T1.4).
   - `apps/web/src/app/routes/route-manifest.ts`: Home offers Findings `/`, Overview `/overview`, Alerts (T1.2).
@@ -386,7 +387,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02 (Step 1 built and validated)
+2026-11-08 (T2.0, the board mapping for the buyer round, written)
 
 ## Founder approval, 2026-11-02
 
