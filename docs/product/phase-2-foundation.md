@@ -718,6 +718,7 @@ Each was asked in a feature's spec, which holds the full recommendation. "As rec
 
 27. **The founder's own decision, 2026-11-08.** **The buyer round is a customer-validation milestone, not a build gate.** It changes items 8, 21 and 25 and F5 D64: no step waits on the conversations. Every feature is built to its full approved plan, which is the "yes" side of each rule in item 21 (F4 Steps 2 to 7; F20's full builder; F19 Step 4 onward past its demand gate; F28 Step 1b; F5 Step 1 onward). The round still happens, using `docs/product/phase-2-buyer-round.md`, and its answers are read afterwards as validation: an answer that argues against something built comes back to the founder, it does not stop work.
 28. **The founder's own decision, 2026-11-08.** **No step waits on a real GitHub test organization (item 23).** F22 Steps 3 to 6 and F5's GitHub parts are built and tested against a simulated GitHub. Every check that needs real GitHub (F22 T3.0's manifest flow from a private address, T5.2's real webhook, F5's GitHub trial) is recorded as "not yet run, founder tests after Phase 2" and run by the founder then. Jira (F22 Step 7) still waits on Atlassian's written answer (item 17), which is a policy gate, not a test.
+29. **The founder, 2026-11-08.** **T0.1 is sent to Atlassian; no reply yet. GitHub ships now; Jira is added if a written yes comes** (item 17's 4-week rule stands). F22 Steps 3 to 6 keep the connection layer kind-agnostic so Jira is an added adapter, not a rework.
 
 ### What A and B change
 
