@@ -19,6 +19,7 @@ import type {
   SloMonth,
   SloMonthRow,
   SloOutage,
+  SloRemovedExclusion,
   SloSharpFall,
   SloView,
 } from "./api";
@@ -119,6 +120,11 @@ export function outageLine(outage: SloOutage, zone: string): string {
   return `This figure does not count the outage on ${dayIn(outage.started_at, zone)} (${durationOf(outage.minutes)}). Requests that never arrived are not failures.`;
 }
 
+/** FR29, AC69: an exclusion removed once its days were past the recount limit. */
+export function removedNotRecountedLine(removal: SloRemovedExclusion, zone: string): string {
+  return `The exclusion from ${dayIn(removal.starts_at, zone)} (${durationOf(removal.minutes)}) was removed, figure not recounted: its days too old to count again still leave it out.`;
+}
+
 /** FR27c. */
 export function sharpFallLine(fall: SloSharpFall): string {
   return `On ${shortDay(fall.day)} requests were ${fall.fall_percent}% below the same weekday in earlier weeks. Requests rejected before reaching this service are not failures.`;
@@ -150,6 +156,9 @@ export function monthNotes(month: SloMonth, kind: SloKind, zone: string): string
       `Runs in maintenance windows are not counted (${month.maintenance_runs} runs this month).`,
     );
   }
+  notes.push(
+    ...month.removed_not_recounted.map((removal) => removedNotRecountedLine(removal, zone)),
+  );
   notes.push(...month.sharp_falls.map(sharpFallLine));
   return notes;
 }

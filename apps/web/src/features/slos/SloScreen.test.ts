@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,6 +21,46 @@ import {
 } from "./slo-harness.test-util";
 
 afterEach(unmountAll);
+
+// The chart draws on a canvas jsdom has not got: what the page hands it is what is
+// tested here, and `TrendChart`'s own tests hold how it draws.
+vi.mock("@/shared/components/TrendChart", () => ({
+  CHART_HEIGHT: 132,
+  TrendChart: (props: { label: readonly string[]; data: unknown[][]; description: string }) =>
+    createElement("div", {
+      role: "img",
+      "aria-label": props.description,
+      "data-labels": props.label.join("|"),
+      "data-points": JSON.stringify(props.data[1]),
+    }),
+}));
+
+function burnLine(points: Array<number | null>, tier: string | null = "fast") {
+  const last = Date.now() - 60_000;
+  return {
+    tier,
+    evaluated_minute: new Date(last).toISOString(),
+    on_pace: 1,
+    points: points.map((rate, index) => ({
+      minute: new Date(last - (points.length - 1 - index) * 60_000).toISOString(),
+      rate,
+    })),
+  };
+}
+
+const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+
+/** A critical burn the job stored: 14.7 times faster, 50 hours left (Step 4). */
+const BURN = {
+  severity: "critical" as const,
+  rate: 14.7,
+  since: minutesAgo(20),
+  hours_left: 50,
+  resolving: false,
+  judged: true,
+  last_held_minute: minutesAgo(1),
+  chart_tier: "fast",
+};
 
 describe("one target", () => {
   it("leads with its sentence, then what was measured, as of a time in the project's zone (AC108)", async () => {
@@ -88,15 +129,136 @@ describe("one target", () => {
           severity: "critical",
           attention: true,
           evaluated_minute: minutesAgo(20),
+          burn: BURN,
         }),
       ),
     });
     const { container } = await mountAt("/slos/slo-1");
     await waitFor(
-      () => readable(container).includes("Was using its allowance too fast"),
+      () =>
+        readable(container).includes(
+          "Was using allowed failures 14 times faster than allowed when last worked out at",
+        ),
       "the stale burn",
     );
+    expect(readable(container)).not.toContain("What is left lasts");
     expect(readable(container)).not.toContain("Running out, act now");
+  });
+
+  it("says how fast a burn runs, since when, how long what is left lasts, and what to do (FR10)", async () => {
+    stubApi({
+      "GET /slos/slo-1": json(
+        target({ state: "running_out", severity: "critical", attention: true, burn: BURN }),
+      ),
+    });
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(
+      () => readable(container).includes("Using allowed failures 14 times faster than allowed"),
+      "the burn",
+    );
+    expect(readable(container)).toContain("What is left lasts about 2 days.");
+    expect(readable(container)).toContain("Open the incident.");
+  });
+
+  it("speaks of slow requests on a latency target's burn (AC89)", async () => {
+    stubApi({
+      "GET /slos/slo-1": json(
+        target({
+          kind: "service_latency",
+          state: "running_out",
+          severity: "warning",
+          attention: true,
+          burn: { ...BURN, severity: "warning" },
+        }),
+      ),
+    });
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("allowed slow requests"), "the burn");
+    expect(readable(container)).toContain("Can wait for working hours.");
+  });
+
+  it("draws how fast against the on-pace line, with gaps, and says the current and peak (AC109)", async () => {
+    stubApi({
+      "GET /slos/slo-1": json(
+        target({ state: "running_out", severity: "critical", attention: true, burn: BURN }),
+      ),
+      "GET /slo-readings/slo-1/burn": json(burnLine([2, null, 20.4, 14.7])),
+    });
+    const { container } = await mountAt("/slos/slo-1");
+    const chart = await waitFor(
+      () => container.querySelector<HTMLElement>('[role="img"][data-labels]'),
+      "the chart",
+    );
+    expect(chart.dataset.labels).toBe("Times faster than allowed|On pace (1)");
+    expect(JSON.parse(chart.dataset.points ?? "[]")).toEqual([2, null, 20.4, 14.7]);
+    expect(chart.getAttribute("aria-label")).toBe(
+      "Times faster than allowed over the last 24 hours, the fast tier: now 14.7, peak 20.4. On pace is 1.",
+    );
+  });
+
+  it("says when no tier can judge, and keeps the figures when the chart fails (AC109, AC82)", async () => {
+    stubApi({
+      "GET /slos/slo-1": json(target()),
+      "GET /slo-readings/slo-1/burn": json(burnLine([], null)),
+    });
+    const quiet = await mountAt("/slos/slo-1");
+    await waitFor(
+      () => readable(quiet.container).includes("No tier can judge this target yet"),
+      "no line",
+    );
+    unmountAll();
+
+    stubApi({
+      "GET /slos/slo-1": json(target()),
+      "GET /slo-readings/slo-1/burn": json({ detail: "boom" }, 500),
+    });
+    const failed = await mountAt("/slos/slo-1");
+    await waitFor(
+      () => readable(failed.container).includes("How fast could not be read"),
+      "the failure line",
+    );
+    expect(readable(failed.container)).toContain("Failures still allowed: 360 of 672.");
+  });
+
+  it("says who is told in each of FR25a's three cases (AC84)", async () => {
+    stubApi({ "GET /slos/slo-1": json(target()) });
+    const told = await mountAt("/slos/slo-1");
+    await waitFor(
+      () =>
+        readable(told.container).includes(
+          "Warnings and criticals go to Organization owners, through Reliability targets.",
+        ),
+      "who is told",
+    );
+    unmountAll();
+
+    stubApi({
+      "GET /slos/slo-1": json(
+        target({
+          told: { alerting: false, rules: [], snoozed_until: null, snoozed_by_name: null },
+        }),
+      ),
+    });
+    const none = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(none.container).includes("No alerts will be sent."), "no alerts");
+    unmountAll();
+
+    stubApi({
+      "GET /slos/slo-1": json(
+        target({
+          told: {
+            ...target().told,
+            snoozed_until: minutesFromNow(120),
+            snoozed_by_name: "Member",
+          },
+        }),
+      ),
+    });
+    const snoozed = await mountAt("/slos/slo-1");
+    await waitFor(
+      () => readable(snoozed.container).includes("by Member. Failures still count."),
+      "snoozed",
+    );
   });
 
   it("shows at most two notes, with the rest behind 'N more notes', the no-alerts note pinned (FR10)", async () => {
@@ -203,6 +365,39 @@ describe("the monthly answer (Step 3)", () => {
     );
     expect(readable(container)).toContain("Holds 8 of 30 days.");
     expect(readable(container)).toContain("Changed on 3 Nov by a change to what it counts.");
+  });
+
+  it("says an exclusion removed too late to recount was removed, figure not recounted (AC69)", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    stubApi(
+      onTheTarget([
+        month({
+          month: "2026-10-01",
+          removed_not_recounted: [
+            {
+              id: "x-1",
+              starts_at: "2026-10-03T08:00:00Z",
+              minutes: 120,
+              removed_at: "2026-11-08T10:00:00Z",
+            },
+          ],
+        }),
+        month({ month: "2026-09-01", days_in_month: 30, days_held: 30 }),
+      ]),
+    );
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("October 2026"), "the months");
+    const line =
+      "The exclusion from 3 Oct (2 h) was removed, figure not recounted: its days too old to count again still leave it out.";
+    expect(readable(container.querySelector('[data-month="2026-10-01"]') as Element)).toContain(
+      line,
+    );
+    expect(readable(container.querySelector('[data-month="2026-09-01"]') as Element)).not.toContain(
+      "not recounted",
+    );
+    await press(container, "Copy");
+    expect(String(writeText.mock.calls[0]?.at(0))).toContain(line);
   });
 
   it("tells a nightly lull from a real outage by the longest stretch and the link (AC77)", async () => {

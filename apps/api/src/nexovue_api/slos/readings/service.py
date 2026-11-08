@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform import slo
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.auth.dependencies import Identity
+from nexovue_api.auth.dependencies import Identity, Reader
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.errors.exceptions import InvalidRequestError
-from nexovue_api.projects.service import require_project
+from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.slos import queries as slo_queries
 from nexovue_api.slos.readings import queries
 from nexovue_api.slos.readings.schemas import (
@@ -26,9 +26,12 @@ from nexovue_api.slos.readings.schemas import (
     CheckFacts,
     CheckWindow,
     EndpointChoice,
+    SloBurnLine,
+    SloBurnPoint,
     SloSuggestion,
     SuggestedWeek,
 )
+from nexovue_api.slos.service import NO_SUCH_TARGET
 from nexovue_api.window import RECEIVE_CLOCK_SLACK
 
 _LOOKBACK: Final = timedelta(days=slo.SUGGESTION_WEEKS * slo.DAYS_IN_A_WEEK)
@@ -245,3 +248,118 @@ def _allowance(check: CheckFacts) -> CheckAllowance:
         ],
         alerts_can_judge=slo.alerts_can_judge_interval(check.interval_seconds),
     )
+
+
+# ------------------------------------------------------------ the burn line (AC109)
+
+# The chart's day, and its on-pace line: a rate of 1 spends the allowance exactly by
+# the end of the window (design, *One target*).
+CHART_SPAN: Final = timedelta(hours=24)
+ON_PACE: Final = 1.0
+_MINUTE: Final = timedelta(minutes=1)
+
+
+async def burn(
+    db: AsyncSession,
+    repository: TenantScopedRepository,
+    *,
+    reader: Reader,
+    target_id: uuid.UUID,
+) -> SloBurnLine:
+    """The tier `slo_status` names, plotted by the minute up to its `evaluated_minute`,
+    from the counts the job judged, exclusions left out as it left them (AC109)."""
+    row = await slo_queries.target_with_status(db, org_id=reader.org_id, target_id=target_id)
+    if row is None or row[0].deleted_at is not None:
+        raise NotFoundError(NO_SUCH_TARGET)
+    target, status = row[0], row[1]
+    await require_readable_project(db, reader=reader, project_id=target.project_id)
+    chart = (status.tiers or {}).get("chart_tier") if status is not None else None
+    if status is None or not chart:
+        return SloBurnLine(
+            tier=None,
+            evaluated_minute=status.evaluated_minute if status else None,
+            on_pace=ON_PACE,
+            points=[],
+        )
+    tier = slo.tier_named(chart)
+    last = status.evaluated_minute
+    first = last - CHART_SPAN + _MINUTE
+    start, end = first - tier.long + _MINUTE, last + _MINUTE
+    minutes = await _minutes(repository, target, start=start, end=end)
+    spans = await slo_queries.exclusion_spans(
+        db, org_id=reader.org_id, target_id=target.id, start=start, end=end
+    )
+    rates = slo.rolling_rates(
+        minutes,
+        first=first,
+        last=last,
+        length=tier.long,
+        excluded=slo.excluded_minutes_in(spans, start=start, end=end),
+        objective=target.objective_percent,
+    )
+    return SloBurnLine(
+        tier=tier.name,
+        evaluated_minute=last,
+        on_pace=ON_PACE,
+        points=[SloBurnPoint(minute=minute, rate=rate) for minute, rate in rates],
+    )
+
+
+async def _minutes(
+    repository: TenantScopedRepository, target: Any, *, start: datetime, end: datetime
+) -> dict[datetime, slo.MinuteTally]:
+    """A target's (events, failures) by minute, by its kind (FR1), as the job counts them."""
+    bound: dict[str, Any] = {
+        "project_id": str(target.project_id),
+        "service": target.service_name or "",
+        "from_minute": start,
+        "to_minute": end,
+    }
+    if target.kind == slo.CHECK_AVAILABILITY:
+        if target.check_id is None:
+            return {}
+        rows = await repository.query(
+            queries.CHECK_MINUTES_SQL,
+            bound
+            | {
+                "check_id": str(target.check_id),
+                "received_from": start - RECEIVE_CLOCK_SLACK,
+                "received_to": end + RECEIVE_CLOCK_SLACK,
+            },
+        )
+        return {
+            _at(row): (int(row["counted"]), int(row["counted"]) - int(row["up"])) for row in rows
+        }
+    if target.kind == slo.SERVICE_LATENCY:
+        rows = await repository.query(queries.LATENCY_MINUTES_SQL, bound)
+        found = {}
+        for row in rows:
+            requests = int(row["requests"])
+            good = min(
+                requests, slo.at_or_under([int(n) for n in row["buckets"]], target.boundary_index)
+            )
+            found[_at(row)] = (requests, requests - good)
+        return found
+    if target.kind == slo.ENDPOINT_AVAILABILITY:
+        rows = await repository.query(
+            queries.ENDPOINT_MINUTES_SQL, bound | {"endpoints": [target.endpoint_name]}
+        )
+        return {_at(row): (int(row["requests"]), int(row["errors"])) for row in rows}
+    rows = await repository.query(queries.SERVICE_MINUTES_SQL, bound)
+    service = {_at(row): (int(row["requests"]), int(row["errors"])) for row in rows}
+    if not target.left_out_endpoints:
+        return service
+    named = await repository.query(
+        queries.ENDPOINT_MINUTES_SQL, bound | {"endpoints": list(target.left_out_endpoints)}
+    )
+    left_out: dict[str, dict[datetime, slo.MinuteTally]] = {}
+    for row in named:
+        left_out.setdefault(str(row["span_name"]), {})[_at(row)] = (
+            int(row["requests"]),
+            int(row["errors"]),
+        )
+    return slo.without_left_out(service, left_out.values())
+
+
+def _at(row: Mapping[str, Any]) -> datetime:
+    return datetime.fromtimestamp(int(row["minute_epoch"]), UTC)

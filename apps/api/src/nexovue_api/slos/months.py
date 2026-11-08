@@ -6,8 +6,9 @@ one function (`nexovue_platform.slo.month_figures`), so it still shows once the 
 have expired (AC44), and the scheduler, the screen and the CSV cannot disagree.
 
 **What a month leaves out** is stated with it: coverage, quiet, lost and excluded
-time, a sharp fall in requests (FR27c), and each traffic finding or silence incident
-on the target's service while those records last (FR27a).
+time, a sharp fall in requests (FR27c), each traffic finding or silence incident
+on the target's service while those records last (FR27a), and each exclusion removed
+too late for its days to be counted again: "removed, figure not recounted" (FR29, AC69).
 
 **A deleted target still counts** in every month that ended before its deletion: from
 its own days while it can be restored, then from `slo_deleted_months` once purged
@@ -34,7 +35,13 @@ from nexovue_platform import slo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.auth.dependencies import Reader
-from nexovue_api.data.postgres.models import Finding, Incident, SloDeletedMonth, SloTarget
+from nexovue_api.data.postgres.models import (
+    Finding,
+    Incident,
+    SloDeletedMonth,
+    SloExclusion,
+    SloTarget,
+)
 from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.exports.csv_cells import spreadsheet_safe
 from nexovue_api.projects.service import require_readable_project
@@ -48,6 +55,7 @@ from nexovue_api.slos.schemas import (
     SloMonthRow,
     SloMonths,
     SloOutage,
+    SloRemovedExclusion,
     SloSharpFall,
 )
 from nexovue_api.slos.service import NO_SUCH_TARGET, day_counts, label_of, zone_of
@@ -123,6 +131,12 @@ async def target_months(
         start=slo.day_bounds(figures[-1].month, zone)[0] if figures else now,
         end=now,
     )
+    removals = await _removals(
+        db,
+        reader.org_id,
+        [target],
+        since=slo.day_bounds(figures[-1].month, zone)[0] if figures else now,
+    )
     return SloMonths(
         id=target.id,
         label=label_of(target, row[3]),
@@ -132,7 +146,13 @@ async def target_months(
         audience=slo.AUDIENCE_LINE,
         zone=str(zone),
         months=[
-            _month(month, target, outages.get(target.service_name or "", []), zone)
+            _month(
+                month,
+                target,
+                outages.get(target.service_name or "", []),
+                removals.get(target.id, []),
+                zone,
+            )
             for month in figures
         ],
     )
@@ -282,6 +302,37 @@ def _incident_outage(incident: Incident, now: datetime) -> _Outage:
     return _Outage("silence_incident", incident.id, incident.opened_at, incident.resolved_at or now)
 
 
+async def _removals(
+    db: AsyncSession, org_id: uuid.UUID, targets: Sequence[SloTarget], *, since: datetime
+) -> dict[uuid.UUID, list[SloExclusion]]:
+    """FR29, AC69: each target's exclusions removed past the recount limit that end
+    after `since`, one read for all the targets."""
+    found: dict[uuid.UUID, list[SloExclusion]] = {}
+    for exclusion in await queries.removed_not_recounted(
+        db, org_id=org_id, target_ids=[target.id for target in targets], since=since
+    ):
+        found.setdefault(exclusion.slo_id, []).append(exclusion)
+    return found
+
+
+def _removed_in_month(
+    removals: Iterable[SloExclusion], month: date, zone: ZoneInfo
+) -> list[SloRemovedExclusion]:
+    """The removals not recounted whose time overlaps a month, each with its whole
+    length: the month's days past the recount limit still leave that time out."""
+    start, end = slo.day_bounds(month, zone)[0], slo.day_bounds(slo.next_month(month), zone)[0]
+    return [
+        SloRemovedExclusion(
+            id=removal.id,
+            starts_at=removal.starts_at,
+            minutes=int((removal.ends_at - removal.starts_at).total_seconds() // 60),
+            removed_at=removal.removed_at,
+        )
+        for removal in removals
+        if removal.removed_at is not None and removal.starts_at < end and removal.ends_at > start
+    ]
+
+
 def _in_month(outages: Iterable[_Outage], month: date, zone: ZoneInfo) -> list[SloOutage]:
     """The outages overlapping a month, each with its whole length."""
     start, end = slo.day_bounds(month, zone)[0], slo.day_bounds(slo.next_month(month), zone)[0]
@@ -298,13 +349,21 @@ def _in_month(outages: Iterable[_Outage], month: date, zone: ZoneInfo) -> list[S
 
 
 def _month(
-    figures: slo.MonthFigures, target: SloTarget, outages: Iterable[_Outage], zone: ZoneInfo
+    figures: slo.MonthFigures,
+    target: SloTarget,
+    outages: Iterable[_Outage],
+    removals: Iterable[SloExclusion],
+    zone: ZoneInfo,
 ) -> SloMonth:
-    return SloMonth(**_month_fields(figures, target.objective_percent, outages, zone))
+    return SloMonth(**_month_fields(figures, target.objective_percent, outages, removals, zone))
 
 
 def _month_fields(
-    figures: slo.MonthFigures, objective: Any, outages: Iterable[_Outage], zone: ZoneInfo
+    figures: slo.MonthFigures,
+    objective: Any,
+    outages: Iterable[_Outage],
+    removals: Iterable[SloExclusion],
+    zone: ZoneInfo,
 ) -> dict[str, Any]:
     shown = _in_month(outages, figures.month, zone)
     return {
@@ -334,6 +393,7 @@ def _month_fields(
             for fall in figures.sharp_falls
         ],
         "outages": shown,
+        "removed_not_recounted": _removed_in_month(removals, figures.month, zone),
         "time_not_counted": bool(figures.lost_minutes or figures.excluded_minutes or shown),
     }
 
@@ -365,6 +425,9 @@ async def _month_rows(
         start=slo.day_bounds(oldest, zone)[0],
         end=now,
     )
+    removals = await _removals(
+        db, org_id, [row[0] for row in targets], since=slo.day_bounds(oldest, zone)[0]
+    )
     purged = await queries.deleted_months_since(
         db, org_id=org_id, project_id=project_id, since=oldest
     )
@@ -388,7 +451,12 @@ async def _month_rows(
             if figures is not None:
                 rows.append(
                     _live_row(
-                        figures, target, row[3], outages.get(target.service_name or "", []), zone
+                        figures,
+                        target,
+                        row[3],
+                        outages.get(target.service_name or "", []),
+                        removals.get(target.id, []),
+                        zone,
                     )
                 )
         rows.extend(
@@ -404,10 +472,11 @@ def _live_row(
     target: SloTarget,
     check_name: str | None,
     outages: Iterable[_Outage],
+    removals: Iterable[SloExclusion],
     zone: ZoneInfo,
 ) -> SloMonthRow:
     return SloMonthRow(
-        **_month_fields(figures, target.objective_percent, outages, zone),
+        **_month_fields(figures, target.objective_percent, outages, removals, zone),
         id=target.id,
         name=target.name,
         label=label_of(target, check_name),
@@ -419,8 +488,9 @@ def _live_row(
 
 
 def _purged_row(record: SloDeletedMonth) -> SloMonthRow:
-    """A purged target's month as the purge kept it: its figures, not its outage links
-    or sharp falls, whose own records may be gone (FR27a: "while those records last")."""
+    """A purged target's month as the purge kept it: its figures, not its outage links,
+    sharp falls or removed exclusions, whose own records went with it or may be gone
+    (FR27a: "while those records last")."""
     return SloMonthRow(
         month=record.month,
         result=slo.MonthResult(record.result),
@@ -445,6 +515,7 @@ def _purged_row(record: SloDeletedMonth) -> SloMonthRow:
         earlier_definition_through=None,
         sharp_falls=[],
         outages=[],
+        removed_not_recounted=[],
         time_not_counted=bool(record.lost_minutes or record.excluded_minutes),
         id=record.slo_id,
         name=None,

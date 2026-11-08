@@ -71,6 +71,22 @@ export function target(overrides: Partial<SloView> = {}): SloView {
       excluded_minutes: 0,
       days_held: 28,
     },
+    burn: null,
+    told: {
+      alerting: true,
+      rules: [
+        {
+          id: "rule-slo",
+          name: "Reliability targets",
+          minimum_severity: "warning",
+          muted_until: null,
+          is_default: true,
+          channels: [{ id: "ch-owners", kind: "owners", name: "Organization owners" }],
+        },
+      ],
+      snoozed_until: null,
+      snoozed_by_name: null,
+    },
     evaluated_minute: minutesAgo(1),
     last_event_minute: minutesAgo(1),
     longest_quiet_7d_minutes: 0,
@@ -107,6 +123,7 @@ export function month(overrides: Partial<SloMonth> = {}): SloMonth {
     earlier_definition_through: null,
     sharp_falls: [],
     outages: [],
+    removed_not_recounted: [],
     time_not_counted: false,
     ...overrides,
   };
@@ -161,6 +178,12 @@ export function stubApi(handlers: Record<string, Handler>, role: TestRole = "own
     // A target's page opens on its months; a test about the rest need not say so.
     "GET /slos/slo-1/months": json(monthsOf([])),
     "GET /slos/slo-1/history": json({ entries: [] }),
+    "GET /slo-readings/slo-1/burn": json({
+      tier: null,
+      evaluated_minute: null,
+      on_pace: 1,
+      points: [],
+    }),
     ...handlers,
   };
   vi.stubGlobal(

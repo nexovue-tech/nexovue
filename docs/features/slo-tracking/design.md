@@ -547,6 +547,8 @@ slo_exclusions                    (Step 4)
   id, org_id, project_id, slo_id, starts_at, ends_at CHECK > starts_at
   reason (10..500), created_by, created_at, removed_at, removed_by
   removal_not_recounted bool
+  counted_at timestamptz           (2026-11-09) the recount queue: null after a creation or
+                                   removal, set by the counts run that recounted its days
 
 slo_target_changes                one per change, for FR30. The one update it allows is members.scrub
   id, org_id, project_id, slo_id (no FK to the target), at, actor_user_id, what, before jsonb, after jsonb
@@ -558,6 +560,7 @@ slo_deleted_months                (Step 3) written at purge, so a report stays t
 - `definition_key` is the kind, source, endpoint, check, boundary, objective and window, as one text value, so nulls cause no trouble in the unique index.
 - `name` uniqueness applies to live targets, so a name is free again during the 30 days. **Restoring a target whose name was taken asks for a new one** (AC116).
 - `quiet_since` is not stored, because `last_event_minute` says it.
+- **`slo_exclusions.counted_at`** (2026-11-09, accepted by the founder as built in Step 4; `status.md`, decision 5) is how a route "queues a recount of the days touched": the scheduler's counts hand-out picks up a project holding an exclusion with it null, recounts those days back to the recount limit, and sets it.
 
 **Changes to what exists:**
 

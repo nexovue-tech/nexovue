@@ -132,7 +132,10 @@ export function sentenceOf(view: SloView, zone: string, now: number = Date.now()
     case "not_up_to_date": {
       const since = view.evaluated_minute ? timeIn(view.evaluated_minute, zone, now) : null;
       if (variant === "was_burning" && since) {
-        return `Was using its allowance too fast when last worked out at ${since}. Not up to date since then.`;
+        const rate = view.burn
+          ? `${Math.floor(view.burn.rate)} times faster than allowed`
+          : "too fast";
+        return `Was using ${allowedNoun(view.kind)} ${rate} when last worked out at ${since}. Not up to date since then.`;
       }
       return since
         ? `Not up to date since ${since}. These figures may be out of date.`
@@ -141,7 +144,7 @@ export function sentenceOf(view: SloView, zone: string, now: number = Date.now()
     case "source_gone":
       return `${view.service_name ?? "This source"} has sent nothing in the last ${view.window_days} days.`;
     case "running_out":
-      return "Using its allowance too fast.";
+      return burnSentence(view, variant, zone, now);
     case "counting":
       return `Reading the past ${view.window_days} days.`;
     case "not_measured":
@@ -163,9 +166,57 @@ export function sentenceOf(view: SloView, zone: string, now: number = Date.now()
   }
 }
 
+// FR12: each kind's own word, so a latency target never says "failures" (AC89).
+const ALLOWED_NOUN: Record<string, string> = {
+  service_latency: "allowed slow requests",
+  check_availability: "allowed failed runs",
+};
+const HOURS_IN_TWO_DAYS = 48;
+// FR18: a burn resolves this long after no tier holds (a guess, in the register).
+const RESOLVE_AFTER_MINUTES = 10;
+
+export function allowedNoun(kind: string): string {
+  return ALLOWED_NOUN[kind] ?? "allowed failures";
+}
+
+/** How long what is left lasts, in FR10's words; null when it is not known. */
+export function lastsFor(hours: number | null): string | null {
+  if (hours === null) return null;
+  if (hours <= 0) return "Nothing is left.";
+  if (hours < 1) return "What is left lasts under an hour.";
+  if (hours < HOURS_IN_TWO_DAYS) return `What is left lasts about ${Math.floor(hours)} hours.`;
+  return `What is left lasts about ${Math.floor(hours / 24)} days.`;
+}
+
+/** FR10's Running out sentence, by variant: burning, nothing left, resolving, not judged. */
+function burnSentence(view: SloView, variant: SloVariant, zone: string, now: number): string {
+  const burn = view.burn;
+  const noun = allowedNoun(view.kind);
+  if (burn === null) return `Using ${noun} too fast.`;
+  const since = timeIn(burn.since, zone, now);
+  if (variant === "not_judged") {
+    const until = burn.last_held_minute ? timeIn(burn.last_held_minute, zone, now) : since;
+    return `Was using ${noun} too fast until ${until}. Not judged since.`;
+  }
+  if (variant === "resolving" && burn.last_held_minute) {
+    const back = Math.max(0, Math.floor((now - Date.parse(burn.last_held_minute)) / 60_000));
+    const closes = Date.parse(burn.last_held_minute) + (RESOLVE_AFTER_MINUTES + 1) * 60_000;
+    return `Back within its allowance for ${back} minutes. Will close at ${timeIn(new Date(closes).toISOString(), zone, now)} if it stays there.`;
+  }
+  const rate = `Using ${noun} ${Math.floor(burn.rate)} times faster than allowed, since ${since}`;
+  if (variant === "nothing_left") return `${rate}, and nothing is left.`;
+  const lasts = lastsFor(burn.hours_left);
+  return lasts ? `${rate}. ${lasts}` : `${rate}.`;
+}
+
 /** FR10's next step, straight after the sentence; null where there is none. */
-export function nextStepOf(state: SloState, view: Pick<SloView, "attention">): string | null {
+export function nextStepOf(
+  state: SloState,
+  view: Pick<SloView, "attention"> & Partial<Pick<SloView, "severity">>,
+): string | null {
   switch (state) {
+    case "running_out":
+      return view.severity === "critical" ? "Open the incident." : "Can wait for working hours.";
     case "disabled":
       return "Turn alerts back on.";
     case "not_up_to_date":
@@ -187,6 +238,62 @@ export function nextStepOf(state: SloState, view: Pick<SloView, "attention">): s
   }
 }
 
+/** FR25a: who is told, in one sentence. */
+export function toldSentence(
+  told: SloView["told"],
+  zone: string,
+  now: number = Date.now(),
+): string {
+  if (told.snoozed_until) {
+    const by = told.snoozed_by_name ? ` by ${told.snoozed_by_name}` : "";
+    return `Messages are snoozed until ${timeIn(told.snoozed_until, zone, now)}${by}. Failures still count.`;
+  }
+  if (!told.alerting) return "No alerts will be sent.";
+  const sending = told.rules.filter((rule) => !rule.muted_until && rule.channels.length > 0);
+  const channels = [...new Set(sending.flatMap((rule) => rule.channels.map((each) => each.name)))];
+  const rules = sending.map((rule) => rule.name);
+  const what = sending.every((rule) => rule.minimum_severity === "critical")
+    ? "Criticals go"
+    : "Warnings and criticals go";
+  return `${what} to ${joinAnd(channels)}, through ${joinAnd(rules)}.`;
+}
+
+/** The chart's description (AC81, AC109): the tier, the current and the peak rate. */
+export function chartDescription(line: {
+  tier: string | null;
+  points: ReadonlyArray<{ rate: number | null }>;
+}): string {
+  const rates = line.points.map((point) => point.rate).filter((rate) => rate !== null);
+  const now = line.points.at(-1)?.rate;
+  const shown = (rate: number) => String(Math.round(rate * 10) / 10);
+  const current = now === null || now === undefined ? "no requests now" : `now ${shown(now)}`;
+  const peak = rates.length ? `, peak ${shown(Math.max(...rates))}` : "";
+  return `Times faster than allowed over the last 24 hours, the ${line.tier} tier: ${current}${peak}. On pace is 1.`;
+}
+
+/** FR25a on the form: who the rules covering every target already tell. */
+export function formToldSentence(
+  rules: ReadonlyArray<{ name: string; muted_until: string | null; channels: { name: string }[] }>,
+): string {
+  const sending = rules.filter((rule) => !rule.muted_until && rule.channels.length > 0);
+  if (sending.length === 0) return "No alerts will be sent.";
+  const channels = [...new Set(sending.flatMap((rule) => rule.channels.map((each) => each.name)))];
+  return `Warnings and criticals go to ${joinAnd(channels)}, through ${joinAnd(sending.map((rule) => rule.name))}.`;
+}
+
+/** A list row's chip (FR25a): no alerts, or every covering rule muted. */
+export function toldChip(told: SloView["told"]): string | null {
+  if (told.rules.length > 0 && told.rules.every((rule) => rule.muted_until !== null)) {
+    return "Muted";
+  }
+  return told.alerting ? null : "No alerts";
+}
+
+function joinAnd(items: string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
 /** A qualifier's line under the sentence (FR10). */
 export function qualifierLine(qualifier: SloQualifier, view: SloView): string {
   switch (qualifier) {
@@ -197,7 +304,9 @@ export function qualifierLine(qualifier: SloQualifier, view: SloView): string {
     case "no_alerts":
       return "No alerts will be sent.";
     case "snoozed":
-      return "Messages are snoozed.";
+      return view.told?.snoozed_until
+        ? `Messages are snoozed until ${timeIn(view.told.snoozed_until, view.zone)}. Failures still count.`
+        : "Messages are snoozed.";
     case "missed":
       return "Target missed.";
     case "thin_traffic":

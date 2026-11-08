@@ -110,6 +110,7 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "slo_daily_counts": "slo_targets",
     "slo_target_changes": "projects",
     "slo_deleted_months": "projects",
+    "slo_exclusions": "slo_targets",
     # F28. Releases and how far the sync has read go with the project; periods with
     # their release.
     "releases": "projects",

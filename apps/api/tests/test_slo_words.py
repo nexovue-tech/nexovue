@@ -7,7 +7,8 @@ moved screen cannot pass by being absent (plan T1.8). T3.6, T4.9, T5.7 and T6.6 
 their paths here.
 
 T3.6 adds the target's tabs and the *Last month* view by name, and "error budget",
-which only the *Definition* tab may say (AC13).
+which only the *Definition* tab may say (AC13). T4.9 adds the `slo_burn` messages'
+wording, `alerts/slo_words.py`.
 """
 
 from __future__ import annotations
@@ -20,7 +21,11 @@ import pytest
 
 REPOSITORY: Final = Path(__file__).resolve().parents[3]
 # What the scan reads, each with the files it must find there.
-SCANNED: Final = {"apps/web/src/features/slos": ("*.ts", "*.tsx")}
+SCANNED: Final = {
+    "apps/web/src/features/slos": ("*.ts", "*.tsx"),
+    # T4.9: what a burn's messages and notices say.
+    "apps/scheduler/src/nexovue_scheduler/alerts": ("slo_words.py",),
+}
 # Files each step names, so a renamed tab cannot leave the scan by being absent.
 NAMED: Final = (
     "apps/web/src/features/slos/SloMonthsTab.tsx",
@@ -28,6 +33,7 @@ NAMED: Final = (
     "apps/web/src/features/slos/SloDefinitionTab.tsx",
     "apps/web/src/features/slos/LastMonthView.tsx",
     "apps/web/src/features/slos/month-words.ts",
+    "apps/scheduler/src/nexovue_scheduler/alerts/slo_words.py",
 )
 # A phrase one file alone may say, beyond `FORBIDDEN`'s allow-lists (AC13: "error
 # budget" only on the Definition tab).
@@ -53,6 +59,8 @@ FORBIDDEN: Final[dict[str, tuple[str, ...]]] = {
 
 _STRING: Final = re.compile(r"\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`")
 _JSX_TEXT: Final = re.compile(r">([^<>{}]+)<")
+# A placeholder inside a string, `${count}` or Python's `{slo.noun(kind)}`, is code.
+_PLACEHOLDER: Final = re.compile(r"\$?\{[^{}]*\}")
 _IMPORT: Final = re.compile(r"^\s*(import|export)\b.*\bfrom\b|^\s*import\s", re.MULTILINE)
 
 
@@ -60,7 +68,7 @@ def said(source: str) -> list[str]:
     """The text a file shows people: its string literals and JSX text, not its imports."""
     lines = [line for line in source.splitlines() if not _IMPORT.match(line)]
     kept = "\n".join(lines)
-    return [match.group(0)[1:-1] for match in _STRING.finditer(kept)] + [
+    return [_PLACEHOLDER.sub(" ", match.group(0)[1:-1]) for match in _STRING.finditer(kept)] + [
         match.group(1) for match in _JSX_TEXT.finditer(kept)
     ]
 
@@ -145,3 +153,8 @@ def test_the_scan_reads_strings_and_jsx_but_not_imports_or_names() -> None:
         "<p>Uptime here</p>\n"
     )
     assert said(source) == ["Counting", "Uptime here"]
+
+
+def test_a_placeholder_in_a_string_is_code_not_words() -> None:
+    assert offences(said('f"{slo.allowance_words(kind)}: 3 of {allowed}"')[0]) == []
+    assert offences(said("`${budget} left`")[0]) == []

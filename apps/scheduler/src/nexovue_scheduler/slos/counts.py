@@ -52,6 +52,8 @@ class DayRow:
     expected_runs: int | None = None
     missed_runs: int | None = None
     maintenance_runs: int | None = None
+    # Minutes a person left out (FR29, BR6): neither good nor bad, nor quiet, nor lost.
+    excluded_minutes: int = 0
 
     @property
     def held_an_event(self) -> bool:
@@ -66,17 +68,27 @@ def day_row(
     through: datetime,
     first_event_at: datetime,
     lost: frozenset[datetime],
+    excluded: frozenset[datetime] = frozenset(),
 ) -> DayRow:
     """One day of one source, over [day_start, day_end), counted from the first event
-    and up to `through` (the settled minute, exclusive)."""
+    and up to `through` (the settled minute, exclusive). An excluded minute adds nothing
+    and ends a quiet stretch, as an event does (BR6)."""
     first = max(day_start, _floor_minute(first_event_at))
     end = min(day_end, through)
-    good = total = quiet = lost_count = 0
+    good = total = quiet = lost_count = excluded_count = 0
     runs: list[int] = []
     run = 0
     leading: int | None = None
     minute = first
     while minute < end:
+        if minute in excluded:
+            excluded_count += 1
+            if leading is None:
+                leading = run
+            runs.append(run)
+            run = 0
+            minute += _MINUTE
+            continue
         counts = source.get(minute)
         requests = counts.requests if counts is not None else 0
         if requests > 0:
@@ -103,6 +115,7 @@ def day_row(
         quiet_leading_minutes=run if leading is None else leading,
         quiet_trailing_minutes=run,
         longest_quiet_minutes=max(runs),
+        excluded_minutes=excluded_count,
     )
 
 
@@ -148,23 +161,17 @@ def last_event(source: Mapping[datetime, MinuteCounts]) -> datetime | None:
 def without_left_out(
     service: Mapping[datetime, MinuteCounts], left_out: Iterable[Mapping[datetime, MinuteCounts]]
 ) -> dict[datetime, MinuteCounts]:
-    """A service's minutes less its left-out endpoints' (FR34): subtracted only where the
-    service has a row, and never below zero. Left-out requests are not activity, so a
-    minute of probes alone is quiet."""
-    removed: dict[datetime, list[int]] = {}
-    for endpoint in left_out:
-        for minute, counts in endpoint.items():
-            if minute in service:
-                totals = removed.setdefault(minute, [0, 0])
-                totals[0] += counts.requests
-                totals[1] += counts.failures
-    counted: dict[datetime, MinuteCounts] = {}
-    for minute, counts in service.items():
-        requests_out, failures_out = removed.get(minute, (0, 0))
-        requests = max(0, counts.requests - requests_out)
-        failures = min(requests, max(0, counts.failures - failures_out))
-        counted[minute] = MinuteCounts(requests, failures)
-    return counted
+    """A service's minutes less its left-out endpoints' (FR34): the platform's rule, which
+    the API's chart reads too. Left-out requests are not activity, so a minute of probes
+    alone is quiet."""
+    counted = slo.without_left_out(
+        {minute: (counts.requests, counts.failures) for minute, counts in service.items()},
+        [
+            {minute: (counts.requests, counts.failures) for minute, counts in endpoint.items()}
+            for endpoint in left_out
+        ],
+    )
+    return {minute: MinuteCounts(*tally) for minute, tally in counted.items()}
 
 
 def latency_minutes(
@@ -188,6 +195,7 @@ def check_day_row(
     first_event_at: datetime,
     interval_seconds: int,
     locations: int,
+    excluded: frozenset[datetime] = frozenset(),
 ) -> DayRow:
     """One day of one check's runs, over [day_start, day_end), from its first run and up
     to `through`. Expected runs are what its interval asks of each location it runs at;
@@ -195,10 +203,15 @@ def check_day_row(
     unmeasured outcome or a lost reading lowers coverage (FR11, AC67)."""
     first = max(day_start, _floor_minute(first_event_at))
     end = min(day_end, through)
-    inside = [reading for minute, reading in runs.items() if first <= minute < end]
+    inside = [
+        reading
+        for minute, reading in runs.items()
+        if first <= minute < end and minute not in excluded
+    ]
     counted = sum(reading.counted for reading in inside)
     maintenance = sum(reading.maintenance for reading in inside)
-    seconds = max(0, int((end - first).total_seconds()))
+    left_out = len([minute for minute in excluded if first <= minute < end])
+    seconds = max(0, int((end - first).total_seconds()) - left_out * _MINUTE.seconds)
     expected = seconds // interval_seconds * locations
     good = sum(reading.up for reading in inside)
     return DayRow(
@@ -213,6 +226,7 @@ def check_day_row(
         expected_runs=expected,
         missed_runs=max(0, expected - counted - maintenance),
         maintenance_runs=maintenance,
+        excluded_minutes=left_out,
     )
 
 

@@ -11,6 +11,7 @@ import socket
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Final
 from urllib.parse import urlsplit
 
@@ -26,9 +27,14 @@ from nexovue_api.data.postgres.models import (
     AlertEvaluation,
     AuditLogEntry,
     Check,
+    DeployEvent,
+    Finding,
+    FindingIncident,
     Incident,
     Notification,
     NotificationChannel,
+    Project,
+    SloTarget,
 )
 from nexovue_api.errors.exceptions import (
     InvalidRequestError,
@@ -137,8 +143,10 @@ async def test_a_new_project_lists_its_default_rules_sending_to_the_owners(
     assert [(rule.name, rule.is_default, rule.notifying_nobody) for rule in listed.rules] == [
         ("Any check down", True, False),
         ("Critical problems", True, False),
+        ("Reliability targets", True, False),
     ]
     assert [[channel.kind for channel in rule.channels] for rule in listed.rules] == [
+        ["owners"],
         ["owners"],
         ["owners"],
     ]
@@ -550,8 +558,50 @@ async def test_a_service_shows_only_the_rules_that_watch_it(
     coverage = await service.coverage_of_service(
         db, org_id=tenant.organization.id, project_id=tenant.project.id, service="checkout"
     )
-    # The default *Critical problems* rule watches every service too (F6 FR29).
+    # The default *Critical problems* rule watches every service too (F6 FR29); the
+    # default *Reliability targets* rule watches targets, never a service (F19 FR25, AC70).
     assert [rule.name for rule in coverage.rules] == ["Critical problems", "Every service silent"]
+
+
+async def _slo_target(db: AsyncSession, tenant: ProvisionedTenant, project_id: uuid.UUID) -> Any:
+    target = SloTarget(
+        org_id=tenant.organization.id,
+        project_id=project_id,
+        name=f"checkout availability {uuid.uuid4()}",
+        kind="service_availability",
+        service_name="checkout",
+        objective_percent=Decimal("99.9"),
+        window_days=28,
+        upstream_sampling="no",
+        definition_key=str(uuid.uuid4()),
+    )
+    db.add(target)
+    await db.flush()
+    return target
+
+
+async def test_a_target_rule_names_only_this_project_s_live_targets(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """F19 T4.11: `slo_ids` are checked at write, as a check rule's ids are."""
+    own = await _slo_target(db, tenant, tenant.project.id)
+    created = await _create(
+        db,
+        tenant,
+        name="Checkout target",
+        condition={"kind": "slo_burn", "slo_ids": [str(own.id)]},
+    )
+    assert created.condition["slo_ids"] == [str(own.id)]
+    with pytest.raises(InvalidRequestError) as refused:
+        await _create(
+            db,
+            tenant,
+            name="Someone else's",
+            condition={"kind": "slo_burn", "slo_ids": [str(uuid.uuid4())]},
+        )
+    assert [problem["field"] for problem in refused.value.extensions["errors"]] == [
+        "condition.slo_ids"
+    ]
 
 
 async def _open(
@@ -928,3 +978,139 @@ async def test_a_member_still_changes_every_other_rule(
         actor_role="member",
         rule_id=created.id,
     )
+
+
+# ------------------------------------------------------- F19: a burn's page (T4.11)
+
+
+async def _burn_incident(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    target: Any,
+    *,
+    service_name: str | None = "checkout",
+) -> Incident:
+    incident = Incident(
+        org_id=tenant.organization.id,
+        project_id=tenant.project.id,
+        rule_id=None,
+        rule_name="Reliability targets",
+        condition_kind="slo_burn",
+        subject_key=f"slo:{target.id}",
+        subject_label="checkout availability, 99.9% over 28 days",
+        severity="critical",
+        opened_at=datetime.now(UTC) - timedelta(minutes=20),
+        detail={
+            "slo_id": str(target.id),
+            "kind": "service_availability",
+            "service": service_name,
+        },
+    )
+    db.add(incident)
+    await db.flush()
+    return incident
+
+
+async def test_ac85_a_burn_states_the_last_deploy_its_finding_and_the_project_s_zone(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    project = await db.get(Project, tenant.project.id)
+    assert project is not None
+    project.timezone = "Asia/Kolkata"
+    target = await _slo_target(db, tenant, tenant.project.id)
+    incident = await _burn_incident(db, tenant, target)
+    deployed = incident.opened_at - timedelta(minutes=11)
+    for name, at in (("checkout", deployed), ("cart", deployed + timedelta(minutes=5))):
+        db.add(
+            DeployEvent(
+                org_id=tenant.organization.id,
+                project_id=tenant.project.id,
+                version="1.2.3",
+                service_name=name,
+                deployed_at=at,
+                source="webhook",
+            )
+        )
+    finding = Finding(
+        org_id=tenant.organization.id,
+        project_id=tenant.project.id,
+        scope="service",
+        service_name="checkout",
+        severity="critical",
+        state="open",
+        title="checkout is failing more than normal",
+        signals=[],
+        started_at=incident.opened_at,
+    )
+    db.add(finding)
+    await db.flush()
+    db.add(
+        FindingIncident(
+            org_id=tenant.organization.id, finding_id=finding.id, incident_id=incident.id
+        )
+    )
+    await db.flush()
+
+    read = await service.get_incident(db, org_id=tenant.organization.id, incident_id=incident.id)
+    assert read.zone == "Asia/Kolkata"
+    assert read.burn is not None
+    assert read.burn.last_deploy_at == deployed
+    assert read.burn.deploys_connected is True
+    assert [(each.id, each.title) for each in read.burn.findings] == [
+        (finding.id, "checkout is failing more than normal")
+    ]
+    assert read.burn.target_deleted is False
+
+
+async def test_ac85_no_deploy_recorded_is_told_apart_from_deploys_not_connected(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    target = await _slo_target(db, tenant, tenant.project.id)
+    incident = await _burn_incident(db, tenant, target)
+    unconnected = await service.get_incident(
+        db, org_id=tenant.organization.id, incident_id=incident.id
+    )
+    assert unconnected.burn is not None
+    assert (unconnected.burn.deploys_connected, unconnected.burn.last_deploy_at) == (False, None)
+
+    db.add(
+        DeployEvent(
+            org_id=tenant.organization.id,
+            project_id=tenant.project.id,
+            version="1.0",
+            service_name="cart",
+            deployed_at=incident.opened_at - timedelta(days=1),
+            source="webhook",
+        )
+    )
+    target.deleted_at = datetime.now(UTC)
+    await db.flush()
+    connected = await service.get_incident(
+        db, org_id=tenant.organization.id, incident_id=incident.id
+    )
+    assert connected.burn is not None
+    assert (connected.burn.deploys_connected, connected.burn.last_deploy_at) == (True, None)
+    assert connected.burn.target_deleted is True
+
+
+async def test_an_incident_that_is_not_a_burn_carries_no_burn_facts(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    check = await _check(db, tenant)
+    incident = Incident(
+        org_id=tenant.organization.id,
+        project_id=tenant.project.id,
+        rule_id=None,
+        rule_name="Any check down",
+        condition_kind="check_state",
+        subject_key=f"check:{check.id}",
+        subject_label="Checkout API",
+        severity="critical",
+        opened_at=datetime.now(UTC),
+        detail={"check_id": str(check.id), "state": "down"},
+    )
+    db.add(incident)
+    await db.flush()
+    read = await service.get_incident(db, org_id=tenant.organization.id, incident_id=incident.id)
+    assert read.burn is None
+    assert read.zone == "UTC"

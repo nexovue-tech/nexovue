@@ -32,6 +32,7 @@ from nexovue_scheduler.jobs import results
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.settings import get_settings
+from nexovue_scheduler.slos import notices
 
 logger = get_logger(__name__)
 
@@ -50,7 +51,9 @@ def deliver() -> None:
 @task(SWEEP_DELIVERIES_TASK)
 def sweep_deliveries() -> None:
     """The safety net: anything due that the fast path did not take (ADR-013), the
-    repeats open incidents are owed (FR10), and which channels are failing (FR21)."""
+    repeats open incidents are owed (FR10), which channels are failing (FR21), and
+    whether reliability targets are being judged at all (F19 FR13b): this runs in a
+    different container from the one judging them, so it can say when that one stops."""
 
     async def repeat(engine: AsyncEngine) -> int:
         async with engine.begin() as connection:
@@ -59,6 +62,9 @@ def sweep_deliveries() -> None:
     repeated = with_engine(repeat)
     if repeated:
         logger.info("alert repeats written", notifications=repeated)
+    blind = with_engine(lambda engine: notices.report_blind(engine, now=datetime.now(UTC)))
+    if blind:
+        logger.info("reliability target judging changed", projects=blind)
     _deliver_due()
     outbound = _outbound_for_process()
     reported = with_engine(

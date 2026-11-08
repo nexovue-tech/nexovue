@@ -20,6 +20,7 @@ import {
   REFRESH_MS,
   sentenceOf,
   staleBannerOf,
+  toldChip,
 } from "./slo-words";
 
 /**
@@ -181,6 +182,7 @@ function counted(view: SloView, now: number): number {
 
 function TargetRow({ view, zone, now }: { view: SloView; zone: string; now: number }) {
   const { state } = liveState(view, now);
+  const chip = toldChip(view.told);
   const shown = { ...view, state, attention: state === "not_up_to_date" || view.attention };
   return (
     <li>
@@ -190,8 +192,9 @@ function TargetRow({ view, zone, now }: { view: SloView; zone: string; now: numb
         className="grid gap-1 py-3 text-sm md:grid-cols-[minmax(12rem,1fr)_auto_minmax(16rem,2fr)_auto] md:items-baseline md:gap-4"
       >
         <span className="font-medium text-ink">{view.name}</span>
-        <span>
+        <span className="flex flex-wrap items-baseline gap-2">
           <SloBadge view={shown} />
+          {chip ? <span className="font-mono text-2xs text-ink-dim uppercase">{chip}</span> : null}
         </span>
         <span className="max-w-prose text-ink">{sentenceOf(view, zone, now)}</span>
         <span className="font-mono text-ink-dim">

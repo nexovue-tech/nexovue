@@ -22,10 +22,13 @@ from fastapi import APIRouter, Query, Response, status
 from nexovue_api.auth.dependencies import CurrentReader
 from nexovue_api.auth.policy import MayConfigureSlos
 from nexovue_api.deps import DbSession
-from nexovue_api.slos import months, service
+from nexovue_api.slos import exclusions, months, service
 from nexovue_api.slos.schemas import (
     SloChange,
     SloCreate,
+    SloExclusion,
+    SloExclusionCreate,
+    SloExclusions,
     SloHistory,
     SloLastMonth,
     SloList,
@@ -139,3 +142,37 @@ async def restore_slo(
     return await service.restore(
         db, identity=identity, target_id=slo_id, request=request, now=datetime.now(UTC)
     )
+
+
+@router.get("/{slo_id}/exclusions", summary="Time left out of a target, with its reasons")
+async def list_slo_exclusions(
+    reader: CurrentReader, db: DbSession, slo_id: uuid.UUID
+) -> SloExclusions:
+    return await exclusions.list_exclusions(db, reader=reader, target_id=slo_id)
+
+
+@router.post(
+    "/{slo_id}/exclusions",
+    status_code=status.HTTP_201_CREATED,
+    summary="Leave planned work out of a target, with a reason",
+)
+async def create_slo_exclusion(
+    identity: MayConfigureSlos, db: DbSession, slo_id: uuid.UUID, request: SloExclusionCreate
+) -> SloExclusion:
+    return await exclusions.create(
+        db, identity=identity, target_id=slo_id, request=request, now=datetime.now(UTC)
+    )
+
+
+@router.delete(
+    "/{slo_id}/exclusions/{exclusion_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove an exclusion; it stays visible as removed",
+)
+async def remove_slo_exclusion(
+    identity: MayConfigureSlos, db: DbSession, slo_id: uuid.UUID, exclusion_id: uuid.UUID
+) -> Response:
+    await exclusions.remove(
+        db, identity=identity, target_id=slo_id, exclusion_id=exclusion_id, now=datetime.now(UTC)
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

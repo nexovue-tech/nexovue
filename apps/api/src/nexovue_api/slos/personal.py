@@ -4,7 +4,8 @@
 `members.scrub` replaces a person's address and name only where a value *is* one
 (`_without_person`). A target's name and description, and its change history's
 `before` and `after`, are words a member typed, so the person may sit inside them:
-"Checkout for Priya Raman". Here their address and full name are replaced wherever
+"Checkout for Priya Raman", and so may an exclusion's reason. Here their address and
+full name are replaced wherever
 they appear as whole words, ignoring case, in every row of the organization, live or
 deleted, whoever wrote it. A first name or a nickname cannot be found, and the docs
 say so. People's ids need no change: the user row stays, renamed by the scrub.
@@ -43,6 +44,11 @@ async def scrub_person(
     for change in await queries.changes_naming(db, org_id=org_id, needles=as_json):
         change.before = _replaced(change.before, pattern, replacement)
         change.after = _replaced(change.after, pattern, replacement)
+    # An exclusion's reason (FR29), removed or not (T4.7).
+    for exclusion in await queries.exclusions_naming(db, org_id=org_id, needles=words):
+        exclusion.reason = pattern.sub(replacement, exclusion.reason)[
+            : slo.EXCLUSION_REASON_LONGEST
+        ]
 
 
 def _whole_words(words: Sequence[str]) -> re.Pattern[str]:

@@ -24,24 +24,37 @@ from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 from nexovue_platform import slo
+from nexovue_platform.alerts.model import SloBurnCondition
 from nexovue_platform.detection import DEFAULT_TIMEZONE
 from nexovue_platform.jobs import ENQUEUE, WAKE
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.alerts import queries as alert_queries
+from nexovue_api.alerts import service as alerts
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity, Reader
-from nexovue_api.data.postgres.models import Project, SloDailyCount, SloStatus, SloTarget
+from nexovue_api.data.postgres.models import (
+    AlertRule,
+    Project,
+    SloDailyCount,
+    SloStatus,
+    SloTarget,
+)
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.slos import queries
 from nexovue_api.slos.schemas import (
     DeletedSlo,
+    SloBurnView,
     SloChange,
     SloCreate,
     SloFigures,
     SloList,
     SloRestore,
+    SloTold,
+    SloToldChannel,
+    SloToldRule,
     SloView,
 )
 
@@ -108,7 +121,10 @@ async def list_targets(
         row for row in rows if row[0].deleted_at and now - row[0].deleted_at < slo.RESTORE_FOR
     ]
     days = await _days(db, reader.org_id, [row[0] for row in [*live, *recent]], now, zone)
-    views = [_view(row, days.get(row[0].id, {}), now=now, zone=zone) for row in live]
+    routing = await _routing(db, reader, project_id, now)
+    views = [
+        _view(row, days.get(row[0].id, {}), now=now, zone=zone, routing=routing) for row in live
+    ]
     ordered = slo.ordered([(view, _status_of(view)) for view in views])
     return SloList(
         targets=[view for view, _ in ordered],
@@ -130,7 +146,8 @@ async def read_target(
     project = await require_readable_project(db, reader=reader, project_id=target.project_id)
     zone = zone_of(project)
     days = await _days(db, reader.org_id, [target], now, zone)
-    return _view(row, days.get(target.id, {}), now=now, zone=zone)
+    routing = await _routing(db, reader, target.project_id, now)
+    return _view(row, days.get(target.id, {}), now=now, zone=zone, routing=routing)
 
 
 # ----------------------------------------------------------------------- writes
@@ -147,8 +164,10 @@ async def create(
     org_id = identity.organization.id
     await require_project(db, org_id=org_id, project_id=project_id)
     _refuse_objective(request.objective_percent)
-    sent = request.model_dump(exclude_unset=True)
+    sent = request.model_dump(exclude_unset=True, exclude={"channel_ids", "critical_channel_ids"})
     _refuse_other_kinds_fields(request.kind, sent)
+    await _refuse_channels(db, org_id, request.channel_ids, "channel_ids")
+    await _refuse_channels(db, org_id, request.critical_channel_ids, "critical_channel_ids")
     source = await _source(
         db,
         org_id,
@@ -201,6 +220,12 @@ async def create(
         at=now,
     )
     audit.record_slo_created(db, target=target, actor_user_id=identity.user.id)
+    for channel_ids, criticals_only in (
+        (request.channel_ids, False),
+        (request.critical_channel_ids, True),
+    ):
+        if channel_ids:
+            await _form_rule(db, identity, target, channel_ids, criticals_only=criticals_only)
     await _queue_history(db, target)
     await db.commit()
     return await _fresh_view(db, identity, target.id, now)
@@ -253,6 +278,9 @@ async def change(
     recount = any(before[field] != after_change[field] for field in _COUNTED)
     if recount:
         target.definition_version += 1
+    if recount or (before["enabled"] and not target.enabled):
+        # Re-pointed, it is a different thing now; disabled, it stops alerting (FR28, FR32).
+        await alerts.stop_burns_of_target(db, org_id=org_id, target_id=target.id, at=now)
     target.updated_at = now
     after = _recorded(target)
     if after != before:
@@ -281,6 +309,7 @@ async def delete(
     target.deleted_at = now
     target.deleted_by = identity.user.id
     target.updated_at = now
+    await alerts.stop_burns_of_target(db, org_id=org_id, target_id=target.id, at=now)
     queries.record_change(
         db,
         target=target,
@@ -335,6 +364,47 @@ async def restore(
 
 
 # ---------------------------------------------------------------------- helpers
+
+
+NO_SUCH_CHANNEL: Final = "No such channel in this organization."
+
+
+async def _refuse_channels(
+    db: AsyncSession, org_id: uuid.UUID, channel_ids: Sequence[uuid.UUID], field: str
+) -> None:
+    if not channel_ids:
+        return
+    found = await alert_queries.channels_by_id(db, org_id=org_id, channel_ids=list(channel_ids))
+    if {channel.id for channel in found} != set(channel_ids):
+        raise InvalidRequestError(NO_SUCH_CHANNEL, field=field)
+
+
+async def _form_rule(
+    db: AsyncSession,
+    identity: Identity,
+    target: SloTarget,
+    channel_ids: Sequence[uuid.UUID],
+    *,
+    criticals_only: bool,
+) -> None:
+    """FR25a's rule for this target, in the save's transaction, named by nexovue (D57).
+    Routing is `operate_alerts`; every role that may set a target holds it."""
+    condition = SloBurnCondition(
+        slo_ids=[target.id], minimum_severity="critical" if criticals_only else "warning"
+    )
+    rule = AlertRule(
+        org_id=target.org_id,
+        project_id=target.project_id,
+        name=slo.form_rule_name(target.id, criticals_only=criticals_only),
+        condition_kind=condition.kind,
+        condition=condition.model_dump(mode="json"),
+    )
+    db.add(rule)
+    await db.flush()
+    await alert_queries.replace_rule_channels(
+        db, org_id=target.org_id, rule_id=rule.id, channel_ids=list(channel_ids)
+    )
+    audit.record_alert_rule_created(db, rule=rule, actor_user_id=identity.user.id)
 
 
 def zone_of(project: Project) -> ZoneInfo:
@@ -543,12 +613,94 @@ def label_of(target: SloTarget, check_name: str | None) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Routing:
+    """A project's burn rules and snoozed services, read once for every target (FR25a)."""
+
+    rules: tuple[tuple[Any, SloBurnCondition, tuple[Any, ...]], ...]
+    snoozes: Mapping[str, tuple[datetime, str | None]]
+    for_person: bool
+
+
+async def _routing(
+    db: AsyncSession, reader: Reader, project_id: uuid.UUID, now: datetime
+) -> _Routing:
+    grouped: dict[uuid.UUID, tuple[Any, list[Any]]] = {}
+    for rule, channel in await queries.burn_rules(db, org_id=reader.org_id, project_id=project_id):
+        held = grouped.setdefault(rule.id, (rule, []))
+        if channel is not None:
+            held[1].append(channel)
+    rules = []
+    for rule, channels in grouped.values():
+        try:
+            condition = SloBurnCondition.model_validate(rule.condition)
+        except ValueError:
+            continue
+        rules.append((rule, condition, tuple(channels)))
+    return _Routing(
+        rules=tuple(rules),
+        snoozes=await queries.snoozes(db, org_id=reader.org_id, project_id=project_id, now=now),
+        for_person=not reader.is_token,
+    )
+
+
+def _told(target: SloTarget, routing: _Routing, now: datetime) -> SloTold:
+    covering = [
+        (rule, condition, channels)
+        for rule, condition, channels in routing.rules
+        if condition.covers_target(target.id)
+    ]
+    snooze = routing.snoozes.get(target.service_name or "")
+    return SloTold(
+        alerting=target.enabled
+        and any(
+            channels and not (rule.muted_until and rule.muted_until > now)
+            for rule, _, channels in covering
+        ),
+        rules=[
+            SloToldRule(
+                id=rule.id,
+                name=rule.name,
+                minimum_severity=condition.minimum_severity,
+                muted_until=rule.muted_until
+                if rule.muted_until and rule.muted_until > now
+                else None,
+                is_default=rule.is_default,
+                channels=[
+                    SloToldChannel(id=channel.id, kind=channel.kind, name=channel.name)
+                    for channel in channels
+                ],
+            )
+            for rule, condition, channels in covering
+        ],
+        snoozed_until=snooze[0] if snooze else None,
+        snoozed_by_name=snooze[1] if snooze and routing.for_person else None,
+    )
+
+
+def _burn_view(status: SloStatus | None, burn: slo.Burn | None) -> SloBurnView | None:
+    if status is None or burn is None:
+        return None
+    tiers = status.tiers or {}
+    return SloBurnView(
+        severity=burn.severity,
+        rate=burn.rate,
+        since=burn.since,
+        hours_left=burn.hours_left,
+        resolving=burn.resolving,
+        judged=burn.judged,
+        last_held_minute=status.last_held_minute,
+        chart_tier=tiers.get("chart_tier"),
+    )
+
+
 def _view(
     row: Sequence[Any],
     days: Mapping[date, slo.DayCounts],
     *,
     now: datetime,
     zone: ZoneInfo,
+    routing: _Routing,
 ) -> SloView:
     """One target from a row of (target, status, deleted-by name, check name, interval)."""
     target: SloTarget = row[0]
@@ -569,8 +721,21 @@ def _view(
         longest_quiet_7d_minutes=status.longest_quiet_7d if status else 0,
         created_at=target.created_at,
     )
+    told = _told(target, routing, now)
+    burn = (
+        slo.burn_from_status(status.tiers or {}, burning_since=status.burning_since)
+        if status
+        else None
+    )
     facts, figures = slo.facts_from_storage(
-        stored, days, now=now, zone=zone, check_interval_seconds=check_interval
+        stored,
+        days,
+        now=now,
+        zone=zone,
+        check_interval_seconds=check_interval,
+        burn=burn,
+        alerting=told.alerting,
+        snoozed=told.snoozed_until is not None,
     )
     state = slo.status_of(facts)
     left = slo.allowance_left(target.objective_percent, figures.total, figures.failures)
@@ -617,6 +782,8 @@ def _view(
             excluded_minutes=figures.excluded_minutes,
             days_held=figures.days_held,
         ),
+        burn=_burn_view(status, burn),
+        told=told,
         evaluated_minute=stored.evaluated_minute,
         last_event_minute=stored.last_event_minute,
         longest_quiet_7d_minutes=stored.longest_quiet_7d_minutes,

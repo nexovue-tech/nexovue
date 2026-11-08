@@ -277,6 +277,20 @@ class ExportedSloChange(BaseModel):
     after: dict[str, Any] | None
 
 
+class ExportedSloExclusion(BaseModel):
+    """Time the person left out of a reliability target, with their reason (F19 FR29,
+    AC88). It stays the organization's record after they leave."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    slo_id: uuid.UUID
+    starts_at: datetime
+    ends_at: datetime
+    reason: str
+    created_at: datetime
+    removed_at: datetime | None
+
+
 class ExportedApiToken(BaseModel):
     """No prefix: it carries characters of the token itself."""
 
@@ -314,3 +328,5 @@ class PersonalDataExport(BaseModel):
     # The reliability target changes they made, newest first, bounded the same way.
     slo_target_changes: list[ExportedSloChange]
     slo_target_changes_truncated: bool
+    slo_exclusions: list[ExportedSloExclusion]
+    slo_exclusions_truncated: bool

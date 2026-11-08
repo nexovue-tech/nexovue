@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from nexovue_platform import slo
@@ -77,3 +78,21 @@ class SloSuggestion(BaseModel):
     # Too few requests: offer a check-based target where the project has a check (FR8).
     offer_check: bool
     check: CheckAllowance | None
+
+
+class SloBurnPoint(BaseModel):
+    """One minute's long-window rate; None where its window held no event (a gap)."""
+
+    minute: datetime
+    rate: float | None
+
+
+class SloBurnLine(BaseModel):
+    """The target page's chart (design, *One target*; AC109): the last 24 hours of the
+    long-window rate of the tier the status names, up to the minute it was judged, and
+    the on-pace line. No tier able to judge: no tier and no points."""
+
+    tier: str | None
+    evaluated_minute: datetime | None
+    on_pace: float
+    points: list[SloBurnPoint]

@@ -11,7 +11,8 @@ The expiry sweep (`jobs/expiry.py`) runs both of these:
   never written for a target left standing, nor a target removed without its months.
 - **Lapsing at 400 days**, which holds 13 months (founder decision 20): daily
   figures by their day, changes by when they were made, and a purged month once 400
-  days have passed since it ended (AC88). Removed exclusions join with Step 4.
+  days have passed since it ended (AC88), and a removed exclusion 400 days after its
+  removal; a live one stays with its target (FR29).
 
 A project or organization deletion removes all of this at once, with no wait
 (`organizations/tables.py`).
@@ -94,6 +95,7 @@ EXPIRED: Final = (
         "org_id, slo_id, month",
         f"month + interval '1 month' < now() - interval '{KEPT_DAYS} days'",
     ),
+    ("slo_exclusions", "id", f"removed_at < now() - interval '{KEPT_DAYS} days'"),
 )
 
 

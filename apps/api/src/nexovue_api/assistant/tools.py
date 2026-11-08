@@ -105,6 +105,8 @@ UNTRUSTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
         "incidents[].detail",
         "incidents[].notifications[].channel_name",
         "incidents[].notifications[].reason",
+        # F19: a burn's joined findings carry nexovue's titles, which name services.
+        "incidents[].burn.findings[].title",
     ),
     "list_checks": ("checks[].name", "checks[].url_hosts"),
     "list_deploys": (
@@ -173,6 +175,8 @@ UNTRUSTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
         "incident[].detail",
         "incident[].notifications[].channel_name",
         "incident[].notifications[].reason",
+        # F19: a burn's joined findings carry nexovue's titles, which name services.
+        "incident[].burn.findings[].title",
     ),
     "get_service_map": (
         "service_map[].services",

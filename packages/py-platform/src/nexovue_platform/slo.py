@@ -887,6 +887,32 @@ class StoredTarget:
     created_at: datetime
 
 
+def burn_from_status(tiers: Mapping[str, object], *, burning_since: datetime | None) -> Burn | None:
+    """FR10's Running out from what the job stored in `slo_status` (Step 4): a burn while
+    `burning_since` is set, with its last held severity and rate. Resolving when it no
+    longer holds but a tier judges; not judged when no tier can (FR17)."""
+    held = tiers.get("burn")
+    if burning_since is None or not isinstance(held, Mapping):
+        return None
+    by_tier = tiers.get("by_tier")
+    judged_tiers = list(by_tier.values()) if isinstance(by_tier, Mapping) else []
+    holding = any(isinstance(each, Mapping) and each.get("holds") for each in judged_tiers)
+    judging = any(isinstance(each, Mapping) and each.get("can_judge") for each in judged_tiers)
+    severity: Literal["critical", "warning"] = (
+        "critical" if held.get("severity") == "critical" else "warning"
+    )
+    rate = held.get("rate")
+    hours_left = held.get("hours_left")
+    return Burn(
+        severity=severity,
+        rate=float(rate) if isinstance(rate, int | float) else 0.0,
+        since=burning_since,
+        hours_left=float(hours_left) if holding and isinstance(hours_left, int | float) else None,
+        resolving=judging and not holding,
+        judged=judging,
+    )
+
+
 def facts_from_storage(
     target: StoredTarget,
     days: Mapping[date, DayCounts],
@@ -894,9 +920,13 @@ def facts_from_storage(
     now: datetime,
     zone: ZoneInfo,
     check_interval_seconds: int | None = None,
+    burn: Burn | None = None,
+    alerting: bool | None = None,
+    snoozed: bool = False,
 ) -> tuple[Facts, WindowFigures]:
     """FR10's facts for a target from Postgres alone (NFR3, AC40): its row, its status
-    and its stored days. Burn, rules and snoozes join in Step 4."""
+    and its stored days, with the burn its status holds and whether a rule sends it
+    anywhere (Step 4)."""
     figures = window_figures(
         days,
         window_days=target.window_days,
@@ -920,14 +950,14 @@ def facts_from_storage(
         expected_since=target.created_at,
         counting=counting,
         source_gone=source_gone,
-        burn=None,
+        burn=burn,
         coverage=figures.coverage,
         last_event_minute=last,
         days_held=figures.days_held,
         allowed=allowed_failures(target.objective, figures.total),
         failures=figures.failures,
-        alerting=None,
-        snoozed=False,
+        alerting=alerting,
+        snoozed=snoozed,
         longest_quiet_7d_minutes=target.longest_quiet_7d_minutes,
         traffic_finding_open=False,
         check_interval_seconds=check_interval_seconds,
@@ -990,6 +1020,8 @@ SHARP_FALL_PERCENT: Final = Decimal("50")
 SHARP_FALL_WEEKS_COMPARED: Final = SUGGESTION_WEEKS
 # `slo_daily_counts.changed_why` when a definition change rewrote a final day.
 CHANGED_BY_DEFINITION: Final = "definition"
+CHANGED_BY_EXCLUSION: Final = "exclusion"
+CHANGED_BY_EXCLUSION_REMOVED: Final = "exclusion_removed"
 
 
 class MonthResult(enum.StrEnum):
@@ -1224,3 +1256,188 @@ AUDIENCE_LINE: Final = "For your own team and board, not for customer promises."
 def report_label(kind: str) -> str:
     """The fixed label for a kind's month, used by the copy action and the CSV alike."""
     return _CHECK_REPORT_LABEL if kind == CHECK_AVAILABILITY else _REQUEST_REPORT_LABEL
+
+
+# ------------------------------------------------------------------------- burn
+#
+# FR14 to FR16: three fixed tiers, each a long and a short window and a rate. The rate
+# arithmetic is here, not in the scheduler's `burn`, because the API's chart plots the
+# same rate and must not differ from what judged it (design, *One target*).
+
+# What a burn is about (design, *The link to findings*): its type, for FR21's pairs.
+ABOUT_SIGNALS: Final = ("availability", "latency")
+
+
+class TierName(enum.StrEnum):
+    FAST = "fast"
+    MEDIUM = "medium"
+    SLOW = "slow"
+
+
+@dataclass(frozen=True, slots=True)
+class Tier:
+    """One of FR14's tiers: its windows, its rate by window, and its severity."""
+
+    name: TierName
+    long: timedelta
+    short: timedelta
+    rate_over_28_days: float
+    rate_over_7_days: float
+    severity: Literal["critical", "warning"]
+
+    def rate(self, window_days: int) -> float:
+        return self.rate_over_7_days if window_days == 7 else self.rate_over_28_days
+
+
+TIERS: Final = (
+    Tier(TierName.FAST, timedelta(hours=1), timedelta(minutes=5), 14.4, 16.8, "critical"),
+    Tier(TierName.MEDIUM, timedelta(hours=6), timedelta(minutes=30), 6.0, 5.6, "critical"),
+    Tier(TierName.SLOW, timedelta(hours=24), timedelta(hours=2), 3.0, 2.8, "warning"),
+)
+# The longest long window: what a judging reads by the minute, and how long a source
+# must be silent before a burn on it closes (FR17).
+LONGEST_TIER_WINDOW: Final = max(tier.long for tier in TIERS)
+# FR15: a tier's rate is capped at this share of the largest rate possible.
+CAPPED_SHARE_OF_LARGEST: Final = 0.9
+
+
+def tier_named(name: str) -> Tier:
+    return next(tier for tier in TIERS if tier.name == name)
+
+
+def allowed_share(objective: Decimal) -> float:
+    """The share of events the objective allows to fail: 0.001 at 99.9%."""
+    return float((Decimal(100) - objective) / Decimal(100))
+
+
+def burn_rate(failures: int, events: int, objective: Decimal) -> float | None:
+    """How many times faster than allowed failures arrived (FR14): the failing share over
+    the allowed share. None with no events: an empty window is a gap, never 0 (AC109)."""
+    if events <= 0:
+        return None
+    return (failures / events) / allowed_share(objective)
+
+
+def tier_limit(tier: Tier, objective: Decimal, window_days: int) -> float:
+    """The rate a tier must exceed: its own, capped at 90% of the largest possible, so a
+    90% target can still page (FR15, AC15)."""
+    return min(tier.rate(window_days), CAPPED_SHARE_OF_LARGEST / allowed_share(objective))
+
+
+def signal_of(kind: str) -> Literal["availability", "latency"]:
+    """What a burn on this kind is about, for FR21's pairs. A check's runs are its
+    availability."""
+    return "latency" if kind == SERVICE_LATENCY else "availability"
+
+
+# ------------------------------------------------------------------- exclusions
+#
+# FR29: one-time stretches a person leaves out of one target, with a reason. Each limit
+# is a guess, in the spec's register.
+
+EXCLUSION_REASON_SHORTEST: Final = 10
+EXCLUSION_REASON_LONGEST: Final = 500
+EXCLUSION_LONGEST: Final = timedelta(days=7)
+# The most a window may leave out: 7 days of 28, or 2 of 7.
+EXCLUDED_MOST_BY_WINDOW: Final = {28: timedelta(days=7), 7: timedelta(days=2)}
+# Live exclusions per target whose time lies within the figures still kept.
+EXCLUSIONS_MOST: Final = 50
+# How long daily figures, and so a removed exclusion, are kept (founder decision 20).
+FIGURES_KEPT: Final = timedelta(days=400)
+
+
+def excluded_minutes_in(
+    spans: Iterable[tuple[datetime, datetime]], *, start: datetime, end: datetime
+) -> frozenset[datetime]:
+    """Every whole minute in [start, end) that an exclusion covers. A minute is left out
+    when the exclusion holds its start, so a span is whole minutes on both sides."""
+    found: set[datetime] = set()
+    one = timedelta(minutes=1)
+    for starts_at, ends_at in spans:
+        minute = max(start, starts_at.replace(second=0, microsecond=0))
+        last = min(end, ends_at)
+        while minute < last:
+            if minute >= starts_at:
+                found.add(minute)
+            minute += one
+    return frozenset(found)
+
+
+# The fixed names nexovue gives incidents no rule is filed under (D57, D58), so no person
+# typed them and deleting a rule changes nothing about them.
+EXCLUSION_NOTICE_RULE_NAME: Final = "Reliability target exclusions"
+# D57: the rules the target form writes, named after the target's id, never its name.
+_FORM_RULE_ID_LENGTH: Final = 8
+
+
+def form_rule_name(target_id: object, *, criticals_only: bool) -> str:
+    name = f"Reliability target rule {str(target_id)[:_FORM_RULE_ID_LENGTH]}"
+    return f"{name}, criticals" if criticals_only else name
+
+
+BLIND_RULE_NAME: Final = "Reliability targets not being judged"
+
+
+# --------------------------------------------------------------- the burn line
+#
+# The target page's chart (design, *One target*; AC109): each minute's long-window rate
+# of one tier, from the same per-minute counts the job judges, so the point at the
+# job's minute equals the rate it stored.
+
+# A source's minute as (events, failures).
+MinuteTally = tuple[int, int]
+
+
+def without_left_out(
+    service: Mapping[datetime, MinuteTally], left_out: Iterable[Mapping[datetime, MinuteTally]]
+) -> dict[datetime, MinuteTally]:
+    """A service's minutes less its left-out endpoints' (FR34): subtracted only where the
+    service has a row, and never below zero, because the service cap applies to service
+    rows and not endpoint rows."""
+    removed: dict[datetime, list[int]] = {}
+    for endpoint in left_out:
+        for minute, (requests, failures) in endpoint.items():
+            if minute in service:
+                totals = removed.setdefault(minute, [0, 0])
+                totals[0] += requests
+                totals[1] += failures
+    counted: dict[datetime, MinuteTally] = {}
+    for minute, (requests, failures) in service.items():
+        requests_out, failures_out = removed.get(minute, (0, 0))
+        kept = max(0, requests - requests_out)
+        counted[minute] = (kept, min(kept, max(0, failures - failures_out)))
+    return counted
+
+
+def rolling_rates(
+    minutes: Mapping[datetime, MinuteTally],
+    *,
+    first: datetime,
+    last: datetime,
+    length: timedelta,
+    excluded: frozenset[datetime],
+    objective: Decimal,
+) -> list[tuple[datetime, float | None]]:
+    """For each minute from `first` to `last`, the burn rate over the window of `length`
+    ending with it, excluded minutes left out (FR29). None where the window holds no
+    event: a gap, never 0 (AC109)."""
+    one = timedelta(minutes=1)
+    span = int(length / one)
+    start = first - one * (span - 1)
+    tallies: list[MinuteTally] = []
+    minute = start
+    while minute <= last:
+        tallies.append((0, 0) if minute in excluded else minutes.get(minute, (0, 0)))
+        minute += one
+    events = failures = 0
+    rates: list[tuple[datetime, float | None]] = []
+    for index, (count, failed) in enumerate(tallies):
+        events += count
+        failures += failed
+        if index >= span:
+            gone_events, gone_failures = tallies[index - span]
+            events -= gone_events
+            failures -= gone_failures
+        if index >= span - 1:
+            rates.append((start + one * index, burn_rate(failures, events, objective)))
+    return rates

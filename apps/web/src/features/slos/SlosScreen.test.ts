@@ -36,6 +36,33 @@ afterEach(() => {
 });
 
 describe("the targets list", () => {
+  it("puts a No alerts or Muted chip on a row whose burns go nowhere (FR25a, AC84)", async () => {
+    const silent = target({
+      id: "slo-2",
+      name: "cart availability",
+      told: { alerting: false, rules: [], snoozed_until: null, snoozed_by_name: null },
+    });
+    const rule = target().told.rules[0];
+    if (rule === undefined) throw new Error("the harness's default rule is missing");
+    const muted = target({
+      id: "slo-3",
+      name: "ad availability",
+      told: {
+        alerting: false,
+        rules: [{ ...rule, muted_until: new Date(Date.now() + 3_600_000).toISOString() }],
+        snoozed_until: null,
+        snoozed_by_name: null,
+      },
+    });
+    stubApi(listed([target(), silent, muted]));
+    const { container } = await mountAt("/slos");
+    await waitFor(() => readable(container).includes("cart availability"), "the rows");
+    const rows = [...container.querySelectorAll("li")].map((row) => row.textContent ?? "");
+    expect(rows.find((row) => row.includes("cart availability"))).toContain("No alerts");
+    expect(rows.find((row) => row.includes("ad availability"))).toContain("Muted");
+    expect(rows.find((row) => row.includes("checkout availability"))).not.toContain("No alerts");
+  });
+
   it("reads 'Failures still allowed: N of M' for a target on track (Step 1's judgeable)", async () => {
     stubApi(listed([target()]));
     const { container } = await mountAt("/slos");

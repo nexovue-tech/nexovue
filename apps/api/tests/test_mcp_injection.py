@@ -107,12 +107,14 @@ ALLOWED: Final[dict[str, dict[str, str]]] = {
         "incidents[].notifications[].channel_kind": "closed vocabulary",
         "incidents[].notifications[].kind": "closed vocabulary",
         "incidents[].notifications[].state": "closed vocabulary",
+        "incidents[].zone": "an IANA zone, judged against the zone database at write",
     },
     "get_incident": {
         "incident[].condition_kind": "closed vocabulary, written by our code",
         "incident[].notifications[].channel_kind": "closed vocabulary",
         "incident[].notifications[].kind": "closed vocabulary",
         "incident[].notifications[].state": "closed vocabulary",
+        "incident[].zone": "an IANA zone, judged against the zone database at write",
     },
     "list_traces": {
         "traces[].trace_id": "a hex id",

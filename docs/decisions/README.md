@@ -37,6 +37,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-031 — A dashboard is a checked document of fixed panel kinds](ADR-031-a-dashboard-is-a-checked-document-of-fixed-panel-kinds.md) — with the F20 design, 2026-11-02; filed 2026-11-08
 - [ADR-032 — A batch read is charged by the scan](ADR-032-a-batch-read-is-charged-by-the-scan.md) — with the F20 design, 2026-11-02; filed 2026-11-08
 - [ADR-033 — The deploy envelope signs its id and time, and secrets are shown once](ADR-033-the-deploy-envelope-signs-its-id-and-time-and-secrets-are-shown-once.md) — with the F28 design, 2026-11-02; filed 2026-11-08
+- [ADR-034 — An incident can say what it is about](ADR-034-an-incident-can-say-what-it-is-about.md) — with the F19 design, 2026-11-02; filed 2026-11-08
 
 ## Earlier decisions, 0001–0112
 

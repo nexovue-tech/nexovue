@@ -818,3 +818,32 @@ def test_the_months_migration_froze_the_same_kinds_results_and_answers() -> None
     assert ", ".join(f"'{kind}'" for kind in slo.KINDS) == revision._KINDS
     assert ", ".join(f"'{result}'" for result in slo.MonthResult) == revision._RESULTS
     assert ", ".join(f"'{answer}'" for answer in slo.SAMPLING_ANSWERS) == revision._SAMPLING
+
+
+# ------------------------------------------------------- Step 4: a burn from status
+
+
+def test_a_burn_reads_from_the_status_the_job_stored() -> None:
+    """T4.5: Running out comes from `slo_status` alone, so it needs no rule (FR10)."""
+    since = datetime(2026, 11, 8, 2, 41, tzinfo=UTC)
+    held = {
+        "chart_tier": "fast",
+        "rate": 14.7,
+        "hours_left": 50.0,
+        "by_tier": {"fast": {"can_judge": True, "holds": True}},
+        "burn": {"severity": "critical", "rate": 14.7, "hours_left": 50.0},
+    }
+    burning = slo.burn_from_status(held, burning_since=since)
+    assert burning == slo.Burn(
+        severity="critical", rate=14.7, since=since, hours_left=50.0, resolving=False, judged=True
+    )
+    resolving = slo.burn_from_status(
+        held | {"rate": None, "by_tier": {"fast": {"can_judge": True, "holds": False}}},
+        burning_since=since,
+    )
+    assert resolving is not None and resolving.resolving and resolving.judged
+    unjudged = slo.burn_from_status(
+        held | {"by_tier": {"fast": {"can_judge": False, "holds": False}}}, burning_since=since
+    )
+    assert unjudged is not None and not unjudged.judged
+    assert slo.burn_from_status(held, burning_since=None) is None

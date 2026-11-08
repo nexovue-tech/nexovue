@@ -101,6 +101,8 @@ export function incident(overrides: Partial<Incident> = {}): Incident {
     flapping: false,
     muted: false,
     check_deleted: false,
+    zone: "UTC",
+    burn: null,
     detail: {
       check_id: "chk-1",
       state: "down",

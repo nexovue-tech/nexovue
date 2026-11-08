@@ -3,7 +3,8 @@
 - **`judge_slos`**, on `slo`, one project each settled minute: where each target
   stands now: when it was worked out, the last minute its source sent anything, and
   the longest quiet stretch of the last 7 days, so a silent service reads **No recent
-  requests** and never looks healthy (BR5). Burn tiers join in Step 4.
+  requests** and never looks healthy (BR5); and its burn, judged under every rule
+  covering it (Step 4, `burns`, `alerting`, `notices`).
 - **`count_slos`**, on `slo_counts`, by age: a project's recent days, rewritten until
   they are 7 days old and then final (D2, BR13).
 - **`read_slo_history`**, on `slo_history`, one target: its past days, back as far as
@@ -37,10 +38,12 @@ work across every organization, and the one that finds a target's project.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
@@ -58,7 +61,7 @@ from nexovue_scheduler.jobs.queue import enqueue_all
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.settings import get_settings
-from nexovue_scheduler.slos import counts
+from nexovue_scheduler.slos import burns, counts, notices
 from nexovue_scheduler.slos.store import (
     CheckMinute,
     LatencyMinute,
@@ -140,6 +143,9 @@ _PROJECTS_TO_COUNT: Final = text(
                    OR (day.computed_at < :recent
                        AND day.day >= CAST(timezone(coalesce(p.timezone, :zone), :now) AS date)
                                       - 1)))
+        OR EXISTS (
+            SELECT 1 FROM slo_exclusions AS e
+            WHERE e.org_id = t.org_id AND e.slo_id = t.id AND e.counted_at IS NULL)
       )
     GROUP BY t.org_id, t.project_id
     ORDER BY t.org_id, t.project_id
@@ -226,9 +232,11 @@ _TARGETS: Final = text(
     """
     SELECT t.id, t.kind, t.service_name, t.endpoint_name, t.boundary_index,
            t.left_out_endpoints, t.check_id, t.first_event_at, t.definition_version,
+           t.objective_percent, t.window_days, t.enabled,
            c.interval_seconds AS check_interval_seconds, c.locations AS check_locations,
-           c.enabled AS check_enabled,
-           s.evaluated_minute, s.last_event_minute
+           c.enabled AS check_enabled, c.name AS check_name,
+           s.evaluated_minute, s.last_event_minute, s.tiers, s.burning_since,
+           s.last_held_minute, s.unjudged_since
     FROM slo_targets AS t
     LEFT JOIN slo_status AS s ON s.org_id = t.org_id AND s.slo_id = t.id
     LEFT JOIN checks AS c ON c.org_id = t.org_id AND c.id = t.check_id
@@ -264,15 +272,25 @@ _FIRST_EVENT: Final = text(
     """
 )
 # Never an older minute over a newer one (AC66), and the last event only moves forward.
+# A minute whose source was not read (a check between its runs) keeps the burn as it was.
 _SAVE_STATUS: Final = text(
     """
     INSERT INTO slo_status (slo_id, org_id, project_id, evaluated_minute, last_event_minute,
-                            longest_quiet_7d)
-    VALUES (:id, :org_id, :project_id, :minute, :last_event, :longest_quiet)
+                            longest_quiet_7d, tiers, burning_since, last_held_minute,
+                            unjudged_since)
+    VALUES (:id, :org_id, :project_id, :minute, :last_event, :longest_quiet,
+            CAST(:tiers AS jsonb), :burning_since, :last_held, :unjudged_since)
     ON CONFLICT (slo_id) DO UPDATE
     SET evaluated_minute = EXCLUDED.evaluated_minute,
         last_event_minute = GREATEST(slo_status.last_event_minute, EXCLUDED.last_event_minute),
-        longest_quiet_7d = EXCLUDED.longest_quiet_7d
+        longest_quiet_7d = EXCLUDED.longest_quiet_7d,
+        tiers = CASE WHEN :judged THEN EXCLUDED.tiers ELSE slo_status.tiers END,
+        burning_since = CASE WHEN :judged THEN EXCLUDED.burning_since
+                             ELSE slo_status.burning_since END,
+        last_held_minute = CASE WHEN :judged THEN EXCLUDED.last_held_minute
+                                ELSE slo_status.last_held_minute END,
+        unjudged_since = CASE WHEN :judged THEN EXCLUDED.unjudged_since
+                              ELSE slo_status.unjudged_since END
     WHERE slo_status.org_id = :org_id
       AND slo_status.evaluated_minute < EXCLUDED.evaluated_minute
     """
@@ -296,10 +314,32 @@ class Target:
     check_interval_seconds: int | None = None
     check_locations: tuple[str, ...] = ()
     check_enabled: bool = True
+    # Step 4: what a burn reads, and what the last judging left (design, *Status and days*).
+    objective: Decimal = Decimal("99.9")
+    window_days: int = slo.DEFAULT_WINDOW_DAYS
+    enabled: bool = True
+    check_name: str | None = None
+    tiers: Mapping[str, Any] = field(default_factory=dict)
+    burning_since: datetime | None = None
+    last_held_minute: datetime | None = None
+    unjudged_since: datetime | None = None
 
     @property
     def is_check(self) -> bool:
         return self.kind == slo.CHECK_AVAILABILITY
+
+    @property
+    def label(self) -> str:
+        """nexovue's composed label (D43): never the target's own name."""
+        return slo.subject_label(
+            self.kind,
+            service_name=self.service_name,
+            endpoint_name=self.endpoint_name,
+            check_name=self.check_name or slo.DELETED_CHECK_NAME,
+            boundary_index=self.boundary_index,
+            objective=self.objective,
+            window_days=self.window_days,
+        )
 
 
 def _target_of(row: Any) -> Target:
@@ -318,6 +358,14 @@ def _target_of(row: Any) -> Target:
         check_interval_seconds=row.check_interval_seconds,
         check_locations=tuple(row.check_locations or ()),
         check_enabled=bool(row.check_enabled) if row.check_enabled is not None else True,
+        objective=getattr(row, "objective_percent", None) or Decimal("99.9"),
+        window_days=getattr(row, "window_days", None) or slo.DEFAULT_WINDOW_DAYS,
+        enabled=bool(getattr(row, "enabled", True)),
+        check_name=getattr(row, "check_name", None),
+        tiers=getattr(row, "tiers", None) or {},
+        burning_since=getattr(row, "burning_since", None),
+        last_held_minute=getattr(row, "last_held_minute", None),
+        unjudged_since=getattr(row, "unjudged_since", None),
     )
 
 
@@ -415,6 +463,7 @@ def day_row_of(
     first_event_at: datetime,
     lost: frozenset[datetime],
     probe_locations: int,
+    excluded: frozenset[datetime] = frozenset(),
 ) -> counts.DayRow:
     """One day of one target, by its kind."""
     if not target.is_check:
@@ -425,6 +474,7 @@ def day_row_of(
             through=through,
             first_event_at=first_event_at,
             lost=lost,
+            excluded=excluded,
         )
     row = counts.check_day_row(
         check_runs(target, sources),
@@ -434,6 +484,7 @@ def day_row_of(
         first_event_at=first_event_at,
         interval_seconds=target.check_interval_seconds or slo.CHECK_FASTEST_INTERVAL_SECONDS,
         locations=len(target.check_locations) or probe_locations,
+        excluded=excluded,
     )
     if not target.check_enabled:
         # A disabled check expects nothing (FR11: runs expected while it was enabled).
@@ -463,10 +514,16 @@ def _has_source(target: Target) -> bool:
 
 
 async def judge_slos(
-    engine: AsyncEngine, store: SloStore, project_id: uuid.UUID, settled: datetime
+    engine: AsyncEngine,
+    store: SloStore,
+    project_id: uuid.UUID,
+    settled: datetime,
+    *,
+    probe_locations: int = ONE_LOCATION,
 ) -> int:
-    """Work out where each of a project's targets stands at `settled`. Returns how many
-    targets were saved; 0 when another run holds the project or nothing is newer."""
+    """Work out where each of a project's targets stands at `settled`, and judge its burn
+    under every rule covering it (Step 4). Returns how many targets were saved; 0 when
+    another run holds the project or nothing is newer."""
     async with engine.connect() as connection:
         binding = await bind_project(connection, project_id)
         if binding is None:
@@ -483,17 +540,30 @@ async def judge_slos(
                 return 0
             zone = await _zone(connection, binding)
             reader = store.for_project(binding.org_id, binding.project_id)
+            start, end = settled - JUDGE_LOOKBACK + _MINUTE, settled + _MINUTE
+            read = [target for target in targets if _interval_turned(target, settled)]
             # Read once for the project. A failed read writes nothing, so the status
             # ages into Not up to date rather than moving on stale figures.
-            sources = read_sources(
-                reader,
-                [target for target in targets if _interval_turned(target, settled)],
-                start=settled - JUDGE_LOOKBACK + _MINUTE,
-                end=settled + _MINUTE,
-            )
+            sources = read_sources(reader, read, start=start, end=end)
             days = await _stored_days(connection, binding, targets, zone=zone, settled=settled)
+            inputs = await burns.inputs(
+                connection, binding, targets, zone=zone, settled=settled, start=start, end=end
+            )
+            read_ids = {target.id for target in read if _has_source(target)}
             for target in targets:
-                await _save_status(connection, binding, target, sources, days, zone, settled)
+                await _save_status(
+                    connection,
+                    binding,
+                    target,
+                    sources,
+                    days,
+                    zone,
+                    settled,
+                    inputs,
+                    read_ids,
+                    probe_locations=probe_locations,
+                )
+            await notices.exclusion_notices(connection, binding, targets, inputs, at=settled)
             await connection.commit()
             return len(targets)
 
@@ -548,6 +618,10 @@ async def _save_status(
     days: StoredDays,
     zone: ZoneInfo,
     settled: datetime,
+    inputs: burns.Inputs,
+    read_ids: set[uuid.UUID],
+    *,
+    probe_locations: int,
 ) -> None:
     first = first_event_of(target, sources)
     if first is not None and (target.first_event_at is None or first < target.first_event_at):
@@ -559,6 +633,19 @@ async def _save_status(
         last_event_of(target, sources),
         _last_event_from_days(days.last_busy.get(target.id), zone),
     )
+    state = None
+    if target.id in read_ids:
+        state = burns.judge_target(
+            target,
+            inputs,
+            minutes=None if target.is_check else request_minutes(target, sources),
+            runs=check_runs(target, sources) if target.is_check else None,
+            first_event_at=_earliest(target.first_event_at, first),
+            last_event=last,
+            settled=settled,
+            zone=zone,
+            probe_locations=probe_locations,
+        )
     await connection.execute(
         _SAVE_STATUS,
         {
@@ -568,8 +655,20 @@ async def _save_status(
             "minute": settled,
             "last_event": last,
             "longest_quiet": slo.longest_quiet(days.recent.get(target.id, [])),
+            "judged": state is not None,
+            "tiers": json.dumps(state.tiers if state else {}),
+            "burning_since": state.burning_since if state else None,
+            "last_held": state.last_held_minute if state else None,
+            "unjudged_since": state.unjudged_since if state else None,
         },
     )
+    if state is not None and target.enabled:
+        await burns.judge_rules(connection, inputs, state)
+        await notices.exhausted_notice(connection, binding, target, inputs, at=settled)
+
+
+def _earliest(*moments: datetime | None) -> datetime | None:
+    return min((moment for moment in moments if moment is not None), default=None)
 
 
 def _last_event_from_days(
@@ -610,16 +709,18 @@ _STALE_DAYS: Final = text(
 _NEW_DAY: Final = """
     INSERT INTO slo_daily_counts (
         org_id, slo_id, day, good, total, failures, quiet_minutes, lost_minutes,
-        quiet_leading_minutes, quiet_trailing_minutes, longest_quiet_minutes, expected_runs,
-        missed_runs, maintenance_runs, loss_known, definition_version, final, computed_at)
+        excluded_minutes, quiet_leading_minutes, quiet_trailing_minutes, longest_quiet_minutes,
+        expected_runs, missed_runs, maintenance_runs, loss_known, definition_version, final,
+        computed_at)
     VALUES (
-        :org_id, :id, :day, :good, :total, :failures, :quiet, :lost, :leading, :trailing,
-        :longest, :expected_runs, :missed_runs, :maintenance_runs, :loss_known, :version,
-        :final, :computed_at)
+        :org_id, :id, :day, :good, :total, :failures, :quiet, :lost, :excluded, :leading,
+        :trailing, :longest, :expected_runs, :missed_runs, :maintenance_runs, :loss_known,
+        :version, :final, :computed_at)
 """
 _COUNTED_COLUMNS: Final = """
     good = EXCLUDED.good, total = EXCLUDED.total, failures = EXCLUDED.failures,
     quiet_minutes = EXCLUDED.quiet_minutes, lost_minutes = EXCLUDED.lost_minutes,
+    excluded_minutes = EXCLUDED.excluded_minutes,
     quiet_leading_minutes = EXCLUDED.quiet_leading_minutes,
     quiet_trailing_minutes = EXCLUDED.quiet_trailing_minutes,
     longest_quiet_minutes = EXCLUDED.longest_quiet_minutes,
@@ -659,6 +760,31 @@ _RECOUNT_DAY: Final = text(
       AND slo_daily_counts.definition_version <= EXCLUDED.definition_version
       AND (NOT slo_daily_counts.final
            OR slo_daily_counts.definition_version < EXCLUDED.definition_version)
+    """
+)
+# An exclusion made or removed inside the recount limit (FR29, AC7): its days are counted
+# again under the same definition, final or not, and a final day whose figures moved is
+# marked changed by it, so its month says so after it ended (BR13).
+_EXCLUSION_DAY: Final = text(
+    f"""
+    {_NEW_DAY}
+    ON CONFLICT (org_id, slo_id, day) DO UPDATE
+    SET {_COUNTED_COLUMNS},
+        final = slo_daily_counts.final OR EXCLUDED.final,
+        changed_at = CASE WHEN slo_daily_counts.final
+                               AND (slo_daily_counts.good, slo_daily_counts.total,
+                                    slo_daily_counts.excluded_minutes)
+                                   IS DISTINCT FROM (EXCLUDED.good, EXCLUDED.total,
+                                                     EXCLUDED.excluded_minutes)
+                          THEN EXCLUDED.computed_at ELSE slo_daily_counts.changed_at END,
+        changed_why = CASE WHEN slo_daily_counts.final
+                                AND (slo_daily_counts.good, slo_daily_counts.total,
+                                     slo_daily_counts.excluded_minutes)
+                                    IS DISTINCT FROM (EXCLUDED.good, EXCLUDED.total,
+                                                      EXCLUDED.excluded_minutes)
+                           THEN :changed_why ELSE slo_daily_counts.changed_why END
+    WHERE slo_daily_counts.org_id = :org_id
+      AND slo_daily_counts.definition_version <= EXCLUDED.definition_version
     """
 )
 # A history read past the recount limit: only a day never counted (AC69); one already
@@ -720,9 +846,87 @@ async def count_slos(
                 now=now,
                 probe_locations=probe_locations,
             )
+            written += await _count_exclusions(
+                connection,
+                binding,
+                store.for_project(binding.org_id, binding.project_id),
+                targets,
+                zone=zone,
+                through=settled + _MINUTE,
+                today=today,
+                now=now,
+                probe_locations=probe_locations,
+            )
             await connection.execute(_MARK_FINAL, keys | {"cutoff": cutoff})
             await connection.commit()
             return written
+
+
+# Exclusions made or removed since the scheduler last counted the days they touch (FR29).
+_UNCOUNTED_EXCLUSIONS: Final = text(
+    """
+    SELECT id, slo_id, starts_at, ends_at, removed_at FROM slo_exclusions
+    WHERE org_id = :org_id AND slo_id = ANY(:ids) AND counted_at IS NULL
+    ORDER BY created_at, id
+    """
+)
+_EXCLUSION_COUNTED: Final = text(
+    "UPDATE slo_exclusions SET counted_at = :at WHERE org_id = :org_id AND id = :id"
+)
+
+
+async def _count_exclusions(
+    connection: AsyncConnection,
+    binding: ProjectBinding,
+    reader: SloReader,
+    targets: Sequence[Target],
+    *,
+    zone: ZoneInfo,
+    through: datetime,
+    today: date,
+    now: datetime,
+    probe_locations: int,
+) -> int:
+    """Count again the days each new or removed exclusion touches, back to the recount
+    limit, and mark it counted (FR29, AC60). A day past the limit stays as it was: the
+    API recorded that removal as not recounted."""
+    by_id = {target.id: target for target in targets}
+    org_id = uuid.UUID(binding.org_id)
+    rows = (
+        await connection.execute(_UNCOUNTED_EXCLUSIONS, {"org_id": org_id, "ids": list(by_id)})
+    ).fetchall()
+    written = 0
+    for row in rows:
+        target = by_id[row.slo_id]
+        limit = slo.recount_limit(today, retention_days=_reach(target, binding))
+        first = max(row.starts_at.astimezone(zone).date(), limit)
+        last = min(row.ends_at.astimezone(zone).date(), today)
+        days = [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
+        written += await _count_days(
+            connection,
+            binding,
+            reader,
+            [target],
+            days,
+            zone=zone,
+            through=through,
+            today=today,
+            now=now,
+            probe_locations=probe_locations,
+            changed_why=(
+                slo.CHANGED_BY_EXCLUSION_REMOVED if row.removed_at else slo.CHANGED_BY_EXCLUSION
+            ),
+        )
+        await connection.execute(_EXCLUSION_COUNTED, {"org_id": org_id, "id": row.id, "at": now})
+    return written
+
+
+def _reach(target: Target, binding: ProjectBinding) -> int:
+    """How far back a target's source holds: a service's rollup at most 35 days (FR27)."""
+    reach = binding.derived_retention_days
+    if target.kind in (slo.SERVICE_AVAILABILITY, slo.SERVICE_LATENCY):
+        return min(reach, SERVICE_ROLLUP_DAYS)
+    return reach
 
 
 async def _count_days(
@@ -738,10 +942,12 @@ async def _count_days(
     now: datetime,
     probe_locations: int,
     recount_from: date | None = None,
+    changed_why: str | None = None,
 ) -> int:
     """Count each day for every target, one read per source per day for the project, and
     save the rows. Returns how many were written. With `recount_from`, a history read's
-    recount limit: days from it are recounted, older ones only first read (FR28)."""
+    recount limit: days from it are recounted, older ones only first read (FR28). With
+    `changed_why`, an exclusion's recount (FR29)."""
     written = 0
     counted = [target for target in targets if _has_source(target)]
     for day in days:
@@ -750,8 +956,9 @@ async def _count_days(
             continue
         sources = read_sources(reader, counted, start=start, end=min(end, through))
         lost = await holds.lost_minutes(connection, start=start, end=min(end, through))
+        excluded = await _excluded(connection, binding, counted, start, min(end, through))
         loss_known = (today - day).days <= slo.LOSS_RECORDS_DAYS
-        statement = _day_statement(day, recount_from)
+        statement = _EXCLUSION_DAY if changed_why is not None else _day_statement(day, recount_from)
         for target in counted:
             if target.first_event_at is None or end <= target.first_event_at:
                 continue
@@ -764,6 +971,7 @@ async def _count_days(
                 first_event_at=target.first_event_at,
                 lost=lost,
                 probe_locations=probe_locations,
+                excluded=excluded.get(target.id, frozenset()),
             )
             await _save_day(
                 connection,
@@ -775,6 +983,7 @@ async def _count_days(
                 loss_known=loss_known,
                 final=(today - day).days > slo.FINAL_AFTER_DAYS,
                 now=now,
+                changed_why=changed_why or slo.CHANGED_BY_DEFINITION,
             )
             written += 1
         await connection.commit()
@@ -798,6 +1007,7 @@ async def _save_day(
     loss_known: bool,
     final: bool,
     now: datetime,
+    changed_why: str = slo.CHANGED_BY_DEFINITION,
 ) -> None:
     await connection.execute(
         statement,
@@ -810,6 +1020,7 @@ async def _save_day(
             "failures": row.failures,
             "quiet": row.quiet_minutes,
             "lost": row.lost_minutes,
+            "excluded": row.excluded_minutes,
             "leading": row.quiet_leading_minutes,
             "trailing": row.quiet_trailing_minutes,
             "longest": row.longest_quiet_minutes,
@@ -820,9 +1031,43 @@ async def _save_day(
             "version": target.definition_version,
             "final": final,
             "computed_at": now,
-            "changed_why": slo.CHANGED_BY_DEFINITION,
+            "changed_why": changed_why,
         },
     )
+
+
+# Each target's live exclusions overlapping a day (FR29).
+_DAY_EXCLUSIONS: Final = text(
+    """
+    SELECT slo_id, starts_at, ends_at FROM slo_exclusions
+    WHERE org_id = :org_id AND slo_id = ANY(:ids) AND removed_at IS NULL
+      AND ends_at > :start AND starts_at < :end
+    """
+)
+
+
+async def _excluded(
+    connection: AsyncConnection,
+    binding: ProjectBinding,
+    targets: Sequence[Target],
+    start: datetime,
+    end: datetime,
+) -> dict[uuid.UUID, frozenset[datetime]]:
+    spans: dict[uuid.UUID, list[tuple[datetime, datetime]]] = {}
+    for row in await connection.execute(
+        _DAY_EXCLUSIONS,
+        {
+            "org_id": uuid.UUID(binding.org_id),
+            "ids": [target.id for target in targets],
+            "start": start,
+            "end": end,
+        },
+    ):
+        spans.setdefault(row.slo_id, []).append((row.starts_at, row.ends_at))
+    return {
+        target: slo.excluded_minutes_in(found, start=start, end=end)
+        for target, found in spans.items()
+    }
 
 
 # --------------------------------------------------------------------- history
@@ -912,9 +1157,7 @@ async def _read_history_once(
     through = (settled or _minute_of(now)) + _MINUTE
     today = now.astimezone(zone).date()
     target = _target_of(row)
-    reach = binding.derived_retention_days
-    if target.kind in (slo.SERVICE_AVAILABILITY, slo.SERVICE_LATENCY):
-        reach = min(reach, SERVICE_ROLLUP_DAYS)
+    reach = _reach(target, binding)
     days = [today - timedelta(days=offset) for offset in range(reach, -1, -1)]
     recount_from = slo.recount_limit(today, retention_days=reach)
     reader = store.for_project(binding.org_id, binding.project_id)
@@ -979,7 +1222,12 @@ def judge_slos_task(project_id: str, settled_minute: str) -> None:
     if store is None:
         return
     settled = datetime.fromisoformat(settled_minute)
-    with_engine(lambda engine: judge_slos(engine, store, uuid.UUID(project_id), settled))
+    locations = len(get_settings().probe_locations)
+    with_engine(
+        lambda engine: judge_slos(
+            engine, store, uuid.UUID(project_id), settled, probe_locations=locations
+        )
+    )
 
 
 @task(slo.COUNT_SLOS_TASK)

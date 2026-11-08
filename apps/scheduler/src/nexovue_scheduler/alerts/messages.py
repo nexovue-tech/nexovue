@@ -20,6 +20,7 @@ from typing import Any, Final
 from nexovue_platform.alerts.model import SEVERITY_RANK
 from nexovue_platform.detection import ADOPTION_AFTER_DAYS
 
+from nexovue_scheduler.alerts import slo_words as _slo_words
 from nexovue_scheduler.alerts.outbox import Notice, Subject, one_line
 from nexovue_scheduler.detection.lifecycle import times
 
@@ -88,6 +89,10 @@ def _compose_incident(notice: Notice, *, app_base_url: str) -> AlertMessage:
     if notice.kind == "resolved":
         summary = f"[resolved] {label} {said.recovered}"
         lines = [f"{label} {said.recovered}."]
+    elif notice.kind == "closed" and subject.detail.get("closed_why") == "source_silent":
+        # F19 FR17: a burn whose source stopped, told to everyone told of it.
+        summary = f"[closed] {label} is no longer judged"
+        lines = [_slo_words.source_silent(subject.detail)]
     elif notice.kind == "closed":
         # Sent only to machines that were told of the opening, so they stop too.
         summary = f"[closed] {label} is no longer watched"
@@ -143,6 +148,14 @@ def _compose_incident(notice: Notice, *, app_base_url: str) -> AlertMessage:
 def _said(subject: Subject) -> _Said:
     detail = subject.detail
     match subject.condition_kind:
+        case "slo_burn":
+            words = _slo_words.said(detail, at=subject.opened_at)
+            return _Said(
+                happening=words.happening,
+                still=words.still,
+                recovered=words.recovered,
+                facts=words.facts,
+            )
         case "service_error_rate" | "service_latency_p95":
             reading = str(detail.get("reading") or "reading")
             unit = str(detail.get("unit") or "")

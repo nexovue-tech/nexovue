@@ -5,9 +5,11 @@ project's rules can send to them. Connect them under **Settings → Alert channe
 or from a rule while you write it.
 
 Every organization starts with one channel, **Organization owners**, and every
-project with two rules sending to it: **Any check down**, and **Critical problems**,
-which sends every critical finding anomaly detection opens. So the first check that
-goes down, and the first critical finding, email you without any setup. Only an owner
+project with three rules sending to it: **Any check down**; **Critical problems**,
+which sends every critical finding anomaly detection opens; and **Reliability
+targets**, which sends the warnings and criticals of every reliability target's
+allowed failures running out too fast, and stays silent until you set a target. So the
+first check that goes down, and the first critical finding, email you without any setup. Only an owner
 or an admin can change or delete an anomaly-finding rule. Owners are emailed at their verified
 address only — verify yours from the link in your sign-up email.
 

@@ -48,6 +48,10 @@ class SloCreate(BaseModel):
     window_days: WindowDays = slo.DEFAULT_WINDOW_DAYS
     # FR5: asked of request kinds only.
     upstream_sampling: Sampling | None = None
+    # FR25a: channels ticked on the form write this target's own rule in the same save:
+    # warnings and criticals to `channel_ids`, criticals only to `critical_channel_ids`.
+    channel_ids: Annotated[list[uuid.UUID], Field(max_length=50)] = []
+    critical_channel_ids: Annotated[list[uuid.UUID], Field(max_length=50)] = []
 
 
 class SloChange(BaseModel):
@@ -89,6 +93,49 @@ class SloFigures(BaseModel):
     days_held: int
 
 
+class SloBurnView(BaseModel):
+    """FR10's Running out as `slo_status` holds it (Step 4)."""
+
+    severity: Literal["critical", "warning"]
+    # The long-window rate of the highest tier held, in times faster than allowed.
+    rate: float
+    since: datetime
+    hours_left: float | None
+    resolving: bool
+    judged: bool
+    last_held_minute: datetime | None
+    # The tier the chart plots (design, *One target*), or None when none can judge.
+    chart_tier: str | None
+
+
+class SloToldChannel(BaseModel):
+    id: uuid.UUID
+    kind: str
+    name: str
+
+
+class SloToldRule(BaseModel):
+    """A rule sending this target's burns (FR25a), with where it sends them."""
+
+    id: uuid.UUID
+    name: str
+    minimum_severity: Literal["critical", "warning"]
+    muted_until: datetime | None
+    is_default: bool
+    channels: list[SloToldChannel]
+
+
+class SloTold(BaseModel):
+    """Who is told (FR25a): the enabled rules covering the target and their channels, and
+    a snooze on its service. `alerting` is false when nobody would be told."""
+
+    alerting: bool
+    rules: list[SloToldRule]
+    snoozed_until: datetime | None
+    # A person's name, for a person only.
+    snoozed_by_name: str | None
+
+
 class SloView(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
@@ -121,6 +168,8 @@ class SloView(BaseModel):
     hours_left: float | None
     quiet_minutes: int | None
     figures: SloFigures
+    burn: SloBurnView | None
+    told: SloTold
     evaluated_minute: datetime | None
     last_event_minute: datetime | None
     longest_quiet_7d_minutes: int
@@ -176,6 +225,17 @@ class SloOutage(BaseModel):
     minutes: int
 
 
+class SloRemovedExclusion(BaseModel):
+    """FR29, AC69: an exclusion touching this month, removed when its days reached past
+    the recount limit, so the month's figure was not recounted without it. Ids and
+    times only: its reason is read on the target's exclusions."""
+
+    id: uuid.UUID
+    starts_at: datetime
+    minutes: int
+    removed_at: datetime
+
+
 class SloMonth(BaseModel):
     """One local month of one target, from its stored days (FR27, AC44)."""
 
@@ -204,6 +264,8 @@ class SloMonth(BaseModel):
     earlier_definition_through: date | None
     sharp_falls: list[SloSharpFall]
     outages: list[SloOutage]
+    # "Removed, figure not recounted" (FR29, AC69): its days still leave it out.
+    removed_not_recounted: list[SloRemovedExclusion]
     # Lost, excluded or outage time it does not count (FR27b's "time not counted").
     time_not_counted: bool
 
@@ -265,3 +327,45 @@ class SloHistory(BaseModel):
     """Newest first."""
 
     entries: list[SloHistoryEntry]
+
+
+# --------------------------------------------------------------- exclusions (FR29)
+
+Reason = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=slo.EXCLUSION_REASON_SHORTEST,
+        max_length=slo.EXCLUSION_REASON_LONGEST,
+    ),
+]
+
+
+class SloExclusionCreate(BaseModel):
+    """A stretch to leave out of one target, with a reason of 10 to 500 characters."""
+
+    starts_at: datetime
+    ends_at: datetime
+    reason: Reason
+
+
+class SloExclusion(BaseModel):
+    """One exclusion, shown to everyone who reads the target (BR6). Who entered or
+    removed it is named to a person only (AC33)."""
+
+    id: uuid.UUID
+    starts_at: datetime
+    ends_at: datetime
+    reason: str
+    created_at: datetime
+    created_by_name: str | None
+    removed_at: datetime | None
+    removed_by_name: str | None
+    # FR29: removed, but its days were past the recount limit, so not recounted.
+    removal_not_recounted: bool
+
+
+class SloExclusions(BaseModel):
+    """Newest first, removed ones included."""
+
+    exclusions: list[SloExclusion]

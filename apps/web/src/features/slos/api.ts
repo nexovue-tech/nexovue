@@ -98,6 +98,10 @@ export interface SloView {
   hours_left: number | null;
   quiet_minutes: number | null;
   figures: SloFigures;
+  /** FR10's Running out as the job stored it (Step 4); null when no burn. */
+  burn: SloBurn | null;
+  /** Who is told (FR25a). */
+  told: SloTold;
   evaluated_minute: string | null;
   last_event_minute: string | null;
   longest_quiet_7d_minutes: number;
@@ -105,6 +109,36 @@ export interface SloView {
   zone: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface SloBurn {
+  severity: "critical" | "warning";
+  /** The long-window rate of the highest tier held, in times faster than allowed. */
+  rate: number;
+  since: string;
+  hours_left: number | null;
+  resolving: boolean;
+  judged: boolean;
+  last_held_minute: string | null;
+  chart_tier: string | null;
+}
+
+export interface SloToldRule {
+  id: string;
+  name: string;
+  minimum_severity: "critical" | "warning";
+  muted_until: string | null;
+  is_default: boolean;
+  channels: { id: string; kind: string; name: string }[];
+}
+
+export interface SloTold {
+  /** False when nobody would be told: no rule, no channel, or every rule muted. */
+  alerting: boolean;
+  rules: SloToldRule[];
+  snoozed_until: string | null;
+  /** A person's name, for a person only. */
+  snoozed_by_name: string | null;
 }
 
 export interface DeletedSlo {
@@ -138,6 +172,9 @@ export interface SloDraft {
   objective_percent: string;
   window_days: 7 | 28;
   upstream_sampling: Sampling;
+  /** FR25a: channels told of warnings and criticals, and of criticals only (create only). */
+  channel_ids: string[];
+  critical_channel_ids: string[];
 }
 
 export const REQUEST_KINDS: readonly SloKind[] = [
@@ -154,7 +191,11 @@ export function bodyOf(draft: SloDraft, { withKind }: { withKind: boolean }) {
     objective_percent: draft.objective_percent.trim(),
     window_days: draft.window_days,
   };
-  if (withKind) body.kind = draft.kind;
+  if (withKind) {
+    body.kind = draft.kind;
+    body.channel_ids = draft.channel_ids;
+    body.critical_channel_ids = draft.critical_channel_ids;
+  }
   if (draft.kind === "check_availability") return { ...body, check_id: draft.check_id };
   body.service_name = draft.service_name.trim();
   body.upstream_sampling = draft.upstream_sampling;
@@ -279,6 +320,65 @@ export function useSlos(projectId: string | undefined) {
   });
 }
 
+/** The chart's line (AC109): the stored tier's rate by the minute; null is a gap. */
+export interface SloBurnLine {
+  tier: string | null;
+  evaluated_minute: string | null;
+  on_pace: number;
+  points: Array<{ minute: string; rate: number | null }>;
+}
+
+export function useSloBurn(sloId: string) {
+  return useQuery({
+    queryKey: ["slos", "burn", sloId] as const,
+    refetchInterval: REFRESH_MS,
+    queryFn: ({ signal }) =>
+      apiClient.get<SloBurnLine>(`slo-readings/${encodeURIComponent(sloId)}/burn`, { signal }),
+  });
+}
+
+export interface ChannelChoice {
+  id: string;
+  kind: string;
+  name: string;
+}
+
+/** The organization's channels, for the form's *Who is told* (FR25a). */
+export function useChannelChoices() {
+  return useQuery({
+    queryKey: ["slos", "channels"] as const,
+    queryFn: ({ signal }) => apiClient.get<{ channels: ChannelChoice[] }>("channels", { signal }),
+    select: (response) => response.channels,
+  });
+}
+
+/** The project's rules covering every target, so the form says who is told already. */
+export function useProjectBurnRules(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["slos", "burn-rules", projectId ?? ""] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ rules: BurnRuleSummary[] }>("alerts/rules", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+    select: (response) =>
+      response.rules.filter(
+        (rule) =>
+          rule.enabled && rule.condition.kind === "slo_burn" && rule.condition.slo_ids === null,
+      ),
+  });
+}
+
+export interface BurnRuleSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+  muted_until: string | null;
+  condition: { kind: string; slo_ids?: string[] | null; minimum_severity?: "critical" | "warning" };
+  channels: ChannelChoice[];
+}
+
 export function useSlo(sloId: string) {
   return useQuery({
     queryKey: targetKey(sloId),
@@ -340,6 +440,15 @@ export interface SloOutage {
   minutes: number;
 }
 
+/** FR29, AC69: an exclusion touching a month, removed too late for its days to be
+ * counted again (the API's `SloRemovedExclusion`). */
+export interface SloRemovedExclusion {
+  id: string;
+  starts_at: string;
+  minutes: number;
+  removed_at: string;
+}
+
 /** One local month of one target, from its stored days (the API's `SloMonth`). */
 export interface SloMonth {
   month: string;
@@ -365,6 +474,7 @@ export interface SloMonth {
   earlier_definition_through: string | null;
   sharp_falls: SloSharpFall[];
   outages: SloOutage[];
+  removed_not_recounted: SloRemovedExclusion[];
   time_not_counted: boolean;
 }
 

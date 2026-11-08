@@ -165,6 +165,29 @@ _INSERT_NOTIFICATIONS: Final = text(
     RETURNING id
     """
 )
+# F19: an open incident's figures, kept current each minute a burn is judged, because
+# `fire` at the same severity writes nothing and `_RESOLVE` writes only `resolved_at`
+# (design, *What each job does*). Only an open one: a closed incident keeps its last.
+_REFRESH_DETAIL: Final = text(
+    """
+    UPDATE incidents SET detail = CAST(:detail AS jsonb)
+    WHERE org_id = :org_id AND rule_id = :rule_id AND subject_key = :subject_key
+      AND resolved_at IS NULL
+    """
+)
+# F19's notices (design, *Notices*): an event, closed as it opens, under the first rule
+# covering its target by name, or none. It never conflicts with an open incident's key.
+_INSERT_NOTICE: Final = text(
+    """
+    INSERT INTO incidents
+        (org_id, project_id, rule_id, rule_name, condition_kind, subject_key, subject_label,
+         severity, opened_at, resolved_at, is_event, detail)
+    VALUES
+        (:org_id, :project_id, :rule_id, :rule_name, :condition_kind, :subject_key,
+         :subject_label, :severity, :at, :at, true, CAST(:detail AS jsonb))
+    RETURNING id
+    """
+)
 # Across organizations on purpose: one sweep serves every rule with a repeat set.
 # Each row carries its own `org_id`, and the notifications written name it.
 _DUE_REPEATS: Final = text(
@@ -282,6 +305,116 @@ async def clear(
         severity=current.severity,
         at=at,
     )
+
+
+async def refresh_detail(
+    connection: AsyncConnection, rule: Rule, subject: Subject, *, detail: dict[str, Any]
+) -> None:
+    """Make an open incident's figures current, so a repeat, the recovery and the
+    incident page read this minute's, not the opening's (F19 FR18, AC19, AC104)."""
+    await connection.execute(
+        _REFRESH_DETAIL,
+        {
+            "org_id": rule.org_id,
+            "rule_id": rule.id,
+            "subject_key": subject.key,
+            "detail": json.dumps(detail),
+        },
+    )
+
+
+async def close_unjudged(
+    connection: AsyncConnection,
+    rule: Rule,
+    subject: Subject,
+    *,
+    at: datetime,
+    detail: dict[str, Any],
+) -> int:
+    """Close an open burn whose source stopped feeding it (F19 FR17): no tier can judge
+    again without new events, so it would otherwise stay open for ever. Unlike a person
+    closing it, nobody chose this, so every channel told of it is told it ended, as
+    `closed`, with why in its detail. Returns how many notifications were written."""
+    keys = {"org_id": rule.org_id, "rule_id": rule.id, "subject_key": subject.key}
+    current = (await connection.execute(_OPEN_INCIDENT, keys)).first()
+    if current is None:
+        return 0
+    await refresh_detail(connection, rule, subject, detail=detail)
+    await connection.execute(_RESOLVE, {"org_id": rule.org_id, "incident_id": current.id, "at": at})
+    told = await _told_channels(connection, rule.org_id, current.id)
+    if current.flapping or current.muted or rule.muted_at(at):
+        told = {channel: kind for channel, kind in told.items() if kind not in READ_BY_PEOPLE}
+    return await _notify(
+        connection,
+        rule,
+        current.id,
+        tuple(told),
+        kind="closed",
+        severity=current.severity,
+        at=at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NoticeTo:
+    """Where a notice goes: the rule it is filed under, if any, and its channels."""
+
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    rule_id: uuid.UUID | None
+    rule_name: str
+    channel_ids: tuple[uuid.UUID, ...]
+
+
+async def fire_notice(
+    connection: AsyncConnection,
+    to: NoticeTo,
+    subject: Subject,
+    *,
+    condition_kind: str,
+    severity: str,
+    at: datetime,
+    detail: dict[str, Any],
+) -> int:
+    """F19's event notices, *Nothing left* and *Exclusion* (design, *Notices*): one
+    incident, closed as it opens, and one `opened` row per channel of the union the
+    caller names, however many rules name each. A channel's own mute still drops its row
+    at delivery. Returns how many notifications were written."""
+    incident_id = (
+        await connection.execute(
+            _INSERT_NOTICE,
+            {
+                "org_id": to.org_id,
+                "project_id": to.project_id,
+                "rule_id": to.rule_id,
+                "rule_name": to.rule_name,
+                "condition_kind": condition_kind,
+                "subject_key": subject.key,
+                "subject_label": subject.label,
+                "severity": severity,
+                "at": at,
+                "detail": json.dumps(detail),
+            },
+        )
+    ).scalar_one()
+    if not to.channel_ids:
+        return 0
+    written = await connection.execute(
+        _INSERT_NOTIFICATIONS,
+        {
+            "org_id": to.org_id,
+            "project_id": to.project_id,
+            "incident_id": incident_id,
+            "channel_ids": list(to.channel_ids),
+            "kind": "opened",
+            "sequence": 0,
+            "severity": severity,
+            "at": at,
+            "group_wait": 0,
+            "human_kinds": _HUMAN_KINDS,
+        },
+    )
+    return len(written.fetchall())
 
 
 async def renotify_due(

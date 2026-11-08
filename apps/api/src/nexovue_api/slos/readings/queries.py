@@ -112,3 +112,75 @@ FROM (
 WHERE final_flag != 'false'
 GROUP BY week
 """
+
+
+# ------------------------------------------------------------ the burn line (AC109)
+#
+# Each source's minutes over [from, to): the same counts the scheduler's judging reads
+# (`nexovue_scheduler.slos.store`), so the chart's rate equals the stored one.
+
+SERVICE_MINUTES_SQL: Final = """
+SELECT toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests,
+       sum(error_count) AS errors
+FROM service_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name = {service:String}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY minute
+"""
+
+LATENCY_MINUTES_SQL: Final = """
+SELECT toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests,
+       sumForEachMerge(latency_buckets) AS buckets
+FROM service_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name = {service:String}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY minute
+"""
+
+ENDPOINT_MINUTES_SQL: Final = """
+SELECT span_name,
+       toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests,
+       sum(error_count) AS errors
+FROM endpoint_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name = {service:String}
+  AND span_kind IN ('SERVER', 'CONSUMER')
+  AND span_name IN {endpoints:Array(String)}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY span_name, minute
+"""
+
+CHECK_MINUTES_SQL: Final = f"""
+SELECT toUnixTimestamp(toStartOfMinute(timestamp)) AS minute_epoch,
+       countIf({_COUNTED_RUN}) AS counted,
+       countIf({_COUNTED_RUN} AND value = {_UP_VALUE}) AS up
+FROM (
+    SELECT timestamp,
+           {_CHECK_ID} AS check_id,
+           metric_name,
+           any(value) AS value,{_READING_ATTRIBUTES}
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name = '{_METRIC_STATUS}'
+      AND {_CHECK_ID} = {{check_id:String}}
+      AND timestamp >= {{from_minute:DateTime64(3)}}
+      AND timestamp < {{to_minute:DateTime64(3)}}
+      AND received_at >= {{received_from:DateTime64(3)}}
+      AND received_at < {{received_to:DateTime64(3)}}
+    {_ONE_ROW_PER_READING}
+)
+WHERE final_flag != 'false'
+GROUP BY minute_epoch
+"""

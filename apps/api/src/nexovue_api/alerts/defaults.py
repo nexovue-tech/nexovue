@@ -18,6 +18,8 @@ from nexovue_platform.alerts.model import (
     DEFAULT_RULE_CONDITION,
     DEFAULT_RULE_NAME,
     OWNERS_CHANNEL_NAME,
+    SLO_RULE_CONDITION,
+    SLO_RULE_NAME,
     Condition,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,8 +47,9 @@ async def provision_project(
     project_id: uuid.UUID,
     actor_user_id: uuid.UUID,
 ) -> list[AlertRule]:
-    """Two rules to the owners: any check down, and its recovery (FR8, D3); and every
-    critical finding, and its close (F6 FR29)."""
+    """Three rules to the owners: any check down, and its recovery (FR8, D3); every
+    critical finding, and its close (F6 FR29); and every reliability target's burn,
+    silent until a target exists (F19 FR25)."""
     owners = await queries.owners_channel(session, org_id=org_id)
     if owners is None:
         # Every organization is created with one and it cannot be deleted, so this
@@ -67,6 +70,7 @@ async def provision_project(
         for name, condition in (
             (DEFAULT_RULE_NAME, DEFAULT_RULE_CONDITION),
             (CRITICAL_PROBLEMS_RULE_NAME, CRITICAL_PROBLEMS_CONDITION),
+            (SLO_RULE_NAME, SLO_RULE_CONDITION),
         )
     ]
 

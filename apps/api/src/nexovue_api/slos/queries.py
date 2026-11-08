@@ -10,14 +10,23 @@ from typing import Any
 from nexovue_platform.alerts.model import service_subject
 from sqlalchemy import Text, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from nexovue_api.data.postgres.models import (
+    AlertRule,
+    AlertRuleChannel,
     Check,
     Finding,
     Incident,
+    NotificationChannel,
+    Organization,
+    Plan,
+    Project,
+    ServiceDetectionSettings,
     ServiceLastSeen,
     SloDailyCount,
     SloDeletedMonth,
+    SloExclusion,
     SloStatus,
     SloTarget,
     SloTargetChange,
@@ -296,6 +305,29 @@ async def changes_naming(
     return (await db.execute(statement)).scalars().all()
 
 
+async def exclusions_naming(
+    db: AsyncSession, *, org_id: uuid.UUID, needles: Sequence[str]
+) -> Sequence[SloExclusion]:
+    """An organization's exclusions whose reason holds any of `needles`, ignoring case
+    (AC88). A prefilter: the caller replaces whole words only."""
+    found = [func.strpos(func.lower(SloExclusion.reason), needle.lower()) > 0 for needle in needles]
+    statement = select(SloExclusion).where(SloExclusion.org_id == org_id, or_(*found))
+    return (await db.execute(statement)).scalars().all()
+
+
+async def exclusions_made_by(
+    db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, limit: int
+) -> Sequence[SloExclusion]:
+    """The exclusions one person entered, newest first, for their export (AC88)."""
+    statement = (
+        select(SloExclusion)
+        .where(SloExclusion.org_id == org_id, SloExclusion.created_by == user_id)
+        .order_by(SloExclusion.created_at.desc(), SloExclusion.id.desc())
+        .limit(limit)
+    )
+    return (await db.execute(statement)).scalars().all()
+
+
 async def changes_made_by(
     db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, limit: int
 ) -> Sequence[SloTargetChange]:
@@ -307,3 +339,156 @@ async def changes_made_by(
         .limit(limit)
     )
     return (await db.execute(statement)).scalars().all()
+
+
+# -------------------------------------------------------------- who is told
+
+
+async def burn_rules(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> Sequence[Any]:
+    """The project's enabled `slo_burn` rules, each with its channels (FR25a)."""
+    statement = (
+        select(AlertRule, NotificationChannel)
+        .outerjoin(
+            AlertRuleChannel,
+            (AlertRuleChannel.rule_id == AlertRule.id) & (AlertRuleChannel.org_id == org_id),
+        )
+        .outerjoin(
+            NotificationChannel,
+            (NotificationChannel.id == AlertRuleChannel.channel_id)
+            & (NotificationChannel.org_id == org_id),
+        )
+        .where(
+            AlertRule.org_id == org_id,
+            AlertRule.project_id == project_id,
+            AlertRule.condition_kind == "slo_burn",
+            AlertRule.enabled.is_(True),
+        )
+        .order_by(AlertRule.name, AlertRule.id, NotificationChannel.name)
+    )
+    return (await db.execute(statement)).all()
+
+
+async def snoozes(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, now: datetime
+) -> dict[str, tuple[datetime, str | None]]:
+    """Each service snoozed now, with until when and by whom (FR25a, FR26)."""
+    statement = (
+        select(
+            ServiceDetectionSettings.service_name,
+            ServiceDetectionSettings.snoozed_until,
+            User.name,
+        )
+        .outerjoin(
+            User,
+            (User.id == ServiceDetectionSettings.snoozed_by) & (User.org_id == org_id),
+        )
+        .where(
+            ServiceDetectionSettings.org_id == org_id,
+            ServiceDetectionSettings.project_id == project_id,
+            ServiceDetectionSettings.snoozed_until > now,
+        )
+    )
+    return {name: (until, by) for name, until, by in (await db.execute(statement)).all()}
+
+
+# --------------------------------------------------------------- exclusions
+
+
+async def exclusions_of(
+    db: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID
+) -> Sequence[Any]:
+    """A target's exclusions, newest first, each with who entered and who removed it."""
+    created_by = aliased(User)
+    removed_by = aliased(User)
+    statement = (
+        select(SloExclusion, created_by.name, removed_by.name)
+        .outerjoin(
+            created_by,
+            (created_by.id == SloExclusion.created_by) & (created_by.org_id == SloExclusion.org_id),
+        )
+        .outerjoin(
+            removed_by,
+            (removed_by.id == SloExclusion.removed_by) & (removed_by.org_id == SloExclusion.org_id),
+        )
+        .where(SloExclusion.org_id == org_id, SloExclusion.slo_id == target_id)
+        .order_by(SloExclusion.starts_at.desc(), SloExclusion.id.desc())
+    )
+    return (await db.execute(statement)).all()
+
+
+async def live_exclusions(
+    db: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID
+) -> Sequence[SloExclusion]:
+    statement = select(SloExclusion).where(
+        SloExclusion.org_id == org_id,
+        SloExclusion.slo_id == target_id,
+        SloExclusion.removed_at.is_(None),
+    )
+    return (await db.execute(statement)).scalars().all()
+
+
+async def exclusion_for_change(
+    db: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID, exclusion_id: uuid.UUID
+) -> SloExclusion | None:
+    """The exclusion, only when it is this target's (AC33), locked for the change."""
+    statement = (
+        select(SloExclusion)
+        .where(
+            SloExclusion.org_id == org_id,
+            SloExclusion.slo_id == target_id,
+            SloExclusion.id == exclusion_id,
+        )
+        .with_for_update()
+    )
+    return (await db.execute(statement)).scalar_one_or_none()
+
+
+async def removed_not_recounted(
+    db: AsyncSession, *, org_id: uuid.UUID, target_ids: Sequence[uuid.UUID], since: datetime
+) -> Sequence[SloExclusion]:
+    """Targets' exclusions removed past the recount limit, ending after `since`, oldest
+    first (FR29, AC69)."""
+    if not target_ids:
+        return []
+    statement = (
+        select(SloExclusion)
+        .where(
+            SloExclusion.org_id == org_id,
+            SloExclusion.slo_id.in_(target_ids),
+            SloExclusion.removal_not_recounted.is_(True),
+            SloExclusion.ends_at > since,
+        )
+        .order_by(SloExclusion.starts_at, SloExclusion.id)
+    )
+    return (await db.execute(statement)).scalars().all()
+
+
+async def exclusion_spans(
+    db: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID, start: datetime, end: datetime
+) -> list[tuple[datetime, datetime]]:
+    """A target's live exclusions overlapping [start, end), as the job leaves them out."""
+    statement = select(SloExclusion.starts_at, SloExclusion.ends_at).where(
+        SloExclusion.org_id == org_id,
+        SloExclusion.slo_id == target_id,
+        SloExclusion.removed_at.is_(None),
+        SloExclusion.ends_at > start,
+        SloExclusion.starts_at < end,
+    )
+    return [(starts, ends) for starts, ends in (await db.execute(statement)).all()]
+
+
+async def project_of(db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID) -> Project:
+    statement = select(Project).where(Project.org_id == org_id, Project.id == project_id)
+    return (await db.execute(statement)).scalar_one()
+
+
+async def derived_retention_days(db: AsyncSession, *, org_id: uuid.UUID) -> int | None:
+    """The plan's derived retention, as `project_retention` reads it (migration 0005)."""
+    found: int | None = await db.scalar(
+        select(Plan.derived_retention_days)
+        .join(Organization, Organization.plan == Plan.slug)
+        .where(Organization.id == org_id)
+    )
+    return found

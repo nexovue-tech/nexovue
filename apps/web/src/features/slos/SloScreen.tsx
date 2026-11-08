@@ -11,6 +11,7 @@ import { useCan } from "@/shared/identity";
 import type { SloView } from "./api";
 import { useChangeSlo, useDeleteSlo, useSlo } from "./api";
 import { SloBadge } from "./SloBadge";
+import { SloBurnChart } from "./SloBurnChart";
 import { SloDefinitionTab } from "./SloDefinitionTab";
 import { SloHistoryTab } from "./SloHistoryTab";
 import { SloMonthsTab } from "./SloMonthsTab";
@@ -24,6 +25,7 @@ import {
   qualifierLine,
   sentenceOf,
   timeIn,
+  toldSentence,
 } from "./slo-words";
 
 /** FR31: a deleted target's daily figures go this many days after it is deleted. */
@@ -82,8 +84,12 @@ function Target({ view, zone }: { view: SloView; zone: string }) {
           {next ? <p className="max-w-prose font-medium text-ink text-sm">{next}</p> : null}
           <Qualifiers view={view} />
         </section>
-        <Measured view={view} zone={zone} />
+        <div className="flex flex-col gap-5">
+          <WhoIsTold view={view} zone={zone} />
+          <Measured view={view} zone={zone} />
+        </div>
       </div>
+      <SloBurnChart sloId={view.id} />
       <TargetTabs view={view} zone={zone} />
       {canConfigure ? <Actions view={view} /> : null}
     </div>
@@ -112,6 +118,26 @@ function TargetTabs({ view, zone }: { view: SloView; zone: string }) {
       {tab === "history" ? <SloHistoryTab sloId={view.id} zone={zone} /> : null}
       {tab === "definition" ? <SloDefinitionTab view={view} /> : null}
     </Tabs>
+  );
+}
+
+/** FR25a: who is told, and where a person allowed to can change it (AC84). */
+function WhoIsTold({ view, zone }: { view: SloView; zone: string }) {
+  const canRoute = useCan("operate_alerts");
+  return (
+    <section aria-label="Who is told" className="flex flex-col gap-1 text-sm">
+      <h2 className="font-semibold text-ink">Who is told</h2>
+      <p className="max-w-prose text-ink">{toldSentence(view.told, zone)}</p>
+      {view.told.alerting ? null : canRoute ? (
+        <p>
+          <Link to="/alerts/rules/new" className="text-brand">
+            Add a rule
+          </Link>
+        </p>
+      ) : (
+        <p className="text-ink-dim">Ask an owner, admin or member to add one.</p>
+      )}
+    </section>
   );
 }
 

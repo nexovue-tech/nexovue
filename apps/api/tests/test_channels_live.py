@@ -209,8 +209,12 @@ async def test_the_owners_channel_can_be_muted_but_not_deleted_or_reconfigured(
 ) -> None:
     listed = await service.list_channels(db, org_id=tenant.organization.id)
     [owners] = [channel for channel in listed.channels if channel.kind == "owners"]
-    # Both default rules send to it (F21 FR8, F6 FR29).
-    assert sorted(rule.name for rule in owners.rules) == ["Any check down", "Critical problems"]
+    # Every default rule sends to it (F21 FR8, F6 FR29, F19 FR25).
+    assert sorted(rule.name for rule in owners.rules) == [
+        "Any check down",
+        "Critical problems",
+        "Reliability targets",
+    ]
 
     with pytest.raises(ConflictError):
         await service.delete(

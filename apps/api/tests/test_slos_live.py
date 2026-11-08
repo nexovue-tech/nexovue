@@ -33,19 +33,23 @@ from typing import Any
 
 import pytest
 from nexovue_platform import slo
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_findings_cases_live import Team, _call, _team, db  # noqa: F401  shared fixtures
 
 from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import (
+    AlertRule,
     AuditLogEntry,
     Check,
     Finding,
     Incident,
+    NotificationChannel,
     ServiceLastSeen,
     SloDailyCount,
     SloDeletedMonth,
+    SloExclusion,
+    SloStatus,
     SloTarget,
     SloTargetChange,
 )
@@ -970,3 +974,371 @@ async def test_fr27a_a_check_target_s_month_carries_no_service_outage(
     month = next(each for each in body["months"] if each["month"] == LAST_MONTH.isoformat())
 
     assert month["outages"] == []
+
+
+# ================================================================ Step 4: exclusions
+#
+# T4.7: time left out of a target, with a reason (FR29). AC34 (each creation and removal
+# audited by id, and a viewer reads the reason), AC60's refusals, AC33 (a token reads them
+# with no person; an exclusion id from another target is refused), and FR29's "removed,
+# figure not recounted" past the recount limit.
+
+
+def _span(start: datetime, hours: float) -> dict[str, str]:
+    return {
+        "starts_at": start.isoformat(),
+        "ends_at": (start + timedelta(hours=hours)).isoformat(),
+        "reason": "Planned database upgrade",
+    }
+
+
+async def test_ac34_an_exclusion_and_its_removal_are_audited_and_read_by_a_viewer(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    path = f"/slos/{target['id']}/exclusions"
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=3)
+    created = await _call(db, acme, acme.member, "POST", path, _span(start, 2))
+    assert created.status_code == 201, created.text
+    exclusion = created.json()
+    removed = await _call(db, acme, acme.member, "DELETE", f"{path}/{exclusion['id']}")
+    assert removed.status_code == 204, removed.text
+
+    entries = (
+        await db.execute(
+            select(AuditLogEntry.action, AuditLogEntry.detail)
+            .where(AuditLogEntry.target == f"slo:{target['id']}")
+            .order_by(AuditLogEntry.id)
+        )
+    ).all()
+    assert [action for action, _ in entries][-2:] == [
+        audit.SLO_EXCLUDED,
+        audit.SLO_EXCLUSION_REMOVED,
+    ]
+    for _, detail in entries[-2:]:
+        assert detail == {"project_id": str(acme.project_id), "exclusion_id": exclusion["id"]}
+
+    read = await _call(db, acme, acme.viewer, "GET", path)
+    [shown] = read.json()["exclusions"]
+    assert shown["reason"] == "Planned database upgrade"
+    assert shown["removed_at"] is not None
+    assert (shown["created_by_name"], shown["removed_by_name"]) == ("Member", "Member")
+    token = await _call(db, acme, None, "GET", path)
+    assert _holds_no_person(token.json())
+    assert token.json()["exclusions"][0]["created_by_name"] is None
+    refused = await _call(db, acme, acme.viewer, "POST", path, _span(start, 1))
+    assert refused.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"reason": "too short"}, "reason"),
+        ({"reason": "x" * 501}, "reason"),
+        ({"hours": 7 * 24 + 1}, "ends_at"),
+        ({"hours": -1}, "ends_at"),
+        ({"days_back": 40}, "starts_at"),
+    ],
+    ids=["9 characters", "501 characters", "over 7 days", "backwards", "before the limit"],
+)
+async def test_ac60_an_exclusion_breaking_a_limit_is_refused_beside_its_field(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    change: dict[str, Any],
+    field: str,
+) -> None:
+    target = await _create(db, acme)
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(days=change.pop("days_back", 1))
+    body = _span(start, change.pop("hours", 2)) | change
+    refused = await _call(db, acme, acme.member, "POST", f"/slos/{target['id']}/exclusions", body)
+    assert refused.status_code == 422, refused.text
+    assert field in refused.text
+
+
+async def test_ac60_excluded_time_over_the_window_s_cap_is_refused(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme, window_days=7, name="weekly")
+    path = f"/slos/{target['id']}/exclusions"
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=1)
+    first = await _call(db, acme, acme.member, "POST", path, _span(start, 30))
+    over = await _call(db, acme, acme.member, "POST", path, _span(start + timedelta(days=2), 20))
+    assert first.status_code == 201, first.text
+    assert over.status_code == 422
+    assert "at most 2 days of its 7" in over.text
+
+
+async def test_ac60_a_51st_live_exclusion_is_refused(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    now = datetime.now(UTC)
+    for offset in range(50):
+        db.add(
+            SloExclusion(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                slo_id=uuid.UUID(target["id"]),
+                starts_at=now + timedelta(days=60 + offset),
+                ends_at=now + timedelta(days=60 + offset, minutes=1),
+                reason="Planned work, one minute",
+            )
+        )
+    await db.flush()
+    refused = await _call(
+        db, acme, acme.member, "POST", f"/slos/{target['id']}/exclusions", _span(now, 1)
+    )
+    assert refused.status_code == 409, refused.text
+
+
+async def test_ac33_an_exclusion_of_another_target_is_refused(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    first = await _create(db, acme)
+    second = await _create(db, acme, name="other", objective_percent="99")
+    start = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=3)
+    created = await _call(
+        db, acme, acme.member, "POST", f"/slos/{first['id']}/exclusions", _span(start, 1)
+    )
+    removed = await _call(
+        db,
+        acme,
+        acme.member,
+        "DELETE",
+        f"/slos/{second['id']}/exclusions/{created.json()['id']}",
+    )
+    assert removed.status_code == 404
+
+
+async def test_fr29_removing_an_exclusion_past_the_recount_limit_says_not_recounted(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    now = datetime.now(UTC)
+    old = SloExclusion(
+        org_id=acme.org_id,
+        project_id=acme.project_id,
+        slo_id=uuid.UUID(target["id"]),
+        starts_at=now - timedelta(days=40),
+        ends_at=now - timedelta(days=39),
+        reason="Migration to new region",
+    )
+    db.add(old)
+    await db.flush()
+    removed = await _call(
+        db, acme, acme.member, "DELETE", f"/slos/{target['id']}/exclusions/{old.id}"
+    )
+    assert removed.status_code == 204, removed.text
+    await db.refresh(old)
+    assert (old.removal_not_recounted, old.counted_at) == (True, None)
+
+
+async def test_ac69_a_month_an_exclusion_removed_past_the_recount_limit_touched_says_so(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC69's last clause, on the month: the exclusion's month names the removal that was
+    not recounted, on the target's months and on *Last month*; a removal the recount
+    reached, and a month the old exclusion does not touch, carry none."""
+    target = await _create(db, acme)
+    earlier = slo.previous_month(LAST_MONTH)
+    days = _whole_month()
+    days.update(dict.fromkeys(_days_of(earlier), (9_995, 10_000)))
+    await _counted(db, acme, target["id"], days)
+    starts = datetime.combine(earlier + timedelta(days=4), datetime.min.time(), UTC)
+    now = datetime.now(UTC)
+    old = SloExclusion(
+        org_id=acme.org_id,
+        project_id=acme.project_id,
+        slo_id=uuid.UUID(target["id"]),
+        starts_at=starts,
+        ends_at=starts + timedelta(hours=2),
+        reason="Migration to new region",
+    )
+    recent = SloExclusion(
+        org_id=acme.org_id,
+        project_id=acme.project_id,
+        slo_id=uuid.UUID(target["id"]),
+        starts_at=now - timedelta(hours=5),
+        ends_at=now - timedelta(hours=4),
+        reason="Planned database upgrade",
+    )
+    db.add_all([old, recent])
+    await db.flush()
+    for exclusion in (old, recent):
+        removed = await _call(
+            db, acme, acme.member, "DELETE", f"/slos/{target['id']}/exclusions/{exclusion.id}"
+        )
+        assert removed.status_code == 204, removed.text
+
+    body = (await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/months")).json()
+    by_month = {month["month"]: month["removed_not_recounted"] for month in body["months"]}
+    [shown] = by_month.pop(earlier.isoformat())
+    assert shown["id"] == str(old.id)
+    assert (datetime.fromisoformat(shown["starts_at"]), shown["minutes"]) == (starts, 120)
+    assert "reason" not in shown
+    assert all(not removals for removals in by_month.values())
+
+    rows = (
+        await _call(
+            db,
+            acme,
+            acme.viewer,
+            "GET",
+            f"/slos/months?project_id={acme.project_id}&month={earlier.isoformat()}",
+        )
+    ).json()["rows"]
+    assert [removal["id"] for row in rows for removal in row["removed_not_recounted"]] == [
+        str(old.id)
+    ]
+
+
+# ============================================================= Step 4: burn and routing
+
+
+async def test_ac51_a_burn_in_status_reads_running_out_first_with_no_rule_needed(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """T4.5: Running out comes from what the job stored, and sorts first (AC51, AC110)."""
+    quiet = await _create(db, acme, name="quiet")
+    burning = await _create(db, acme, name="burning", objective_percent="99")
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    for target in (quiet, burning):
+        await db.execute(
+            update(SloTarget)
+            .where(SloTarget.id == uuid.UUID(target["id"]))
+            .values(history_read_version=1)
+        )
+    db.add(
+        SloStatus(
+            slo_id=uuid.UUID(burning["id"]),
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            evaluated_minute=now,
+            last_event_minute=now,
+            burning_since=now - timedelta(minutes=20),
+            last_held_minute=now,
+            tiers={
+                "chart_tier": "fast",
+                "rate": 14.7,
+                "hours_left": 50.0,
+                "by_tier": {"fast": {"can_judge": True, "holds": True}},
+                "burn": {"severity": "critical", "rate": 14.7, "hours_left": 50.0},
+            },
+        )
+    )
+    await db.flush()
+    listed = await _call(db, acme, acme.viewer, "GET", f"/slos?project_id={acme.project_id}")
+    first = listed.json()["targets"][0]
+    assert first["id"] == burning["id"]
+    assert first["state"] == slo.State.RUNNING_OUT
+    assert first["burn"]["rate"] == 14.7 and first["burn"]["chart_tier"] == "fast"
+    assert first["severity"] == "critical"
+
+
+async def test_ac76_ac84_who_is_told_the_default_rule_or_no_alerts(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    told = target["told"]
+    assert told["alerting"] is True
+    [rule] = told["rules"]
+    assert (rule["name"], rule["is_default"]) == ("Reliability targets", True)
+    assert [channel["kind"] for channel in rule["channels"]] == ["owners"]
+
+    await db.execute(
+        update(AlertRule)
+        .where(AlertRule.project_id == acme.project_id, AlertRule.condition_kind == "slo_burn")
+        .values(enabled=False)
+    )
+    await db.flush()
+    read = await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}")
+    assert read.json()["told"] == {
+        "alerting": False,
+        "rules": [],
+        "snoozed_until": None,
+        "snoozed_by_name": None,
+    }
+    assert slo.Qualifier.NO_ALERTS in read.json()["qualifiers"]
+
+
+async def test_fr25a_channels_ticked_on_the_form_write_a_rule_with_a_fixed_name(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """D57: the rule the form writes is named by nexovue, never after the target (AC72)."""
+    owners = await db.scalar(
+        select(NotificationChannel.id).where(
+            NotificationChannel.org_id == acme.org_id, NotificationChannel.kind == "owners"
+        )
+    )
+    pager = NotificationChannel(
+        org_id=acme.org_id, kind="pagerduty", name="On call", config={"routing_key": "x"}
+    )
+    db.add(pager)
+    await db.flush()
+    target = await _create(
+        db,
+        acme,
+        name="Checkout for ACME Corp's biggest customer",
+        channel_ids=[str(owners)],
+        critical_channel_ids=[str(pager.id)],
+    )
+    rules = (
+        (
+            await db.execute(
+                select(AlertRule)
+                .where(AlertRule.project_id == acme.project_id, AlertRule.is_default.is_(False))
+                .order_by(AlertRule.name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    short = target["id"][:8]
+    assert [(rule.name, rule.condition) for rule in rules] == [
+        (
+            f"Reliability target rule {short}",
+            {"kind": "slo_burn", "slo_ids": [target["id"]], "minimum_severity": "warning"},
+        ),
+        (
+            f"Reliability target rule {short}, criticals",
+            {"kind": "slo_burn", "slo_ids": [target["id"]], "minimum_severity": "critical"},
+        ),
+    ]
+    told = {
+        rule["name"]: [each["kind"] for each in rule["channels"]]
+        for rule in target["told"]["rules"]
+    }
+    assert told[f"Reliability target rule {short}"] == ["owners"]
+    assert told[f"Reliability target rule {short}, criticals"] == ["pagerduty"]
+    assert all("ACME" not in rule.name for rule in rules)
+
+
+async def test_fr25a_a_channel_of_another_organization_is_refused_beside_its_field(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    theirs = await db.scalar(
+        select(NotificationChannel.id).where(
+            NotificationChannel.org_id == globex.org_id, NotificationChannel.kind == "owners"
+        )
+    )
+    refused = await _call(
+        db,
+        acme,
+        acme.member,
+        "POST",
+        f"/slos?project_id={acme.project_id}",
+        _body(channel_ids=[str(theirs)]),
+    )
+    assert refused.status_code == 422, refused.text
+    assert "channel_ids" in refused.text

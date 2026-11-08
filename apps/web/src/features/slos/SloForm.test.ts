@@ -58,6 +58,8 @@ function suggestion(overrides: Partial<SloSuggestion> = {}): SloSuggestion {
 const BASE = {
   "GET /projects": json({ projects: [] }),
   "GET /alerts/coverage/services/checkout": NO_SILENCE_RULE,
+  "GET /channels": json({ channels: [] }),
+  "GET /alerts/rules": json({ rules: [] }),
 };
 
 function input(container: Element, name: string): HTMLInputElement {
@@ -200,6 +202,58 @@ describe("the form, for every kind", () => {
     expect(hrefs).toContain("/alerts/rules/new?service=checkout");
     expect(hrefs).toContain("/synthetics/new");
     expect(readable(container)).toContain("Do you sample before sending to nexovue?");
+  });
+
+  it("lists the channels, pre-ticks PagerDuty for criticals, and saves them as the target's own rule (FR25a)", async () => {
+    const { calls, container } = await openForm({
+      "GET /channels": json({
+        channels: [
+          { id: "ch-owners", kind: "owners", name: "Organization owners", health: "healthy" },
+          { id: "ch-pager", kind: "pagerduty", name: "On call", health: "healthy" },
+          { id: "ch-slack", kind: "slack", name: "#ops", health: "healthy" },
+        ],
+      }),
+      "GET /alerts/rules": json({
+        rules: [
+          {
+            id: "rule-slo",
+            name: "Reliability targets",
+            enabled: true,
+            muted_until: null,
+            condition: { kind: "slo_burn", slo_ids: null, minimum_severity: "warning" },
+            channels: [{ id: "ch-owners", kind: "owners", name: "Organization owners" }],
+          },
+        ],
+      }),
+      "POST /slos": json(target(), 201),
+      "GET /slos/slo-1": json(target()),
+    });
+    await typeInto(container, "service_name", "checkout");
+    await waitFor(() => readable(container).includes("#ops"), "the channels");
+    expect(readable(container)).toContain(
+      "Warnings and criticals go to Organization owners, through Reliability targets.",
+    );
+    const box = (name: string, value: string) => {
+      const found = container.querySelector<HTMLInputElement>(
+        `input[name=${name}][value=${value}]`,
+      );
+      if (!found) throw new Error(`no ${name} box for ${value}`);
+      return found;
+    };
+    expect(box("critical_channel", "ch-pager").checked).toBe(true);
+    expect(box("warning_channel", "ch-slack").checked).toBe(false);
+    await act(async () => box("warning_channel", "ch-slack").click());
+    await press(container, "Save");
+    const post = await waitFor(() => calls.find((call) => call.method === "POST"), "the save");
+    expect(post.body).toMatchObject({
+      channel_ids: ["ch-slack"],
+      critical_channel_ids: ["ch-pager"],
+    });
+  });
+
+  it("says no alerts will be sent when no rule covers every target (AC76)", async () => {
+    const { container } = await openForm({});
+    await waitFor(() => readable(container).includes("No alerts will be sent."), "who is told");
   });
 
   it("links 'Not sure' to how to check, and says what Yes means (FR5, AC114)", async () => {

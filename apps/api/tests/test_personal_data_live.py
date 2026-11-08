@@ -44,6 +44,7 @@ from nexovue_api.data.postgres.models import (
     Finding,
     FindingNote,
     SessionRecord,
+    SloExclusion,
     SloTarget,
     SloTargetChange,
     User,
@@ -620,3 +621,55 @@ async def test_ac88_the_export_holds_the_target_changes_the_person_made(
     assert [(change.slo_id, change.after) for change in exported.slo_target_changes] == [
         (target.id, {"objective_percent": "99.5"})
     ]
+
+
+async def test_ac88_removal_replaces_the_person_inside_every_exclusion_s_reason(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F19 T4.7: an exclusion's reason is free text, scrubbed whoever wrote it."""
+    priya = await _join(db, acme, "member", "Priya Raman")
+    target = await _slo_target(db, acme, name="checkout", description="")
+    exclusion = SloExclusion(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        slo_id=target.id,
+        starts_at=_now() - timedelta(hours=2),
+        ends_at=_now() - timedelta(hours=1),
+        reason=f"Upgrade run by Priya Raman ({priya.email})",
+        created_by=acme.user.id,
+    )
+    db.add(exclusion)
+    await db.flush()
+
+    await members.remove(
+        db, actor=acme.user, organization=acme.organization, member_id=priya.id, now=_now()
+    )
+    await db.flush()
+    await db.refresh(exclusion)
+    name = members.FORMER_MEMBER_NAME
+    assert exclusion.reason == f"Upgrade run by {name} ({name})"
+
+
+async def test_ac88_the_export_holds_the_exclusions_the_person_made(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    priya = await _join(db, acme, "member", "Priya")
+    target = await _slo_target(db, acme, name="checkout", description="")
+    for author, reason in ((priya, "Her planned upgrade"), (acme.user, "Someone else's work")):
+        db.add(
+            SloExclusion(
+                org_id=acme.organization.id,
+                project_id=acme.project.id,
+                slo_id=target.id,
+                starts_at=_now() - timedelta(hours=2),
+                ends_at=_now() - timedelta(hours=1),
+                reason=reason,
+                created_by=author.id,
+            )
+        )
+    await db.flush()
+    exported = await personal_data.export(
+        db, user=priya, organization=acme.organization, now=_now()
+    )
+    assert [each.reason for each in exported.slo_exclusions] == ["Her planned upgrade"]
+    assert exported.slo_exclusions_truncated is False

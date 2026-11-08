@@ -227,3 +227,40 @@ async def test_ac88_figures_changes_and_purged_months_lapse_at_400_days(
         engine, "SELECT month FROM slo_deleted_months WHERE org_id = :org_id", org_id=tenant.org_id
     )
     assert [row.month for row in months] == [recent_month]
+
+
+async def test_ac88_removed_exclusions_lapse_at_400_days_and_live_ones_stay(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F19 T4.7: a removed exclusion is kept 400 days after its removal, as changes are."""
+    target = await _target(engine, tenant, deleted_ago=None, service="checkout")
+    async with engine.begin() as connection:
+        for reason, removed in (
+            ("Removed long ago", "now() - interval '401 days'"),
+            ("Removed lately", "now() - interval '10 days'"),
+            ("Never removed", "NULL"),
+        ):
+            await connection.execute(
+                text(
+                    f"""
+                    INSERT INTO slo_exclusions (org_id, project_id, slo_id, starts_at, ends_at,
+                        reason, created_at, removed_at)
+                    VALUES (:org_id, :project_id, :id, now() - interval '500 days',
+                        now() - interval '499 days', :reason, now() - interval '500 days',
+                        {removed})
+                    """
+                ),
+                {
+                    "org_id": tenant.org_id,
+                    "project_id": tenant.project_id,
+                    "id": target,
+                    "reason": reason,
+                },
+            )
+    await expiry.sweep(engine)
+    left = await _rows(
+        engine,
+        "SELECT reason FROM slo_exclusions WHERE org_id = :org_id ORDER BY reason",
+        org_id=tenant.org_id,
+    )
+    assert [row.reason for row in left] == ["Never removed", "Removed lately"]

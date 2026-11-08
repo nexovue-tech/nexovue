@@ -3,6 +3,10 @@
 `suggestion` is a person's, of any role, a viewer included (AC32), and never a token's
 (AC33): `CurrentIdentity` refuses one with 403. It is the form's only ClickHouse read,
 so when it fails the form says so and still saves (AC106).
+
+`{slo_id}/burn` is any reader's, a token included (design, *API*): the target page's
+chart, the tier `slo_status` names plotted by the minute (AC109). It loads the target
+and compares its project with the caller's, as `/slos/{id}` does (AC33).
 """
 
 from __future__ import annotations
@@ -14,10 +18,10 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from nexovue_platform import slo
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import AppSettings, DbSession
 from nexovue_api.slos.readings import service
-from nexovue_api.slos.readings.schemas import SloSuggestion
+from nexovue_api.slos.readings.schemas import SloBurnLine, SloSuggestion
 from nexovue_api.slos.schemas import CreatableKind
 
 router = APIRouter(prefix="/slo-readings", tags=["slos"])
@@ -50,3 +54,10 @@ async def read_suggestion(
         probe_locations=len(settings.probe_locations),
         now=datetime.now(UTC),
     )
+
+
+@router.get("/{slo_id}/burn", summary="A target's burn rate over the last day, for its chart")
+async def read_burn(
+    reader: CurrentReader, db: DbSession, repository: TenantRepository, slo_id: uuid.UUID
+) -> SloBurnLine:
+    return await service.burn(db, repository, reader=reader, target_id=slo_id)

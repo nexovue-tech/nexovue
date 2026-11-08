@@ -33,6 +33,7 @@ from nexovue_api.profile.schemas import (
     ExportedProfile,
     ExportedSession,
     ExportedSloChange,
+    ExportedSloExclusion,
     PersonalDataExport,
 )
 from nexovue_api.slos import queries as slo_queries
@@ -66,6 +67,9 @@ async def export(
         db, org_id=organization.id, user_id=user.id, limit=MAX_NOTES_EXPORTED + 1
     )
     slo_changes = await slo_queries.changes_made_by(
+        db, org_id=organization.id, user_id=user.id, limit=MAX_SLO_CHANGES_EXPORTED + 1
+    )
+    exclusions = await slo_queries.exclusions_made_by(
         db, org_id=organization.id, user_id=user.id, limit=MAX_SLO_CHANGES_EXPORTED + 1
     )
     return PersonalDataExport(
@@ -145,6 +149,20 @@ async def export(
             for change in slo_changes[:MAX_SLO_CHANGES_EXPORTED]
         ],
         slo_target_changes_truncated=len(slo_changes) > MAX_SLO_CHANGES_EXPORTED,
+        slo_exclusions=[
+            ExportedSloExclusion(
+                id=exclusion.id,
+                project_id=exclusion.project_id,
+                slo_id=exclusion.slo_id,
+                starts_at=exclusion.starts_at,
+                ends_at=exclusion.ends_at,
+                reason=exclusion.reason,
+                created_at=exclusion.created_at,
+                removed_at=exclusion.removed_at,
+            )
+            for exclusion in exclusions[:MAX_SLO_CHANGES_EXPORTED]
+        ],
+        slo_exclusions_truncated=len(exclusions) > MAX_SLO_CHANGES_EXPORTED,
     )
 
 

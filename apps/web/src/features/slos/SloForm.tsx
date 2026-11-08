@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { ApiError } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
@@ -15,8 +15,10 @@ import {
   bodyOf,
   REQUEST_KINDS,
   useChangeSlo,
+  useChannelChoices,
   useCheckChoices,
   useCreateSlo,
+  useProjectBurnRules,
   useSilenceCovered,
   useSlo,
   useSuggestion,
@@ -28,6 +30,7 @@ import {
   boundaryPreview,
   DEFINITIONS,
   FAST_FAILURE_LINE,
+  formToldSentence,
   generatedName,
   highestBoundaryLine,
   SAMPLING_NOT_SURE,
@@ -85,6 +88,8 @@ const EMPTY: SloDraft = {
   objective_percent: "99.9",
   window_days: 28,
   upstream_sampling: "no",
+  channel_ids: [],
+  critical_channel_ids: [],
 };
 
 /** `/slos/new`: one form on one screen (F19 design, *Creating a first target*). */
@@ -149,6 +154,8 @@ function draftOf(view: SloView): SloDraft {
     objective_percent: String(Number(view.objective_percent)),
     window_days: view.window_days === 7 ? 7 : 28,
     upstream_sampling: view.upstream_sampling ?? "no",
+    channel_ids: [],
+    critical_channel_ids: [],
   };
 }
 
@@ -441,6 +448,13 @@ function SloForm({
           {requestKind && covered.data === false ? (
             <StopsCompletely service={asked.service.trim()} />
           ) : null}
+          {editing ? null : (
+            <WhoIsToldChoice
+              warning={draft.channel_ids}
+              critical={draft.critical_channel_ids}
+              onChange={(channels) => setDraft((current) => ({ ...current, ...channels }))}
+            />
+          )}
           <div className="flex flex-col gap-2">
             <h2 className="font-semibold text-ink">What counts</h2>
             <ul className="flex max-w-prose list-disc flex-col gap-1 pl-5 text-ink-dim">
@@ -570,5 +584,85 @@ function SamplingQuestion({
         </p>
       ) : null}
     </fieldset>
+  );
+}
+
+/**
+ * FR25a on the form: who the rules covering every target tell already, and the
+ * organization's channels, ticking one of which writes this target's own rule in the
+ * same save, named by nexovue (D57). A PagerDuty channel starts ticked for criticals, so
+ * the first target can reach the person on call.
+ */
+function WhoIsToldChoice({
+  warning,
+  critical,
+  onChange,
+}: {
+  warning: string[];
+  critical: string[];
+  onChange: (channels: { channel_ids: string[]; critical_channel_ids: string[] }) => void;
+}) {
+  const { projectId } = useProjectSelection();
+  const channels = useChannelChoices();
+  const rules = useProjectBurnRules(projectId);
+  const [preset, setPreset] = useState(false);
+  useEffect(() => {
+    if (preset || !channels.data) return;
+    setPreset(true);
+    const pagers = channels.data.filter((each) => each.kind === "pagerduty").map((each) => each.id);
+    if (pagers.length) onChange({ channel_ids: warning, critical_channel_ids: pagers });
+  }, [channels.data, preset, warning, onChange]);
+  const toggle = (list: string[], id: string) =>
+    list.includes(id) ? list.filter((each) => each !== id) : [...list, id];
+  const listed = channels.data ?? [];
+  return (
+    <div className="flex flex-col gap-2">
+      <h2 className="font-semibold text-ink">Who is told</h2>
+      {rules.data ? <p className="max-w-prose text-ink">{formToldSentence(rules.data)}</p> : null}
+      {listed.length ? (
+        <>
+          <fieldset className="flex flex-col gap-1">
+            <legend className="text-ink-dim">Also send warnings and criticals to</legend>
+            {listed.map((channel) => (
+              <label key={channel.id} className="flex items-center gap-2 text-ink">
+                <input
+                  type="checkbox"
+                  name="warning_channel"
+                  value={channel.id}
+                  checked={warning.includes(channel.id)}
+                  onChange={() =>
+                    onChange({
+                      channel_ids: toggle(warning, channel.id),
+                      critical_channel_ids: critical,
+                    })
+                  }
+                />
+                <span>{channel.name}</span>
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="flex flex-col gap-1">
+            <legend className="text-ink-dim">Also send criticals only to</legend>
+            {listed.map((channel) => (
+              <label key={channel.id} className="flex items-center gap-2 text-ink">
+                <input
+                  type="checkbox"
+                  name="critical_channel"
+                  value={channel.id}
+                  checked={critical.includes(channel.id)}
+                  onChange={() =>
+                    onChange({
+                      channel_ids: warning,
+                      critical_channel_ids: toggle(critical, channel.id),
+                    })
+                  }
+                />
+                <span>{channel.name}</span>
+              </label>
+            ))}
+          </fieldset>
+        </>
+      ) : null}
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import dataclasses
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from nexovue_platform.alerts.channels import READ_BY_PEOPLE
@@ -18,6 +19,7 @@ from nexovue_scheduler.alerts.outbox import CaseOfSubject, Notice, Subject
 OPENED_AT = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
 CHECK_ID = uuid.uuid4()
 RULE_ID = uuid.uuid4()
+BASE = "https://app.nexovue.test"
 
 
 def _notice(
@@ -509,3 +511,134 @@ def test_pagerduty_and_webhooks_are_byte_equal_with_and_without_a_case() -> None
             )
         )
     assert bodies[0] == bodies[1]
+
+
+# ------------------------------------------------------------ F19: burns (T4.9)
+
+_BURN_KINDS = {
+    "service_availability": ("checkout availability, 99.9% over 28 days", "failures"),
+    "service_latency": ("checkout latency under 487.2 ms, 99.9% over 28 days", "slow requests"),
+    "check_availability": ("Payment check availability, 99.9% over 28 days", "failed runs"),
+}
+
+
+def _burn_notice(
+    kind: str = "service_availability", *, notice_kind: str = "opened", **detail: object
+) -> Notice:
+    label, _ = _BURN_KINDS[kind]
+    since = OPENED_AT - timedelta(minutes=20)
+    return _about(
+        _notice(notice_kind),
+        key=f"slo:{uuid.uuid4()}",
+        label=label,
+        rule_name="Reliability targets",
+        condition_kind="slo_burn",
+        detail={
+            "slo_id": str(uuid.uuid4()),
+            "kind": kind,
+            "service": None if kind == "check_availability" else "checkout",
+            "endpoint": None,
+            "check_id": str(CHECK_ID) if kind == "check_availability" else None,
+            "objective_percent": "99.9",
+            "window_days": 28,
+            "holding": True,
+            "tier": "fast",
+            "rate": 14.7,
+            "hours_left": 50.0,
+            "since": since.isoformat(),
+            "allowed": 672,
+            "left": 312,
+            "zone": "Asia/Kolkata",
+            "as_of": OPENED_AT.isoformat(),
+            "exclusions": [],
+        }
+        | detail,
+    )
+
+
+def test_a_burn_says_how_fast_how_long_what_is_left_lasts_and_since_when() -> None:
+    message = compose(_burn_notice(), app_base_url=BASE)
+    assert message.summary == (
+        "[critical] checkout availability, 99.9% over 28 days is using its allowed failures "
+        "14 times faster than its target allows"
+    )
+    since = (OPENED_AT - timedelta(minutes=20)).astimezone(ZoneInfo("Asia/Kolkata"))
+    assert f"Since {since:%H:%M} IST, on checkout." in message.details
+    assert "Target: 99.9% of requests over 28 days." in message.details
+    assert "At this rate, what is left lasts about 2 days." in message.details
+    assert "Failures still allowed: 312 of 672." in message.details
+
+
+@pytest.mark.parametrize("kind", sorted(_BURN_KINDS))
+def test_ac89_a_burn_speaks_of_its_own_kind(kind: str) -> None:
+    """A latency target never says "failures"; a check target never says "requests"."""
+    words = []
+    for notice_kind in ("opened", "repeated", "resolved", "escalated"):
+        message = compose(_burn_notice(kind, notice_kind=notice_kind), app_base_url=BASE)
+        words.append(" ".join((message.summary, *message.details)).lower())
+    said = " ".join(words)
+    _, noun = _BURN_KINDS[kind]
+    assert f"allowed {noun}" in said
+    if kind == "service_latency":
+        assert "failures" not in said
+    if kind == "check_availability":
+        assert "request" not in said
+
+
+def test_a_burn_closed_because_its_source_stopped_says_so() -> None:
+    notice = _burn_notice(notice_kind="closed", closed_why="source_silent")
+    message = compose(_about(notice, closed_at=OPENED_AT + timedelta(hours=24)), app_base_url=BASE)
+    assert (
+        message.summary == "[closed] checkout availability, 99.9% over 28 days is no longer judged"
+    )
+    assert (
+        "No longer judged: checkout has sent nothing for 24 hours. The burn may not be over."
+        in message.details
+    )
+
+
+def test_ac36_a_hostile_service_name_in_a_burn_arrives_as_one_line() -> None:
+    hostile = "checkout\n<@channel> [click](https://evil.test)"
+    message = compose(_burn_notice(service=hostile), app_base_url=BASE)
+    assert all("\n" not in line for line in message.details)
+
+
+def test_nothing_left_and_an_exclusion_are_said_without_a_reason_or_a_person() -> None:
+    exhausted = compose(
+        _burn_notice(notice="exhausted", failures=700, allowed=672), app_base_url=BASE
+    )
+    assert exhausted.summary == (
+        "[critical] checkout availability, 99.9% over 28 days has no allowed failures left"
+    )
+    excluded = compose(
+        _burn_notice(
+            notice="excluded",
+            starts_at=OPENED_AT.isoformat(),
+            ends_at=(OPENED_AT + timedelta(hours=2)).isoformat(),
+            minutes=120,
+        ),
+        app_base_url=BASE,
+    )
+    assert excluded.summary.endswith("checkout availability, 99.9% over 28 days had time left out")
+    assert any(line.startswith("Someone left 2 h out of it, from") for line in excluded.details)
+
+
+def test_targets_not_being_judged_say_since_when_and_that_a_burn_would_not_reach_you() -> None:
+    """FR13b: the delivery sweep's notice, and its "judging again"."""
+    since = OPENED_AT - timedelta(minutes=16)
+    notice = _about(
+        _burn_notice(),
+        key="slo-project:p:blind",
+        label="Reliability targets in Production",
+        rule_id=None,
+        rule_name="Reliability targets not being judged",
+        detail={"notice": "blind", "since": since.isoformat(), "zone": "UTC"},
+    )
+    opened = compose(notice, app_base_url=BASE)
+    assert opened.summary == "[critical] Reliability targets in Production are not being judged"
+    assert f"Not judged since {since:%H:%M} UTC. A burn would not reach you." in opened.details
+    resolved = compose(
+        _about(dataclasses.replace(notice, kind="resolved"), closed_at=OPENED_AT),
+        app_base_url=BASE,
+    )
+    assert resolved.summary.endswith("are being judged again")

@@ -10,6 +10,15 @@ recount limit and marked changed; AC45's older days kept under the old definitio
 AC69's day beyond the limit untouched and a day first read past 29 days marked loss
 not known; and AC64's last clause with a final day inside the limit.
 
+Step 4 (T4.5, T4.6): a burn judged under its rules through the real job: AC17 (resolves
+10 minutes after no tier holds), AC18 (two targets on one service, two incidents), AC19
+(a slow burn's warning escalates once, with current figures), AC20 (lost minutes judge
+nothing), AC21 (a restart resumes the resolving wait), AC22 (one *Nothing left* warning
+to a channel two rules name, and its repeat limits), AC23 (no second incident or row),
+AC62 (the warning waits while building history), AC93 (a burn through a silence resolves
+once judging resumes), AC94's closing (a stopped source closes a burn after a measured
+day, and says so), and AC104 (a lower rate without a severity change).
+
 The jobs `queue_jobs` hands out are read back from `jobs` and run by name, as a worker
 would. This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -27,7 +36,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
-from alert_fixtures import AlertTenant
+from alert_fixtures import AlertTenant, add_rule
 from clickhouse_connect.driver.client import Client
 from live import require_stack
 from nexovue_platform import slo
@@ -592,3 +601,652 @@ async def test_ac64_a_change_during_a_read_recounts_final_days_inside_the_limit_
     days = await _days(engine, target)
     assert {day.definition_version for day in days.values()} == {2}
     assert days[inside].total == 40
+
+
+# ===================================================================== Step 4: burns
+#
+# Plan T4.5 and T4.6: a burn through the real `judge_slos`, judged under each rule, with
+# rows written to `service_stats_1m` by the minute. 100 requests a minute for a day,
+# then failures where a test wants them.
+
+BUSY: Final = 100
+
+
+async def _burn_rule(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    *,
+    name: str = "Reliability targets",
+    condition: dict[str, Any] | None = None,
+    channel: uuid.UUID | None = None,
+) -> uuid.UUID:
+    async with engine.begin() as connection:
+        return await add_rule(
+            connection,
+            tenant.org_id,
+            tenant.project_id,
+            name=name,
+            condition=condition or {"kind": "slo_burn"},
+            channel_ids=[channel or tenant.owners_channel_id],
+        )
+
+
+async def _counted_target(
+    engine: AsyncEngine, tenant: AlertTenant, *, objective: str = "99.9", window: int = 28
+) -> uuid.UUID:
+    """A target whose history is read: it judges from its first minute."""
+    key = slo.definition_key(
+        slo.SERVICE_AVAILABILITY,
+        service_name=SERVICE,
+        objective=Decimal(objective),
+        window_days=window,
+    )
+    async with engine.begin() as connection:
+        made = await connection.scalar(
+            text(
+                """
+                INSERT INTO slo_targets (org_id, project_id, name, kind, service_name,
+                    objective_percent, window_days, upstream_sampling, definition_key,
+                    definition_version, history_read_version, first_event_at)
+                VALUES (:org_id, :project_id, :name, 'service_availability', :service,
+                    :objective, :window, 'no', :key, 1, 1, now() - interval '30 days')
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "name": f"checkout {objective} {window}",
+                "service": SERVICE,
+                "objective": Decimal(objective),
+                "window": window,
+                "key": key,
+            },
+        )
+    assert isinstance(made, uuid.UUID)
+    return made
+
+
+def _traffic(
+    client: Client,
+    tenant: AlertTenant,
+    *,
+    first: datetime,
+    count: int,
+    failing: dict[datetime, int] | None = None,
+) -> None:
+    counts = dict.fromkeys(minutes(first, count), (BUSY, 0))
+    for minute, failures in (failing or {}).items():
+        counts[minute] = (BUSY, failures)
+    write_service(client, tenant, SERVICE, counts)
+
+
+async def _incidents(engine: AsyncEngine, tenant: AlertTenant) -> list[Any]:
+    async with engine.connect() as connection:
+        return list(
+            await connection.execute(
+                text(
+                    """
+                    SELECT id, subject_key, subject_label, severity, resolved_at, detail,
+                           rule_name, is_event
+                    FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn'
+                    ORDER BY opened_at, id
+                    """
+                ),
+                {"org_id": tenant.org_id},
+            )
+        )
+
+
+async def _notifications(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple[str, str]]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                """
+                SELECT n.kind, n.severity FROM notifications n
+                JOIN incidents i ON i.id = n.incident_id
+                WHERE n.org_id = :org_id AND i.condition_kind = 'slo_burn'
+                ORDER BY n.created_at, n.id
+                """
+            ),
+            {"org_id": tenant.org_id},
+        )
+        return [(row.kind, row.severity) for row in rows]
+
+
+def _fast_burn(start: datetime) -> dict[datetime, int]:
+    """Half of five minutes' requests failing, ending at `start`: fast and medium hold."""
+    return {start - MINUTE * offset: BUSY // 2 for offset in range(5)}
+
+
+async def test_ac17_a_fast_burn_fires_critical_and_resolves_ten_minutes_after_no_tier_holds(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    target = await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    [opened] = await _incidents(engine, project)
+    assert (opened.severity, opened.resolved_at) == ("critical", None)
+    assert opened.subject_key == f"slo:{target}"
+    assert opened.subject_label == "checkout availability, 99.9% over 28 days"
+    # The medium tier's 30-minute short window still holds the failures until +30.
+    for offset in (29, 30, 39):
+        await job.judge_slos(engine, slo_store, project.project_id, burning + MINUTE * offset)
+    [still] = await _incidents(engine, project)
+    assert still.resolved_at is None
+    await job.judge_slos(engine, slo_store, project.project_id, burning + MINUTE * 40)
+    [resolved] = await _incidents(engine, project)
+    assert resolved.resolved_at == burning + MINUTE * 40
+    assert await _notifications(engine, project) == [
+        ("opened", "critical"),
+        ("resolved", "critical"),
+    ]
+
+
+async def test_ac18_two_targets_on_one_service_under_one_rule_hold_two_incidents(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=25 * 60 + 1,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    first = await _counted_target(engine, project, window=28)
+    second = await _counted_target(engine, project, window=7)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    opened = await _incidents(engine, project)
+    assert {row.subject_key for row in opened} == {f"slo:{first}", f"slo:{second}"}
+    assert all(row.resolved_at is None for row in opened)
+
+
+async def test_ac19_a_slow_burn_opens_a_warning_and_escalates_once_through_the_job(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    """0.5% failing for a day: only the slow tier holds. Then half failing for five
+    minutes: the fast tier holds, and the one incident escalates with one row."""
+    slow = _now() - timedelta(hours=2)
+    first = slow - timedelta(hours=25)
+    steady = {minute: 1 for minute in minutes(first, 26 * 60) if minute.minute % 2 == 0}
+    later = slow + MINUTE * 5
+    _traffic(administrator, project, first=first, count=26 * 60, failing=steady | _fast_burn(later))
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, slow)
+    [opened] = await _incidents(engine, project)
+    assert opened.severity == "warning"
+    assert opened.detail["tier"] == "slow"
+    slow_rate = opened.detail["rate"]
+
+    await job.judge_slos(engine, slo_store, project.project_id, later)
+    await job.judge_slos(engine, slo_store, project.project_id, later + MINUTE)
+    [escalated] = await _incidents(engine, project)
+    assert escalated.id == opened.id
+    assert escalated.severity == "critical"
+    # The figures are this minute's, not the opening's (AC19, AC104).
+    assert escalated.detail["tier"] == "fast"
+    assert escalated.detail["rate"] > slow_rate
+    assert escalated.detail["as_of"] == (later + MINUTE).isoformat()
+    assert await _notifications(engine, project) == [
+        ("opened", "warning"),
+        ("escalated", "critical"),
+    ]
+
+
+async def test_ac104_a_burn_falling_without_a_severity_change_shows_the_lower_rate(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    """Five minutes on, the fast tier's short window is clean and the medium tier holds
+    alone: still critical, at its lower rate."""
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    [opened] = await _incidents(engine, project)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + 5 * MINUTE)
+    [later] = await _incidents(engine, project)
+    assert (opened.detail["tier"], later.detail["tier"]) == ("fast", "medium")
+    assert later.severity == opened.severity == "critical"
+    assert later.detail["rate"] < opened.detail["rate"]
+
+
+async def test_ac23_a_repeated_or_restarted_judging_writes_no_second_incident_or_row(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning) | _fast_burn(burning + 3 * MINUTE),
+    )
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    assert await job.judge_slos(engine, slo_store, project.project_id, burning) == 0
+    await job.judge_slos(engine, slo_store, project.project_id, burning + MINUTE)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + 2 * MINUTE)
+    assert len(await _incidents(engine, project)) == 1
+    assert await _notifications(engine, project) == [("opened", "critical")]
+
+
+async def test_ac21_a_restart_in_the_resolving_wait_resumes_it(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    """The wait is the position in Postgres, so a new process continues it: judged at
+    +30 (first minute not holding), then by a fresh store at +40, it resolves at +40."""
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + MINUTE * 30)
+
+    restarted = connect_store(READER_DSN)
+    await job.judge_slos(engine, restarted, project.project_id, burning + MINUTE * 40)
+    [resolved] = await _incidents(engine, project)
+    assert resolved.resolved_at == burning + MINUTE * 40
+
+
+async def test_ac20_with_every_tier_short_of_coverage_a_burn_does_not_move(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    """Minutes nexovue lost judge nothing (FR17): no incident opens, the position does
+    not move, and the status says since when no tier could judge (FR13b)."""
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    target = await _counted_target(engine, project)
+    lost = minutes(burning - timedelta(minutes=179), 180)
+    async with engine.begin() as connection:
+        for minute in lost:
+            await connection.execute(
+                text(
+                    "INSERT INTO intake_refusals (minute, receiver_id, reason, count) "
+                    "VALUES (:minute, 'f19-test', 'broker_unavailable', 1) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"minute": minute},
+            )
+    try:
+        await job.judge_slos(engine, slo_store, project.project_id, burning)
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM intake_refusals WHERE receiver_id = 'f19-test'")
+            )
+    assert await _incidents(engine, project) == []
+    async with engine.connect() as connection:
+        unjudged = await connection.scalar(
+            text("SELECT unjudged_since FROM slo_status WHERE slo_id = :id"), {"id": target}
+        )
+        positions = await connection.scalar(
+            text("SELECT count(*) FROM alert_evaluations WHERE subject_key = :key"),
+            {"key": f"slo:{target}"},
+        )
+    assert unjudged == burning
+    assert positions == 1  # held as insufficient, with no `evaluated_at` of a judgment
+
+
+async def test_ac93_a_burn_open_through_a_silence_resolves_ten_minutes_after_judging_resumes(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=23)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=25 * 60 + 1,
+        failing=_fast_burn(burning),
+    )
+    resumed = burning + timedelta(hours=20)
+    _traffic(administrator, project, first=resumed - timedelta(minutes=30), count=41)
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + timedelta(hours=10))
+    [open_through] = await _incidents(engine, project)
+    assert open_through.resolved_at is None
+    await job.judge_slos(engine, slo_store, project.project_id, resumed)
+    await job.judge_slos(engine, slo_store, project.project_id, resumed + MINUTE * 10)
+    [resolved] = await _incidents(engine, project)
+    assert resolved.resolved_at == resumed + MINUTE * 10
+
+
+async def test_ac94_a_burn_on_a_stopped_source_closes_after_a_measured_day_and_says_so(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=26)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=24),
+        count=24 * 60 + 1,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + timedelta(hours=23))
+    [still] = await _incidents(engine, project)
+    assert still.resolved_at is None
+    closed_at = burning + timedelta(hours=24)
+    await job.judge_slos(engine, slo_store, project.project_id, closed_at)
+    [closed] = await _incidents(engine, project)
+    assert closed.resolved_at == closed_at
+    assert closed.detail["closed_why"] == "source_silent"
+    # People told of it are told it ended (FR17), unlike a person closing it.
+    assert await _notifications(engine, project) == [
+        ("opened", "critical"),
+        ("closed", "critical"),
+    ]
+
+
+async def test_ac22_nothing_left_sends_one_warning_to_a_channel_two_rules_name(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    """With a burn open at that moment. Then not again while it hovers at zero, nor
+    within 7 days of the last, and again once back above 5% and run out again."""
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project, name="A")
+    await _burn_rule(engine, project, name="B")
+    target = await _counted_target(engine, project)
+    today = burning.astimezone(UTC_ZONE).date()
+    async with engine.begin() as connection:
+        for offset in range(10):
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO slo_daily_counts (org_id, slo_id, day, good, total, failures,
+                        quiet_minutes, lost_minutes, quiet_leading_minutes,
+                        quiet_trailing_minutes, longest_quiet_minutes, definition_version,
+                        final, computed_at)
+                    VALUES (:org_id, :id, :day, 9980, 10000, 20, 0, 0, 0, 0, 0, 1, false, now())
+                    """
+                ),
+                {"org_id": project.org_id, "id": target, "day": today - timedelta(days=offset)},
+            )
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + MINUTE)
+    notices = [row for row in await _incidents(engine, project) if row.is_event]
+    assert [row.subject_key for row in notices] == [f"slo:{target}:exhausted"]
+    assert notices[0].rule_name == "A"
+    assert ("opened", "warning") in await _notifications(engine, project)
+    async with engine.connect() as connection:
+        rows = await connection.scalar(
+            text("SELECT count(*) FROM notifications WHERE incident_id = :id"),
+            {"id": notices[0].id},
+        )
+    assert rows == 1
+
+    # Back above 5%: re-armed, but within 7 days of the last nothing more is said.
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_daily_counts SET good = total, failures = 0 WHERE slo_id = :id"),
+            {"id": target},
+        )
+    await job.judge_slos(engine, slo_store, project.project_id, burning + 2 * MINUTE)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_daily_counts SET good = 9980, failures = 20 WHERE slo_id = :id"),
+            {"id": target},
+        )
+    await job.judge_slos(engine, slo_store, project.project_id, burning + 3 * MINUTE)
+    assert len([row for row in await _incidents(engine, project) if row.is_event]) == 1
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE slo_targets SET exhausted_warned_at = now() - interval '8 days' "
+                "WHERE id = :id"
+            ),
+            {"id": target},
+        )
+    await job.judge_slos(engine, slo_store, project.project_id, burning + 4 * MINUTE)
+    assert len([row for row in await _incidents(engine, project) if row.is_event]) == 2
+
+
+async def test_ac62_while_building_history_the_warning_waits_and_burns_still_judge(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    target = await _counted_target(engine, project)
+    today = burning.astimezone(UTC_ZONE).date()
+    async with engine.begin() as connection:
+        for offset in range(2):  # 2 of 28 days held
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO slo_daily_counts (org_id, slo_id, day, good, total, failures,
+                        quiet_minutes, lost_minutes, quiet_leading_minutes,
+                        quiet_trailing_minutes, longest_quiet_minutes, definition_version,
+                        final, computed_at)
+                    VALUES (:org_id, :id, :day, 9980, 10000, 20, 0, 0, 0, 0, 0, 1, false, now())
+                    """
+                ),
+                {"org_id": project.org_id, "id": target, "day": today - timedelta(days=offset)},
+            )
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    rows = await _incidents(engine, project)
+    assert [row.is_event for row in rows] == [False]
+
+
+# ------------------------------------------------------------ exclusions (T4.7)
+
+
+async def _exclude(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    target: uuid.UUID,
+    starts_at: datetime,
+    ends_at: datetime,
+) -> uuid.UUID:
+    async with engine.begin() as connection:
+        made = await connection.scalar(
+            text(
+                """
+                INSERT INTO slo_exclusions (org_id, project_id, slo_id, starts_at, ends_at,
+                                            reason)
+                VALUES (:org_id, :project_id, :slo_id, :starts_at, :ends_at,
+                        'Planned database upgrade')
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "slo_id": target,
+                "starts_at": starts_at,
+                "ends_at": ends_at,
+            },
+        )
+    assert isinstance(made, uuid.UUID)
+    return made
+
+
+async def _day(engine: AsyncEngine, target: uuid.UUID, day: Any) -> Any:
+    async with engine.connect() as connection:
+        return (
+            await connection.execute(
+                text(
+                    "SELECT good, total, failures, excluded_minutes, changed_why "
+                    "FROM slo_daily_counts WHERE slo_id = :id AND day = :day"
+                ),
+                {"id": target, "day": day},
+            )
+        ).one()
+
+
+async def test_ac60_failures_inside_an_exclusion_count_nowhere_fire_nothing_and_come_back(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    burning = now - timedelta(minutes=30)
+    _traffic(
+        administrator,
+        project,
+        first=now - timedelta(hours=25),
+        count=25 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    target = await _counted_target(engine, project)
+    exclusion = await _exclude(
+        engine, project, target, burning - 10 * MINUTE, burning + 10 * MINUTE
+    )
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    assert [row for row in await _incidents(engine, project) if not row.is_event] == []
+    await job.count_slos(engine, slo_store, project.project_id, now=now)
+    today = burning.astimezone(UTC_ZONE).date()
+    counted = await _day(engine, target, today)
+    assert counted.excluded_minutes == 20
+    assert counted.failures == 0
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_exclusions SET removed_at = now(), counted_at = NULL WHERE id = :id"),
+            {"id": exclusion},
+        )
+    await job.count_slos(engine, slo_store, project.project_id, now=now + MINUTE)
+    restored = await _day(engine, target, today)
+    assert (restored.excluded_minutes, restored.failures) == (0, 5 * (BUSY // 2))
+
+
+async def test_ac102_a_future_exclusion_changes_nothing_until_it_starts(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    _traffic(administrator, project, first=now - timedelta(hours=3), count=3 * 60)
+    target = await _counted_target(engine, project)
+    await job.count_slos(engine, slo_store, project.project_id, now=now)
+    before = await _day(engine, target, now.astimezone(UTC_ZONE).date())
+    await _exclude(engine, project, target, now + timedelta(hours=2), now + timedelta(hours=3))
+    await job.count_slos(engine, slo_store, project.project_id, now=now + MINUTE)
+    after = await _day(engine, target, now.astimezone(UTC_ZONE).date())
+    assert (after.good, after.total, after.excluded_minutes) == (
+        before.good,
+        before.total,
+        0,
+    )
+
+
+async def test_ac60_each_exclusion_sends_one_notice_under_a_muted_rule_with_no_reason(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    _traffic(administrator, project, first=now - timedelta(hours=2), count=120)
+    async with engine.begin() as connection:
+        await add_rule(
+            connection,
+            project.org_id,
+            project.project_id,
+            name="Muted targets",
+            condition={"kind": "slo_burn"},
+            channel_ids=[project.owners_channel_id],
+            muted=True,
+        )
+    target = await _counted_target(engine, project)
+    exclusion = await _exclude(engine, project, target, now - timedelta(hours=1), now)
+
+    await job.judge_slos(engine, slo_store, project.project_id, now - MINUTE)
+    await job.judge_slos(engine, slo_store, project.project_id, now)
+    [notice] = [row for row in await _incidents(engine, project) if row.is_event]
+    assert notice.subject_key == f"slo:{target}:excluded:{exclusion}"
+    assert notice.rule_name == "Muted targets"
+    assert "Planned database upgrade" not in str(notice.detail)
+    assert await _notifications(engine, project) == [("opened", "warning")]
+
+
+async def test_ac60_with_no_rule_an_exclusion_notice_goes_to_the_owners(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    _traffic(administrator, project, first=now - timedelta(hours=2), count=120)
+    target = await _counted_target(engine, project)
+    await _exclude(engine, project, target, now - timedelta(hours=1), now)
+    await job.judge_slos(engine, slo_store, project.project_id, now)
+    [notice] = await _incidents(engine, project)
+    assert notice.rule_name == slo.EXCLUSION_NOTICE_RULE_NAME
+    async with engine.connect() as connection:
+        rule_id = await connection.scalar(
+            text("SELECT rule_id FROM incidents WHERE id = :id"), {"id": notice.id}
+        )
+        channel = await connection.scalar(
+            text("SELECT channel_id FROM notifications WHERE incident_id = :id"),
+            {"id": notice.id},
+        )
+    assert (rule_id, channel) == (None, project.owners_channel_id)
+
+
+async def test_ac60_an_exclusion_overlapping_an_open_burn_shows_on_its_incident(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    target = await _counted_target(engine, project)
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    exclusion = await _exclude(engine, project, target, burning + MINUTE, burning + 30 * MINUTE)
+    await job.judge_slos(engine, slo_store, project.project_id, burning + 2 * MINUTE)
+    [burn_incident] = [row for row in await _incidents(engine, project) if not row.is_event]
+    assert [each["id"] for each in burn_incident.detail["exclusions"]] == [str(exclusion)]

@@ -19,6 +19,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Final
 
+from nexovue_platform import slo
 from nexovue_platform.alerts.model import (
     ATTEMPT_KINDS,
     ATTEMPT_OUTCOMES,
@@ -1430,11 +1431,21 @@ class Incident(Base):
     detail: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
+    # What a burn is about (F19, design *The link to findings*): typed, apart from its
+    # identity, so links, withholding and PagerDuty compare columns, not JSON. Null for
+    # every other kind.
+    about_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    about_signal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    about_endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    about_check_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
 
     __table_args__ = (
         CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
         CheckConstraint(
             f"condition_kind IN ({_quoted(CONDITION_KINDS)})", name="condition_is_known"
+        ),
+        CheckConstraint(
+            f"about_signal IN ({_quoted(slo.ABOUT_SIGNALS)})", name="about_signal_is_known"
         ),
         CheckConstraint(
             "resolved_at IS NULL OR resolved_at >= opened_at", name="resolves_after_it_opens"
@@ -1453,6 +1464,17 @@ class Incident(Base):
             postgresql_where=text("resolved_at IS NULL"),
         ),
         Index("ix_incidents_rule_id_subject_key_opened_at", "rule_id", "subject_key", "opened_at"),
+        # F19 FR13b, D58: one open "not being judged" notice per project, filed under no
+        # rule. Limited to its own subjects, so deleting rules with open burns still works.
+        Index(
+            "uq_incidents_blind_open",
+            "project_id",
+            "subject_key",
+            unique=True,
+            postgresql_where=text(
+                "rule_id IS NULL AND resolved_at IS NULL AND subject_key LIKE 'slo-project:%'"
+            ),
+        ),
     )
 
 
@@ -2902,6 +2924,64 @@ class SloDeletedMonth(Base):
 
     __table_args__ = (
         Index("ix_slo_deleted_months_org_id_project_id_month", "org_id", "project_id", "month"),
+    )
+
+
+class SloExclusion(Base):
+    """A stretch of time a person left out of one target's figure, with a reason (F19,
+    FR29). Removed by a mark, never deleted, so its history stays (BR6, BR7). The reason
+    is free text: it never enters an incident or a notification (FR33)."""
+
+    __tablename__ = "slo_exclusions"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    starts_at: Mapped[RequiredTimestamp]
+    ends_at: Mapped[RequiredTimestamp]
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    created_at: Mapped[CreatedAt]
+    removed_at: Mapped[OptionalTimestamp]
+    removed_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # Null while the days it touches wait for the scheduler's recount (FR29).
+    counted_at: Mapped[OptionalTimestamp]
+    removal_not_recounted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "slo_id"],
+            ["slo_targets.org_id", "slo_targets.id"],
+            ondelete="CASCADE",
+            name="fk_slo_exclusions_target",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_slo_exclusions_created_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "removed_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (removed_by)",
+            name="fk_slo_exclusions_removed_by",
+        ),
+        CheckConstraint("ends_at > starts_at", name="ends_after_it_starts"),
+        CheckConstraint(
+            f"length(reason) BETWEEN {slo.EXCLUSION_REASON_SHORTEST} "
+            f"AND {slo.EXCLUSION_REASON_LONGEST}",
+            name="a_reason_is_given",
+        ),
+        CheckConstraint(
+            "removed_at IS NULL OR removed_at >= created_at", name="removed_after_created"
+        ),
+        Index("ix_slo_exclusions_org_id_slo_id_starts_at", "org_id", "slo_id", "starts_at"),
     )
 
 

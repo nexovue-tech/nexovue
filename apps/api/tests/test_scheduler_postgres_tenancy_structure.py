@@ -176,6 +176,18 @@ CROSS_TENANT_STATEMENTS: Final = (
         "project, and through it the organization, from the target's own row (F6's m6)",
     ),
     _across(
+        "slos.notices",
+        "_BLIND_PROJECTS",
+        f"{_SWEEP}: the projects whose enabled targets are not being judged, each told by "
+        "its own `org_id` (F19 FR13b, D58)",
+    ),
+    _across(
+        "slos.notices",
+        "_OPEN_BLIND",
+        f"{_SWEEP}: every open 'not being judged' notice, resolved by its own `org_id` once "
+        "its project is judged again (F19 FR13b, D58)",
+    ),
+    _across(
         "slos.retention",
         "_DUE_FOR_PURGE",
         f"{_SWEEP}: deleted targets past restoring, purged one by one, each in its own "

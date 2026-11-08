@@ -86,6 +86,8 @@ DASHBOARD_UPDATED: Final = "dashboard.updated"
 DASHBOARD_DELETED: Final = "dashboard.deleted"
 DASHBOARD_RESTORED: Final = "dashboard.restored"
 DASHBOARD_PURGED: Final = "dashboard.purged"
+SLO_EXCLUDED: Final = "slo.excluded"
+SLO_EXCLUSION_REMOVED: Final = "slo.exclusion_removed"
 CHECK_CREATED: Final = "check.created"
 CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
@@ -804,6 +806,45 @@ def record_dashboard_deleted(
         actor_user_id=actor_user_id,
         facts=facts,
         before=facts,
+    )
+
+
+def record_slo_excluded(
+    db: AsyncSession, *, target: SloTarget, exclusion_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """Time left out of a target (FR29): ids only, never the reason (AC88)."""
+    _record_slo_exclusion(
+        db, SLO_EXCLUDED, target=target, exclusion_id=exclusion_id, actor_user_id=actor_user_id
+    )
+
+
+def record_slo_exclusion_removed(
+    db: AsyncSession, *, target: SloTarget, exclusion_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    _record_slo_exclusion(
+        db,
+        SLO_EXCLUSION_REMOVED,
+        target=target,
+        exclusion_id=exclusion_id,
+        actor_user_id=actor_user_id,
+    )
+
+
+def _record_slo_exclusion(
+    db: AsyncSession,
+    action: str,
+    *,
+    target: SloTarget,
+    exclusion_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> None:
+    _add(
+        db,
+        org_id=target.org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(SLO_TARGET, target.id),
+        detail={"project_id": str(target.project_id), "exclusion_id": str(exclusion_id)},
     )
 
 
