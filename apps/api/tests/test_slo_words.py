@@ -5,6 +5,9 @@ and JSX text, not identifiers or import paths. Each forbidden word has a named
 allow-list of the phrases that may carry it. A named path holding no file fails, so a
 moved screen cannot pass by being absent (plan T1.8). T3.6, T4.9, T5.7 and T6.6 add
 their paths here.
+
+T3.6 adds the target's tabs and the *Last month* view by name, and "error budget",
+which only the *Definition* tab may say (AC13).
 """
 
 from __future__ import annotations
@@ -18,6 +21,19 @@ import pytest
 REPOSITORY: Final = Path(__file__).resolve().parents[3]
 # What the scan reads, each with the files it must find there.
 SCANNED: Final = {"apps/web/src/features/slos": ("*.ts", "*.tsx")}
+# Files each step names, so a renamed tab cannot leave the scan by being absent.
+NAMED: Final = (
+    "apps/web/src/features/slos/SloMonthsTab.tsx",
+    "apps/web/src/features/slos/SloHistoryTab.tsx",
+    "apps/web/src/features/slos/SloDefinitionTab.tsx",
+    "apps/web/src/features/slos/LastMonthView.tsx",
+    "apps/web/src/features/slos/month-words.ts",
+)
+# A phrase one file alone may say, beyond `FORBIDDEN`'s allow-lists (AC13: "error
+# budget" only on the Definition tab).
+ALLOWED_IN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
+    "SloDefinitionTab.tsx": {"budget": ("error budget",)},
+}
 # Test files say what a screen must not say, so they are not what a screen says.
 NOT_SCANNED: Final = re.compile(r"\.test(-util)?\.tsx?$")
 
@@ -49,12 +65,13 @@ def said(source: str) -> list[str]:
     ]
 
 
-def offences(text: str) -> list[str]:
+def offences(text: str, *, also_allowed: dict[str, tuple[str, ...]] | None = None) -> list[str]:
     found = []
     lowered = text.lower()
+    extra = also_allowed or {}
     for word, allowed in FORBIDDEN.items():
         cleaned = lowered
-        for phrase in allowed:
+        for phrase in (*allowed, *extra.get(word, ())):
             cleaned = cleaned.replace(phrase, " ")
         if re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", cleaned):
             found.append(word)
@@ -78,10 +95,24 @@ def _files() -> list[Path]:
 
 @pytest.mark.parametrize("path", _files(), ids=lambda path: path.name)
 def test_no_forbidden_word_is_said(path: Path) -> None:
+    allowed = ALLOWED_IN.get(path.name, {})
     hits = {
-        text: offences(text) for text in said(path.read_text(encoding="utf-8")) if offences(text)
+        text: found
+        for text in said(path.read_text(encoding="utf-8"))
+        if (found := offences(text, also_allowed=allowed))
     }
     assert hits == {}, f"{path.relative_to(REPOSITORY)} says: {hits}"
+
+
+@pytest.mark.parametrize("named", NAMED)
+def test_every_named_screen_file_exists_to_be_scanned(named: str) -> None:
+    assert (REPOSITORY / named).is_file(), f"{named} is gone: this test must follow it"
+
+
+def test_error_budget_is_said_on_the_definition_tab_and_allowed_nowhere_else() -> None:
+    definition = (REPOSITORY / NAMED[2]).read_text(encoding="utf-8")
+    assert any("error budget" in text.lower() for text in said(definition))
+    assert offences("Your error budget") == ["budget"]
 
 
 @pytest.mark.parametrize(

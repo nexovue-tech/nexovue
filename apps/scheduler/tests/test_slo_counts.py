@@ -28,7 +28,6 @@ from nexovue_scheduler.slos.counts import (
     last_event,
     last_run,
     latency_minutes,
-    longest_quiet,
     without_left_out,
 )
 from nexovue_scheduler.slos.store import CheckMinute, LatencyMinute, MinuteCounts
@@ -128,7 +127,7 @@ def test_a_quiet_stretch_across_midnight_is_one_stretch() -> None:
         lost=frozenset(),
     )
     assert evening.longest_quiet_minutes == 120 and morning.longest_quiet_minutes == 120
-    assert longest_quiet([evening, morning]) == 240
+    assert slo.longest_quiet([evening, morning]) == 240
 
 
 def test_ac73_a_minute_either_side_of_kolkata_midnight_lands_in_its_own_day() -> None:

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiClient } from "@/shared/api-client";
+import { API_BASE_PATH, apiClient } from "@/shared/api-client";
 
 import { REFRESH_MS } from "./slo-words";
 
@@ -322,4 +322,133 @@ export function useRestoreSlo() {
   return useInvalidatingMutation(({ sloId, name }: { sloId: string; name?: string }) =>
     apiClient.post<SloView>(`slos/${encodeURIComponent(sloId)}/restore`, name ? { name } : {}),
   );
+}
+
+/** FR27: a month against its objective; not judged below 90% coverage. */
+export type MonthResult = "met" | "missed" | "not_judged";
+
+export interface SloSharpFall {
+  day: string;
+  fall_percent: number;
+}
+
+/** FR27a: a traffic finding or silence incident on the target's service that month. */
+export interface SloOutage {
+  kind: "traffic_finding" | "silence_incident";
+  id: string;
+  started_at: string;
+  minutes: number;
+}
+
+/** One local month of one target, from its stored days (the API's `SloMonth`). */
+export interface SloMonth {
+  month: string;
+  result: MonthResult;
+  figure_percent: string | null;
+  objective_percent: string;
+  good: number;
+  total: number;
+  failures: number;
+  coverage: number | null;
+  quiet_minutes: number;
+  longest_quiet_minutes: number;
+  lost_minutes: number;
+  excluded_minutes: number;
+  missed_runs: number | null;
+  maintenance_runs: number | null;
+  days_held: number;
+  days_in_month: number;
+  may_still_change: boolean;
+  loss_known: boolean;
+  changed_at: string | null;
+  changed_why: "definition" | "exclusion" | "exclusion_removed" | null;
+  earlier_definition_through: string | null;
+  sharp_falls: SloSharpFall[];
+  outages: SloOutage[];
+  time_not_counted: boolean;
+}
+
+export interface SloMonths {
+  id: string;
+  label: string;
+  kind: SloKind;
+  upstream_sampling: Sampling | null;
+  /** FR27b's fixed label for the kind, the CSV's too. */
+  report_label: string;
+  audience: string;
+  zone: string;
+  months: SloMonth[];
+}
+
+/** One target's row in *Last month*: live, deleted, or purged (no name). */
+export interface SloMonthRow extends SloMonth {
+  id: string;
+  name: string | null;
+  label: string;
+  kind: SloKind;
+  upstream_sampling: Sampling | null;
+  report_label: string;
+  deleted_at: string | null;
+}
+
+export interface SloLastMonth {
+  month: string;
+  zone: string;
+  audience: string;
+  targets: number;
+  met: number;
+  missed: number;
+  not_judged: number;
+  met_with_time_not_counted: number;
+  rows: SloMonthRow[];
+}
+
+export interface SloHistoryEntry {
+  at: string;
+  what: "created" | "changed" | "deleted" | "restored";
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  /** A person's name, for a person only. */
+  by_name: string | null;
+}
+
+export function useSloMonths(sloId: string) {
+  return useQuery({
+    queryKey: ["slos", "months", sloId] as const,
+    queryFn: ({ signal }) =>
+      apiClient.get<SloMonths>(`slos/${encodeURIComponent(sloId)}/months`, { signal }),
+  });
+}
+
+export function useSloHistory(sloId: string) {
+  return useQuery({
+    queryKey: ["slos", "history", sloId] as const,
+    queryFn: ({ signal }) =>
+      apiClient
+        .get<{ entries: SloHistoryEntry[] }>(`slos/${encodeURIComponent(sloId)}/history`, {
+          signal,
+        })
+        .then((body) => body.entries),
+  });
+}
+
+export function useLastMonth(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["slos", "last-month", projectId ?? ""] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<SloLastMonth>("slos/months", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+  });
+}
+
+/** FR27b's months as a file. A link, never a blob this page builds, as `traceExportUrl`. */
+export function monthsCsvUrl(projectId: string, months: number, sloId?: string): string {
+  const url = new URL(`${API_BASE_PATH}slos/months.csv`, window.location.origin);
+  url.searchParams.set("project_id", projectId);
+  url.searchParams.set("months", String(months));
+  if (sloId) url.searchParams.set("slo_id", sloId);
+  return url.toString();
 }

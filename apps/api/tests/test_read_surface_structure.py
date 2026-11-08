@@ -56,6 +56,10 @@ THE_SURFACE: Final = {
     "nexovue_api/findings/router.py:list_findings": "GET /findings",
     "nexovue_api/slos/router.py:list_slos": "GET /slos",
     "nexovue_api/slos/router.py:get_slo": "GET /slos/{slo_id}",
+    "nexovue_api/slos/router.py:last_month": "GET /slos/months",
+    "nexovue_api/slos/router.py:months_csv": "GET /slos/months.csv",
+    "nexovue_api/slos/router.py:get_slo_months": "GET /slos/{slo_id}/months",
+    "nexovue_api/slos/router.py:get_slo_history": "GET /slos/{slo_id}/history",
     "nexovue_api/findings/router.py:finding_stats": "GET /findings/stats",
     "nexovue_api/findings/router.py:get_finding": "GET /findings/{finding_id}",
     # F22 FR20: a token reads kinds and times alone; the route itself narrows.

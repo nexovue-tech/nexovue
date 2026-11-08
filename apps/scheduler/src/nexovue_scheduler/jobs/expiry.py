@@ -1,5 +1,7 @@
-"""The expiry sweep: deletes what Redis used to forget on its own (ADR-020), and
-what detection keeps only for a while (`detection/retention.py`).
+"""The expiry sweep: deletes what Redis used to forget on its own (ADR-020), what
+detection keeps only for a while (`detection/retention.py`), and what reliability
+targets keep: a deleted target past restoring, and figures past 400 days
+(`slos/retention.py`).
 
 Every read of the first group already ignores a lapsed row, so for them this
 sweep is about disk, never correctness — a missed run leaves rows that answer
@@ -11,6 +13,7 @@ cleared in bites, never one long lock.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Final
 
 from nexovue_platform.telemetry.logging import get_logger
@@ -21,6 +24,7 @@ from nexovue_scheduler.detection import retention
 from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
+from nexovue_scheduler.slos import retention as slo_retention
 
 logger = get_logger(__name__)
 
@@ -40,12 +44,16 @@ _EXPIRED: Final = (
     # The auth tier's windows are a minute long; an hour is room for any quota.
     ("rate_limit_windows", "key, window_start", "window_start < now() - interval '1 hour'"),
     *retention.EXPIRED,
+    *slo_retention.EXPIRED,
 )
 
 
 async def sweep(engine: AsyncEngine) -> dict[str, int]:
-    """Delete every lapsed row; how many went from each table."""
-    removed: dict[str, int] = {}
+    """Delete every lapsed row; how many went from each table. A deleted target past
+    restoring is purged first, so its months are kept before its days can lapse."""
+    removed: dict[str, int] = {
+        "slo_targets": await slo_retention.purge_deleted(engine, now=datetime.now(UTC))
+    }
     for table, key, lapsed in _EXPIRED:
         statement = text(
             # Every part is a constant above; nothing here came from a caller.

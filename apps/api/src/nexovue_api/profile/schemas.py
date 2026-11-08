@@ -264,6 +264,19 @@ class ExportedNote(BaseModel):
     created_at: datetime
 
 
+class ExportedSloChange(BaseModel):
+    """A change the person made to a reliability target (F19 FR30, AC88). It stays the
+    organization's record after they leave."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    slo_id: uuid.UUID
+    at: datetime
+    what: str
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+
+
 class ExportedApiToken(BaseModel):
     """No prefix: it carries characters of the token itself."""
 
@@ -298,3 +311,6 @@ class PersonalDataExport(BaseModel):
     # Newest first and bounded on their own: `notes_truncated` says they were cut.
     notes_written: list[ExportedNote]
     notes_truncated: bool
+    # The reliability target changes they made, newest first, bounded the same way.
+    slo_target_changes: list[ExportedSloChange]
+    slo_target_changes_truncated: bool

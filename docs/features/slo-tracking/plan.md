@@ -146,12 +146,16 @@ Ordered so the first step ships something you can see (ADR-0019). Each step is b
 
 *Judgeable:* You open *Last month* and read "N of M targets met", with what each leaves out. You copy one row into a note and it keeps its label. You download the CSV. You delete a target that missed, and it still counts in last month. **This is the number a buyer asked for, shown before any alert work, so a reporting-only product could stop here.**
 
-- [ ] **T3.1** — migration, `data/postgres/models.py`, `organizations/tables.py`, `test_migration_rules.py` · `slo_deleted_months`; the revision joins `ROLL_FORWARD_ONLY` · proved by `test_deletion_live.py`
-- [ ] **T3.2** — `slos/job.py`, `slos/store.py` · recount by version, final days, the recount limit, `loss_known`, `changed_at`, the sharp-fall line · proved by `test_slo_job_live.py`: AC7, AC45, AC64's last clause, AC69, AC113
-- [ ] **T3.3** — `apps/api/.../slos/` · `/months` per target and across targets, `/months.csv` with `spreadsheet_safe`, `/history`, labels per kind · proved by `test_slos_live.py`: AC33 for these routes, AC44, AC78, AC112, AC115
-- [ ] **T3.4** — `slos/retention.py` (new), `jobs/expiry.py:31-44` · purge after 30 days, writing `slo_deleted_months`; 400-day lapsing · proved by `test_slo_prune_live.py`, on `test_detection_prune_live.py`'s pattern: AC71's second half, AC88's lapsing
-- [ ] **T3.5** — `members/service.py:188-234`, `profile/personal_data.py` · the free-text scrub; the export gains exclusions and changes · proved by the personal-data tests, extended: AC88
-- [ ] **T3.6** — `features/slos/` · tabs for months, history and definition; the *Last month* view; copy; CSV · proved by `SloScreen.test.ts`, `SlosScreen.test.ts`: AC77, AC78's screens, AC117, and `test_slo_words.py` gains the new tabs (AC13)
+- [x] **T3.1** — migration, `data/postgres/models.py`, `organizations/tables.py`, `test_migration_rules.py` · `slo_deleted_months`; the revision joins `ROLL_FORWARD_ONLY` · proved by `test_deletion_live.py`
+  *2026-11-08: Alembic **0053**. It holds more than the design's column list (counts, coverage, quiet, lost and excluded time, runs, days, loss known, sampling answer), so a purged month's copy and CSV still carry what FR27b requires; `status.md`, Open decisions.*
+- [x] **T3.2** — `slos/job.py`, `slos/store.py` · recount by version, final days, the recount limit, `loss_known`, `changed_at`, the sharp-fall line · proved by `test_slo_job_live.py`: AC7, AC45, AC64's last clause, AC69, AC113
+  *2026-11-08: `store.py` needed no change. The sharp-fall line is worked out where months are read, from stored days (`nexovue_platform.slo.sharp_falls`), so AC113 is proved in `test_slo_model.py` and `test_slos_live.py`. AC69's exclusion clause waits for exclusions (T4.7); `status.md`, Open decisions.*
+- [x] **T3.3** — `apps/api/.../slos/` · `/months` per target and across targets, `/months.csv` with `spreadsheet_safe`, `/history`, labels per kind · proved by `test_slos_live.py`: AC33 for these routes, AC44, AC78, AC112, AC115
+- [x] **T3.4** — `slos/retention.py` (new), `jobs/expiry.py:31-44` · purge after 30 days, writing `slo_deleted_months`; 400-day lapsing · proved by `test_slo_prune_live.py`, on `test_detection_prune_live.py`'s pattern: AC71's second half, AC88's lapsing
+- [x] **T3.5** — `members/service.py:188-234`, `profile/personal_data.py` · the free-text scrub; the export gains exclusions and changes · proved by the personal-data tests, extended: AC88
+  *2026-11-08: changes only; exclusions and their reasons join the scrub and the export with their table (T4.7).*
+- [x] **T3.6** — `features/slos/` · tabs for months, history and definition; the *Last month* view; copy; CSV · proved by `SloScreen.test.ts`, `SlosScreen.test.ts`: AC77, AC78's screens, AC117, and `test_slo_words.py` gains the new tabs (AC13)
+  *2026-11-08: not checked in a browser at 375px (AC81), and Step 3's* Judgeable *was not walked on the dev stack.*
 
 ### Demand gate
 
@@ -412,4 +416,4 @@ To stop the feature: take `slo`, `slo_counts` and `slo_history` out of `schedule
 
 ## Outcome
 
-Not started. Filled in when the work completes.
+In progress: Steps 1 and 2 on `feature/phase-2`, Step 3 built 2026-11-08 and awaiting commit (`status.md`). Filled in when the work completes.

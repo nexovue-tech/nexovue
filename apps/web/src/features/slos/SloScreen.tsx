@@ -5,11 +5,15 @@ import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { Tabs } from "@/shared/components/Tabs";
 import { useCan } from "@/shared/identity";
 
 import type { SloView } from "./api";
 import { useChangeSlo, useDeleteSlo, useSlo } from "./api";
 import { SloBadge } from "./SloBadge";
+import { SloDefinitionTab } from "./SloDefinitionTab";
+import { SloHistoryTab } from "./SloHistoryTab";
+import { SloMonthsTab } from "./SloMonthsTab";
 import {
   deleteWarningOf,
   durationOf,
@@ -80,8 +84,34 @@ function Target({ view, zone }: { view: SloView; zone: string }) {
         </section>
         <Measured view={view} zone={zone} />
       </div>
+      <TargetTabs view={view} zone={zone} />
       {canConfigure ? <Actions view={view} /> : null}
     </div>
+  );
+}
+
+type Tab = "months" | "history" | "definition";
+const TABS = [
+  { id: "months", label: "By month" },
+  { id: "history", label: "History" },
+  { id: "definition", label: "Definition" },
+] as const;
+
+/** The design's tabs, after the figures: *By month*, *History*, *Definition*. *Exclusions*
+ * joins with Step 4. */
+function TargetTabs({ view, zone }: { view: SloView; zone: string }) {
+  const [tab, setTab] = useState<Tab>("months");
+  return (
+    <Tabs
+      label="About this target"
+      items={TABS}
+      selected={tab}
+      onSelect={(id) => setTab(id as Tab)}
+    >
+      {tab === "months" ? <SloMonthsTab view={view} /> : null}
+      {tab === "history" ? <SloHistoryTab sloId={view.id} zone={zone} /> : null}
+      {tab === "definition" ? <SloDefinitionTab view={view} /> : null}
+    </Tabs>
   );
 }
 

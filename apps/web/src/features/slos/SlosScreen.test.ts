@@ -5,11 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SloView } from "./api";
 import {
+  AUDIENCE,
+  buttons,
   json,
   list,
   minutesAgo,
+  monthRow,
   mountAt,
   PROJECT_ID,
+  press,
+  REQUEST_LABEL,
   readable,
   stubApi,
   target,
@@ -155,5 +160,81 @@ describe("the targets list", () => {
     await waitFor(() => readable(container).includes("was deleted by Priya on 3 Nov"), "the line");
     expect(readable(container)).toContain("Its daily figures go on 3 Dec.");
     expect(readable(container)).toContain("Restore");
+  });
+});
+
+describe("last month (Step 3)", () => {
+  function lastMonth() {
+    return {
+      month: "2026-10-01",
+      zone: "UTC",
+      audience: AUDIENCE,
+      targets: 4,
+      met: 2,
+      missed: 1,
+      not_judged: 1,
+      met_with_time_not_counted: 1,
+      rows: [
+        monthRow({
+          id: "pay",
+          name: null,
+          label: "payment availability, 99.9% over 28 days",
+          result: "missed",
+          figure_percent: "99.80",
+          deleted_at: "2026-11-03T10:00:00Z",
+        }),
+        monthRow({
+          id: "cart",
+          name: "cart",
+          label: "cart availability, 99.9% over 28 days",
+          result: "not_judged",
+          coverage: 0.71,
+        }),
+        monthRow({ excluded_minutes: 120, time_not_counted: true }),
+        monthRow({ id: "ad", name: "ad", label: "ad availability, 99.9% over 28 days" }),
+      ],
+    };
+  }
+
+  it("heads 'N of M targets met' with missed and not judged named, and no single figure (AC78, AC112)", async () => {
+    stubApi({ ...listed([target()]), "GET /slos/months": json(lastMonth()) });
+    const { container } = await mountAt("/slos");
+    await waitFor(() => readable(container).includes("Last month"), "the views");
+    await press(container, "Last month");
+    await waitFor(() => readable(container).includes("targets met in October"), "the headline");
+    expect(readable(container)).toContain(
+      "2 of 4 targets met in October. 1 missed. 1 not judged. 1 of those met has time not counted.",
+    );
+    expect(readable(container)).toContain("There is no single figure across targets");
+    expect(readable(container)).toContain("A project is one environment");
+    expect(readable(container)).toContain("Deleted on 3 Nov.");
+    expect(readable(container)).toContain("2 h left out.");
+    expect(readable(container)).toContain(AUDIENCE);
+    const download = container.querySelector('a[href*="slos/months.csv"]');
+    expect(download?.getAttribute("href")).toContain(`project_id=${PROJECT_ID}`);
+  });
+
+  it("copies a row with its period, quiet and excluded time and fixed label (AC78)", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const only = {
+      ...lastMonth(),
+      targets: 1,
+      met: 1,
+      missed: 0,
+      not_judged: 0,
+      rows: [monthRow()],
+    };
+    stubApi({ ...listed([target()]), "GET /slos/months": json(only) });
+    const { container } = await mountAt("/slos");
+    await waitFor(() => readable(container).includes("Last month"), "the views");
+    await press(container, "Last month");
+    await waitFor(() => buttons(container).includes("Copy"), "the copy action");
+    await press(container, "Copy");
+    const copied = String(writeText.mock.calls[0]?.at(0));
+    expect(copied).toContain("October 2026: 99.95% against 99.9%. Measured 100% of the month.");
+    expect(copied).toContain("No minute without requests.");
+    expect(copied).toContain("Nothing left out for planned work.");
+    expect(copied).toContain(REQUEST_LABEL);
   });
 });

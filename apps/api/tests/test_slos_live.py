@@ -11,14 +11,23 @@ Step 2: every kind is created with its own fields (AC3: 500 ms is stored and sho
 487.2 ms), AC4 (no route makes an endpoint latency target), a check from another
 project is refused, and FR34's left-out endpoints are stored and change what is counted.
 
+Step 3 (T3.3): a target's months, read from stored days alone (AC44), with the
+outage line (FR27a), a sharp fall (AC113) and a change of definition (AC45); the
+*Last month* view's N, X, Y and M across live, deleted and purged targets (AC112);
+the CSV with the period, coverage, quiet and excluded time and each kind's fixed label
+(AC78), and a name starting `=` made safe (AC115); the history (FR30); and AC33 for
+each of these routes. A restore keeps its definition and reads its gap again (FR31).
+
 Rows are written inside one outer transaction per test and rolled back afterwards; the
 team and client helpers are F22's (`test_findings_cases_live.py`).
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -32,7 +41,11 @@ from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     Check,
+    Finding,
+    Incident,
     ServiceLastSeen,
+    SloDailyCount,
+    SloDeletedMonth,
     SloTarget,
     SloTargetChange,
 )
@@ -531,3 +544,429 @@ async def test_fr34_only_a_service_availability_target_leaves_endpoints_out(
         _body(kind="service_latency", asked_ms=500, left_out_endpoints=["GET /health"]),
     )
     assert (refused.status_code, refused.json()["field"]) == (422, "left_out_endpoints")
+
+
+# ------------------------------------------------------- Step 3: the monthly answer
+
+TODAY = datetime.now(UTC).date()
+LAST_MONTH = slo.previous_month(slo.month_start(TODAY))
+LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
+
+
+def _days_of(month: date) -> list[date]:
+    return [month + timedelta(days=offset) for offset in range(slo.days_in_month(month))]
+
+
+async def _counted(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    target_id: str,
+    days: dict[date, tuple[int, int]],
+    **columns: Any,
+) -> None:
+    """Days as the scheduler stores them: (good, total) each, final, under version 1. The
+    target's history is read and its first event long ago, so every minute counts."""
+    target = await db.get(SloTarget, uuid.UUID(target_id))
+    assert target is not None
+    target.first_event_at = LONG_AGO
+    target.history_read_version = target.definition_version
+    for day, (good, total) in days.items():
+        db.add(
+            SloDailyCount(
+                org_id=team.org_id,
+                slo_id=target.id,
+                day=day,
+                good=good,
+                total=total,
+                failures=total - good,
+                quiet_minutes=columns.get("quiet_minutes", 0),
+                lost_minutes=columns.get("lost_minutes", 0),
+                excluded_minutes=0,
+                quiet_leading_minutes=0,
+                quiet_trailing_minutes=0,
+                longest_quiet_minutes=columns.get("quiet_minutes", 0),
+                definition_version=columns.get("definition_version", target.definition_version),
+                final=True,
+                computed_at=datetime.now(UTC),
+            )
+        )
+    await db.flush()
+
+
+def _whole_month(good: int = 9_995, total: int = 10_000) -> dict[date, tuple[int, int]]:
+    return dict.fromkeys(_days_of(LAST_MONTH), (good, total))
+
+
+async def _service(db: AsyncSession, team: Team, name: str) -> None:  # noqa: F811
+    db.add(
+        ServiceLastSeen(
+            org_id=team.org_id,
+            project_id=team.project_id,
+            service_name=name,
+            last_seen_at=datetime.now(UTC),
+        )
+    )
+    await db.flush()
+
+
+async def test_ac44_last_month_s_figure_is_counted_from_stored_days_alone(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    await _counted(db, acme, target["id"], _whole_month())
+
+    read = await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/months")
+
+    assert read.status_code == 200, read.text
+    body = read.json()
+    month = next(each for each in body["months"] if each["month"] == LAST_MONTH.isoformat())
+    assert month["result"] == "met"
+    assert month["figure_percent"] == "99.95"
+    assert month["objective_percent"] == "99.90"
+    assert month["days_held"] == month["days_in_month"] == slo.days_in_month(LAST_MONTH)
+    assert body["report_label"] == slo.report_label(slo.SERVICE_AVAILABILITY)
+    assert body["label"] == "checkout availability, 99.9% over 28 days"
+
+
+async def test_fr27a_a_month_holding_a_traffic_finding_carries_the_outage(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    await _counted(db, acme, target["id"], _whole_month())
+    started = datetime.combine(LAST_MONTH + timedelta(days=13), datetime.min.time(), UTC)
+    db.add_all(
+        [
+            Finding(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                scope="service",
+                service_name="checkout",
+                severity="critical",
+                state="closed",
+                closed_reason="recovered",
+                title="checkout is losing traffic",
+                signals=[
+                    {
+                        "signal": "traffic",
+                        "normal": 80,
+                        "current": 0,
+                        "worst": 0,
+                        "comparison": "Tuesdays",
+                    }
+                ],
+                started_at=started,
+                closed_at=started + timedelta(hours=3, minutes=10),
+            ),
+            # Another service's, and a slower finding of this one, are not outages.
+            Finding(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                scope="service",
+                service_name="checkout",
+                severity="warning",
+                state="closed",
+                closed_reason="recovered",
+                title="checkout is slower than normal",
+                signals=[
+                    {
+                        "signal": "slower",
+                        "normal": 80,
+                        "current": 200,
+                        "worst": 200,
+                        "comparison": "Tuesdays",
+                    }
+                ],
+                started_at=started,
+                closed_at=started + timedelta(hours=1),
+            ),
+            Incident(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                rule_name="Silence",
+                condition_kind="service_silent",
+                subject_key="service:checkout",
+                subject_label="checkout",
+                severity="critical",
+                opened_at=started + timedelta(days=2),
+                resolved_at=started + timedelta(days=2, minutes=40),
+            ),
+        ]
+    )
+    await db.flush()
+
+    body = (await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/months")).json()
+    month = next(each for each in body["months"] if each["month"] == LAST_MONTH.isoformat())
+
+    assert [(outage["kind"], outage["minutes"]) for outage in month["outages"]] == [
+        ("traffic_finding", 190),
+        ("silence_incident", 40),
+    ]
+    assert month["time_not_counted"] is True
+
+
+async def test_ac113_a_day_60_percent_below_its_weekday_carries_its_line_onto_the_month(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    days = _whole_month()
+    days.update(dict.fromkeys(_days_of(slo.previous_month(LAST_MONTH)), (9_995, 10_000)))
+    fell, dipped = LAST_MONTH + timedelta(days=14), LAST_MONTH + timedelta(days=21)
+    days[fell] = (4_000, 4_000)
+    days[dipped] = (6_000, 6_000)
+    await _counted(db, acme, target["id"], days)
+
+    body = (await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/months")).json()
+    month = next(each for each in body["months"] if each["month"] == LAST_MONTH.isoformat())
+
+    assert month["sharp_falls"] == [{"day": fell.isoformat(), "fall_percent": 60}]
+
+
+async def test_ac45_a_month_holding_two_definitions_says_where_the_old_one_ends(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    row = await db.get(SloTarget, uuid.UUID(target["id"]))
+    assert row is not None
+    row.definition_version = 2
+    first_half = dict.fromkeys(_days_of(LAST_MONTH)[:10], (9995, 10000))
+    rest = dict.fromkeys(_days_of(LAST_MONTH)[10:], (9995, 10000))
+    await _counted(db, acme, target["id"], first_half, definition_version=1)
+    await _counted(db, acme, target["id"], rest, definition_version=2)
+
+    body = (await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/months")).json()
+    month = next(each for each in body["months"] if each["month"] == LAST_MONTH.isoformat())
+
+    assert month["earlier_definition_through"] == (LAST_MONTH + timedelta(days=9)).isoformat()
+
+
+async def test_ac112_last_month_counts_live_deleted_and_purged_targets_and_names_each(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    met_with_outage = await _create(db, acme)
+    await _counted(db, acme, met_with_outage["id"], _whole_month())
+    db.add(
+        Incident(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            rule_name="Silence",
+            condition_kind="service_silent",
+            subject_key="service:checkout",
+            subject_label="checkout",
+            severity="critical",
+            opened_at=datetime.combine(LAST_MONTH, datetime.min.time(), UTC) + timedelta(days=3),
+            resolved_at=datetime.combine(LAST_MONTH, datetime.min.time(), UTC)
+            + timedelta(days=3, hours=1),
+        )
+    )
+    await _service(db, acme, "cart")
+    not_judged = await _create(db, acme, name="cart", service_name="cart")
+    await _counted(db, acme, not_judged["id"], _whole_month(), lost_minutes=200)
+    await _service(db, acme, "payment")
+    missed_then_deleted = await _create(db, acme, name="payment", service_name="payment")
+    await _counted(db, acme, missed_then_deleted["id"], _whole_month(good=9_000))
+    await _call(db, acme, acme.member, "DELETE", f"/slos/{missed_then_deleted['id']}")
+    await _service(db, acme, "ad")
+    deleted_before = await _create(db, acme, name="ad", service_name="ad")
+    await _counted(db, acme, deleted_before["id"], _whole_month())
+    gone = await db.get(SloTarget, uuid.UUID(deleted_before["id"]))
+    assert gone is not None
+    gone.created_at = LONG_AGO
+    gone.deleted_at = datetime.combine(LAST_MONTH, datetime.min.time(), UTC) + timedelta(days=5)
+    db.add(
+        SloDeletedMonth(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            slo_id=uuid.uuid4(),
+            month=LAST_MONTH,
+            kind=slo.SERVICE_AVAILABILITY,
+            label="=email availability, 99.5% over 28 days",
+            objective_percent=Decimal("99.5"),
+            result="met",
+            figure_percent=Decimal("99.80"),
+            good=998,
+            total=1_000,
+            coverage=0.97,
+            quiet_minutes=30,
+            longest_quiet_minutes=30,
+            lost_minutes=0,
+            excluded_minutes=0,
+            days_held=slo.days_in_month(LAST_MONTH),
+            days_in_month=slo.days_in_month(LAST_MONTH),
+            loss_known=True,
+            upstream_sampling="yes",
+            deleted_at=datetime.now(UTC),
+        )
+    )
+    await db.flush()
+
+    read = await _call(db, acme, acme.viewer, "GET", f"/slos/months?project_id={acme.project_id}")
+
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["month"] == LAST_MONTH.isoformat()
+    assert (body["targets"], body["met"], body["missed"], body["not_judged"]) == (4, 2, 1, 1)
+    assert body["met_with_time_not_counted"] == 1
+    results = {row["label"]: (row["result"], row["deleted_at"] is not None) for row in body["rows"]}
+    assert results == {
+        "checkout availability, 99.9% over 28 days": ("met", False),
+        "cart availability, 99.9% over 28 days": ("not_judged", False),
+        "payment availability, 99.9% over 28 days": ("missed", True),
+        "=email availability, 99.5% over 28 days": ("met", True),
+    }
+    assert "figure_percent" not in body
+
+
+async def test_ac78_ac115_the_csv_carries_the_period_coverage_quiet_excluded_and_label(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    await _service(db, acme, "=cmd")
+    target = await _create(db, acme, name="formula", service_name="=cmd", upstream_sampling="yes")
+    await _counted(db, acme, target["id"], _whole_month(), quiet_minutes=30)
+
+    read = await _call(
+        db, acme, acme.viewer, "GET", f"/slos/months.csv?project_id={acme.project_id}&months=2"
+    )
+
+    assert read.status_code == 200, read.text
+    assert read.headers["content-type"].startswith("text/csv")
+    assert "attachment" in read.headers["content-disposition"]
+    rows = list(csv.DictReader(io.StringIO(read.text)))
+    (row,) = [each for each in rows if each["month"] == LAST_MONTH.isoformat()[:7]]
+    assert row["target"].startswith("'=cmd availability")
+    assert row["result"] == "met"
+    assert row["measured_percent"] == "100"
+    assert row["quiet_minutes"] == str(30 * slo.days_in_month(LAST_MONTH))
+    assert row["excluded_minutes"] == "0"
+    assert row["sampled_before_nexovue"] == "yes"
+    assert row["label"] == slo.report_label(slo.SERVICE_AVAILABILITY)
+    assert row["audience"] == slo.AUDIENCE_LINE
+
+
+async def test_fr30_the_history_lists_each_change_and_names_the_person_to_people_only(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    await _call(
+        db, acme, acme.member, "PATCH", f"/slos/{target['id']}", {"objective_percent": "99.5"}
+    )
+
+    person = await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/history")
+    token = await _call(db, acme, None, "GET", f"/slos/{target['id']}/history")
+
+    assert (person.status_code, token.status_code) == (200, 200)
+    entries = person.json()["entries"]
+    assert [entry["what"] for entry in entries] == ["changed", "created"]
+    assert Decimal(entries[0]["before"]["objective_percent"]) == Decimal("99.9")
+    assert Decimal(entries[0]["after"]["objective_percent"]) == Decimal("99.5")
+    assert entries[0]["by_name"] == "Member"
+    assert all(entry["by_name"] is None for entry in token.json()["entries"])
+    assert _holds_no_person(token.json()) and _holds_no_person(person.json())
+
+
+async def test_ac33_a_token_reads_the_month_routes_and_is_held_to_its_project(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    await _counted(db, acme, target["id"], _whole_month())
+    mine = [
+        f"/slos/{target['id']}/months",
+        f"/slos/{target['id']}/history",
+        f"/slos/months?project_id={acme.project_id}",
+        f"/slos/months.csv?project_id={acme.project_id}",
+    ]
+    for path in mine:
+        read = await _call(db, acme, None, "GET", path)
+        assert read.status_code == 200, (path, read.text)
+        if path.endswith(("months", "history")) or "months?" in path:
+            assert _holds_no_person(read.json()), path
+
+    other = await _call(
+        db, acme, acme.owner, "POST", "/projects", {"name": "staging", "slug": "staging"}
+    )
+    elsewhere = uuid.UUID(other.json()["id"])
+    await _reported(db, acme, elsewhere)
+    theirs = (
+        await _call(db, acme, acme.member, "POST", f"/slos?project_id={elsewhere}", _body())
+    ).json()
+    for path in (
+        f"/slos/{theirs['id']}/months",
+        f"/slos/{theirs['id']}/history",
+        f"/slos/months?project_id={elsewhere}",
+        f"/slos/months.csv?project_id={elsewhere}",
+    ):
+        assert (await _call(db, acme, None, "GET", path)).status_code == 404, path
+
+
+async def test_fr31_a_restore_keeps_its_definition_and_reads_its_gap_again(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    row = await db.get(SloTarget, uuid.UUID(target["id"]))
+    assert row is not None
+    row.history_read_version = row.definition_version
+    await db.flush()
+    await _call(db, acme, acme.member, "DELETE", f"/slos/{target['id']}")
+
+    restored = await _call(db, acme, acme.member, "POST", f"/slos/{target['id']}/restore", {})
+
+    assert restored.status_code == 200, restored.text
+    await db.refresh(row)
+    assert row.definition_version == 1
+    assert row.history_read_version < row.definition_version
+    assert restored.json()["state"] == slo.State.COUNTING
+
+
+async def test_fr27a_a_check_target_s_month_carries_no_service_outage(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    check_id = await _check(db, acme)
+    created = await _call(
+        db,
+        acme,
+        acme.member,
+        "POST",
+        f"/slos?project_id={acme.project_id}",
+        {
+            "kind": "check_availability",
+            "name": "checkout check",
+            "check_id": str(check_id),
+            "objective_percent": "99.5",
+            "window_days": 28,
+        },
+    )
+    target = created.json()
+    # A check target may name a service to join findings (D19); it counts runs, not requests.
+    row = await db.get(SloTarget, uuid.UUID(target["id"]))
+    assert row is not None
+    row.service_name = "checkout"
+    await _counted(db, acme, target["id"], _whole_month())
+    db.add(
+        Incident(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            rule_name="Silence",
+            condition_kind="service_silent",
+            subject_key="service:checkout",
+            subject_label="checkout",
+            severity="critical",
+            opened_at=datetime.combine(LAST_MONTH, datetime.min.time(), UTC) + timedelta(days=3),
+            resolved_at=datetime.combine(LAST_MONTH, datetime.min.time(), UTC)
+            + timedelta(days=3, hours=1),
+        )
+    )
+    await db.flush()
+
+    body = (await _call(db, acme, acme.viewer, "GET", f"/slos/{target['id']}/months")).json()
+    month = next(each for each in body["months"] if each["month"] == LAST_MONTH.isoformat())
+
+    assert month["outages"] == []

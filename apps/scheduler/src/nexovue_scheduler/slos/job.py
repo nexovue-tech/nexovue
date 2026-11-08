@@ -9,6 +9,13 @@
 - **`read_slo_history`**, on `slo_history`, one target: its past days, back as far as
   the source holds, when it is created or what it counts changes.
 
+**Recounting by version** (FR28, AC7). A count never writes over a final day, nor over
+a day counted under a newer definition. A history read under a newer definition
+rewrites every day back to the recount limit, final or not, and marks a final day
+whose figures moved as changed by the definition, so its month says so (BR13). Past
+the limit a day stays as it was counted, under its old definition (AC45), and a day
+first read there says nexovue's losses in it are not known (AC69).
+
 **Who gets a job** is read from the targets themselves, not from detection's active
 projects, which drop a project silent for a day (C8): a 27-day silence is still judged
 (AC8). Projects go longest-waiting first, so whoever was skipped leads the next minute
@@ -41,7 +48,7 @@ from nexovue_platform import slo
 from nexovue_platform.detection import DEFAULT_TIMEZONE
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
-from sqlalchemy import text
+from sqlalchemy import TextClause, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.detection import holds
@@ -80,8 +87,6 @@ JUDGE_LOOKBACK: Final = timedelta(hours=24)
 # yet final, when theirs is older than an hour (design, *What each job does*).
 RECENT_DAYS_DUE_AFTER: Final = timedelta(minutes=5)
 OLDER_DAYS_DUE_AFTER: Final = timedelta(hours=1)
-# A span's own time is trusted 7 days back, so a day older than that is final (BR13).
-FINAL_AFTER_DAYS: Final = 7
 # The 7 days FR10a's attention limit reads the longest quiet stretch from.
 QUIET_LOOKBACK_DAYS: Final = 7
 # `service_stats_1m` holds at most 35 days on any plan (FR27): how far a service
@@ -91,9 +96,6 @@ SERVICE_ROLLUP_DAYS: Final = 35
 # Where a check names no location, it runs from every location the deployment has
 # (`checks.py`); the task passes how many that is.
 ONE_LOCATION: Final = 1
-# `intake_refusals` and `detection_events` are kept 29 days (`detection/retention.py`): a
-# day older than that cannot say what nexovue lost in it (FR28).
-LOSS_RECORDS_DAYS: Final = 29
 _MINUTE: Final = timedelta(minutes=1)
 _JUDGE_LOCK: Final = "slo-judge"
 _COUNT_LOCK: Final = "slo-count"
@@ -565,7 +567,7 @@ async def _save_status(
             "project_id": uuid.UUID(binding.project_id),
             "minute": settled,
             "last_event": last,
-            "longest_quiet": counts.longest_quiet(days.recent.get(target.id, [])),
+            "longest_quiet": slo.longest_quiet(days.recent.get(target.id, [])),
         },
     )
 
@@ -605,9 +607,7 @@ _STALE_DAYS: Final = text(
     WHERE org_id = :org_id AND slo_id = ANY(:ids) AND NOT final AND computed_at < :older
     """
 )
-# A final day is never rewritten here (AC7); a definition change or an exclusion is Step 3's.
-_SAVE_DAY: Final = text(
-    """
+_NEW_DAY: Final = """
     INSERT INTO slo_daily_counts (
         org_id, slo_id, day, good, total, failures, quiet_minutes, lost_minutes,
         quiet_leading_minutes, quiet_trailing_minutes, longest_quiet_minutes, expected_runs,
@@ -616,17 +616,57 @@ _SAVE_DAY: Final = text(
         :org_id, :id, :day, :good, :total, :failures, :quiet, :lost, :leading, :trailing,
         :longest, :expected_runs, :missed_runs, :maintenance_runs, :loss_known, :version,
         :final, :computed_at)
+"""
+_COUNTED_COLUMNS: Final = """
+    good = EXCLUDED.good, total = EXCLUDED.total, failures = EXCLUDED.failures,
+    quiet_minutes = EXCLUDED.quiet_minutes, lost_minutes = EXCLUDED.lost_minutes,
+    quiet_leading_minutes = EXCLUDED.quiet_leading_minutes,
+    quiet_trailing_minutes = EXCLUDED.quiet_trailing_minutes,
+    longest_quiet_minutes = EXCLUDED.longest_quiet_minutes,
+    expected_runs = EXCLUDED.expected_runs, missed_runs = EXCLUDED.missed_runs,
+    maintenance_runs = EXCLUDED.maintenance_runs,
+    loss_known = EXCLUDED.loss_known, definition_version = EXCLUDED.definition_version,
+    computed_at = EXCLUDED.computed_at
+"""
+# A count: never over a final day (AC7), nor over a day a newer definition counted.
+_SAVE_DAY: Final = text(
+    f"""
+    {_NEW_DAY}
     ON CONFLICT (org_id, slo_id, day) DO UPDATE
-    SET good = EXCLUDED.good, total = EXCLUDED.total, failures = EXCLUDED.failures,
-        quiet_minutes = EXCLUDED.quiet_minutes, lost_minutes = EXCLUDED.lost_minutes,
-        quiet_leading_minutes = EXCLUDED.quiet_leading_minutes,
-        quiet_trailing_minutes = EXCLUDED.quiet_trailing_minutes,
-        longest_quiet_minutes = EXCLUDED.longest_quiet_minutes,
-        expected_runs = EXCLUDED.expected_runs, missed_runs = EXCLUDED.missed_runs,
-        maintenance_runs = EXCLUDED.maintenance_runs,
-        loss_known = EXCLUDED.loss_known, definition_version = EXCLUDED.definition_version,
-        final = EXCLUDED.final, computed_at = EXCLUDED.computed_at
+    SET {_COUNTED_COLUMNS}, final = EXCLUDED.final
     WHERE slo_daily_counts.org_id = :org_id AND NOT slo_daily_counts.final
+      AND slo_daily_counts.definition_version <= EXCLUDED.definition_version
+    """
+)
+# A history read inside the recount limit (FR28): also over a final day counted under an
+# older definition. A final day whose figures moved is marked changed, so its month says
+# so after it ended (BR13); one that read the same is not.
+_RECOUNT_DAY: Final = text(
+    f"""
+    {_NEW_DAY}
+    ON CONFLICT (org_id, slo_id, day) DO UPDATE
+    SET {_COUNTED_COLUMNS},
+        final = slo_daily_counts.final OR EXCLUDED.final,
+        changed_at = CASE WHEN slo_daily_counts.final
+                               AND (slo_daily_counts.good, slo_daily_counts.total)
+                                   IS DISTINCT FROM (EXCLUDED.good, EXCLUDED.total)
+                          THEN EXCLUDED.computed_at ELSE slo_daily_counts.changed_at END,
+        changed_why = CASE WHEN slo_daily_counts.final
+                                AND (slo_daily_counts.good, slo_daily_counts.total)
+                                    IS DISTINCT FROM (EXCLUDED.good, EXCLUDED.total)
+                           THEN :changed_why ELSE slo_daily_counts.changed_why END
+    WHERE slo_daily_counts.org_id = :org_id
+      AND slo_daily_counts.definition_version <= EXCLUDED.definition_version
+      AND (NOT slo_daily_counts.final
+           OR slo_daily_counts.definition_version < EXCLUDED.definition_version)
+    """
+)
+# A history read past the recount limit: only a day never counted (AC69); one already
+# held stays as it was counted, under its own definition (AC45).
+_FIRST_READ_DAY: Final = text(
+    f"""
+    {_NEW_DAY}
+    ON CONFLICT (org_id, slo_id, day) DO NOTHING
     """
 )
 _MARK_FINAL: Final = text(
@@ -664,7 +704,7 @@ async def count_slos(
             stale = await connection.execute(
                 _STALE_DAYS, keys | {"older": now - OLDER_DAYS_DUE_AFTER}
             )
-            cutoff = today - timedelta(days=FINAL_AFTER_DAYS)
+            cutoff = today - timedelta(days=slo.FINAL_AFTER_DAYS)
             due = sorted(
                 {today, today - timedelta(days=1)} | {row.day for row in stale if row.day >= cutoff}
             )
@@ -697,9 +737,11 @@ async def _count_days(
     today: date,
     now: datetime,
     probe_locations: int,
+    recount_from: date | None = None,
 ) -> int:
     """Count each day for every target, one read per source per day for the project, and
-    save the rows. Returns how many were written."""
+    save the rows. Returns how many were written. With `recount_from`, a history read's
+    recount limit: days from it are recounted, older ones only first read (FR28)."""
     written = 0
     counted = [target for target in targets if _has_source(target)]
     for day in days:
@@ -708,7 +750,8 @@ async def _count_days(
             continue
         sources = read_sources(reader, counted, start=start, end=min(end, through))
         lost = await holds.lost_minutes(connection, start=start, end=min(end, through))
-        loss_known = (today - day).days <= LOSS_RECORDS_DAYS
+        loss_known = (today - day).days <= slo.LOSS_RECORDS_DAYS
+        statement = _day_statement(day, recount_from)
         for target in counted:
             if target.first_event_at is None or end <= target.first_event_at:
                 continue
@@ -724,12 +767,13 @@ async def _count_days(
             )
             await _save_day(
                 connection,
+                statement,
                 binding,
                 target,
                 day,
                 row,
                 loss_known=loss_known,
-                final=(today - day).days > FINAL_AFTER_DAYS,
+                final=(today - day).days > slo.FINAL_AFTER_DAYS,
                 now=now,
             )
             written += 1
@@ -737,8 +781,15 @@ async def _count_days(
     return written
 
 
+def _day_statement(day: date, recount_from: date | None) -> TextClause:
+    if recount_from is None:
+        return _SAVE_DAY
+    return _RECOUNT_DAY if day >= recount_from else _FIRST_READ_DAY
+
+
 async def _save_day(
     connection: AsyncConnection,
+    statement: TextClause,
     binding: ProjectBinding,
     target: Target,
     day: date,
@@ -749,7 +800,7 @@ async def _save_day(
     now: datetime,
 ) -> None:
     await connection.execute(
-        _SAVE_DAY,
+        statement,
         {
             "org_id": uuid.UUID(binding.org_id),
             "id": target.id,
@@ -769,6 +820,7 @@ async def _save_day(
             "version": target.definition_version,
             "final": final,
             "computed_at": now,
+            "changed_why": slo.CHANGED_BY_DEFINITION,
         },
     )
 
@@ -864,6 +916,7 @@ async def _read_history_once(
     if target.kind in (slo.SERVICE_AVAILABILITY, slo.SERVICE_LATENCY):
         reach = min(reach, SERVICE_ROLLUP_DAYS)
     days = [today - timedelta(days=offset) for offset in range(reach, -1, -1)]
+    recount_from = slo.recount_limit(today, retention_days=reach)
     reader = store.for_project(binding.org_id, binding.project_id)
     first = target.first_event_at
     written = 0
@@ -889,6 +942,7 @@ async def _read_history_once(
             today=today,
             now=now,
             probe_locations=probe_locations,
+            recount_from=recount_from,
         )
     await connection.execute(
         _HISTORY_READ, keys | {"version": target.definition_version, "through": today}

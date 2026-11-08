@@ -8,7 +8,8 @@
 - **A lost minute** is one nexovue's own intake failed in (`detection/holds.py`). It
   is not quiet; it lowers coverage. Whatever did arrive in it still counts.
 - **Stretches.** Each day keeps its leading, trailing and longest quiet stretch, so a
-  stretch from 22:00 to 02:00 reads as 4 hours from Postgres alone.
+  stretch from 22:00 to 02:00 reads as 4 hours from Postgres alone
+  (`nexovue_platform.slo.longest_quiet`, which the API's months read too).
 
 A day counts only from the source's first event and up to the settled minute.
 
@@ -22,7 +23,7 @@ maintenance window (FR11). It has no quiet minutes.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Final
@@ -129,24 +130,6 @@ def day_rows_by_local_day(
             lost=lost,
         )
     return rows
-
-
-def longest_quiet(days: Sequence[DayRow]) -> int:
-    """The longest quiet stretch across consecutive days, joining one day's trailing
-    stretch to the next day's leading one, so a stretch can cross midnight."""
-    longest = carried = 0
-    for row in days:
-        if (
-            row.quiet_leading_minutes == row.quiet_minutes
-            and not row.held_an_event
-            and (row.lost_minutes == 0)
-        ):
-            carried += row.quiet_minutes
-            longest = max(longest, carried)
-            continue
-        longest = max(longest, row.longest_quiet_minutes, carried + row.quiet_leading_minutes)
-        carried = row.quiet_trailing_minutes
-    return longest
 
 
 def first_event(source: Mapping[datetime, MinuteCounts]) -> datetime | None:

@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_DOWN, ROUND_FLOOR, Decimal
-from typing import Final, Literal, Self
+from typing import Final, Literal, Protocol, Self
 from zoneinfo import ZoneInfo
 
 from nexovue_platform.jobs import JobRequest
@@ -74,6 +74,12 @@ READ_SLO_HISTORY_TASK: Final = "nexovue_scheduler.slos.read_slo_history"
 # A history read takes up to this long (design, *What each job does*): soft, then hard.
 HISTORY_SOFT_LIMIT_SECONDS: Final = 300
 HISTORY_HARD_LIMIT_SECONDS: Final = 330
+
+# FR31: a deleted target can be restored, and its daily figures stay, this long (a guess).
+# Then the scheduler purges it, keeping each complete month's result (D46).
+RESTORE_FOR: Final = timedelta(days=30)
+# How a target whose check was deleted is still labelled, by what it was (D43).
+DELETED_CHECK_NAME: Final = "deleted check"
 
 # A history job not started within a minute is overtaken by the next minute's hand-out,
 # which picks up any target whose history is behind (F19 AC64).
@@ -335,7 +341,7 @@ def window_days_of(today: date, window_days: int, *, first_event_day: date | Non
 
 @dataclass(frozen=True, slots=True)
 class DayCounts:
-    """One stored day of one target, as far as a window needs it."""
+    """One stored day of one target: what a window and a month need of it."""
 
     good: int
     total: int
@@ -346,6 +352,29 @@ class DayCounts:
     expected_runs: int | None = None
     missed_runs: int | None = None
     maintenance_runs: int | None = None
+    # The day's quiet time and stretches, so a month's longest crosses midnight.
+    quiet_minutes: int = 0
+    quiet_leading_minutes: int = 0
+    quiet_trailing_minutes: int = 0
+    longest_quiet_minutes: int = 0
+    # False when the day was first read after nexovue's loss records lapsed (FR28).
+    loss_known: bool = True
+    final: bool = False
+    definition_version: int = 0
+    # When a person's change rewrote the day once it was final, and why (BR13).
+    changed_at: datetime | None = None
+    changed_why: str | None = None
+
+    def replace(self, **changes: object) -> Self:
+        return replace(self, **changes)  # type: ignore[arg-type]
+
+    @classmethod
+    def of_row(cls, row: object) -> Self:
+        """A `slo_daily_counts` row, read by the API's model or the scheduler's statement."""
+        return cls(**{name: getattr(row, name) for name in _DAY_COLUMNS})
+
+
+_DAY_COLUMNS: Final = tuple(DayCounts.__dataclass_fields__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,6 +410,17 @@ def window_figures(
         for day in window_days_of(today, window_days, first_event_day=first_day)
         if day in days
     ]
+    return _summed(held, first_event_at=first_event_at, now=now, zone=zone)
+
+
+def _summed(
+    held: Sequence[tuple[date, DayCounts]],
+    *,
+    first_event_at: datetime | None,
+    now: datetime,
+    zone: ZoneInfo,
+) -> WindowFigures:
+    """The days held, summed: a window's or a month's figures and coverage (FR11)."""
     good = sum(counts.good for _, counts in held)
     total = sum(counts.total for _, counts in held)
     lost = sum(counts.lost_minutes for _, counts in held)
@@ -893,3 +933,294 @@ def facts_from_storage(
         check_interval_seconds=check_interval_seconds,
     )
     return facts, figures
+
+
+# ---------------------------------------------------------------- quiet stretches
+
+
+class QuietDay(Protocol):
+    """A stored day's quiet time: a scheduler's counted row or the API's stored one."""
+
+    @property
+    def total(self) -> int: ...
+    @property
+    def lost_minutes(self) -> int: ...
+    @property
+    def quiet_minutes(self) -> int: ...
+    @property
+    def quiet_leading_minutes(self) -> int: ...
+    @property
+    def quiet_trailing_minutes(self) -> int: ...
+    @property
+    def longest_quiet_minutes(self) -> int: ...
+
+
+def longest_quiet(days: Sequence[QuietDay]) -> int:
+    """The longest quiet stretch across consecutive days, joining one day's trailing
+    stretch to the next day's leading one, so a stretch can cross midnight (design,
+    *Status and days*). A whole quiet day carries the stretch on."""
+    longest = carried = 0
+    for day in days:
+        if (
+            day.quiet_leading_minutes == day.quiet_minutes
+            and day.total == 0
+            and day.lost_minutes == 0
+        ):
+            carried += day.quiet_minutes
+            longest = max(longest, carried)
+            continue
+        longest = max(longest, day.longest_quiet_minutes, carried + day.quiet_leading_minutes)
+        carried = day.quiet_trailing_minutes
+    return longest
+
+
+# ------------------------------------------------------------------------ months
+
+# FR27: months build up from the first day held, to this many, the current one
+# included; daily rows lapse at 400 days, which holds them (founder decision 20).
+MONTHS_SHOWN: Final = 13
+# BR13: a span's own time is trusted 7 days back, so an older day is final.
+FINAL_AFTER_DAYS: Final = 7
+# `intake_refusals` and `detection_events` are kept 29 days: a day first read later
+# cannot say what nexovue lost in it (FR28).
+LOSS_RECORDS_DAYS: Final = 29
+# FR27c: a day at least this far below its usual weekday is a sharp fall (a guess),
+# against the median of the same weekday in up to this many earlier weeks held.
+SHARP_FALL_PERCENT: Final = Decimal("50")
+SHARP_FALL_WEEKS_COMPARED: Final = SUGGESTION_WEEKS
+# `slo_daily_counts.changed_why` when a definition change rewrote a final day.
+CHANGED_BY_DEFINITION: Final = "definition"
+
+
+class MonthResult(enum.StrEnum):
+    """A month against its objective (FR27b): met, missed, or not judged below 90%."""
+
+    MET = "met"
+    MISSED = "missed"
+    NOT_JUDGED = "not_judged"
+
+
+@dataclass(frozen=True, slots=True)
+class SharpFall:
+    """FR27c: a day whose requests fell this far below its usual weekday."""
+
+    day: date
+    fall_percent: int
+
+
+@dataclass(frozen=True, slots=True)
+class MonthFigures:
+    """One local month of one target, from its stored days alone (FR27, AC44)."""
+
+    month: date
+    result: MonthResult
+    figure_percent: Decimal | None
+    good: int
+    total: int
+    failures: int
+    coverage: float | None
+    quiet_minutes: int
+    longest_quiet_minutes: int
+    lost_minutes: int
+    excluded_minutes: int
+    # A check's runs (FR27): none for a request kind.
+    missed_runs: int | None
+    maintenance_runs: int | None
+    days_held: int
+    days_in_month: int
+    # Any day under 7 days old (BR13).
+    may_still_change: bool
+    # False when any day was first read after nexovue's loss records lapsed (AC69).
+    loss_known: bool
+    # The latest change a person made to one of its days after the month ended.
+    changed_at: datetime | None
+    changed_why: str | None
+    # The last day still counted under an earlier definition (AC45); None when none is.
+    earlier_definition_through: date | None
+    sharp_falls: tuple[SharpFall, ...]
+
+
+def month_start(day: date) -> date:
+    return day.replace(day=1)
+
+
+def next_month(month: date) -> date:
+    return (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+def previous_month(month: date) -> date:
+    return month_start(month - timedelta(days=1))
+
+
+def days_in_month(month: date) -> int:
+    return (next_month(month) - month).days
+
+
+def month_result(
+    objective: Decimal, *, total: int, failures: int, coverage: float | None
+) -> MonthResult:
+    """Not judged below 90% coverage or with nothing counted (FR27), else met while
+    something is still allowed or exactly on the target."""
+    if coverage is None or coverage < COVERAGE_TO_JUDGE or total <= 0:
+        return MonthResult.NOT_JUDGED
+    if allowance_left(objective, total, failures) >= 0:
+        return MonthResult.MET
+    return MonthResult.MISSED
+
+
+def month_figures(
+    days: Mapping[date, DayCounts],
+    *,
+    month: date,
+    kind: str,
+    objective: Decimal,
+    definition_version: int,
+    first_event_at: datetime | None,
+    now: datetime,
+    zone: ZoneInfo,
+) -> MonthFigures | None:
+    """A month from the days it holds; None when it holds none. A day with no row adds
+    nothing: it was never counted (BR4)."""
+    held = [
+        (day, days[day])
+        for day in (month + timedelta(days=offset) for offset in range(days_in_month(month)))
+        if day in days
+    ]
+    if not held:
+        return None
+    summed = _summed(held, first_event_at=first_event_at, now=now, zone=zone)
+    today = now.astimezone(zone).date()
+    month_ended = day_bounds(next_month(month), zone)[0]
+    changes = [
+        (counts.changed_at, counts.changed_why)
+        for _, counts in held
+        if counts.changed_at is not None and counts.changed_at >= month_ended
+    ]
+    changed_at, changed_why = max(changes, key=lambda change: change[0], default=(None, None))
+    earlier = [day for day, counts in held if counts.definition_version < definition_version]
+    is_check = kind == CHECK_AVAILABILITY
+    return MonthFigures(
+        month=month,
+        result=month_result(
+            objective, total=summed.total, failures=summed.failures, coverage=summed.coverage
+        ),
+        figure_percent=figure_percent(summed.good, summed.total),
+        good=summed.good,
+        total=summed.total,
+        failures=summed.failures,
+        coverage=summed.coverage,
+        quiet_minutes=sum(counts.quiet_minutes for _, counts in held),
+        longest_quiet_minutes=longest_quiet([counts for _, counts in held]),
+        lost_minutes=summed.lost_minutes,
+        excluded_minutes=summed.excluded_minutes,
+        missed_runs=sum(counts.missed_runs or 0 for _, counts in held) if is_check else None,
+        maintenance_runs=(
+            sum(counts.maintenance_runs or 0 for _, counts in held) if is_check else None
+        ),
+        days_held=len(held),
+        days_in_month=days_in_month(month),
+        may_still_change=any((today - day).days < FINAL_AFTER_DAYS for day, _ in held),
+        loss_known=all(counts.loss_known for _, counts in held),
+        changed_at=changed_at,
+        changed_why=changed_why,
+        earlier_definition_through=max(earlier, default=None),
+        sharp_falls=()
+        if is_check
+        else sharp_falls(
+            days,
+            within=[day for day, _ in held],
+            partial={today, *([first_event_at.astimezone(zone).date()] if first_event_at else [])},
+        ),
+    )
+
+
+def months_of(
+    days: Mapping[date, DayCounts],
+    *,
+    kind: str,
+    objective: Decimal,
+    definition_version: int,
+    first_event_at: datetime | None,
+    now: datetime,
+    zone: ZoneInfo,
+) -> list[MonthFigures]:
+    """FR27: the months holding a day, newest first, the current one included, to 13."""
+    month = month_start(now.astimezone(zone).date())
+    found: list[MonthFigures] = []
+    for _ in range(MONTHS_SHOWN):
+        figures = month_figures(
+            days,
+            month=month,
+            kind=kind,
+            objective=objective,
+            definition_version=definition_version,
+            first_event_at=first_event_at,
+            now=now,
+            zone=zone,
+        )
+        if figures is not None:
+            found.append(figures)
+        month = previous_month(month)
+    return found
+
+
+def earliest_month_shown(today: date) -> date:
+    """The oldest month `months_of` can show from `today`."""
+    month = month_start(today)
+    for _ in range(MONTHS_SHOWN - 1):
+        month = previous_month(month)
+    return month
+
+
+def sharp_falls(
+    days: Mapping[date, DayCounts], *, within: Iterable[date], partial: Iterable[date]
+) -> tuple[SharpFall, ...]:
+    """FR27c: each day in `within` whose requests are at least 50% below the median of
+    the same weekday in up to four earlier weeks held. A partial day, today's or the
+    first event's, is never compared, nor compared against."""
+    skipped = set(partial)
+    falls: list[SharpFall] = []
+    for day in within:
+        if day in skipped or day not in days:
+            continue
+        earlier = [
+            days[before].total
+            for before in (
+                day - timedelta(weeks=weeks) for weeks in range(1, SHARP_FALL_WEEKS_COMPARED + 1)
+            )
+            if before in days and before not in skipped
+        ]
+        if not earlier:
+            continue
+        usual = Decimal(statistics.median(earlier))
+        if usual <= 0:
+            continue
+        fall = (usual - days[day].total) * 100 / usual
+        if fall >= SHARP_FALL_PERCENT:
+            falls.append(SharpFall(day=day, fall_percent=int(fall)))
+    return tuple(falls)
+
+
+def recount_limit(today: date, *, retention_days: int) -> date:
+    """FR28: the oldest day a change may rewrite: the later of what the source still
+    holds and the 29 days nexovue's loss records last."""
+    held_from = today - timedelta(days=retention_days - 1)
+    return max(held_from, today - timedelta(days=LOSS_RECORDS_DAYS))
+
+
+# FR27b: the fixed label every copied month and CSV row carries, by kind (D42).
+_REQUEST_REPORT_LABEL: Final = (
+    "Measured from requests that reached the service and were reported. Not a contract figure."
+)
+_CHECK_REPORT_LABEL: Final = (
+    "Measured from nexovue's own check runs, one view from outside. Runs in maintenance "
+    "windows are not counted. Not a contract figure."
+)
+# Founder decision 2 (foundation item 16): until a lawyer reads it, a figure is for
+# the team and the board.
+AUDIENCE_LINE: Final = "For your own team and board, not for customer promises."
+
+
+def report_label(kind: str) -> str:
+    """The fixed label for a kind's month, used by the copy action and the CSV alike."""
+    return _CHECK_REPORT_LABEL if kind == CHECK_AVAILABILITY else _REQUEST_REPORT_LABEL

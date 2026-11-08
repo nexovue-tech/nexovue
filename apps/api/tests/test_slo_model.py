@@ -562,3 +562,259 @@ def test_fr16_a_check_slower_than_2_4_hours_a_run_cannot_be_judged() -> None:
     assert slo.alerts_can_judge_interval(8_640)
     assert not slo.alerts_can_judge_interval(8_641)
     assert not slo.alerts_can_judge_interval(21_600)
+
+
+# ------------------------------------------------------ Step 3: the monthly answer
+
+OCTOBER = date(2026, 10, 1)
+# A month read on 7 November, its days all older than 7 days.
+AFTER_OCTOBER = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
+LONG_AGO = datetime(2026, 1, 1, tzinfo=UTC)
+MINUTES_IN_A_DAY = 24 * 60
+DECIMAL_OBJECTIVE = Decimal("99.9")
+
+
+def _october_days(**changes: object) -> dict[date, DayCounts]:
+    """31 full days of 10,000 requests and 5 failures each, all final."""
+    base = DayCounts(
+        good=9_995,
+        total=10_000,
+        lost_minutes=0,
+        final=True,
+        definition_version=1,
+    )
+    return {OCTOBER + timedelta(days=offset): base.replace(**changes) for offset in range(31)}
+
+
+def _month(days: dict[date, DayCounts], **options: object) -> slo.MonthFigures:
+    arguments: dict[str, object] = {
+        "month": OCTOBER,
+        "kind": slo.SERVICE_AVAILABILITY,
+        "objective": DECIMAL_OBJECTIVE,
+        "definition_version": 1,
+        "first_event_at": LONG_AGO,
+        "now": AFTER_OCTOBER,
+        "zone": UTC_ZONE,
+    }
+    arguments.update(options)
+    month = slo.month_figures(days, **arguments)  # type: ignore[arg-type]
+    assert month is not None
+    return month
+
+
+def test_fr27_a_whole_month_gives_its_figure_and_result() -> None:
+    month = _month(_october_days())
+    assert (month.good, month.total, month.failures) == (309_845, 310_000, 155)
+    assert month.figure_percent == Decimal("99.95")
+    assert month.result is slo.MonthResult.MET
+    assert (month.days_held, month.days_in_month) == (31, 31)
+    assert month.may_still_change is False and month.loss_known is True
+
+
+def test_a_month_past_its_allowance_is_missed() -> None:
+    month = _month(_october_days(good=9_980))
+    assert month.result is slo.MonthResult.MISSED
+    assert month.figure_percent is not None and month.figure_percent < DECIMAL_OBJECTIVE
+
+
+@pytest.mark.parametrize(("measured", "judged"), [(0.89, False), (0.91, True)])
+def test_ac77_a_month_at_89_percent_coverage_is_not_judged_and_at_91_is(
+    measured: float, judged: bool
+) -> None:
+    lost = round(MINUTES_IN_A_DAY * (1 - measured))
+    month = _month(_october_days(lost_minutes=lost))
+    assert (month.result is not slo.MonthResult.NOT_JUDGED) is judged
+    assert month.coverage == pytest.approx(measured, abs=0.001)
+
+
+def test_ac77_may_still_change_while_any_day_is_under_7_days_old() -> None:
+    days = _october_days()
+    assert _month(days, now=datetime(2026, 11, 5, tzinfo=UTC)).may_still_change is True
+    assert _month(days, now=datetime(2026, 11, 8, 1, tzinfo=UTC)).may_still_change is False
+
+
+def test_ac77_a_month_changed_after_it_ended_says_when_and_why() -> None:
+    days = _october_days()
+    changed = datetime(2026, 11, 3, 9, tzinfo=UTC)
+    days[date(2026, 10, 14)] = days[date(2026, 10, 14)].replace(
+        changed_at=changed, changed_why=slo.CHANGED_BY_DEFINITION
+    )
+    month = _month(days)
+    assert (month.changed_at, month.changed_why) == (changed, "definition")
+    # A change while the month was still under way is not a change after it ended.
+    days[date(2026, 10, 14)] = days[date(2026, 10, 14)].replace(
+        changed_at=datetime(2026, 10, 20, tzinfo=UTC)
+    )
+    assert _month(days).changed_at is None
+
+
+def test_ac45_a_month_holding_two_definitions_says_where_the_old_one_ends() -> None:
+    days = _october_days(definition_version=2)
+    for offset in range(10):
+        day = OCTOBER + timedelta(days=offset)
+        days[day] = days[day].replace(definition_version=1)
+    month = _month(days, definition_version=2)
+    assert month.earlier_definition_through == date(2026, 10, 10)
+    assert (
+        _month(_october_days(definition_version=2), definition_version=2).earlier_definition_through
+        is None
+    )
+
+
+def test_ac69_a_day_whose_losses_are_not_known_carries_onto_its_month() -> None:
+    days = _october_days()
+    days[date(2026, 10, 2)] = days[date(2026, 10, 2)].replace(loss_known=False)
+    assert _month(days).loss_known is False
+
+
+def test_fr27_a_month_holds_only_its_counted_days_and_says_how_many() -> None:
+    days = {day: counts for day, counts in _october_days().items() if day.day >= 20}
+    month = _month(days, first_event_at=datetime(2026, 10, 20, tzinfo=UTC))
+    assert (month.days_held, month.days_in_month) == (12, 31)
+    assert _month(_october_days(), month=date(2026, 10, 1)).days_held == 31
+    assert (
+        slo.month_figures(
+            {},
+            month=OCTOBER,
+            kind=slo.SERVICE_AVAILABILITY,
+            objective=DECIMAL_OBJECTIVE,
+            definition_version=1,
+            first_event_at=LONG_AGO,
+            now=AFTER_OCTOBER,
+            zone=UTC_ZONE,
+        )
+        is None
+    )
+
+
+def test_ac77_a_nightly_lull_crossing_midnight_is_one_stretch() -> None:
+    days = _october_days(quiet_minutes=0)
+    evening, morning = date(2026, 10, 14), date(2026, 10, 15)
+    days[evening] = days[evening].replace(
+        quiet_minutes=120, quiet_trailing_minutes=120, longest_quiet_minutes=120
+    )
+    days[morning] = days[morning].replace(
+        quiet_minutes=125, quiet_leading_minutes=125, longest_quiet_minutes=125
+    )
+    month = _month(days)
+    assert month.quiet_minutes == 245
+    assert month.longest_quiet_minutes == 245
+
+
+def test_fr27_a_check_month_states_its_missed_and_maintenance_runs() -> None:
+    days = _october_days(expected_runs=288, missed_runs=2, maintenance_runs=12)
+    month = _month(days, kind=slo.CHECK_AVAILABILITY)
+    assert (month.missed_runs, month.maintenance_runs) == (62, 372)
+    assert month.sharp_falls == ()
+
+
+def test_ac113_a_day_60_percent_below_its_weekday_is_a_sharp_fall_and_40_percent_is_not() -> None:
+    days = _october_days()
+    days[date(2026, 10, 14)] = days[date(2026, 10, 14)].replace(good=4_000, total=4_000)
+    days[date(2026, 10, 21)] = days[date(2026, 10, 21)].replace(good=6_000, total=6_000)
+    falls = _month(days).sharp_falls
+    assert falls == (slo.SharpFall(day=date(2026, 10, 14), fall_percent=60),)
+
+
+def test_fr27c_a_partial_first_day_is_never_a_sharp_fall() -> None:
+    days = _october_days()
+    days[date(2026, 10, 15)] = days[date(2026, 10, 15)].replace(good=100, total=100)
+    first = datetime(2026, 10, 15, 23, 0, tzinfo=UTC)
+    month = _month(days, first_event_at=first)
+    assert month.sharp_falls == ()
+
+
+def test_fr27_months_build_up_from_the_first_day_held_and_stop_at_13() -> None:
+    today = date(2027, 12, 15)
+    days = {
+        date(2026, 1, 1) + timedelta(days=offset): DayCounts(good=10, total=10, lost_minutes=0)
+        for offset in range((today - date(2026, 1, 1)).days + 1)
+    }
+    months = slo.months_of(
+        days,
+        kind=slo.SERVICE_AVAILABILITY,
+        objective=DECIMAL_OBJECTIVE,
+        definition_version=0,
+        first_event_at=LONG_AGO,
+        now=datetime(2027, 12, 15, 12, tzinfo=UTC),
+        zone=UTC_ZONE,
+    )
+    assert [month.month for month in months][:2] == [date(2027, 12, 1), date(2027, 11, 1)]
+    assert len(months) == slo.MONTHS_SHOWN == 13
+    assert months[-1].month == date(2026, 12, 1)
+    young = {day: counts for day, counts in days.items() if day >= date(2027, 11, 20)}
+    assert (
+        len(
+            slo.months_of(
+                young,
+                kind=slo.SERVICE_AVAILABILITY,
+                objective=DECIMAL_OBJECTIVE,
+                definition_version=0,
+                first_event_at=LONG_AGO,
+                now=datetime(2027, 12, 15, 12, tzinfo=UTC),
+                zone=UTC_ZONE,
+            )
+        )
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "label"),
+    [
+        (slo.SERVICE_AVAILABILITY, "Measured from requests that reached the service"),
+        (slo.SERVICE_LATENCY, "Measured from requests that reached the service"),
+        (slo.ENDPOINT_AVAILABILITY, "Measured from requests that reached the service"),
+        (slo.CHECK_AVAILABILITY, "Measured from nexovue's own check runs, one view from outside"),
+    ],
+)
+def test_fr27b_each_kind_carries_its_fixed_label(kind: str, label: str) -> None:
+    assert slo.report_label(kind).startswith(label)
+    assert slo.report_label(kind).endswith("Not a contract figure.")
+
+
+def test_fr28_the_recount_limit_is_the_later_of_retention_and_29_days() -> None:
+    today = date(2026, 11, 8)
+    assert slo.recount_limit(today, retention_days=395) == date(2026, 10, 10)
+    assert slo.recount_limit(today, retention_days=30) == date(2026, 10, 10)
+    assert slo.recount_limit(today, retention_days=7) == date(2026, 11, 2)
+
+
+def test_the_longest_quiet_stretch_joins_days_across_midnight() -> None:
+    evening = DayCounts(
+        good=5,
+        total=5,
+        lost_minutes=0,
+        quiet_minutes=120,
+        quiet_trailing_minutes=120,
+        longest_quiet_minutes=120,
+    )
+    night = DayCounts(
+        good=0,
+        total=0,
+        lost_minutes=0,
+        quiet_minutes=1440,
+        quiet_leading_minutes=1440,
+        quiet_trailing_minutes=1440,
+        longest_quiet_minutes=1440,
+    )
+    morning = DayCounts(
+        good=5,
+        total=5,
+        lost_minutes=0,
+        quiet_minutes=60,
+        quiet_leading_minutes=60,
+        longest_quiet_minutes=60,
+    )
+    assert slo.longest_quiet([evening, night, morning]) == 120 + 1440 + 60
+
+
+def test_the_months_migration_froze_the_same_kinds_results_and_answers() -> None:
+    path = next((Path(__file__).resolve().parents[1] / "migrations/versions").glob("0053_*.py"))
+    spec = importlib.util.spec_from_file_location("revision_0053", path)
+    assert spec is not None and spec.loader is not None
+    revision = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(revision)
+    assert ", ".join(f"'{kind}'" for kind in slo.KINDS) == revision._KINDS
+    assert ", ".join(f"'{result}'" for result in slo.MonthResult) == revision._RESULTS
+    assert ", ".join(f"'{answer}'" for answer in slo.SAMPLING_ANSWERS) == revision._SAMPLING

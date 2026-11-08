@@ -5,6 +5,11 @@ silence's length, never **On track**, after 16 minutes, 25 hours, 3, 10 and 27 d
 at figures of 100% and 99.99%. AC64's history loop and crash recovery, AC65's
 longest-waiting order, AC66's overlapping and older runs, and AC48's stale status.
 
+Step 3 (T3.2): AC7's final days, rewritten only by a definition change inside the
+recount limit and marked changed; AC45's older days kept under the old definition;
+AC69's day beyond the limit untouched and a day first read past 29 days marked loss
+not known; and AC64's last clause with a final day inside the limit.
+
 The jobs `queue_jobs` hands out are read back from `jobs` and run by name, as a worker
 would. This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -393,3 +398,197 @@ async def test_ac48_status_the_job_stopped_writing_reads_not_up_to_date(
 
     later = await _status(engine, target, now=now + 16 * MINUTE)
     assert later.state is slo.State.NOT_UP_TO_DATE
+
+
+# ------------------------------------------------------------- Step 3: recounts
+
+
+async def _on_a_paid_plan(engine: AsyncEngine, tenant: AlertTenant) -> None:
+    """395 days of derived retention, so a service target reaches its 35 days of rollups
+    and a day can sit inside them and past the 29-day recount limit."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE organizations SET plan = 'pro' WHERE id = :org_id"),
+            {"org_id": tenant.org_id},
+        )
+
+
+async def _store_day(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    target: uuid.UUID,
+    day: Any,
+    *,
+    total: int,
+    version: int,
+    final: bool,
+) -> None:
+    """A day as an earlier count left it: `total` requests, none failing."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO slo_daily_counts (org_id, slo_id, day, good, total, failures,
+                    quiet_minutes, lost_minutes, quiet_leading_minutes, quiet_trailing_minutes,
+                    longest_quiet_minutes, definition_version, final, computed_at)
+                VALUES (:org_id, :id, :day, :total, :total, 0, 0, 0, 0, 0, 0, :version,
+                        :final, now() - interval '30 days')
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "id": target,
+                "day": day,
+                "total": total,
+                "version": version,
+                "final": final,
+            },
+        )
+
+
+async def _days(engine: AsyncEngine, target: uuid.UUID) -> dict[Any, Any]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                "SELECT day, total, definition_version, final, loss_known, changed_at, "
+                "changed_why FROM slo_daily_counts WHERE slo_id = :id"
+            ),
+            {"id": target},
+        )
+        return {row.day: row for row in rows}
+
+
+async def _change_what_is_counted(engine: AsyncEngine, target: uuid.UUID, version: int) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_targets SET definition_version = :version WHERE id = :id"),
+            {"id": target, "version": version},
+        )
+
+
+async def test_ac7_a_final_day_is_rewritten_only_by_a_definition_change_inside_the_limit(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    today = now.date()
+    inside, beyond = today - timedelta(days=10), today - timedelta(days=32)
+    await _on_a_paid_plan(engine, project)
+    write_service(
+        administrator,
+        project,
+        SERVICE,
+        {
+            datetime.combine(day, datetime.min.time(), UTC) + timedelta(hours=12): (40, 0)
+            for day in (inside, beyond, today - timedelta(days=34))
+        },
+    )
+    target = await _target(engine, project, history_read_version=1)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_targets SET first_event_at = :first WHERE id = :id"),
+            {"id": target, "first": now - timedelta(days=40)},
+        )
+    await _store_day(engine, project, target, inside, total=7, version=1, final=True)
+    await _store_day(engine, project, target, beyond, total=7, version=1, final=True)
+
+    await job.count_slos(engine, slo_store, project.project_id, now=now)
+    assert (await _days(engine, target))[inside].total == 7
+
+    await _change_what_is_counted(engine, target, 2)
+    await job.read_slo_history(engine, slo_store, target, now=now)
+    days = await _days(engine, target)
+
+    assert (days[inside].total, days[inside].definition_version) == (40, 2)
+    assert days[inside].final is True
+    assert days[inside].changed_why == slo.CHANGED_BY_DEFINITION
+    assert days[inside].changed_at is not None
+    # AC45, AC69: past the limit a day stays as counted, under the old definition.
+    assert (days[beyond].total, days[beyond].definition_version) == (7, 1)
+    assert days[beyond].changed_at is None
+    # AC69: a day first read past the 29 days nexovue's loss records last.
+    first_read = days[today - timedelta(days=34)]
+    assert (first_read.total, first_read.loss_known) == (40, False)
+    assert days[inside].loss_known is True
+
+
+async def test_a_recount_that_changes_nothing_marks_no_day_changed(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    inside = now.date() - timedelta(days=10)
+    write_service(
+        administrator,
+        project,
+        SERVICE,
+        {datetime.combine(inside, datetime.min.time(), UTC) + timedelta(hours=12): (40, 0)},
+    )
+    target = await _target(engine, project, history_read_version=1)
+    await _store_day(engine, project, target, inside, total=40, version=1, final=True)
+
+    await _change_what_is_counted(engine, target, 2)
+    await job.read_slo_history(engine, slo_store, target, now=now)
+    day = (await _days(engine, target))[inside]
+
+    assert (day.total, day.definition_version, day.changed_at) == (40, 2, None)
+
+
+async def test_a_count_never_writes_an_older_definition_over_a_newer_day(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    now = _now()
+    write_service(administrator, project, SERVICE, {now - 30 * MINUTE: (40, 0)})
+    target = await _target(engine, project, history_read_version=1)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_targets SET first_event_at = :first WHERE id = :id"),
+            {"id": target, "first": now - timedelta(days=1)},
+        )
+    # A recount under version 3 landed while this count still held version 1.
+    await _store_day(engine, project, target, now.date(), total=9, version=3, final=False)
+
+    await job.count_slos(engine, slo_store, project.project_id, now=now)
+
+    day = (await _days(engine, target))[now.date()]
+    assert (day.total, day.definition_version) == (9, 3)
+
+
+async def test_ac64_a_change_during_a_read_recounts_final_days_inside_the_limit_too(
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _now()
+    inside = now.date() - timedelta(days=10)
+    write_service(
+        administrator,
+        project,
+        SERVICE,
+        {datetime.combine(inside, datetime.min.time(), UTC) + timedelta(hours=12): (40, 0)},
+    )
+    target = await _target(engine, project)
+    await _store_day(engine, project, target, inside, total=7, version=1, final=True)
+    changed = False
+    count_days = job._count_days
+
+    async def change_once(connection: Any, *arguments: Any, **options: Any) -> int:
+        nonlocal changed
+        if not changed:
+            changed = True
+            await connection.execute(
+                text(
+                    "UPDATE slo_targets SET definition_version = 2 "
+                    "WHERE id = :id AND org_id = :org_id"
+                ),
+                {"id": target, "org_id": project.org_id},
+            )
+            await connection.commit()
+        return await count_days(connection, *arguments, **options)
+
+    monkeypatch.setattr(job, "_count_days", change_once)
+    await job.read_slo_history(engine, slo_store, target, now=now)
+
+    days = await _days(engine, target)
+    assert {day.definition_version for day in days.values()} == {2}
+    assert days[inside].total == 40

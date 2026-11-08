@@ -6,6 +6,11 @@ account and leaves every audit entry naming the user id, never the address or
 the name (AC2); the last owner is refused and nothing changes (AC3); an admin's
 removal leaves the same audit result (AC4).
 
+F19 AC88 (plan T3.5): removing a person replaces their address and full name inside
+reliability targets' names and descriptions, live or deleted, and at any depth in their
+change history, across the whole organization whoever wrote them; and the export holds
+the changes they made, and nobody else's.
+
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
@@ -39,6 +44,8 @@ from nexovue_api.data.postgres.models import (
     Finding,
     FindingNote,
     SessionRecord,
+    SloTarget,
+    SloTargetChange,
     User,
 )
 from nexovue_api.detection import service as detection
@@ -501,3 +508,115 @@ async def test_an_admins_removal_scrubs_the_same_way(
     removed = next(entry for entry in entries if entry.action == audit.MEMBER_REMOVED)
     assert removed.actor_user_id == acme.user.id
     assert removed.detail == {"role": "member"}
+
+
+# ---- F19 AC88: reliability targets ------------------------------------------------------
+
+
+async def _slo_target(
+    db: AsyncSession, acme: ProvisionedTenant, *, name: str, description: str, **extra: Any
+) -> SloTarget:
+    target = SloTarget(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        name=name,
+        description=description,
+        kind="service_availability",
+        service_name="checkout",
+        objective_percent=99.9,
+        window_days=28,
+        upstream_sampling="no",
+        definition_key=f"key-{uuid.uuid4()}",
+        **extra,
+    )
+    db.add(target)
+    await db.flush()
+    return target
+
+
+def _slo_change(
+    acme: ProvisionedTenant, target: SloTarget, actor: User, before: Any, after: Any
+) -> SloTargetChange:
+    return SloTargetChange(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        slo_id=target.id,
+        actor_user_id=actor.id,
+        what="changed",
+        before=before,
+        after=after,
+    )
+
+
+async def test_ac88_removal_replaces_the_person_inside_every_target_s_free_text(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    priya = await _join(db, acme, "member", "Priya Raman")
+    address = priya.email
+    live = await _slo_target(
+        db, acme, name="Checkout for Priya Raman", description=f"Ask {address} first"
+    )
+    deleted = await _slo_target(
+        db,
+        acme,
+        name="Old checkout",
+        description="PRIYA RAMAN's draft",
+        deleted_at=_now(),
+    )
+    untouched = await _slo_target(db, acme, name="Priyanka's cart", description="")
+    # Written by someone else, naming her deep inside.
+    db.add(
+        _slo_change(
+            acme,
+            live,
+            acme.user,
+            {"name": "x", "notes": [{"by": f"{address}"}]},
+            {"name": "Checkout for Priya Raman", "nested": {"who": ["Priya Raman"]}},
+        )
+    )
+    await db.flush()
+
+    await members.remove(
+        db, actor=acme.user, organization=acme.organization, member_id=priya.id, now=_now()
+    )
+    await db.flush()
+
+    for target in (live, deleted, untouched):
+        await db.refresh(target)
+    assert live.name == f"Checkout for {members.FORMER_MEMBER_NAME}"
+    assert live.description == f"Ask {members.FORMER_MEMBER_NAME} first"
+    assert deleted.description == f"{members.FORMER_MEMBER_NAME}'s draft"
+    assert untouched.name == "Priyanka's cart"
+    changes = list(
+        await db.scalars(
+            select(SloTargetChange).where(SloTargetChange.org_id == acme.organization.id)
+        )
+    )
+    written = json.dumps([[change.before, change.after] for change in changes])
+    assert address not in written and "Priya Raman" not in written
+    assert members.FORMER_MEMBER_NAME in written
+
+
+async def test_ac88_the_export_holds_the_target_changes_the_person_made(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    priya = await _join(db, acme, "member", "Priya")
+    other = await _join(db, acme, "member", "Other")
+    target = await _slo_target(db, acme, name="checkout", description="")
+    db.add_all(
+        [
+            _slo_change(
+                acme, target, priya, {"objective_percent": "99.9"}, {"objective_percent": "99.5"}
+            ),
+            _slo_change(acme, target, other, {"name": "a"}, {"name": "b"}),
+        ]
+    )
+    await db.flush()
+
+    exported = await personal_data.export(
+        db, user=priya, organization=acme.organization, now=_now()
+    )
+
+    assert [(change.slo_id, change.after) for change in exported.slo_target_changes] == [
+        (target.id, {"objective_percent": "99.5"})
+    ]

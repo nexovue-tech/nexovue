@@ -175,6 +175,12 @@ CROSS_TENANT_STATEMENTS: Final = (
         "what establishes the tenant: a history job is given a target id and reads its "
         "project, and through it the organization, from the target's own row (F6's m6)",
     ),
+    _across(
+        "slos.retention",
+        "_DUE_FOR_PURGE",
+        f"{_SWEEP}: deleted targets past restoring, purged one by one, each in its own "
+        "transaction binding its own `org_id` (F19 FR31)",
+    ),
     # The job queue and its metrics.
     _across("jobs.queue", "_CLAIM", "a worker claims due jobs of every organization"),
     _across("jobs.queue", "_FINISH", "a claimed job, by its id and this worker's lease"),

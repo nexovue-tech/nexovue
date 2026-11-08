@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from nexovue_platform import slo
 from pydantic import BaseModel, Field, StringConstraints
@@ -152,3 +152,116 @@ class SloList(BaseModel):
     zone: str
     # The project's sources, so an empty list can say "Nothing is reporting yet" (AC41).
     has_services: bool
+
+
+# ------------------------------------------------------------------- months (FR27)
+
+OutageKind = Literal["traffic_finding", "silence_incident"]
+
+
+class SloSharpFall(BaseModel):
+    """FR27c: a day whose requests fell this far below its usual weekday."""
+
+    day: date
+    fall_percent: int
+
+
+class SloOutage(BaseModel):
+    """FR27a: a traffic finding or a silence incident on the target's service in the
+    month, while that record lasts. Its silence is not counted as failure."""
+
+    kind: OutageKind
+    id: uuid.UUID
+    started_at: datetime
+    minutes: int
+
+
+class SloMonth(BaseModel):
+    """One local month of one target, from its stored days (FR27, AC44)."""
+
+    month: date
+    result: slo.MonthResult
+    figure_percent: Decimal | None
+    objective_percent: Decimal
+    good: int
+    total: int
+    failures: int
+    coverage: float | None
+    quiet_minutes: int
+    longest_quiet_minutes: int
+    lost_minutes: int
+    excluded_minutes: int
+    # A check's runs (FR27); None for a request kind.
+    missed_runs: int | None
+    maintenance_runs: int | None
+    days_held: int
+    days_in_month: int
+    may_still_change: bool
+    loss_known: bool
+    # A person's change to one of its days after the month ended (BR13).
+    changed_at: datetime | None
+    changed_why: str | None
+    earlier_definition_through: date | None
+    sharp_falls: list[SloSharpFall]
+    outages: list[SloOutage]
+    # Lost, excluded or outage time it does not count (FR27b's "time not counted").
+    time_not_counted: bool
+
+
+class SloMonths(BaseModel):
+    """A target's months, newest first, up to 13 (founder decision 20)."""
+
+    id: uuid.UUID
+    label: str
+    kind: str
+    upstream_sampling: str | None
+    # FR27b's fixed label for the kind, as the CSV carries it (D42).
+    report_label: str
+    audience: str
+    zone: str
+    months: list[SloMonth]
+
+
+class SloMonthRow(SloMonth):
+    """One target's row in *Last month* (FR27b): live, deleted or purged."""
+
+    id: uuid.UUID
+    # A purged target's name is gone with it; its composed label stays (D46).
+    name: str | None
+    label: str
+    kind: str
+    upstream_sampling: str | None
+    report_label: str
+    deleted_at: datetime | None
+
+
+class SloLastMonth(BaseModel):
+    """FR27b: "N of M targets met", with missed and not judged named, and no single
+    blended figure across targets. One project, because a project is an environment
+    (D47)."""
+
+    month: date
+    zone: str
+    audience: str
+    targets: int
+    met: int
+    missed: int
+    not_judged: int
+    met_with_time_not_counted: int
+    rows: list[SloMonthRow]
+
+
+class SloHistoryEntry(BaseModel):
+    """One change (FR30). Who made it is named to a person only (AC33)."""
+
+    at: datetime
+    what: str
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+    by_name: str | None
+
+
+class SloHistory(BaseModel):
+    """Newest first."""
+
+    entries: list[SloHistoryEntry]

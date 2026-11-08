@@ -15,7 +15,7 @@ import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
 
-import type { SloList, SloView } from "./api";
+import type { SloList, SloMonth, SloMonthRow, SloMonths, SloView } from "./api";
 import { EditSloScreen, NewSloScreen } from "./SloForm";
 import { SloScreen } from "./SloScreen";
 import { SlosScreen } from "./SlosScreen";
@@ -81,6 +81,69 @@ export function target(overrides: Partial<SloView> = {}): SloView {
   };
 }
 
+/** A whole October, met at 99.95% against 99.9%, every minute measured. */
+export function month(overrides: Partial<SloMonth> = {}): SloMonth {
+  return {
+    month: "2026-10-01",
+    result: "met",
+    figure_percent: "99.95",
+    objective_percent: "99.90",
+    good: 309_845,
+    total: 310_000,
+    failures: 155,
+    coverage: 1,
+    quiet_minutes: 0,
+    longest_quiet_minutes: 0,
+    lost_minutes: 0,
+    excluded_minutes: 0,
+    missed_runs: null,
+    maintenance_runs: null,
+    days_held: 31,
+    days_in_month: 31,
+    may_still_change: false,
+    loss_known: true,
+    changed_at: null,
+    changed_why: null,
+    earlier_definition_through: null,
+    sharp_falls: [],
+    outages: [],
+    time_not_counted: false,
+    ...overrides,
+  };
+}
+
+export const REQUEST_LABEL =
+  "Measured from requests that reached the service and were reported. Not a contract figure.";
+export const AUDIENCE = "For your own team and board, not for customer promises.";
+
+export function monthsOf(months: SloMonth[], overrides: Partial<SloMonths> = {}): SloMonths {
+  return {
+    id: "slo-1",
+    label: "checkout availability, 99.9% over 28 days",
+    kind: "service_availability",
+    upstream_sampling: "no",
+    report_label: REQUEST_LABEL,
+    audience: AUDIENCE,
+    zone: "UTC",
+    months,
+    ...overrides,
+  };
+}
+
+export function monthRow(overrides: Partial<SloMonthRow> = {}): SloMonthRow {
+  return {
+    ...month(),
+    id: "slo-1",
+    name: "checkout availability",
+    label: "checkout availability, 99.9% over 28 days",
+    kind: "service_availability",
+    upstream_sampling: "no",
+    report_label: REQUEST_LABEL,
+    deleted_at: null,
+    ...overrides,
+  };
+}
+
 export function list(targets: SloView[], overrides: Partial<SloList> = {}): SloList {
   return { targets, deleted: [], zone: "UTC", has_services: true, ...overrides };
 }
@@ -93,7 +156,13 @@ export const json =
 
 export function stubApi(handlers: Record<string, Handler>, role: TestRole = "owner") {
   const calls: Array<{ method: string; path: string; body: unknown }> = [];
-  const all: Record<string, Handler> = { "GET /auth/me": json(identityFor(role)), ...handlers };
+  const all: Record<string, Handler> = {
+    "GET /auth/me": json(identityFor(role)),
+    // A target's page opens on its months; a test about the rest need not say so.
+    "GET /slos/slo-1/months": json(monthsOf([])),
+    "GET /slos/slo-1/history": json({ entries: [] }),
+    ...handlers,
+  };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: URL, init?: RequestInit) => {

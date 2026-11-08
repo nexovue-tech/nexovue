@@ -32,13 +32,17 @@ from nexovue_api.profile.schemas import (
     ExportedOrganization,
     ExportedProfile,
     ExportedSession,
+    ExportedSloChange,
     PersonalDataExport,
 )
+from nexovue_api.slos import queries as slo_queries
 
 # Years of activity still answers in seconds at this bound (spec, NFR).
 MAX_ACTIVITY_ENTRIES: Final = 10_000
 # The same bound for case notes (F22 AC25): at most 4,000 characters each.
 MAX_NOTES_EXPORTED: Final = 10_000
+# And for reliability target changes (F19 AC88).
+MAX_SLO_CHANGES_EXPORTED: Final = 10_000
 
 SOLE_OWNER_REFUSAL: Final = (
     "You are this organization's only owner. "
@@ -60,6 +64,9 @@ async def export(
     # bound was reached.
     notes = await queries.notes_written(
         db, org_id=organization.id, user_id=user.id, limit=MAX_NOTES_EXPORTED + 1
+    )
+    slo_changes = await slo_queries.changes_made_by(
+        db, org_id=organization.id, user_id=user.id, limit=MAX_SLO_CHANGES_EXPORTED + 1
     )
     return PersonalDataExport(
         exported_at=now,
@@ -125,6 +132,19 @@ async def export(
             for note in notes[:MAX_NOTES_EXPORTED]
         ],
         notes_truncated=len(notes) > MAX_NOTES_EXPORTED,
+        slo_target_changes=[
+            ExportedSloChange(
+                id=change.id,
+                project_id=change.project_id,
+                slo_id=change.slo_id,
+                at=change.at,
+                what=change.what,
+                before=change.before,
+                after=change.after,
+            )
+            for change in slo_changes[:MAX_SLO_CHANGES_EXPORTED]
+        ],
+        slo_target_changes_truncated=len(slo_changes) > MAX_SLO_CHANGES_EXPORTED,
     )
 
 

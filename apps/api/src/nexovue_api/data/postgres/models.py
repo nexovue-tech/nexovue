@@ -2697,3 +2697,42 @@ class SloTargetChange(Base):
         Index("ix_slo_target_changes_org_id_slo_id_at", "org_id", "slo_id", "at"),
         Index("ix_slo_target_changes_org_id_actor_user_id", "org_id", "actor_user_id"),
     )
+
+
+class SloDeletedMonth(Base):
+    """A purged target's month result (F19, FR31, D46): written before its daily figures
+    go, so a past month still counts it. It goes with the project."""
+
+    __tablename__ = "slo_deleted_months"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    month: Mapped[date] = mapped_column(Date, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    objective_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    figure_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    good: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    coverage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quiet_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    longest_quiet_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    lost_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    excluded_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    missed_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maintenance_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    days_held: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    days_in_month: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    loss_known: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    upstream_sampling: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        Index("ix_slo_deleted_months_org_id_project_id_month", "org_id", "project_id", "month"),
+    )

@@ -5,11 +5,13 @@ import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { Tabs } from "@/shared/components/Tabs";
 import { useCan } from "@/shared/identity";
 import { useProjectSelection } from "@/shared/projects";
 
 import type { DeletedSlo, SloView } from "./api";
 import { useRestoreSlo, useSlos } from "./api";
+import { LastMonthView } from "./LastMonthView";
 import { SloBadge } from "./SloBadge";
 import {
   deletedLineOf,
@@ -25,26 +27,56 @@ import {
  *
  * A linked list, not `DataTable`, so state and sentence stay visible at 375px. Rows
  * come in FR10a's order from the API; a row this browser sees go stale joins the
- * counted ones, so the top N rows are the headline's N.
+ * counted ones, so the top N rows are the headline's N. Two views: *Now*, and *Last
+ * month* across the project's targets (FR27b).
  */
 export function SlosScreen() {
   const { projectId } = useProjectSelection();
+  const [shown, setShown] = useState<View>("now");
+
+  return (
+    <div className="flex flex-col gap-4 px-4 py-5">
+      <SlosHeader />
+      <Tabs label="Views" items={VIEWS} selected={shown} onSelect={(id) => setShown(id as View)}>
+        {shown === "now" ? (
+          <NowView projectId={projectId} />
+        ) : projectId ? (
+          <LastMonthView projectId={projectId} />
+        ) : null}
+      </Tabs>
+    </div>
+  );
+}
+
+type View = "now" | "last-month";
+const VIEWS = [
+  { id: "now", label: "Now" },
+  { id: "last-month", label: "Last month" },
+] as const;
+
+function SlosHeader() {
+  const canConfigure = useCan("configure_slos");
+  return (
+    <header className="flex flex-wrap items-baseline justify-between gap-3">
+      <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
+        Reliability targets (SLOs)
+      </h1>
+      {canConfigure ? (
+        <Link to="/slos/new" className="font-medium text-brand text-sm">
+          New target
+        </Link>
+      ) : null}
+    </header>
+  );
+}
+
+function NowView({ projectId }: { projectId: string | undefined }) {
   const slos = useSlos(projectId);
   const now = useNow();
   const canConfigure = useCan("configure_slos");
 
   return (
-    <div className="flex flex-col gap-4 px-4 py-5">
-      <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-          Reliability targets (SLOs)
-        </h1>
-        {canConfigure ? (
-          <Link to="/slos/new" className="font-medium text-brand text-sm">
-            New target
-          </Link>
-        ) : null}
-      </header>
+    <div className="flex flex-col gap-4 py-3">
       {slos.isPending ? <SkeletonRows rows={4} label="Loading targets" /> : null}
       {slos.isError ? (
         <InlineFailure

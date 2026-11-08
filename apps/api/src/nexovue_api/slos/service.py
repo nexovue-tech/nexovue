@@ -45,8 +45,6 @@ from nexovue_api.slos.schemas import (
     SloView,
 )
 
-# FR31: a deleted target can be restored, and its daily figures stay, this long (a guess).
-RESTORE_FOR: Final = timedelta(days=30)
 NO_SUCH_TARGET: Final = "No such reliability target"
 TOO_MANY: Final = (
     f"A project holds at most {slo.TARGETS_PER_PROJECT} targets. The limit protects the "
@@ -103,10 +101,12 @@ async def list_targets(
     db: AsyncSession, *, reader: Reader, project_id: uuid.UUID, now: datetime
 ) -> SloList:
     project = await require_readable_project(db, reader=reader, project_id=project_id)
-    zone = _zone_of(project)
+    zone = zone_of(project)
     rows = await queries.targets_with_status(db, org_id=reader.org_id, project_id=project_id)
     live = [row for row in rows if row[0].deleted_at is None]
-    recent = [row for row in rows if row[0].deleted_at and now - row[0].deleted_at < RESTORE_FOR]
+    recent = [
+        row for row in rows if row[0].deleted_at and now - row[0].deleted_at < slo.RESTORE_FOR
+    ]
     days = await _days(db, reader.org_id, [row[0] for row in [*live, *recent]], now, zone)
     views = [_view(row, days.get(row[0].id, {}), now=now, zone=zone) for row in live]
     ordered = slo.ordered([(view, _status_of(view)) for view in views])
@@ -128,7 +128,7 @@ async def read_target(
         raise NotFoundError(NO_SUCH_TARGET)
     target = row[0]
     project = await require_readable_project(db, reader=reader, project_id=target.project_id)
-    zone = _zone_of(project)
+    zone = zone_of(project)
     days = await _days(db, reader.org_id, [target], now, zone)
     return _view(row, days.get(target.id, {}), now=now, zone=zone)
 
@@ -306,7 +306,7 @@ async def restore(
     counted again for the gap the source still holds (FR31)."""
     org_id = identity.organization.id
     target = await queries.target_for_change(db, org_id=org_id, target_id=target_id)
-    if target is None or target.deleted_at is None or now - target.deleted_at >= RESTORE_FOR:
+    if target is None or target.deleted_at is None or now - target.deleted_at >= slo.RESTORE_FOR:
         raise NotFoundError(NO_SUCH_TARGET)
     name = request.name or target.name
     await _refuse_taken(
@@ -316,7 +316,9 @@ async def restore(
     target.deleted_at = None
     target.deleted_by = None
     target.updated_at = now
-    target.definition_version += 1
+    # The gap is read again under the same definition, so the days counted before the
+    # deletion keep their version and never read as an earlier definition (AC45).
+    target.history_read_version = min(target.history_read_version, target.definition_version - 1)
     queries.record_change(
         db,
         target=target,
@@ -335,7 +337,7 @@ async def restore(
 # ---------------------------------------------------------------------- helpers
 
 
-def _zone_of(project: Project) -> ZoneInfo:
+def zone_of(project: Project) -> ZoneInfo:
     return ZoneInfo(project.timezone or DEFAULT_TIMEZONE)
 
 
@@ -520,32 +522,21 @@ async def _days(
     )
     found: dict[uuid.UUID, dict[date, slo.DayCounts]] = {}
     for row in rows:
-        found.setdefault(row.slo_id, {})[row.day] = _day_counts(row)
+        found.setdefault(row.slo_id, {})[row.day] = day_counts(row)
     return found
 
 
-def _day_counts(row: SloDailyCount) -> slo.DayCounts:
-    return slo.DayCounts(
-        good=row.good,
-        total=row.total,
-        lost_minutes=row.lost_minutes,
-        excluded_minutes=row.excluded_minutes,
-        expected_runs=row.expected_runs,
-        missed_runs=row.missed_runs,
-        maintenance_runs=row.maintenance_runs,
-    )
+def day_counts(row: SloDailyCount) -> slo.DayCounts:
+    """A stored day as the platform's arithmetic reads it, for a window or a month."""
+    return slo.DayCounts.of_row(row)
 
 
-# A deleted check's target is still labelled, by what it was.
-_DELETED_CHECK: Final = "deleted check"
-
-
-def _label(target: SloTarget, check_name: str | None) -> str:
+def label_of(target: SloTarget, check_name: str | None) -> str:
     return slo.subject_label(
         target.kind,
         service_name=target.service_name,
         endpoint_name=target.endpoint_name,
-        check_name=check_name or _DELETED_CHECK,
+        check_name=check_name or slo.DELETED_CHECK_NAME,
         boundary_index=target.boundary_index,
         objective=target.objective_percent,
         window_days=target.window_days,
@@ -604,7 +595,7 @@ def _view(
         window_days=target.window_days,
         upstream_sampling=target.upstream_sampling,
         enabled=target.enabled,
-        label=_label(target, check_name),
+        label=label_of(target, check_name),
         allowance_words=slo.allowance_words(target.kind),
         state=state.state,
         variant=state.variant,
@@ -659,9 +650,9 @@ def _deleted_line(
     return DeletedSlo(
         id=target.id,
         name=target.name,
-        label=_label(target, row[3]),
+        label=label_of(target, row[3]),
         deleted_at=target.deleted_at,
-        purged_on=(target.deleted_at + RESTORE_FOR).date(),
+        purged_on=(target.deleted_at + slo.RESTORE_FOR).date(),
         days_held=len(days),
         deleted_by_name=None if reader.is_token else deleted_by_name,
     )

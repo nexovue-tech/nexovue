@@ -95,12 +95,13 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "finding_notes": "findings",
     "finding_emails_owed": "findings",
     # F19. Targets and their change history go with the project; status and daily
-    # counts with their target. The history has no key to the target, because it
-    # outlives the target's purge (FR31).
+    # counts with their target. The history and a purged target's months have no key
+    # to the target, because they outlive its purge (FR31, D46).
     "slo_targets": "projects",
     "slo_status": "slo_targets",
     "slo_daily_counts": "slo_targets",
     "slo_target_changes": "projects",
+    "slo_deleted_months": "projects",
     "detection_state": "projects",
     "detection_project_runs": "projects",
     "detection_baselines": "projects",

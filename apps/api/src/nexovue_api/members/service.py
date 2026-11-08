@@ -45,6 +45,7 @@ from nexovue_api.members.schemas import (
     MemberSummary,
     Role,
 )
+from nexovue_api.slos import personal as slo_personal
 
 logger = structlog.get_logger(__name__)
 
@@ -214,6 +215,10 @@ async def scrub(db: AsyncSession, *, member: User, now: datetime) -> None:
             replacement=str(member.id),
         )
     await queries.end_sessions_of(db, org_id=member.org_id, user_id=member.id)
+    # F19 AC88: inside reliability targets' free text too, whoever wrote it.
+    await slo_personal.scrub_person(
+        db, org_id=member.org_id, address=address, name=name, replacement=FORMER_MEMBER_NAME
+    )
 
     member.removed_at = now
     # The epoch as well as the rows: a session minted mid-request is refused too.

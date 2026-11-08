@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**In development. Step 1 is on `feature/phase-2` (2026-11-08); Step 2 is on `feature/phase-2` too (2026-11-08), except T2.7, the founder's judgement.** The founder approved the specification, design and plan on 2026-11-02. Step 3 is not started; Step 4 waits on the demand gate and the browser-door change.
+**In development. Step 1 is on `feature/phase-2` (2026-11-08); Step 2 is on `feature/phase-2` too (2026-11-08), except T2.7, the founder's judgement. Step 3 is on `feature/phase-2` too (2026-11-08).** The founder approved the specification, design and plan on 2026-11-02. Step 4 waits on the demand gate (the buyer round); the browser-door change it also needed is on the branch.
 
 ## Current task
 
-Plan Step 2, *All four kinds, and a suggestion that needs no thought*: T2.1 to T2.6 on `feature/phase-2` (2026-11-08); Step 1 before it (b246b62). T2.7's list is printed below and awaits the founder's judgement.
+Plan Step 3, *The monthly answer*: T3.1 to T3.6 built (2026-11-08), not yet committed. Step 2 (T2.1 to T2.6) and Step 1 are on `feature/phase-2`; T2.7's list is printed below and awaits the founder's judgement.
 
 ## Completed
 
@@ -20,7 +20,47 @@ Plan Step 2, *All four kinds, and a suggestion that needs no thought*: T2.1 to T
 
 ## Next action
 
-Step 2 is committed (`just check` passed). The founder judges T2.7's list (below) and Step 2's *Judgeable* on the dev stack with the demo running, which was not done here, and `test_slo_system.py` runs against the whole stack.
+Step 3 is committed (`just check` passed). The founder answers Step 3's three open decisions (below), judges T2.7's list, and walks Step 2's and Step 3's *Judgeable* on the dev stack with the demo running, which was not done here; `test_slo_system.py` runs against the whole stack. Step 4 waits on the demand gate.
+
+## Step 3, built 2026-11-08
+
+**What was built, by task.**
+
+| Task | Done | Where |
+|---|---|---|
+| T3.1 | Alembic **0053**, `slo_deleted_months`: one row per purged target and local month, keyed `(org_id, slo_id, month)`, cascading from its project; the downgrade refuses and the revision joins `ROLL_FORWARD_ONLY`; the inventory line | `0053_slo_deleted_months.py`, `models.py` (`SloDeletedMonth`), `organizations/tables.py`, `test_migration_rules.py` |
+| T3.2 | A count never writes over a final day, nor over a day a newer definition counted. A history read under a newer definition rewrites every day back to the recount limit (`slo.recount_limit`: the later of what the source holds and 29 days), final or not, and a final day whose figures moved gets `changed_at` and `changed_why = 'definition'`; past the limit a day is only first read, so an existing one keeps its old definition (AC45) and a new one reads loss not known (AC69). `FINAL_AFTER_DAYS` and `LOSS_RECORDS_DAYS` moved to the platform; `longest_quiet` too, so the API's months cross midnight by the same function. The sharp-fall line is worked out where months are read (below) | `slos/job.py`, `slos/counts.py`, `nexovue_platform/slo.py` |
+| T3.3 | `GET /slos/{id}/months` (up to 13, newest first), `GET /slos/months?project_id=&month=` (*Last month*: N, X, Y of M, and how many met have time not counted; no blended figure), `GET /slos/months.csv?project_id=&months=&slo_id=` (complete months, `spreadsheet_safe` on the label), `GET /slos/{id}/history` (who, to a person only). A month is the platform's one function over stored days (`slo.month_figures`): result, coverage, quiet and longest stretch, lost and excluded time, a check's missed and maintenance runs, days held, may still change, changed after it ended, an earlier definition's last day, loss known, sharp falls (FR27c), and each traffic finding or silence incident on the service (FR27a). A target deleted after a month ended counts in it; purged ones from `slo_deleted_months`. Each kind's fixed label is `slo.report_label`, used by the CSV and sent to the copy action (D42). Four routes join the read surface and `docs/product/setup/api.md` | `slos/months.py` (new), `router.py`, `schemas.py`, `queries.py`, `service.py`, `test_read_surface_structure.py` |
+| T3.4 | The expiry sweep purges a target deleted over 30 days ago: each month that ended before its deletion goes to `slo_deleted_months` (once, whatever reruns), then the target goes and its status and days cascade, one transaction per target; its changes stay. Daily figures, changes and purged months lapse at 400 days. `_DUE_FOR_PURGE` is named in `CROSS_TENANT_STATEMENTS` | `slos/retention.py` (new), `jobs/expiry.py`, `test_scheduler_postgres_tenancy_structure.py` |
+| T3.5 | `members.scrub` replaces the person's address and full name, as whole words ignoring case, inside every target's name and description (live or deleted) and at any depth in every change's `before` and `after`, across the organization, whoever wrote them, within each column's length. The export gains the target changes the person made, bounded with a flag as notes are | `slos/personal.py` (new), `members/service.py`, `profile/personal_data.py`, `profile/schemas.py` |
+| T3.6 | The target page gains tabs *By month* (each month's sentence, what it leaves out with links to the finding or incident, a copy action, the raw counts beneath, a CSV link, "different periods", who a figure is for), *History* and *Definition* (the only place "error budget" is said, and how far back figures reach). `/slos` gains *Now* and *Last month*: the headline, why no single figure, one project, who a figure is for, a row per target with a copy action, deleted rows read "Deleted on 3 Nov.", and a CSV link. `test_slo_words.py` names the new files and allows "error budget" only in the Definition tab | `features/slos/` (new: `SloMonthsTab.tsx`, `SloHistoryTab.tsx`, `SloDefinitionTab.tsx`, `LastMonthView.tsx`, `month-words.ts`; changed: `SloScreen.tsx`, `SlosScreen.tsx`, `api.ts`), `test_slo_words.py` |
+
+**Files the plan's tasks do not name, and why.**
+
+- **`slos/service.py`, a restore.** Step 1's restore raised `definition_version` to queue a recount. With T3.2's recount by version, that would mark every day past the recount limit as "counted under the earlier definition" although nothing changed (AC45 false), and rewrite final days. A restore now leaves the version alone and marks its history unread (`history_read_version` below it), so the read fills the gap and leaves counted days as they were. Test seen failing first.
+- **`nexovue_platform/slo.py`**: months, the recount limit, `RESTORE_FOR` and the deleted-check label moved there, because the scheduler's purge and the API's months must agree; `DayCounts.of_row` reads a stored day for both.
+- **`docs/product/setup/api.md`**: the read surface's customer list, which `test_read_surface_structure.py` ties to the routes.
+
+**Decisions taken while building, within the design.** Each is the founder's to overrule.
+
+- **13 months include the month under way**, so the oldest is twelve months back; daily rows lapse at 400 days, which holds them. The CSV carries complete months only.
+- **A sharp fall (FR27c)** compares a day's requests with the median of the same weekday in up to four earlier weeks held, as the suggestion reads four weeks; today and the first event's day are partial and never compared. Request kinds only.
+- **Time not counted** (*Last month*'s "N of those met have time not counted") is lost minutes, excluded minutes, or an outage line. Quiet time is not: a nightly lull is normal.
+- **An outage line** gives the outage's whole length, not the part inside the month. Check targets get none, since they count runs, even where one names a service (D19).
+- **The copy and the CSV also carry "For your own team and board, not for customer promises."** (founder decision 2, foundation item 16) beside FR27b's fixed label.
+- **The copied sentence always states quiet and excluded time**, "No minute without requests." and "Nothing left out for planned work." when there was none, because FR27b says both always carry them.
+- **History** is read for a live or deleted target; once purged, its changes stay 400 days but no route reads them (the target row that proves its project is gone). See *Open decisions*.
+
+**Not built or not proved in Step 3, said plainly.**
+
+- **AC69's last clause** ("removed, figure not recounted") and "Changed on 3 Nov by an exclusion": exclusions do not exist until T4.7. The words are in place; nothing writes them yet.
+- **FR27's form line** on how far back each kind reaches at creation: T3.6 names no form change. The *Definition* tab says it; the create form does not yet.
+- **AC81 at 375px and by keyboard** for the new tabs and view: `Tabs` is the shared accessible pattern and `DataTable` scrolls by design, but nothing was checked in a browser.
+- **Step 3's *Judgeable*** was not walked on the dev stack with the demo.
+- **A purged month** keeps its figures, not its outage links or sharp-fall lines (FR27a: "while those records last").
+- **A removed person's name inside a target's name** could, in principle, make two live targets' names equal and fail the removal on the unique index; not handled, not seen. Residual risk.
+
+**Self-review (`/review-diff`), 2026-11-08.** One finding, fixed with a test seen failing first: a check target that names a service (D19) would have shown the service's outages on its months, though it counts runs. Also tidied: a duplicated row-to-day conversion became `DayCounts.of_row`, and the month result is the platform's enum end to end (mypy caught the mismatch). Unintended changes: none; every file is named above. Tenancy: every new API statement binds `org_id`; every new scheduler statement binds it or is named (`_DUE_FOR_PURGE`); the month routes load the row and check the project, as `/slos/{id}` does (AC33). No new write route.
 
 ## Step 2, built 2026-11-08
 
@@ -126,7 +166,13 @@ Every service's `GET /health` was pre-ticked. On one day, `checkout` had 48,728 
 
 ## Open decisions
 
-**None.** Answered 2026-11-08, kept for the record:
+**Three, from Step 3 (2026-11-08).** None blocks Step 3's commit; each asks the founder to confirm or redirect.
+
+1. **AC69's exclusion clause belongs to T4.7.** The plan maps AC69 wholly to T3.2, but its last clause ("removing an exclusion reaching past it must show 'removed, figure not recounted'") needs `slo_exclusions`, which T4.1 creates (`plan.md`, Step 4; `design.md`, *Data*: "slo_exclusions (Step 4)"). **Options:** (a) move that clause to T4.7, which builds exclusions and their recount; (b) build the exclusions table in Step 3. **Recommendation: (a).** T3.2 proves AC69's other two clauses (`test_slo_job_live.py::test_ac7_…`).
+2. **A check's month states maintenance as runs, not hours.** FR27's example says "Runs in maintenance windows are not counted (6 h this month)". The API stores maintenance *runs* per day (`slo_daily_counts.maintenance_runs`), and turning runs into hours needs the check's locations, which for a check naming none is the deployment's probe list, known to the scheduler (`settings.probe_locations`) and not the API. **Options:** (a) keep "(72 runs this month)"; (b) store maintenance minutes per day in a later migration and say hours. **Recommendation: (a)** until a buyer asks; it is exact where hours would be derived.
+3. **`slo_deleted_months` holds more than the design listed, and a purged target's history has no route.** The design names `org_id, project_id, slo_id, month, label, figure, objective, result, deleted_at` (`design.md`, *Data*). FR27b says a copied month and the CSV always carry what it covers, quiet and excluded time and the sampling answer, so 0053 also keeps counts, coverage, quiet, longest quiet, lost and excluded minutes, a check's runs, days held, loss known, kind and sampling answer (`0053_slo_deleted_months.py`). Separately, UR9 keeps a purged target's changes 400 days, but `GET /slos/{id}/history` needs the target row to prove its project (`slos/months.py`, `history`). **Recommendation:** confirm the columns as built; leave the purged history unreadable until a screen for purged targets is asked for, since the audit log keeps the fact.
+
+**Answered 2026-11-08, kept for the record:**
 
 0. **AC73 wording corrected, founder 2026-11-08.** The spec said a local day holds 1,410 to 1,500 minutes; a New York spring-forward day holds 1,380, which Step 1's test already held. Read from the tz database (2026e, every zone, every day of 2026): 1,380 and 1,500 on one-hour changes, 1,410 and 1,470 at Australia/Lord_Howe (30 minutes), 1,320 and 1,560 at Antarctica/Troll (two hours). The AC now states those bounds, 1,320 to 1,560. No behaviour changed.
 
@@ -137,7 +183,8 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 
 ## Blocked
 
-- Nothing blocks Steps 2 and 3. Step 1 is on `feature/phase-2` (2026-11-08); T2.3 now also writes the helper's `metrics_gauge` rows.
+- Nothing blocks Step 3's commit; its three open decisions ask for confirmation.
+- Nothing blocked Steps 2 and 3. Step 1 is on `feature/phase-2` (2026-11-08); T2.3 now also writes the helper's `metrics_gauge` rows.
 - **Plan Step 4 onward** waits on the demand gate, and on precondition P2: a separate change keeping browser-door spans out of the rollups. **F19's release waits on P2 too.** It has no record yet. Foundation item 7 sets it before Stage 1 reaches a customer, and F28 owns it (item 22, 2026-11-02).
   **2026-11-07:** P2 is `docs/changes/browser-door/`, built (all four steps, with the AC37 live test through the real
   receiver and worker) and on `feature/phase-2` (2026-11-07).
@@ -160,6 +207,15 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 - **AC38's outside tester** comes from the conversation round (spec D64). If nobody there agrees to a later screen test, it reads "not proved".
 
 ## Validation
+
+**Step 3, 2026-11-08,** on the worktree, against its own stores (`f19-pg`, Postgres 18 with pgvector, port 25432; `f19-ch`, ClickHouse 26.3.20.7, port 28123), migrated to Alembic **0053** and ClickHouse 000039 (no new ClickHouse migration). `just check` was not run, by instruction.
+
+| What | Result |
+|---|---|
+| Seen failing first | `test_migration_rules.py` (0053 not found); `test_deletion_live.py` (2: the new table unclassified); `test_slo_model.py` (21: no months, recount limit, labels, `longest_quiet`, frozen copies); `test_slo_job_live.py` (4: a final day kept under a newer definition, the version not moved on an unchanged recount, an older count over a newer day, AC64 with a final day); `test_slos_live.py` (9: no month routes, 422 on `/slos/months`, 404 on `/months` and `/history`, a restore bumping the version); `test_read_surface_structure.py` (four routes undocumented); `test_scheduler_postgres_tenancy_structure.py` (`_DUE_FOR_PURGE` unnamed); `test_slo_prune_live.py` (3: nothing purged or lapsed); `test_personal_data_live.py` (2: name unscrubbed, no `slo_target_changes` in the export); `test_slo_words.py` (5: the named files missing); `SloScreen.test.ts` (8) and `SlosScreen.test.ts` (2) against Step 2's screens; and, at review, the check-target outage test |
+| F19 suites, final | `test_slo_model.py` 103, `test_slos_live.py` 33, `test_slo_words.py` 27, `test_slo_job_live.py` 20, `test_slo_prune_live.py` 3, `test_slo_counts.py` 15, `test_slo_store_live.py` 12, `test_personal_data_live.py` 12; web `features/slos` 42 |
+| Wider | API offline suite (every `apps/api/tests` file not `_live`, less `test_slo_system.py`) 4,140 passed, 1 skipped. Scheduler offline suite 4,694 passed (`test_connect_guard.py` left out: public DNS). Live, 203 passed: the F19 suites above with `test_detection_prune_live.py`, `test_jobs_live.py`, `test_detection_store_live.py`, `test_detection_has_no_ai.py`, `test_slo_suggestion.py`, `test_deletion_live.py`, `test_members_live.py`, `test_findings_cases_live.py`. Web: 141 files, 1,630 tests. Whole-repo `mypy .` clean (777 files); `ruff check .` clean; `ruff format --check .` clean but for `docs/research/f20-board-mapping-2026-11.md`, from F20's commit 1c95fae, untouched here; `pnpm -r --if-present run typecheck` clean; Biome clean on the changed web files; `verify-tokens.js` clean. No Go changed |
+| Not run | `just check`; the whole-stack suites (`test_tenant_isolation_live.py`, `test_slo_system.py`); a browser at 375px |
 
 **Step 2, 2026-11-08,** on the worktree, against its own stores (`f19-pg`, Postgres 18 with pgvector, port 25432; `f19-ch`, ClickHouse 26.3.20.7, ports 28123 and 29000), migrated to Alembic 0052 and ClickHouse 000039 (no new migration). The machine restarted at 06:46 UTC; the stores were started again after Docker came back. `just check` was not run, by instruction.
 

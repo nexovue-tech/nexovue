@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AUDIENCE,
   buttons,
   json,
   minutesAgo,
+  month,
+  monthsOf,
   mountAt,
   press,
+  REQUEST_LABEL,
   readable,
   stubApi,
   target,
@@ -141,6 +145,168 @@ describe("the form", () => {
       () => readable(container).includes("Do you sample before sending to nexovue?"),
       "the question",
     );
+    expect(readable(container)).toContain("A failure is a request whose span status is ERROR.");
+  });
+});
+
+describe("the monthly answer (Step 3)", () => {
+  function onTheTarget(months: Parameters<typeof monthsOf>[0], view = target()) {
+    return {
+      "GET /slos/slo-1": json(view),
+      "GET /slos/slo-1/months": json(monthsOf(months)),
+    };
+  }
+
+  it("reads a month at 89% coverage as not judged and at 91% gives its figure (AC77)", async () => {
+    stubApi(
+      onTheTarget([
+        month({ month: "2026-10-01", coverage: 0.91 }),
+        month({
+          month: "2026-09-01",
+          coverage: 0.89,
+          result: "not_judged",
+          days_in_month: 30,
+          days_held: 30,
+        }),
+      ]),
+    );
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("October 2026: 99.95%"), "the months");
+    expect(readable(container)).toContain(
+      "October 2026: 99.95% against 99.9%. Measured 91% of the month.",
+    );
+    expect(readable(container)).toContain("September 2026: not judged. Nexovue measured only 89%.");
+  });
+
+  it("shows at most 13 months, says which may still change and which changed after they ended (AC77)", async () => {
+    const months = Array.from({ length: 14 }, (_, index) => {
+      const at = new Date(Date.UTC(2026, 10 - index, 1));
+      return month({ month: at.toISOString().slice(0, 10) });
+    });
+    months[0] = month({
+      month: "2026-11-01",
+      may_still_change: true,
+      days_held: 8,
+      days_in_month: 30,
+    });
+    months[1] = month({
+      month: "2026-10-01",
+      changed_at: "2026-11-03T09:00:00Z",
+      changed_why: "definition",
+    });
+    stubApi(onTheTarget(months));
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("November 2026"), "the months");
+    expect(container.querySelectorAll("[data-month]").length).toBe(13);
+    expect(readable(container)).toContain(
+      "May still change: some of its days are under 7 days old.",
+    );
+    expect(readable(container)).toContain("Holds 8 of 30 days.");
+    expect(readable(container)).toContain("Changed on 3 Nov by a change to what it counts.");
+  });
+
+  it("tells a nightly lull from a real outage by the longest stretch and the link (AC77)", async () => {
+    stubApi(
+      onTheTarget([
+        month({
+          month: "2026-10-01",
+          quiet_minutes: 400,
+          longest_quiet_minutes: 190,
+          time_not_counted: true,
+          outages: [
+            {
+              kind: "traffic_finding",
+              id: "f-1",
+              started_at: "2026-10-14T02:00:00Z",
+              minutes: 190,
+            },
+          ],
+        }),
+        month({
+          month: "2026-09-01",
+          quiet_minutes: 600,
+          longest_quiet_minutes: 120,
+          days_in_month: 30,
+          days_held: 30,
+        }),
+      ]),
+    );
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("October 2026"), "the months");
+    const october = container.querySelector('[data-month="2026-10-01"]');
+    const september = container.querySelector('[data-month="2026-09-01"]');
+    expect(readable(october as Element)).toContain(
+      "This figure does not count the outage on 14 Oct (3 h 10 m). Requests that never arrived are not failures.",
+    );
+    expect(october?.querySelector('a[href="/findings/f-1"]')).not.toBeNull();
+    expect(readable(september as Element)).toContain("10 h with no requests, the longest 2 h.");
+    expect(readable(september as Element)).not.toContain("outage");
+  });
+
+  it("says a met month and a missed rolling window are different periods (AC117)", async () => {
+    const missing = target({ figures: { ...target().figures, missed_by: 40, left: 0 } });
+    stubApi(onTheTarget([month()], missing));
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("October 2026"), "the months");
+    expect(readable(container)).toContain("The last 28 days and October are different periods.");
+  });
+
+  it("copies a month with its period, coverage, quiet and excluded time and fixed label (AC78)", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    stubApi(onTheTarget([month({ quiet_minutes: 190, longest_quiet_minutes: 125 })]));
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => buttons(container).includes("Copy"), "the copy action");
+    await press(container, "Copy");
+    const copied = String(writeText.mock.calls[0]?.at(0));
+    expect(copied).toContain("checkout availability, 99.9% over 28 days.");
+    expect(copied).toContain("October 2026: 99.95% against 99.9%. Measured 100% of the month.");
+    expect(copied).toContain("3 h 10 m with no requests, the longest 2 h 5 m.");
+    expect(copied).toContain("Nothing left out for planned work.");
+    expect(copied).toContain(REQUEST_LABEL);
+    expect(copied).toContain(AUDIENCE);
+  });
+
+  it("offers the months as a CSV file and says who a figure is for", async () => {
+    stubApi(onTheTarget([month()]));
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => readable(container).includes("October 2026"), "the months");
+    const download = container.querySelector('a[href*="slos/months.csv"]');
+    expect(download?.getAttribute("href")).toContain("slo_id=slo-1");
+    expect(readable(container)).toContain(AUDIENCE);
+  });
+
+  it("lists each change on the History tab (FR30)", async () => {
+    stubApi({
+      "GET /slos/slo-1": json(target()),
+      "GET /slos/slo-1/history": json({
+        entries: [
+          {
+            at: "2026-11-03T09:00:00Z",
+            what: "changed",
+            before: { name: "checkout availability", objective_percent: "99.90" },
+            after: { name: "checkout availability", objective_percent: "99.5" },
+            by_name: "Member",
+          },
+          { at: "2026-10-01T09:00:00Z", what: "created", before: null, after: {}, by_name: null },
+        ],
+      }),
+    });
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => buttons(container).includes("History"), "the tabs");
+    await press(container, "History");
+    await waitFor(() => readable(container).includes("Changed by Member"), "the history");
+    expect(readable(container)).toContain("Target: 99.90 → 99.5");
+    expect(readable(container)).not.toContain("Name: checkout");
+  });
+
+  it("explains the error budget on the Definition tab, and only there (AC13)", async () => {
+    stubApi({ "GET /slos/slo-1": json(target()) });
+    const { container } = await mountAt("/slos/slo-1");
+    await waitFor(() => buttons(container).includes("Definition"), "the tabs");
+    expect(readable(container)).not.toContain("error budget");
+    await press(container, "Definition");
+    expect(readable(container)).toContain("error budget");
     expect(readable(container)).toContain("A failure is a request whose span status is ERROR.");
   });
 });
