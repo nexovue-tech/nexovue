@@ -56,10 +56,12 @@
 import json, sys
 from pathlib import Path
 
+
 def walk(panels):
     for p in panels:
         yield p
-        yield from walk(p.get("panels", []))   # panels inside a collapsed row
+        yield from walk(p.get("panels", []))  # panels inside a collapsed row
+
 
 total = 0
 for f in sorted(Path(sys.argv[1]).glob("*.json")):
