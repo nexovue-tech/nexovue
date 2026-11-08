@@ -1,6 +1,13 @@
-"""F19's reads against real ClickHouse (plan T1.3, T1.11): exact counts back from rows
-written by `slo_rows`, the lowered bounds sent with every read, and a first test of
-`sumForEachMergeIf`, which the burn and latency reads will lean on.
+"""F19's reads against real ClickHouse (plan T1.3, T1.11, T2.1 to T2.3): exact counts
+back from rows written by `slo_rows`, the lowered bounds sent with every read, and a
+first test of `sumForEachMergeIf`, which the burn and latency reads will lean on.
+
+Step 2: each of the four kinds gives its seeded count exactly (AC2), a latency target
+counts at or under its boundary (AC3), left-out endpoints are subtracted and a capped
+minute never goes negative (AC80, FR34), and a check counts only confirmed, measured
+runs outside maintenance, once each however often a reading was delivered (AC2), with
+missed runs lowering its coverage (AC67's coverage half) and its interval saying what it
+allows when that is thin (AC11).
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -9,20 +16,35 @@ from __future__ import annotations
 
 import os
 import socket
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+import pytest
 from alert_fixtures import AlertTenant
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from live import require_stack
 from nexovue_platform import slo
-from slo_rows import Traffic, minutes, traffic_rows, write_buckets, write_service
+from slo_rows import (
+    READINGS,
+    Run,
+    Traffic,
+    minutes,
+    traffic_rows,
+    write_buckets,
+    write_endpoint,
+    write_runs,
+    write_service,
+)
 
 from nexovue_scheduler.alerts.telemetry import TelemetryStore, connect
-from nexovue_scheduler.slos.store import SLO_READ_SETTINGS, SloStore
+from nexovue_scheduler.slos import counts
+from nexovue_scheduler.slos.job import Sources, Target, request_minutes
+from nexovue_scheduler.slos.store import SLO_READ_SETTINGS, MinuteCounts, SloStore
 
 READER_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_READER_DSN",
@@ -154,3 +176,199 @@ def test_sum_for_each_merge_if_splits_buckets_by_window_in_one_statement(
 
 DAY_HOUR: Final = 9
 NIGHT_HOUR: Final = 22
+
+
+# ------------------------------------------------------------ Step 2: four kinds
+
+HEALTH: Final = "GET /health"
+ORDERS: Final = "POST /orders"
+
+
+def _target(kind: str, **fields: Any) -> Target:
+    return Target(
+        id=uuid.uuid4(),
+        kind=kind,
+        service_name=fields.pop("service_name", SERVICE),
+        first_event_at=START,
+        definition_version=1,
+        evaluated_minute=None,
+        last_event_minute=None,
+        **fields,
+    )
+
+
+def test_ac3_a_latency_target_counts_requests_at_or_under_its_boundary(
+    administrator: Client, project: AlertTenant
+) -> None:
+    index = slo.boundary_at_or_under(500.0)
+    assert index is not None and round(slo.boundary_ms(index), 1) == 487.2
+    buckets = [0] * slo.BUCKET_COUNT
+    buckets[index - 1], buckets[index], buckets[index + 1] = 11, 13, 17
+    write_buckets(
+        administrator, project, SERVICE, {START: buckets, START + timedelta(minutes=1): buckets}
+    )
+    store, recording = _store()
+    reader = store.for_project(project.org_id, project.project_id)
+
+    latency = reader.service_latency([SERVICE], start=START, end=START + timedelta(hours=1))
+    target = _target(slo.SERVICE_LATENCY, boundary_index=index)
+    counted = request_minutes(target, Sources({}, latency, {}, {}))
+
+    assert sum(minute.requests for minute in counted.values()) == 82
+    assert sum(minute.requests - minute.failures for minute in counted.values()) == 48
+    assert recording.settings == [SLO_READ_SETTINGS]
+
+
+def test_ac2_an_endpoint_target_reads_its_own_endpoint_and_count_columns_only(
+    administrator: Client, project: AlertTenant
+) -> None:
+    write_endpoint(administrator, project, SERVICE, ORDERS, {START: (40, 3)})
+    write_endpoint(administrator, project, SERVICE, HEALTH, {START: (6, 0)})
+    write_endpoint(administrator, project, "cart", ORDERS, {START: (9, 9)})
+    store, _ = _store()
+    reader = store.for_project(project.org_id, project.project_id)
+
+    read = reader.endpoint_minutes([(SERVICE, ORDERS)], start=START, end=START + timedelta(hours=1))
+
+    assert read == {(SERVICE, ORDERS): {START: MinuteCounts(40, 3)}}
+
+
+def test_ac80_left_out_probes_count_nothing_and_a_capped_minute_is_not_negative(
+    administrator: Client, project: AlertTenant
+) -> None:
+    """Seeded probe traffic: `/health` left out of a service availability target counts
+    no probe request; a minute of probes alone is quiet, so a dead service still reads
+    **No recent requests**; and probes in a minute the service cap dropped subtract
+    nothing (FR34)."""
+    first, probes_only, capped = START, START + timedelta(minutes=1), START + timedelta(minutes=2)
+    write_service(administrator, project, SERVICE, {first: (100, 5), probes_only: (6, 0)})
+    write_endpoint(
+        administrator,
+        project,
+        SERVICE,
+        HEALTH,
+        {first: (6, 0), probes_only: (6, 0), capped: (6, 0)},
+    )
+    store, _ = _store()
+    reader = store.for_project(project.org_id, project.project_id)
+    target = _target(slo.SERVICE_AVAILABILITY, left_out_endpoints=(HEALTH,))
+    span = {"start": START, "end": START + timedelta(hours=1)}
+
+    sources = Sources(
+        services=reader.service_minutes([SERVICE], **span),
+        latency={},
+        endpoints=reader.endpoint_minutes([(SERVICE, HEALTH)], **span),
+        checks={},
+    )
+    counted = request_minutes(target, sources)
+
+    assert counted == {
+        first: MinuteCounts(94, 5),
+        probes_only: MinuteCounts(0, 0),
+    }
+    assert counts.last_event(counted) == first
+
+
+@pytest.fixture
+def readings(project: AlertTenant) -> None:
+    delete_after_run(READINGS, str(project.org_id))
+
+
+def test_ac2_a_check_counts_confirmed_measured_runs_once_each(
+    administrator: Client, project: AlertTenant, readings: None
+) -> None:
+    """Eight minutes of runs: an overruled attempt beside its confirmed retry, one in
+    maintenance, one `prober_error`, one `misconfigured`, one down, and one delivered
+    twice, beside another check's run. Eight are confirmed and seen; five count, four
+    of them up; one ran in maintenance."""
+    check = str(uuid.uuid4())
+    at = [START + timedelta(minutes=offset) for offset in range(8)]
+    runs = [
+        Run(at[0]),
+        Run(at[1], up=False, outcome="down", final=False),
+        Run(at[1], up=True, attempt=2),
+        Run(at[2], maintenance=True),
+        Run(at[3], up=False, outcome="prober_error"),
+        Run(at[4], up=False, outcome="misconfigured"),
+        Run(at[5], up=False, outcome="down"),
+        Run(at[6]),
+        Run(at[7]),
+    ]
+    write_runs(administrator, project, check, runs)
+    write_runs(administrator, project, check, [Run(at[7])])
+    write_runs(administrator, project, str(uuid.uuid4()), [Run(at[0])])
+    store, recording = _store()
+
+    read = store.for_project(project.org_id, project.project_id).check_runs(
+        [check], start=START, end=START + timedelta(hours=1)
+    )[check]
+
+    assert sum(minute.seen for minute in read.values()) == 8
+    assert sum(minute.counted for minute in read.values()) == 5
+    assert sum(minute.up for minute in read.values()) == 4
+    assert sum(minute.maintenance for minute in read.values()) == 1
+    assert recording.settings == [SLO_READ_SETTINGS]
+
+
+@pytest.mark.parametrize("interval", [60, 300, 3_600])
+def test_ac67_a_stopped_prober_lowers_a_check_s_coverage_through_missed_runs(
+    administrator: Client, project: AlertTenant, readings: None, interval: int
+) -> None:
+    """A check that ran for the first half of a day and then stopped: half its runs are
+    missed, so the day is not measured, at each interval."""
+    check = str(uuid.uuid4())
+    expected = 86_400 // interval
+    every = timedelta(seconds=interval)
+    write_runs(
+        administrator, project, check, [Run(START + every * n) for n in range(expected // 2)]
+    )
+    store, _ = _store()
+    read = store.for_project(project.org_id, project.project_id).check_runs(
+        [check], start=START, end=START + timedelta(days=1)
+    )[check]
+
+    row = counts.check_day_row(
+        read,
+        day_start=START,
+        day_end=START + timedelta(days=1),
+        through=START + timedelta(days=1),
+        first_event_at=START,
+        interval_seconds=interval,
+        locations=1,
+    )
+    day = slo.DayCounts(
+        good=row.good,
+        total=row.total,
+        lost_minutes=0,
+        expected_runs=row.expected_runs,
+        missed_runs=row.missed_runs,
+        maintenance_runs=row.maintenance_runs,
+    )
+    figures = slo.window_figures(
+        {START.date(): day},
+        window_days=7,
+        first_event_at=START,
+        now=START + timedelta(days=1),
+        zone=UTC_ZONE,
+    )
+    assert (row.expected_runs, row.missed_runs) == (expected, expected - expected // 2)
+    assert figures.coverage is not None and figures.coverage < slo.COVERAGE_TO_JUDGE
+
+
+def test_ac11_a_thin_check_target_reads_too_little_traffic_from_its_runs(
+    administrator: Client, project: AlertTenant, readings: None
+) -> None:
+    """A 5-minute check over a day holds 288 runs: 99.9% allows none, so the target is
+    **Too little traffic**, and what its interval allows over 28 days is 8."""
+    check = str(uuid.uuid4())
+    every = timedelta(minutes=5)
+    write_runs(administrator, project, check, [Run(START + every * n) for n in range(288)])
+    store, _ = _store()
+    read = store.for_project(project.org_id, project.project_id).check_runs(
+        [check], start=START, end=START + timedelta(days=1)
+    )[check]
+    total = sum(minute.counted for minute in read.values())
+
+    assert total == 288
+    assert slo.allowed_failures(Decimal("99.9"), total) < slo.THIN_ALLOWED
+    assert slo.allowed_failures(Decimal("99.9"), slo.expected_runs(300, window_days=28)) == 8

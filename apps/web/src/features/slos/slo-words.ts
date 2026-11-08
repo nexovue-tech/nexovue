@@ -254,13 +254,185 @@ export function deleteWarningOf(daysHeld: number, purgedOn: string): string {
   return `Takes this target off the list. Its ${daysHeld} days of figures go on ${purgedOn}. It can be restored until then. Past months' results stay.`;
 }
 
-/** FR5's definition lines for a service availability target. */
+const FAILURE_LINE =
+  "A failure is a request whose span status is ERROR. A 4xx usually does not count.";
+const SAMPLE_LINE =
+  "Needs server spans, not sampled before they reach nexovue. If you sample first, these figures count the sample.";
+const REJECTED_LINE =
+  "Requests rejected before they reach this service are not counted. Add a check for this.";
+const MIXED_LINE = "A queue consumer and a web route are counted together in one service.";
+/** FR4: the buckets do not separate failures. */
+export const FAST_FAILURE_LINE =
+  "A fast failure counts here. Pair this with an availability target.";
+
+/** FR5's definition lines, by kind. */
 export const AVAILABILITY_DEFINITION = [
-  "A failure is a request whose span status is ERROR. A 4xx usually does not count.",
-  "Needs server spans, not sampled before they reach nexovue. If you sample first, these figures count the sample.",
-  "Requests rejected before they reach this service are not counted. Add a check for this.",
-  "Health checks count as good requests.",
+  FAILURE_LINE,
+  MIXED_LINE,
+  SAMPLE_LINE,
+  REJECTED_LINE,
+  "Health checks count as good requests unless you leave them out.",
 ] as const;
+export const LATENCY_DEFINITION = [
+  FAST_FAILURE_LINE,
+  "This includes health checks and background jobs, so it may not reflect your users' experience.",
+  MIXED_LINE,
+  SAMPLE_LINE,
+  REJECTED_LINE,
+] as const;
+export const ENDPOINT_DEFINITION = [FAILURE_LINE, SAMPLE_LINE, REJECTED_LINE] as const;
+export const CHECK_DEFINITION = [
+  "Measured from nexovue's own check runs, one view from outside.",
+  "A run counts only when it is the confirmed one: an attempt a retry overruled does not.",
+  "Runs in maintenance windows are not counted, and runs that could not measure your service are not counted as failures.",
+] as const;
+
+export const DEFINITIONS = {
+  service_availability: AVAILABILITY_DEFINITION,
+  service_latency: LATENCY_DEFINITION,
+  endpoint_availability: ENDPOINT_DEFINITION,
+  check_availability: CHECK_DEFINITION,
+} as const;
+
+/** FR25a, AC79: said wherever no silence rule watches the service. */
+export const STOPS_COMPLETELY = "This target does not alert if the service stops completely.";
+export const ASK_WHO_CAN_ADD = "Ask an owner, admin or member to add one.";
+/** FR16, AC79. */
+export const CHECK_TOO_INFREQUENT =
+  "Alerts cannot judge a check this infrequent. It needs at least 10 runs a day.";
+export const SUGGESTION_FAILED = "Could not read this service's history. Enter a target yourself.";
+
+/** A typed latency threshold's preview (FR3): the boundary it snaps down to. */
+export function boundaryPreview(boundaryMs: number): string {
+  return `This counts requests at or under ${boundaryMs.toFixed(1)} ms.`;
+}
+export function highestBoundaryLine(highestMs: number): string {
+  return `The highest threshold nexovue counts is ${(highestMs / 1000).toFixed(1)} s.`;
+}
+export function aboveHighest(highestMs: number): string {
+  return `Choose a threshold at or under ${(highestMs / 1000).toFixed(1)} s, the highest nexovue counts.`;
+}
+export function belowLowest(lowestMs: number): string {
+  return `The finest threshold nexovue counts is ${lowestMs.toFixed(1)} ms.`;
+}
+
+/** The boundary at or under a typed threshold, from the platform's own boundaries; null
+ * below the finest or above the highest (refused, AC101). */
+export function snappedBoundary(askedMs: number, boundaries: readonly number[]): number | null {
+  if (!Number.isFinite(askedMs) || boundaries.length === 0) return null;
+  const highest = boundaries[boundaries.length - 1] ?? 0;
+  if (askedMs > highest * (1 + 1e-9)) return null;
+  let found: number | null = null;
+  for (const boundary of boundaries) {
+    if (boundary <= askedMs * (1 + 1e-9)) found = boundary;
+  }
+  return found;
+}
+
+/** FR12's allowance in whole events, in hundredths so no float rounds it up. */
+export function allowedEvents(objective: string, events: number): number {
+  const hundredths = Math.round(Number(objective) * 100);
+  return Math.floor(((10_000 - hundredths) * events) / 10_000);
+}
+
+const INTERVAL_WORDS: Record<number, string> = {
+  60: "every minute",
+  300: "every 5 minutes",
+  600: "every 10 minutes",
+  1800: "every 30 minutes",
+  3600: "every hour",
+  21600: "every 6 hours",
+  86400: "every day",
+};
+export function intervalWords(seconds: number): string {
+  return INTERVAL_WORDS[seconds] ?? `every ${durationOf(Math.round(seconds / 60))}`;
+}
+
+/** FR8: what a check's interval allows, and what to change when that is too little:
+ * "At every 5 minutes, 99.9% allows 8 failed runs over 28 days. Run it every minute or
+ * choose 99.5%." */
+export function checkAllowanceLine(input: {
+  intervalSeconds: number;
+  objective: string;
+  windowDays: number;
+  expectedRuns: number;
+  fastestExpectedRuns: number;
+  steps: readonly string[];
+  /** The fewest failed runs a target may allow before one moves it a lot (FR10). */
+  thinAllowed: number;
+}): string {
+  const allowed = allowedEvents(input.objective, input.expectedRuns);
+  const runs = allowed === 1 ? "failed run" : "failed runs";
+  const said = `At ${intervalWords(input.intervalSeconds)}, ${Number(input.objective)}% allows ${allowed} ${runs} over ${input.windowDays} days.`;
+  if (allowed >= input.thinAllowed) return said;
+  const faster =
+    input.intervalSeconds > 60 &&
+    allowedEvents(input.objective, input.fastestExpectedRuns) >= input.thinAllowed;
+  const step = [...input.steps]
+    .reverse()
+    .find((candidate) => allowedEvents(candidate, input.expectedRuns) >= input.thinAllowed);
+  const choices = [
+    faster ? "Run it every minute" : null,
+    step ? `choose ${Number(step)}%` : null,
+  ].filter(Boolean);
+  if (choices.length === 0) return said;
+  const advice = choices.join(" or ");
+  return `${said} ${advice.charAt(0).toUpperCase()}${advice.slice(1)}.`;
+}
+
+const weekPercent = (figure: string | null) => (figure === null ? "\u2014" : `${Number(figure)}%`);
+
+/** FR7's arithmetic, in a sentence the person can check. */
+export function suggestionSentence(input: {
+  outcome: string;
+  objective: string | null;
+  worst: string | null;
+  typical: string | null;
+  boundaryMs: number | null;
+  kindIsLatency: boolean;
+}): string {
+  const { outcome, objective, worst, typical } = input;
+  if (outcome === "starter") {
+    return "Fewer than 7 days of data. 99.5% is offered as a starting guess, not from your data.";
+  }
+  if (outcome === "below_lowest") {
+    return `Your worst week was ${weekPercent(worst)} and your typical week ${weekPercent(typical)}, both below 90%, the lowest target nexovue sets. There is no suggestion.`;
+  }
+  if (outcome === "too_few") {
+    return "Too few events to suggest a target: one failure would move it a lot.";
+  }
+  if (input.kindIsLatency && input.boundaryMs !== null) {
+    return `In each of the last four weeks, 95% of requests took ${input.boundaryMs.toFixed(1)} ms or less. We suggest 95% at or under ${input.boundaryMs.toFixed(1)} ms.`;
+  }
+  if (outcome === "from_typical_week") {
+    return `Your typical week was ${weekPercent(typical)}, your worst ${weekPercent(worst)}. We suggest ${weekPercent(objective)}. Your worst week would have missed this.`;
+  }
+  return `Your worst week of the last four was ${weekPercent(worst)}. We suggest ${weekPercent(objective)}.`;
+}
+
+/** The name the form proposes, from the source, like a message's label (D43). */
+export function generatedName(input: {
+  kind: string;
+  service: string;
+  endpoint: string;
+  checkName: string;
+  boundaryMs: number | null;
+}): string {
+  if (input.kind === "check_availability")
+    return input.checkName ? `${input.checkName} availability` : "";
+  if (!input.service) return "";
+  if (input.kind === "endpoint_availability")
+    return `${input.service} ${input.endpoint} availability`.trim();
+  if (input.kind === "service_latency") {
+    return input.boundaryMs === null
+      ? `${input.service} latency`
+      : `${input.service} latency under ${input.boundaryMs.toFixed(1)} ms`;
+  }
+  return `${input.service} availability`;
+}
+
+export const PRE_TICKED =
+  "Pre-ticked because they look like health checks. Left-out requests count as neither good nor bad, and not as activity.";
 
 export const SAMPLING_QUESTION = "Do you sample before sending to nexovue?";
 export const SAMPLING_YES =

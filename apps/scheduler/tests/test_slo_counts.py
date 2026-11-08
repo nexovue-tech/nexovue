@@ -4,6 +4,10 @@ AC6 (a replay gives the same row), AC9 (a lost minute lowers coverage and adds n
 good events), AC10 (lost and quiet minutes kept apart), AC12 (a window with no
 failure carries the instrumentation line), AC73 (local midnight in Kolkata), a quiet
 stretch across midnight, and no good events from missing minutes.
+
+Step 2 (plan T2.1 to T2.3): a latency minute's slow requests (AC3), left-out endpoints
+subtracted minute by minute and never below zero (AC80, FR34), and a check's day of
+runs with its expected, missed and maintenance runs (AC2, AC67's coverage half).
 """
 
 from __future__ import annotations
@@ -15,8 +19,19 @@ from zoneinfo import ZoneInfo
 
 from nexovue_platform import slo
 
-from nexovue_scheduler.slos.counts import DayRow, day_row, day_rows_by_local_day, longest_quiet
-from nexovue_scheduler.slos.store import MinuteCounts
+from nexovue_scheduler.slos.counts import (
+    DayRow,
+    check_day_row,
+    day_row,
+    day_rows_by_local_day,
+    first_run,
+    last_event,
+    last_run,
+    latency_minutes,
+    longest_quiet,
+    without_left_out,
+)
+from nexovue_scheduler.slos.store import CheckMinute, LatencyMinute, MinuteCounts
 
 MINUTE = timedelta(minutes=1)
 KOLKATA = ZoneInfo("Asia/Kolkata")
@@ -158,3 +173,134 @@ def test_ac12_a_window_with_no_failure_carries_the_instrumentation_qualifier() -
         check_interval_seconds=None,
     )
     assert slo.Qualifier.NEVER_FAILED in slo.status_of(facts).qualifiers
+
+
+# ------------------------------------------------------- Step 2: other sources
+
+
+def test_ac80_left_out_requests_are_subtracted_minute_by_minute() -> None:
+    """A service of 100 requests a minute, 10 of them `/health` probes: 90 count. A
+    minute with only probes counts nothing, so it is quiet and a dead service reads
+    **No recent requests** (FR34)."""
+    service = _busy(START, 3, requests=100, failures=4)
+    service[START + MINUTE * 2] = MinuteCounts(10, 0)
+    probes = _busy(START, 3, requests=10, failures=1)
+    probes[START + MINUTE * 2] = MinuteCounts(10, 0)
+
+    counted = without_left_out(service, [probes])
+
+    assert counted[START] == MinuteCounts(90, 3)
+    assert counted[START + MINUTE * 2] == MinuteCounts(0, 0)
+    row = _row(counted, through=START + MINUTE * 3)
+    assert (row.total, row.failures, row.quiet_minutes) == (180, 6, 1)
+    assert last_event(counted) == START + MINUTE
+
+
+def test_fr34_a_capped_minute_with_no_service_row_never_goes_negative() -> None:
+    """The service cap drops service rows, not endpoint rows: a minute with probes and
+    no service row subtracts nothing, and more probes than requests leaves zero."""
+    service = {START: MinuteCounts(5, 5)}
+    probes = {START: MinuteCounts(8, 6), START + MINUTE: MinuteCounts(10, 0)}
+
+    counted = without_left_out(service, [probes])
+
+    assert counted == {START: MinuteCounts(0, 0)}
+
+
+def test_two_left_out_endpoints_are_both_subtracted() -> None:
+    service = {START: MinuteCounts(100, 10)}
+    counted = without_left_out(
+        service, [{START: MinuteCounts(10, 1)}, {START: MinuteCounts(20, 2)}]
+    )
+    assert counted == {START: MinuteCounts(70, 7)}
+
+
+def test_ac3_a_latency_minute_is_good_at_or_under_its_boundary() -> None:
+    index = slo.boundary_at_or_under(500.0)
+    assert index is not None
+    buckets = [0] * slo.BUCKET_COUNT
+    buckets[index - 1], buckets[index], buckets[index + 1] = 3, 5, 7
+    minutes = {START: LatencyMinute(requests=15, buckets=tuple(buckets))}
+
+    counted = latency_minutes(minutes, index)
+
+    # A latency target's failure is a slow request (FR12).
+    assert counted == {START: MinuteCounts(15, 7)}
+
+
+def _runs(
+    first: datetime, count: int, every: timedelta, *, up: int = 1
+) -> dict[datetime, CheckMinute]:
+    return {
+        first + every * i: CheckMinute(seen=1, counted=1, up=up, maintenance=0)
+        for i in range(count)
+    }
+
+
+def test_ac2_a_check_day_counts_confirmed_runs_and_states_maintenance() -> None:
+    every = timedelta(minutes=5)
+    runs = _runs(START, 288, every)
+    runs[START] = CheckMinute(seen=1, counted=0, up=0, maintenance=1)
+    runs[START + every] = CheckMinute(seen=1, counted=1, up=0, maintenance=0)
+
+    row = check_day_row(
+        runs,
+        day_start=START,
+        day_end=END,
+        through=END,
+        first_event_at=START,
+        interval_seconds=300,
+        locations=1,
+    )
+
+    assert (row.good, row.total, row.failures) == (286, 287, 1)
+    assert (row.expected_runs, row.missed_runs, row.maintenance_runs) == (288, 0, 1)
+    # A check has no quiet minutes (FR11).
+    assert row.quiet_minutes == 0
+
+
+def test_ac67_a_stopped_prober_misses_runs_at_each_interval() -> None:
+    """Half a day of runs, then none: half the day's runs are missed, whatever the
+    interval, and from two locations twice as many are expected."""
+    for interval in (60, 300, 3_600):
+        every = timedelta(seconds=interval)
+        expected = 86_400 // interval
+        runs = _runs(START, expected // 2, every)
+        row = check_day_row(
+            runs,
+            day_start=START,
+            day_end=END,
+            through=END,
+            first_event_at=START,
+            interval_seconds=interval,
+            locations=1,
+        )
+        assert (row.expected_runs, row.missed_runs) == (expected, expected - expected // 2)
+        two = check_day_row(
+            runs,
+            day_start=START,
+            day_end=END,
+            through=END,
+            first_event_at=START,
+            interval_seconds=interval,
+            locations=2,
+        )
+        assert two.expected_runs == 2 * expected
+        assert last_run(runs) == START + every * (expected // 2 - 1)
+
+
+def test_a_check_day_expects_runs_only_from_its_first_run_up_to_the_settled_minute() -> None:
+    every = timedelta(minutes=1)
+    first = START + timedelta(hours=6)
+    runs = _runs(first, 60, every)
+    row = check_day_row(
+        runs,
+        day_start=START,
+        day_end=END,
+        through=first + timedelta(hours=2),
+        first_event_at=first,
+        interval_seconds=60,
+        locations=1,
+    )
+    assert (row.expected_runs, row.missed_runs) == (120, 60)
+    assert first_run(runs) == first

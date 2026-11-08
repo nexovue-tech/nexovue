@@ -444,3 +444,121 @@ def test_the_migration_froze_the_same_kinds_and_answers() -> None:
     spec.loader.exec_module(revision)
     assert ", ".join(f"'{kind}'" for kind in slo.KINDS) == revision._KINDS
     assert ", ".join(f"'{answer}'" for answer in slo.SAMPLING_ANSWERS) == revision._SAMPLING
+
+
+# --------------------------------------------------------- Step 2: four kinds
+
+
+def test_ac4_every_kind_is_creatable_and_endpoint_latency_is_no_kind() -> None:
+    assert slo.CREATABLE_KINDS == slo.KINDS
+    assert "endpoint_latency" not in slo.KINDS
+
+
+def test_ac101_a_latency_threshold_outside_the_boundaries_is_refused() -> None:
+    """The highest offered boundary is about 50.5 s, and anything above it is refused
+    rather than quietly snapped to it (AC101); below the finest there is no boundary."""
+    assert round(slo.HIGHEST_BOUNDARY_MS) == 50_523
+    assert slo.latency_refusal(500.0) is None
+    assert slo.latency_refusal(slo.HIGHEST_BOUNDARY_MS) is None
+    above = slo.latency_refusal(slo.HIGHEST_BOUNDARY_MS + 1)
+    assert above is not None and "50.5 s" in above
+    below = slo.latency_refusal(1.0)
+    assert below is not None and "1.2 ms" in below
+    assert slo.latency_refusal(0) is not None
+    assert slo.latency_refusal(math.nan) is not None
+
+
+def test_ac3_the_good_count_is_every_bucket_at_or_under_the_boundary() -> None:
+    buckets = [0] * slo.BUCKET_COUNT
+    index = slo.boundary_at_or_under(500.0)
+    assert index is not None
+    buckets[index - 1], buckets[index], buckets[index + 1] = 3, 5, 7
+    assert slo.at_or_under(buckets, index) == 8
+    assert slo.at_or_under(buckets, index - 1) == 3
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "looks"),
+    [
+        ("GET /health", True),
+        ("/healthz", True),
+        ("GET /api/readyz", True),
+        ("GET /livez", True),
+        ("grpc.health.v1.Health/Check", True),
+        ("GET /ping", True),
+        ("GET /checkout", False),
+        ("POST /orders/healthy-snacks", False),
+        ("GET /shipping/delivery", False),
+    ],
+)
+def test_fr34_names_that_look_like_health_checks_are_pre_ticked(endpoint: str, looks: bool) -> None:
+    assert slo.looks_like_health_check(endpoint) is looks
+
+
+def test_fr34_at_most_20_endpoints_are_left_out() -> None:
+    assert slo.LEFT_OUT_MOST == 20
+
+
+def test_fr11_a_check_s_coverage_is_runs_seen_against_runs_expected() -> None:
+    """Missed runs lower a check's coverage, and runs in maintenance are left out of it,
+    as excluded time is (FR11, AC67's coverage half)."""
+    day = date(2026, 11, 2)
+    now = datetime(2026, 11, 3, 0, 0, tzinfo=UTC)
+    held = {
+        day: DayCounts(
+            good=1_000,
+            total=1_200,
+            lost_minutes=0,
+            expected_runs=1_440,
+            missed_runs=120,
+            maintenance_runs=120,
+        )
+    }
+    figures = slo.window_figures(
+        held,
+        window_days=7,
+        first_event_at=datetime(2026, 11, 1, tzinfo=UTC),
+        now=now,
+        zone=ZoneInfo("UTC"),
+    )
+    assert figures.coverage == pytest.approx(1_200 / 1_320)
+    assert (figures.good, figures.total, figures.failures) == (1_000, 1_200, 200)
+
+
+def test_ac67_a_stopped_prober_reads_not_measured_through_missed_runs() -> None:
+    day = date(2026, 11, 2)
+    now = datetime(2026, 11, 3, 0, 0, tzinfo=UTC)
+    held = {
+        day: DayCounts(good=100, total=100, lost_minutes=0, expected_runs=1_440, missed_runs=1_340)
+    }
+    figures = slo.window_figures(
+        held,
+        window_days=7,
+        first_event_at=datetime(2026, 11, 1, tzinfo=UTC),
+        now=now,
+        zone=ZoneInfo("UTC"),
+    )
+    assert figures.coverage is not None and figures.coverage < slo.COVERAGE_TO_JUDGE
+
+
+@pytest.mark.parametrize(
+    ("interval", "window", "objective", "allowed"),
+    [
+        (300, 28, "99.9", 8),
+        (300, 28, "99.5", 40),
+        (60, 28, "99.9", 40),
+        (3_600, 28, "99.9", 0),
+        (60, 7, "99.9", 10),
+    ],
+)
+def test_fr8_what_a_check_s_interval_allows(
+    interval: int, window: int, objective: str, allowed: int
+) -> None:
+    expected = slo.expected_runs(interval, window_days=window)
+    assert slo.allowed_failures(Decimal(objective), expected) == allowed
+
+
+def test_fr16_a_check_slower_than_2_4_hours_a_run_cannot_be_judged() -> None:
+    assert slo.alerts_can_judge_interval(8_640)
+    assert not slo.alerts_can_judge_interval(8_641)
+    assert not slo.alerts_can_judge_interval(21_600)

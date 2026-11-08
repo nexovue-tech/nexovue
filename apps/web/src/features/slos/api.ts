@@ -45,6 +45,13 @@ export type SloQualifier =
 
 export type Sampling = "no" | "yes" | "not_sure";
 
+/** FR1's four kinds. There is no endpoint latency kind (AC4). */
+export type SloKind =
+  | "service_availability"
+  | "service_latency"
+  | "endpoint_availability"
+  | "check_availability";
+
 export interface SloFigures {
   good: number;
   total: number;
@@ -66,8 +73,17 @@ export interface SloView {
   project_id: string;
   name: string;
   description: string;
-  kind: string;
+  kind: SloKind;
   service_name: string | null;
+  endpoint_name: string | null;
+  check_id: string | null;
+  check_name: string | null;
+  check_interval_seconds: number | null;
+  /** A latency target's boundary, and what was typed: "487.2 ms", not "500 ms" (FR3). */
+  boundary_index: number | null;
+  boundary_ms: number | null;
+  asked_ms: number | null;
+  left_out_endpoints: string[];
   objective_percent: string;
   window_days: number;
   upstream_sampling: Sampling | null;
@@ -108,13 +124,146 @@ export interface SloList {
   has_services: boolean;
 }
 
+/** The form's fields; `bodyOf` sends only the kind's own (the API refuses another's). */
 export interface SloDraft {
+  kind: SloKind;
   name: string;
   description: string;
   service_name: string;
+  endpoint_name: string;
+  check_id: string;
+  /** The typed latency threshold, in ms, as typed. */
+  asked_ms: string;
+  left_out_endpoints: string[];
   objective_percent: string;
   window_days: 7 | 28;
   upstream_sampling: Sampling;
+}
+
+export const REQUEST_KINDS: readonly SloKind[] = [
+  "service_availability",
+  "service_latency",
+  "endpoint_availability",
+];
+
+/** What the API takes for the draft's kind, and nothing another kind takes. */
+export function bodyOf(draft: SloDraft, { withKind }: { withKind: boolean }) {
+  const body: Record<string, unknown> = {
+    name: draft.name.trim(),
+    description: draft.description,
+    objective_percent: draft.objective_percent.trim(),
+    window_days: draft.window_days,
+  };
+  if (withKind) body.kind = draft.kind;
+  if (draft.kind === "check_availability") return { ...body, check_id: draft.check_id };
+  body.service_name = draft.service_name.trim();
+  body.upstream_sampling = draft.upstream_sampling;
+  if (draft.kind === "endpoint_availability") body.endpoint_name = draft.endpoint_name;
+  if (draft.kind === "service_latency") body.asked_ms = Number(draft.asked_ms);
+  if (draft.kind === "service_availability") body.left_out_endpoints = draft.left_out_endpoints;
+  return body;
+}
+
+/** `/slo-readings/suggestion`: FR7's and FR8's arithmetic, as data (the API's schemas). */
+export type Suggested =
+  | "from_worst_week"
+  | "from_typical_week"
+  | "starter"
+  | "below_lowest"
+  | "too_few";
+
+export interface SloSuggestion {
+  outcome: Suggested;
+  objective: string | null;
+  weeks: Array<{ good: number; total: number; figure: string | null }>;
+  worst: string | null;
+  typical: string | null;
+  best: string | null;
+  days_of_data: number;
+  boundary_index: number | null;
+  boundary_ms: number | null;
+  week_boundaries_ms: Array<number | null>;
+  highest_boundary_ms: number;
+  boundaries_ms: number[];
+  steps: string[];
+  thin_allowed: number;
+  endpoints: Array<{ name: string; health_check: boolean }>;
+  offer_check: boolean;
+  check: {
+    interval_seconds: number;
+    windows: Array<{ window_days: number; expected_runs: number; fastest_expected_runs: number }>;
+    alerts_can_judge: boolean;
+  } | null;
+}
+
+export interface SuggestionAsk {
+  projectId: string;
+  kind: SloKind;
+  service: string;
+  endpoint: string;
+  checkId: string;
+}
+
+/** Ready to ask: the source the kind needs is named. */
+export function suggestionReady(ask: SuggestionAsk): boolean {
+  if (ask.kind === "check_availability") return ask.checkId !== "";
+  if (ask.kind === "endpoint_availability") return ask.service !== "" && ask.endpoint !== "";
+  return ask.service !== "";
+}
+
+/** The form's only ClickHouse read (design, *Form states*): its failure never stops a save. */
+export function useSuggestion(ask: SuggestionAsk) {
+  return useQuery({
+    queryKey: ["slos", "suggestion", ask] as const,
+    enabled: suggestionReady(ask),
+    staleTime: 5 * 60_000,
+    queryFn: ({ signal }) => {
+      const searchParams: Record<string, string> = { project_id: ask.projectId, kind: ask.kind };
+      if (ask.kind === "check_availability") searchParams.check_id = ask.checkId;
+      else searchParams.service = ask.service;
+      if (ask.kind === "endpoint_availability") searchParams.endpoint = ask.endpoint;
+      return apiClient.get<SloSuggestion>("slo-readings/suggestion", { searchParams, signal });
+    },
+  });
+}
+
+export interface CheckChoice {
+  id: string;
+  name: string;
+  interval_seconds: number;
+}
+
+/** The project's checks, for a check target (Postgres, `/checks`). */
+export function useCheckChoices(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["slos", "checks", projectId ?? ""] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient
+        .get<{ checks: CheckChoice[] }>("checks", {
+          searchParams: { project_id: projectId },
+          signal,
+        })
+        .then((body) => body.checks),
+  });
+}
+
+/** Whether a silence rule watches the service, so the form can say when a target alone
+ * would not alert on it stopping (FR25a, AC79). */
+export function useSilenceCovered(projectId: string | undefined, service: string) {
+  return useQuery({
+    queryKey: ["slos", "silence-coverage", projectId ?? "", service] as const,
+    enabled: projectId !== undefined && service !== "",
+    queryFn: ({ signal }) =>
+      apiClient
+        .get<{ rules: Array<{ condition_kind: string; enabled: boolean }> }>(
+          `alerts/coverage/services/${encodeURIComponent(service)}`,
+          { searchParams: { project_id: projectId }, signal },
+        )
+        .then((body) =>
+          body.rules.some((rule) => rule.condition_kind === "service_silent" && rule.enabled),
+        ),
+  });
 }
 
 const listKey = (projectId: string) => ["slos", "list", projectId] as const;
@@ -151,12 +300,14 @@ function useInvalidatingMutation<Variables, Result>(
 
 export function useCreateSlo(projectId: string) {
   return useInvalidatingMutation((draft: SloDraft) =>
-    apiClient.post<SloView>("slos", draft, { searchParams: { project_id: projectId } }),
+    apiClient.post<SloView>("slos", bodyOf(draft, { withKind: true }), {
+      searchParams: { project_id: projectId },
+    }),
   );
 }
 
 export function useChangeSlo(sloId: string) {
-  return useInvalidatingMutation((change: Partial<SloDraft> & { enabled?: boolean }) =>
+  return useInvalidatingMutation((change: Record<string, unknown>) =>
     apiClient.patch<SloView>(`slos/${encodeURIComponent(sloId)}`, change),
   );
 }

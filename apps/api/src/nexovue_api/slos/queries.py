@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    Check,
     ServiceLastSeen,
     SloDailyCount,
     SloStatus,
@@ -23,14 +24,11 @@ from nexovue_api.data.postgres.models import (
 async def targets_with_status(
     db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
 ) -> Sequence[Any]:
-    """A project's targets, live and deleted, each with its status if it has one."""
+    """A project's targets, live and deleted, each with its status if it has one, the
+    name of whoever deleted it, and a check target's check name and interval."""
     statement = (
-        select(SloTarget, SloStatus, User.name)
-        .outerjoin(
-            SloStatus, (SloStatus.slo_id == SloTarget.id) & (SloStatus.org_id == SloTarget.org_id)
-        )
-        .outerjoin(User, (User.id == SloTarget.deleted_by) & (User.org_id == SloTarget.org_id))
-        .where(SloTarget.org_id == org_id, SloTarget.project_id == project_id)
+        _with_status_and_check(org_id)
+        .where(SloTarget.project_id == project_id)
         .order_by(SloTarget.created_at, SloTarget.id)
     )
     return (await db.execute(statement)).all()
@@ -39,15 +37,38 @@ async def targets_with_status(
 async def target_with_status(
     db: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID
 ) -> Any | None:
-    statement = (
-        select(SloTarget, SloStatus, User.name)
+    statement = _with_status_and_check(org_id).where(SloTarget.id == target_id)
+    return (await db.execute(statement)).one_or_none()
+
+
+def _with_status_and_check(org_id: uuid.UUID) -> Any:
+    """One organization's rows of (target, status, deleted-by name, check name, interval)."""
+    return (
+        select(SloTarget, SloStatus, User.name, Check.name, Check.interval_seconds)
         .outerjoin(
             SloStatus, (SloStatus.slo_id == SloTarget.id) & (SloStatus.org_id == SloTarget.org_id)
         )
         .outerjoin(User, (User.id == SloTarget.deleted_by) & (User.org_id == SloTarget.org_id))
-        .where(SloTarget.org_id == org_id, SloTarget.id == target_id)
+        .outerjoin(Check, (Check.id == SloTarget.check_id) & (Check.org_id == SloTarget.org_id))
+        .where(SloTarget.org_id == org_id)
     )
-    return (await db.execute(statement)).one_or_none()
+
+
+async def check_in_project(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, check_id: uuid.UUID
+) -> Check | None:
+    """The check, only when it is this project's: a target's source is checked against
+    its project at write (design, *Tenancy path*)."""
+    statement = select(Check).where(
+        Check.org_id == org_id, Check.project_id == project_id, Check.id == check_id
+    )
+    found: Check | None = await db.scalar(statement)
+    return found
+
+
+async def has_checks(db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID) -> bool:
+    statement = select(Check.id).where(Check.org_id == org_id, Check.project_id == project_id)
+    return await db.scalar(statement.limit(1)) is not None
 
 
 async def target_for_change(

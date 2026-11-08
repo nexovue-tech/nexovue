@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**In development. Step 1 is on `feature/phase-2` (2026-11-08).** The founder approved the specification, design and plan on 2026-11-02. Steps 2 onward are not started; Step 4 waits on the demand gate and the browser-door change.
+**In development. Step 1 is on `feature/phase-2` (2026-11-08); Step 2 is on `feature/phase-2` too (2026-11-08), except T2.7, the founder's judgement.** The founder approved the specification, design and plan on 2026-11-02. Step 3 is not started; Step 4 waits on the demand gate and the browser-door change.
 
 ## Current task
 
-Plan Step 1, *A real figure on a real screen, with no alerts*: on `feature/phase-2` (commit b246b62, 2026-11-08). T1.1 to T1.11 are done; T1.11's `metrics_gauge` rows moved to T2.3 (founder, 2026-11-08).
+Plan Step 2, *All four kinds, and a suggestion that needs no thought*: T2.1 to T2.6 on `feature/phase-2` (2026-11-08); Step 1 before it (b246b62). T2.7's list is printed below and awaits the founder's judgement.
 
 ## Completed
 
@@ -20,7 +20,67 @@ Plan Step 1, *A real figure on a real screen, with no alerts*: on `feature/phase
 
 ## Next action
 
-Step 1 is committed (b246b62; `just check` passed). Step 2 is being built. The founder judges Step 1 on the dev stack with the demo running (plan, Step 1's *Judgeable*), which was not done here.
+Step 2 is committed (`just check` passed). The founder judges T2.7's list (below) and Step 2's *Judgeable* on the dev stack with the demo running, which was not done here, and `test_slo_system.py` runs against the whole stack.
+
+## Step 2, built 2026-11-08
+
+**What was built, by task.**
+
+| Task | Done | Where |
+|---|---|---|
+| T2.1 | Latency from buckets: `at_or_under`, the boundary holding a share, and a refusal outside the boundaries (AC101: above about 50.5 s is refused, not snapped); `SLO_SERVICE_LATENCY_SQL` reads `sumForEachMerge(latency_buckets)` per minute, and a latency target's failures are its slow requests | `nexovue_platform/slo.py`, `slos/store.py`, `slos/counts.py`; `apps/api/tests/test_slo_system.py` (new, not run) |
+| T2.2 | `SLO_ENDPOINT_MINUTES_SQL` reads count columns only, binding service, inbound kinds and names; an endpoint target reads its own endpoint; left-out endpoints are subtracted minute by minute only where the service has a row, never below zero | `slos/store.py`, `slos/counts.py`, `slos/job.py` |
+| T2.3 | `_COUNTED`, `UNMEASURED_OUTCOMES`, the status metric, the check id, the run attributes and the collapse moved to `nexovue_platform/readings.py` (C3); `synthetics/queries.py` binds them as module constants, and the synthetics tests pass unchanged. `SLO_CHECK_RUNS_SQL` counts confirmed runs, counted runs, up runs and maintenance runs per minute; a check day stores expected, missed and maintenance runs; a check's coverage is runs measured over runs expected outside maintenance; a check is read at its interval's cadence. `slo_rows.py` writes exact `metrics_gauge` readings (founder, 2026-11-08) | `readings.py`, `synthetics/queries.py`, `slos/store.py`, `slos/counts.py`, `slos/job.py`, `slo.py`, `apps/scheduler/tests/slo_rows.py` |
+| T2.4 | `GET /slo-readings/suggestion` on `CurrentIdentity` and the telemetry tier; FR7 and FR8 in the platform; the service's endpoints with health checks marked; what a check's interval expects | `slos/readings/` (new: router, service, queries, schemas), `main.py`, `ratelimit/policy.py` |
+| T2.5 | The form: what to watch, kind, generated name, suggestion and arithmetic with its loading, failed and retry states, boundary preview from the platform's boundaries, definitions by kind, refusals beside fields, sampling question with a link for *Not sure*, pre-ticked health checks, the stops-completely line with prefilled links, a check's interval line and FR16's line | `features/slos/SloForm.tsx`, `SloFormParts.tsx` (new), `api.ts`, `slo-words.ts` |
+| T2.6 | Endpoint rows that add up to each service's, with a `GET /health` probe every busy minute, and check readings: confirmed up and down, overruled, a weekly maintenance hour, `prober_error` | `tools/detection-seed/seed.py` |
+| T2.7 | Printed below. **Awaits the founder's judgement** | `status.md` |
+
+**Files the plan's tasks do not name, and why.** Step 2's tasks name no API file for creating the new kinds, yet the step is "all four kinds" and its tests (AC3's 487.2 ms "stored and shown", AC4 and AC80 in `test_slos_live.py`) need the routes to take them; Step 1's code said "Step 2 widens this". So `slos/schemas.py`, `slos/service.py` and `slos/queries.py` take each kind's own fields, refuse another kind's beside the field, and check a check against the project. `slos/job.py` counts each kind, because the counts it writes are what T2.2 and T2.3 prove. No migration: 0052 already holds every column.
+
+**Decisions taken while building, within the design.** Each is the founder's to overrule at T2.7.
+
+- **FR7's latency suggestion** is the lowest boundary that held 95% of requests *in every week held*, so the slowest week decides it, as the worst week does for availability, and the target it proposes is 95%. The spec does not say whether "in those same windows" means each week or all four together.
+- **Too few to suggest (FR8)** means the suggested objective would allow fewer than 10 failures (FR10's thin limit) over the four weeks' events.
+- **A check's suggestion** applies FR7 to its counted runs by week, beside what its interval allows; the design named only services and endpoints, and T2.4 asks for check suggestions.
+- **A missed run** is any expected run that was neither counted nor in maintenance, so a `prober_error` or `misconfigured` run lowers coverage rather than counting as a failure. Runs in a maintenance window leave coverage's denominator, as excluded time does (BR6).
+- **Expected runs** use the check's interval and locations as they are now, from each location it names, or every location the deployment has. A disabled check expects nothing. Changing a check's interval mid-window misreads the days before the change until they are recounted.
+- **Health-check names** are a guess: a whole segment `health`, `healthz`, `healthcheck`, `ready`, `readyz`, `readiness`, `live`, `livez`, `liveness` or `ping`.
+- **The form asks for a suggestion when the source field is left,** not on each keystroke, so typing a name costs one ClickHouse read.
+- **The stops-completely line** shows when no enabled `service_silent` rule covers the service. Nothing links a check to a service, so a check cannot hide it. The rule link prefills the service, not the silence kind, because the rule editor takes no kind.
+- **The suggestion for a service availability target counts left-out endpoints in,** because it reads the service's own counts.
+
+**T2.7: what the suggestion says for each demo service.** The running demo was not up, so this is four weeks of `tools/detection-seed` history (seed 6, the 15 demo services, one check every minute), written to this worktree's own ClickHouse and read by the API's own suggestion code. Synthetic history: it shows the arithmetic works on real rows, not whether it suits real traffic.
+
+| Service | Availability (weeks, newest first) | Latency |
+|---|---|---|
+| accounting | 99.5% (99.81, 99.84, 99.79, 99.82) | 95% at or under 123.2 ms |
+| ad | 99.5% (99.82, 99.82, 99.78, 99.82) | 95% at or under 11.1 ms |
+| cart | 99% (99.30, 99.30, 99.29, 99.31) | 95% at or under 687.1 ms |
+| checkout | 99.5% (99.77, 99.74, 99.75, 99.76) | 95% at or under 73.5 ms |
+| currency | 99.5% (99.84, 99.82, 99.84, 99.83) | 95% at or under 52.1 ms |
+| email | 99.9% (99.93, 99.93, 99.93, 99.94) | 95% at or under 26.2 ms |
+| fraud-detection | 99.5% (99.71, 99.70, 99.70, 99.68) | 95% at or under 103.7 ms |
+| frontend | 99.9% (99.92, 99.93, 99.93, 99.91) | 95% at or under 410.3 ms |
+| frontend-proxy | 99.5% (99.67, 99.68, 99.65, 99.65) | 95% at or under 290.9 ms |
+| image-provider | 99.9% (99.93, 99.92, 99.92, 99.92) | 95% at or under 206.3 ms |
+| payment | 99.5% (99.79, 99.76, 99.77, 99.78) | 95% at or under 123.2 ms |
+| product-catalog | 99.9% (99.94, 99.95, 99.95, 99.93) | 95% at or under 244.9 ms |
+| quote | 99.5% (99.55, 99.64, 99.63, 99.62) | 95% at or under 22.1 ms |
+| recommendation | 99.5% (99.79, 99.80, 99.80, 99.79) | 95% at or under 244.9 ms |
+| shipping | 99.5% (99.88, 99.86, 99.87, 99.88) | 95% at or under 9.3 ms |
+| a check, every minute | 99.5% (99.75, 99.65, 99.70, 99.67); 40,320 runs expected over 28 days | |
+
+Every service's `GET /health` was pre-ticked. On one day, `checkout` had 48,728 requests of which 2,871 were probes; the check had 1,440 confirmed runs, 1,437 up.
+
+**Not built or not proved in Step 2, said plainly.**
+
+- **AC3's live half** (`test_slo_system.py`, spans through the real receiver and worker) is written and fails loudly without the whole stack; only Postgres and ClickHouse ran here. Not run.
+- **AC81 for the form** (375px, keyboard): the form stacks by CSS, errors are tied to fields and a summary, the source fields are a fieldset; nothing was checked in a browser.
+- **Step 2's *Judgeable*** on the dev stack with the demo was not walked.
+- **AC80's form half and AC79** are proved in the form's tests; a viewer never reaches the form, so "a viewer reads who can add one" is the target page's, which shows no such line yet.
+
+**Self-review (`/review-diff`), 2026-11-08.** Two findings, fixed: a PATCH re-asked `service_last_seen` about an unchanged service (Step 1 asked only on a change), and the shared select for the list and a target bound `org_id` only in its callers (`test_postgres_tenancy_structure.py` caught it). Not fixed, recorded above: expected runs read the check's current interval, and the service suggestion counts left-out endpoints in. Unintended changes: none; every file is named above.
 
 ## Step 1, built 2026-11-07
 
@@ -68,6 +128,9 @@ Step 1 is committed (b246b62; `just check` passed). Step 2 is being built. The f
 
 **None.** Answered 2026-11-08, kept for the record:
 
+0. **AC73 wording corrected, founder 2026-11-08.** The spec said a local day holds 1,410 to 1,500 minutes; a New York spring-forward day holds 1,380, which Step 1's test already held. Read from the tz database (2026e, every zone, every day of 2026): 1,380 and 1,500 on one-hour changes, 1,410 and 1,470 at Australia/Lord_Howe (30 minutes), 1,320 and 1,560 at Antarctica/Troll (two hours). The AC now states those bounds, 1,320 to 1,560. No behaviour changed.
+
+
 1. **Founder answer, 2026-11-08: option (b).** **T1.11's `metrics_gauge` rows.** The plan's T1.11 asks the helper to write exact `metrics_gauge` rows too, proved by AC2 through `test_slo_store_live.py`. In Step 1 no reader of check readings exists (that is T2.3, which moves `_COUNTED` from `apps/api/.../synthetics/queries.py:37-60`), and a reading is several JSON attributes (`synthetics/queries.py:37-48`: outcome, final, maintenance, run id, attempt) whose exact shape only that reader proves. **Options:** (a) write the helper now, proved only by counting its own rows back; (b) move this part of T1.11 into T2.3, beside its reader. **Recommendation: (b)**, so the helper is proved by the code that reads it. The service and endpoint parts are built.
 
 The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, below).
@@ -97,6 +160,16 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 - **AC38's outside tester** comes from the conversation round (spec D64). If nobody there agrees to a later screen test, it reads "not proved".
 
 ## Validation
+
+**Step 2, 2026-11-08,** on the worktree, against its own stores (`f19-pg`, Postgres 18 with pgvector, port 25432; `f19-ch`, ClickHouse 26.3.20.7, ports 28123 and 29000), migrated to Alembic 0052 and ClickHouse 000039 (no new migration). The machine restarted at 06:46 UTC; the stores were started again after Docker came back. `just check` was not run, by instruction.
+
+| What | Result |
+|---|---|
+| Seen failing first | `test_slo_model.py` (21: no creatable kinds, refusal, `at_or_under`, health names, run coverage, interval allowance); `test_slo_counts.py` (no `check_day_row`); `test_slo_suggestion.py` (no `slos.readings`, then the tier test); `test_ratelimit_coverage.py` (`/slo-readings` on the default tier); `SloForm.test.ts` (12 of 13 against Step 1's form); `test_seed.py` (no `HEALTH_ENDPOINT`); `test_slos_live.py`'s 8 new tests against Step 1's API (`kind` refused); `test_postgres_tenancy_structure.py` (a shared select without `org_id`, found by the offline run and fixed); `test_tenant_chokepoint_structure.py` (interpolating imported names in `synthetics/queries.py`, fixed by binding module constants) |
+| Written after their code | `test_slo_store_live.py`'s 8 new tests (the offline counts tests above had failed first); they import code Step 1 lacks |
+| F19 suites, final | `test_slo_model.py` 82, `test_slo_suggestion.py` 15, `test_slo_counts.py` 15, `test_slo_store_live.py` 12, `test_slo_job_live.py` 16, `test_slos_live.py` 23, `test_seed.py` 18 (with `test_fault.py`); web `features/slos` 32 |
+| Wider | Scheduler offline suite 4,694 passed (`test_connect_guard.py` left out: it needs public DNS). API offline suite 4,064 passed, 1 skipped. Live: `test_jobs_live.py`, `test_detection_store_live.py`, `test_detection_has_no_ai.py` 31; `test_deletion_live.py` with the synthetics, structure and policy suites 429. Web: 141 files, 1,620 tests. Whole-repo `mypy .`, `ruff check .`, `ruff format --check .`, `pnpm -r --if-present run typecheck`, Biome on `features/slos`, and `verify-tokens.js`: clean |
+| Live seed | `seed.py --tenant-id` wrote 576,281 service rows, 1,491,266 endpoint rows and 40,694 check readings; read back exactly; T2.7's list read them through the API's code |
 
 **Step 1, 2026-11-07,** on the worktree, against its own stores (`f19-pg`, Postgres 18 with pgvector, port 25432; `f19-ch`, ClickHouse 26.3.20.7, port 28123), migrated to Alembic 0052 and ClickHouse 000038. `just check` was not run, by instruction.
 
@@ -335,7 +408,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-07
+2026-11-08
 
 ## Founder decision, 2026-11-02: SLO work runs on `scheduler-light` (D66)
 

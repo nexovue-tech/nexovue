@@ -19,21 +19,35 @@ Name = Annotated[
 ]
 Description = Annotated[str, StringConstraints(max_length=slo.DESCRIPTION_LONGEST)]
 ServiceName = Annotated[str, StringConstraints(min_length=1, max_length=slo.SERVICE_NAME_LONGEST)]
+EndpointName = Annotated[str, StringConstraints(min_length=1, max_length=slo.ENDPOINT_NAME_LONGEST)]
+LeftOut = Annotated[list[EndpointName], Field(max_length=slo.LEFT_OUT_MOST)]
+# A typed latency threshold, in milliseconds; snapped down to a boundary (FR3).
+AskedMs = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 Objective = Annotated[Decimal, Field(max_digits=7, decimal_places=4)]
 WindowDays = Literal[7, 28]
 Sampling = Literal["no", "yes", "not_sure"]
-# Step 1 creates service availability only (plan T1.7); Step 2 widens this.
-CreatableKind = Literal["service_availability"]
+# The four kinds (FR1). Endpoint latency is none of them, so no route can make one (AC4).
+CreatableKind = Literal[
+    "service_availability", "service_latency", "endpoint_availability", "check_availability"
+]
 
 
 class SloCreate(BaseModel):
+    """Each kind's own fields; the service refuses another kind's, beside the field."""
+
     kind: CreatableKind = "service_availability"
     name: Name
     description: Description = ""
-    service_name: ServiceName
+    # Every request kind names its service; a check target does not.
+    service_name: ServiceName | None = None
+    endpoint_name: EndpointName | None = None
+    check_id: uuid.UUID | None = None
+    asked_ms: AskedMs | None = None
+    left_out_endpoints: LeftOut = []
     objective_percent: Objective
     window_days: WindowDays = slo.DEFAULT_WINDOW_DAYS
-    upstream_sampling: Sampling
+    # FR5: asked of request kinds only.
+    upstream_sampling: Sampling | None = None
 
 
 class SloChange(BaseModel):
@@ -42,6 +56,10 @@ class SloChange(BaseModel):
     name: Name | None = None
     description: Description | None = None
     service_name: ServiceName | None = None
+    endpoint_name: EndpointName | None = None
+    check_id: uuid.UUID | None = None
+    asked_ms: AskedMs | None = None
+    left_out_endpoints: LeftOut | None = None
     objective_percent: Objective | None = None
     window_days: WindowDays | None = None
     upstream_sampling: Sampling | None = None
@@ -78,6 +96,16 @@ class SloView(BaseModel):
     description: str
     kind: str
     service_name: str | None
+    endpoint_name: str | None
+    check_id: uuid.UUID | None
+    # The check's name and interval while it exists (FR8, FR10's silence limit).
+    check_name: str | None
+    check_interval_seconds: int | None
+    # A latency target's boundary and what was typed (FR3: "487.2 ms", not "500 ms").
+    boundary_index: int | None
+    boundary_ms: float | None
+    asked_ms: float | None
+    left_out_endpoints: list[str]
     objective_percent: Decimal
     window_days: int
     upstream_sampling: str | None

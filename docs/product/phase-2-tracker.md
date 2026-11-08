@@ -21,7 +21,7 @@ server; see foundation, *What A and B change*).
 | 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | Step 1 (2026-11-07); Step 2 (2026-11-07) except T2.9, which waits on F3 | No | After deploy |
 | 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ wait on F3 and the buyer round | No | After deploy |
 | 5 Fix | [F5 AI solution](../features/ai-solution/status.md) | Done | Yes | Yes | No | No | After deploy |
-| 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | Yes | Yes | Step 1 (2026-11-08); T1.11's `metrics_gauge` rows moved to T2.3 (founder, 2026-11-08) | No | After deploy |
+| 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | Yes | Yes | Step 1 and Step 2 (2026-11-08); T2.7, judging the suggestions, waits for the founder | No | After deploy |
 | 6 Around | [F20 Dashboards](../features/dashboards/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ not started | No | After deploy |
 
 **All seven features' specs, designs and plans, and the foundation, approved by the founder on 2026-11-02.** F6 merged on 2026-11-02 (PR #24). Each feature starts as *The order of work* below allows, on the one branch `feature/phase-2`. Founder questions open: **none** (all approved 2026-11-02). F19's SLO work runs on `scheduler-light`, not a new container (F19 D66, 2026-11-02). Waiting on outside parties: Atlassian's written

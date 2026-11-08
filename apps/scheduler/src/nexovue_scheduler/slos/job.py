@@ -1,9 +1,9 @@
 """F19's three jobs, and `queue_jobs`, which hands them out (design, *What each job does*).
 
 - **`judge_slos`**, on `slo`, one project each settled minute: where each target
-  stands now. Step 1 records when it was worked out, the last minute its source sent
-  anything, and the longest quiet stretch of the last 7 days, so a silent service
-  reads **No recent requests** and never looks healthy (BR5). Burn tiers join in Step 4.
+  stands now: when it was worked out, the last minute its source sent anything, and
+  the longest quiet stretch of the last 7 days, so a silent service reads **No recent
+  requests** and never looks healthy (BR5). Burn tiers join in Step 4.
 - **`count_slos`**, on `slo_counts`, by age: a project's recent days, rewritten until
   they are 7 days old and then final (D2, BR13).
 - **`read_slo_history`**, on `slo_history`, one target: its past days, back as far as
@@ -13,6 +13,11 @@
 projects, which drop a project silent for a day (C8): a 27-day silence is still judged
 (AC8). Projects go longest-waiting first, so whoever was skipped leads the next minute
 (AC65). A failure to queue is the caller's to log; it must not stop detection (AC95).
+
+**Each kind's source** is read once per project, one statement per source (`store`),
+and turned into one target's minutes by `counts`. A check is read at its own cadence:
+a judging reads it only once its interval has turned since the last (design, *What
+each job does*).
 
 **Order and repeats.** A project's judging holds a session lock, a target is skipped
 when the minute is not newer than its last, and the status upsert refuses an older
@@ -27,7 +32,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
@@ -47,7 +52,14 @@ from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.settings import get_settings
 from nexovue_scheduler.slos import counts
-from nexovue_scheduler.slos.store import MinuteCounts, SloReader, SloStore, connect_store
+from nexovue_scheduler.slos.store import (
+    CheckMinute,
+    LatencyMinute,
+    MinuteCounts,
+    SloReader,
+    SloStore,
+    connect_store,
+)
 
 logger = get_logger(__name__)
 
@@ -72,8 +84,13 @@ OLDER_DAYS_DUE_AFTER: Final = timedelta(hours=1)
 FINAL_AFTER_DAYS: Final = 7
 # The 7 days FR10a's attention limit reads the longest quiet stretch from.
 QUIET_LOOKBACK_DAYS: Final = 7
-# `service_stats_1m` holds at most 35 days on any plan (FR27): how far a history reaches.
+# `service_stats_1m` holds at most 35 days on any plan (FR27): how far a service
+# target's history reaches. An endpoint or check target reaches the plan's derived
+# retention.
 SERVICE_ROLLUP_DAYS: Final = 35
+# Where a check names no location, it runs from every location the deployment has
+# (`checks.py`); the task passes how many that is.
+ONE_LOCATION: Final = 1
 # `intake_refusals` and `detection_events` are kept 29 days (`detection/retention.py`): a
 # day older than that cannot say what nexovue lost in it (FR28).
 LOSS_RECORDS_DAYS: Final = 29
@@ -205,10 +222,14 @@ _SETTINGS: Final = text("SELECT timezone FROM projects WHERE org_id = :org_id AN
 # The live targets of one project, enabled and disabled, oldest status first.
 _TARGETS: Final = text(
     """
-    SELECT t.id, t.kind, t.service_name, t.first_event_at, t.definition_version,
+    SELECT t.id, t.kind, t.service_name, t.endpoint_name, t.boundary_index,
+           t.left_out_endpoints, t.check_id, t.first_event_at, t.definition_version,
+           c.interval_seconds AS check_interval_seconds, c.locations AS check_locations,
+           c.enabled AS check_enabled,
            s.evaluated_minute, s.last_event_minute
     FROM slo_targets AS t
     LEFT JOIN slo_status AS s ON s.org_id = t.org_id AND s.slo_id = t.id
+    LEFT JOIN checks AS c ON c.org_id = t.org_id AND c.id = t.check_id
     WHERE t.org_id = :org_id AND t.project_id = :project_id AND t.deleted_at IS NULL
     ORDER BY s.evaluated_minute NULLS FIRST, t.id
     """
@@ -265,22 +286,41 @@ class Target:
     definition_version: int
     evaluated_minute: datetime | None
     last_event_minute: datetime | None
+    endpoint_name: str | None = None
+    boundary_index: int | None = None
+    left_out_endpoints: tuple[str, ...] = ()
+    # A check target's check; None once the check is deleted (Source gone, AC70).
+    check_id: uuid.UUID | None = None
+    check_interval_seconds: int | None = None
+    check_locations: tuple[str, ...] = ()
+    check_enabled: bool = True
+
+    @property
+    def is_check(self) -> bool:
+        return self.kind == slo.CHECK_AVAILABILITY
+
+
+def _target_of(row: Any) -> Target:
+    return Target(
+        id=row.id,
+        kind=row.kind,
+        service_name=row.service_name,
+        first_event_at=row.first_event_at,
+        definition_version=row.definition_version,
+        evaluated_minute=getattr(row, "evaluated_minute", None),
+        last_event_minute=getattr(row, "last_event_minute", None),
+        endpoint_name=row.endpoint_name,
+        boundary_index=row.boundary_index,
+        left_out_endpoints=tuple(row.left_out_endpoints or ()),
+        check_id=row.check_id,
+        check_interval_seconds=row.check_interval_seconds,
+        check_locations=tuple(row.check_locations or ()),
+        check_enabled=bool(row.check_enabled) if row.check_enabled is not None else True,
+    )
 
 
 async def _targets(connection: AsyncConnection, binding: ProjectBinding) -> list[Target]:
-    rows = await connection.execute(_TARGETS, _keys(binding))
-    return [
-        Target(
-            id=row.id,
-            kind=row.kind,
-            service_name=row.service_name,
-            first_event_at=row.first_event_at,
-            definition_version=row.definition_version,
-            evaluated_minute=row.evaluated_minute,
-            last_event_minute=row.last_event_minute,
-        )
-        for row in rows
-    ]
+    return [_target_of(row) for row in await connection.execute(_TARGETS, _keys(binding))]
 
 
 async def _zone(connection: AsyncConnection, binding: ProjectBinding) -> ZoneInfo:
@@ -292,15 +332,129 @@ def _keys(binding: ProjectBinding) -> dict[str, uuid.UUID]:
     return {"org_id": uuid.UUID(binding.org_id), "project_id": uuid.UUID(binding.project_id)}
 
 
-def _services(targets: Sequence[Target]) -> list[str]:
-    """The services Step 1's one kind reads; other kinds' sources join in Step 2."""
-    return sorted(
-        {
-            target.service_name
-            for target in targets
-            if target.kind == slo.SERVICE_AVAILABILITY and target.service_name
-        }
+# ------------------------------------------------------------------ the sources
+
+
+@dataclass(frozen=True, slots=True)
+class Sources:
+    """Everything a project's targets read for one span of time: one read per source."""
+
+    services: Mapping[str, Mapping[datetime, MinuteCounts]]
+    latency: Mapping[str, Mapping[datetime, LatencyMinute]]
+    endpoints: Mapping[tuple[str, str], Mapping[datetime, MinuteCounts]]
+    checks: Mapping[str, Mapping[datetime, CheckMinute]]
+
+
+def read_sources(
+    reader: SloReader, targets: Sequence[Target], *, start: datetime, end: datetime
+) -> Sources:
+    """Each source the targets need, in [start, end), each read only if one needs it."""
+    services = {t.service_name for t in targets if t.kind == slo.SERVICE_AVAILABILITY}
+    latency = {t.service_name for t in targets if t.kind == slo.SERVICE_LATENCY}
+    endpoints = {
+        (t.service_name, t.endpoint_name)
+        for t in targets
+        if t.kind == slo.ENDPOINT_AVAILABILITY and t.service_name and t.endpoint_name
+    } | {
+        (t.service_name, name)
+        for t in targets
+        if t.kind == slo.SERVICE_AVAILABILITY and t.service_name
+        for name in t.left_out_endpoints
+    }
+    checks = {str(t.check_id) for t in targets if t.is_check and t.check_id is not None}
+    return Sources(
+        services=reader.service_minutes([name for name in services if name], start=start, end=end),
+        latency=reader.service_latency([name for name in latency if name], start=start, end=end),
+        endpoints=reader.endpoint_minutes(endpoints, start=start, end=end),
+        checks=reader.check_runs(checks, start=start, end=end),
     )
+
+
+def request_minutes(target: Target, sources: Sources) -> dict[datetime, MinuteCounts]:
+    """A request kind's minutes from the project's sources (FR1)."""
+    service = target.service_name or ""
+    if target.kind == slo.SERVICE_LATENCY:
+        if target.boundary_index is None:
+            return {}
+        return counts.latency_minutes(sources.latency.get(service, {}), target.boundary_index)
+    if target.kind == slo.ENDPOINT_AVAILABILITY:
+        return dict(sources.endpoints.get((service, target.endpoint_name or ""), {}))
+    return counts.without_left_out(
+        sources.services.get(service, {}),
+        [sources.endpoints.get((service, name), {}) for name in target.left_out_endpoints],
+    )
+
+
+def check_runs(target: Target, sources: Sources) -> Mapping[datetime, CheckMinute]:
+    if target.check_id is None:
+        return {}
+    return sources.checks.get(str(target.check_id), {})
+
+
+def first_event_of(target: Target, sources: Sources) -> datetime | None:
+    if target.is_check:
+        return counts.first_run(check_runs(target, sources))
+    return counts.first_event(request_minutes(target, sources))
+
+
+def last_event_of(target: Target, sources: Sources) -> datetime | None:
+    if target.is_check:
+        return counts.last_run(check_runs(target, sources))
+    return counts.last_event(request_minutes(target, sources))
+
+
+def day_row_of(
+    target: Target,
+    sources: Sources,
+    *,
+    day_start: datetime,
+    day_end: datetime,
+    through: datetime,
+    first_event_at: datetime,
+    lost: frozenset[datetime],
+    probe_locations: int,
+) -> counts.DayRow:
+    """One day of one target, by its kind."""
+    if not target.is_check:
+        return counts.day_row(
+            request_minutes(target, sources),
+            day_start=day_start,
+            day_end=day_end,
+            through=through,
+            first_event_at=first_event_at,
+            lost=lost,
+        )
+    row = counts.check_day_row(
+        check_runs(target, sources),
+        day_start=day_start,
+        day_end=day_end,
+        through=through,
+        first_event_at=first_event_at,
+        interval_seconds=target.check_interval_seconds or slo.CHECK_FASTEST_INTERVAL_SECONDS,
+        locations=len(target.check_locations) or probe_locations,
+    )
+    if not target.check_enabled:
+        # A disabled check expects nothing (FR11: runs expected while it was enabled).
+        seen = row.total + (row.maintenance_runs or 0)
+        row = replace(row, expected_runs=seen, missed_runs=0)
+    return row
+
+
+def _interval_turned(target: Target, settled: datetime) -> bool:
+    """A check is read at its own cadence: once its interval has turned since the last
+    judging, not every minute (design, *What each job does*)."""
+    if not target.is_check:
+        return True
+    interval = target.check_interval_seconds or slo.CHECK_FASTEST_INTERVAL_SECONDS
+    if target.evaluated_minute is None:
+        return True
+    return int(settled.timestamp()) // interval != int(target.evaluated_minute.timestamp()) // (
+        interval
+    )
+
+
+def _has_source(target: Target) -> bool:
+    return target.check_id is not None if target.is_check else bool(target.service_name)
 
 
 # --------------------------------------------------------------------- judging
@@ -329,12 +483,15 @@ async def judge_slos(
             reader = store.for_project(binding.org_id, binding.project_id)
             # Read once for the project. A failed read writes nothing, so the status
             # ages into Not up to date rather than moving on stale figures.
-            minutes = reader.service_minutes(
-                _services(targets), start=settled - JUDGE_LOOKBACK + _MINUTE, end=settled + _MINUTE
+            sources = read_sources(
+                reader,
+                [target for target in targets if _interval_turned(target, settled)],
+                start=settled - JUDGE_LOOKBACK + _MINUTE,
+                end=settled + _MINUTE,
             )
             days = await _stored_days(connection, binding, targets, zone=zone, settled=settled)
             for target in targets:
-                await _save_status(connection, binding, target, minutes, days, zone, settled)
+                await _save_status(connection, binding, target, sources, days, zone, settled)
             await connection.commit()
             return len(targets)
 
@@ -385,20 +542,19 @@ async def _save_status(
     connection: AsyncConnection,
     binding: ProjectBinding,
     target: Target,
-    minutes: Mapping[str, Mapping[datetime, MinuteCounts]],
+    sources: Sources,
     days: StoredDays,
     zone: ZoneInfo,
     settled: datetime,
 ) -> None:
-    source = minutes.get(target.service_name or "", {})
-    first = counts.first_event(source)
+    first = first_event_of(target, sources)
     if first is not None and (target.first_event_at is None or first < target.first_event_at):
         await connection.execute(
             _FIRST_EVENT, {"org_id": uuid.UUID(binding.org_id), "id": target.id, "first": first}
         )
     last = _latest(
         target.last_event_minute,
-        counts.last_event(source),
+        last_event_of(target, sources),
         _last_event_from_days(days.last_busy.get(target.id), zone),
     )
     await connection.execute(
@@ -454,17 +610,20 @@ _SAVE_DAY: Final = text(
     """
     INSERT INTO slo_daily_counts (
         org_id, slo_id, day, good, total, failures, quiet_minutes, lost_minutes,
-        quiet_leading_minutes, quiet_trailing_minutes, longest_quiet_minutes, loss_known,
-        definition_version, final, computed_at)
+        quiet_leading_minutes, quiet_trailing_minutes, longest_quiet_minutes, expected_runs,
+        missed_runs, maintenance_runs, loss_known, definition_version, final, computed_at)
     VALUES (
         :org_id, :id, :day, :good, :total, :failures, :quiet, :lost, :leading, :trailing,
-        :longest, :loss_known, :version, :final, :computed_at)
+        :longest, :expected_runs, :missed_runs, :maintenance_runs, :loss_known, :version,
+        :final, :computed_at)
     ON CONFLICT (org_id, slo_id, day) DO UPDATE
     SET good = EXCLUDED.good, total = EXCLUDED.total, failures = EXCLUDED.failures,
         quiet_minutes = EXCLUDED.quiet_minutes, lost_minutes = EXCLUDED.lost_minutes,
         quiet_leading_minutes = EXCLUDED.quiet_leading_minutes,
         quiet_trailing_minutes = EXCLUDED.quiet_trailing_minutes,
         longest_quiet_minutes = EXCLUDED.longest_quiet_minutes,
+        expected_runs = EXCLUDED.expected_runs, missed_runs = EXCLUDED.missed_runs,
+        maintenance_runs = EXCLUDED.maintenance_runs,
         loss_known = EXCLUDED.loss_known, definition_version = EXCLUDED.definition_version,
         final = EXCLUDED.final, computed_at = EXCLUDED.computed_at
     WHERE slo_daily_counts.org_id = :org_id AND NOT slo_daily_counts.final
@@ -479,7 +638,12 @@ _MARK_FINAL: Final = text(
 
 
 async def count_slos(
-    engine: AsyncEngine, store: SloStore, project_id: uuid.UUID, *, now: datetime
+    engine: AsyncEngine,
+    store: SloStore,
+    project_id: uuid.UUID,
+    *,
+    now: datetime,
+    probe_locations: int = ONE_LOCATION,
 ) -> int:
     """Rewrite a project's due days: today, yesterday, and any day not yet final whose
     row is an hour old. Marks days past 7 final. Returns the rows written."""
@@ -514,6 +678,7 @@ async def count_slos(
                 through=settled + _MINUTE,
                 today=today,
                 now=now,
+                probe_locations=probe_locations,
             )
             await connection.execute(_MARK_FINAL, keys | {"cutoff": cutoff})
             await connection.commit()
@@ -531,27 +696,31 @@ async def _count_days(
     through: datetime,
     today: date,
     now: datetime,
+    probe_locations: int,
 ) -> int:
-    """Count each day for every target, one read per day for the project, and save the
-    rows. Returns how many were written."""
+    """Count each day for every target, one read per source per day for the project, and
+    save the rows. Returns how many were written."""
     written = 0
+    counted = [target for target in targets if _has_source(target)]
     for day in days:
         start, end = slo.day_bounds(day, zone)
         if start >= through:
             continue
-        minutes = reader.service_minutes(_services(targets), start=start, end=min(end, through))
+        sources = read_sources(reader, counted, start=start, end=min(end, through))
         lost = await holds.lost_minutes(connection, start=start, end=min(end, through))
         loss_known = (today - day).days <= LOSS_RECORDS_DAYS
-        for target in targets:
+        for target in counted:
             if target.first_event_at is None or end <= target.first_event_at:
                 continue
-            row = counts.day_row(
-                minutes.get(target.service_name or "", {}),
+            row = day_row_of(
+                target,
+                sources,
                 day_start=start,
                 day_end=end,
                 through=through,
                 first_event_at=target.first_event_at,
                 lost=lost,
+                probe_locations=probe_locations,
             )
             await _save_day(
                 connection,
@@ -593,6 +762,9 @@ async def _save_day(
             "leading": row.quiet_leading_minutes,
             "trailing": row.quiet_trailing_minutes,
             "longest": row.longest_quiet_minutes,
+            "expected_runs": row.expected_runs,
+            "missed_runs": row.missed_runs,
+            "maintenance_runs": row.maintenance_runs,
             "loss_known": loss_known,
             "version": target.definition_version,
             "final": final,
@@ -608,9 +780,13 @@ async def _save_day(
 _TARGET_PROJECT: Final = text("SELECT project_id FROM slo_targets WHERE id = :id")
 _HISTORY_TARGET: Final = text(
     """
-    SELECT id, kind, service_name, first_event_at, definition_version, created_at
-    FROM slo_targets
-    WHERE org_id = :org_id AND id = :id AND deleted_at IS NULL
+    SELECT t.id, t.kind, t.service_name, t.endpoint_name, t.boundary_index,
+           t.left_out_endpoints, t.check_id, t.first_event_at, t.definition_version,
+           c.interval_seconds AS check_interval_seconds, c.locations AS check_locations,
+           c.enabled AS check_enabled
+    FROM slo_targets AS t
+    LEFT JOIN checks AS c ON c.org_id = t.org_id AND c.id = t.check_id
+    WHERE t.org_id = :org_id AND t.id = :id AND t.deleted_at IS NULL
     """
 )
 _HISTORY_READ: Final = text(
@@ -627,7 +803,12 @@ _CURRENT_VERSION: Final = text(
 
 
 async def read_slo_history(
-    engine: AsyncEngine, store: SloStore, target_id: uuid.UUID, *, now: datetime
+    engine: AsyncEngine,
+    store: SloStore,
+    target_id: uuid.UUID,
+    *,
+    now: datetime,
+    probe_locations: int = ONE_LOCATION,
 ) -> int:
     """Count a target's past days, oldest first, back as far as its source holds, and
     run again while its definition moved during the read (AC64). Returns rows written."""
@@ -644,7 +825,9 @@ async def read_slo_history(
                 return 0
             written = 0
             while True:
-                read = await _read_history_once(connection, store, binding, target_id, now=now)
+                read = await _read_history_once(
+                    connection, store, binding, target_id, now=now, probe_locations=probe_locations
+                )
                 if read is None:
                     return written
                 version, rows = read
@@ -664,6 +847,7 @@ async def _read_history_once(
     target_id: uuid.UUID,
     *,
     now: datetime,
+    probe_locations: int,
 ) -> tuple[int, int] | None:
     keys = {"org_id": uuid.UUID(binding.org_id), "id": target_id}
     row = (await connection.execute(_HISTORY_TARGET, keys)).one_or_none()
@@ -675,27 +859,19 @@ async def _read_history_once(
     await connection.commit()
     through = (settled or _minute_of(now)) + _MINUTE
     today = now.astimezone(zone).date()
-    reach = min(binding.derived_retention_days, SERVICE_ROLLUP_DAYS)
+    target = _target_of(row)
+    reach = binding.derived_retention_days
+    if target.kind in (slo.SERVICE_AVAILABILITY, slo.SERVICE_LATENCY):
+        reach = min(reach, SERVICE_ROLLUP_DAYS)
     days = [today - timedelta(days=offset) for offset in range(reach, -1, -1)]
     reader = store.for_project(binding.org_id, binding.project_id)
-    target = Target(
-        id=row.id,
-        kind=row.kind,
-        service_name=row.service_name,
-        first_event_at=row.first_event_at,
-        definition_version=row.definition_version,
-        evaluated_minute=None,
-        last_event_minute=None,
-    )
     first = target.first_event_at
     written = 0
-    for day in days:
+    for day in days if _has_source(target) else []:
         start, end = slo.day_bounds(day, zone)
         if first is None:
-            found = counts.first_event(
-                reader.service_minutes(_services([target]), start=start, end=min(end, through)).get(
-                    target.service_name or "", {}
-                )
+            found = first_event_of(
+                target, read_sources(reader, [target], start=start, end=min(end, through))
             )
             if found is None:
                 continue
@@ -712,6 +888,7 @@ async def _read_history_once(
             through=through,
             today=today,
             now=now,
+            probe_locations=probe_locations,
         )
     await connection.execute(
         _HISTORY_READ, keys | {"version": target.definition_version, "through": today}
@@ -721,15 +898,7 @@ async def _read_history_once(
 
 
 def _with_first(target: Target, first: datetime) -> Target:
-    return Target(
-        id=target.id,
-        kind=target.kind,
-        service_name=target.service_name,
-        first_event_at=first,
-        definition_version=target.definition_version,
-        evaluated_minute=target.evaluated_minute,
-        last_event_minute=target.last_event_minute,
-    )
+    return replace(target, first_event_at=first)
 
 
 # ----------------------------------------------------------------------- tasks
@@ -765,7 +934,12 @@ def count_slos_task(project_id: str) -> None:
     if store is None:
         return
     now = datetime.now(UTC)
-    with_engine(lambda engine: count_slos(engine, store, uuid.UUID(project_id), now=now))
+    locations = len(get_settings().probe_locations)
+    with_engine(
+        lambda engine: count_slos(
+            engine, store, uuid.UUID(project_id), now=now, probe_locations=locations
+        )
+    )
 
 
 @task(slo.READ_SLO_HISTORY_TASK)
@@ -774,4 +948,9 @@ def read_slo_history_task(target_id: str) -> None:
     if store is None:
         return
     now = datetime.now(UTC)
-    with_engine(lambda engine: read_slo_history(engine, store, uuid.UUID(target_id), now=now))
+    locations = len(get_settings().probe_locations)
+    with_engine(
+        lambda engine: read_slo_history(
+            engine, store, uuid.UUID(target_id), now=now, probe_locations=locations
+        )
+    )

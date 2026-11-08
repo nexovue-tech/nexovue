@@ -7,6 +7,11 @@ rows directly, shaped like a business's traffic, and ends just before the live d
 
 The history is synthetic. A detection pass on it shows the path works, not that detection is right.
 
+F19 (plan T2.6) adds what reliability targets read: `endpoint_stats_1m` rows that add up to each
+service's, with a `/health`-style probe every busy minute, and `synthetic.check.status` readings for
+the project's checks holding every kind of run the uptime rule tells apart: confirmed up and down,
+an attempt a retry overruled, a run in a weekly maintenance hour, and a `prober_error`.
+
 Dev stack only: it refuses any host but localhost, for ClickHouse and Postgres alike.
 Run with `just detection-seed` (options: `just detection-seed --help`).
 """
@@ -21,7 +26,7 @@ import math
 import random
 import sys
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Final
@@ -99,6 +104,36 @@ _EARLIEST: Final = """
 SELECT min(minute), count() FROM service_stats_1m
 WHERE tenant_id = {tenant:String} AND project_id = {project:String}
 """
+# F19: the endpoints under each service, and the probe a target leaves out (FR34).
+HEALTH_ENDPOINT: Final = "GET /health"
+PROBES_PER_MINUTE: Final = 2
+# The busier of a service's two routes takes this share of its other requests.
+MAIN_ROUTE_SHARE: Final = 0.7
+INBOUND_KIND: Final = "SERVER"
+_ENDPOINT_INSERT: Final = (
+    "INSERT INTO endpoint_stats_1m (tenant_id, derived_retention_days, project_id, service_name, "
+    "span_kind, span_name, minute, request_count, error_count) FORMAT JSONEachRow"
+)
+# A check's runs, as the prober publishes them (apps/scheduler/.../publish.py).
+CHECK_STATUS_METRIC: Final = "synthetic.check.status"
+PROBER_SERVICE: Final = "nexovue-prober"
+# How often each kind of run happens (guesses, for a demo): an attempt a retry overruled, a
+# confirmed down, and a run the prober itself could not make.
+OVERRULED_SHARE: Final = 0.01
+DOWN_SHARE: Final = 0.003
+PROBER_ERROR_SHARE: Final = 0.002
+# A maintenance hour each week: Sunday 03:00 to 04:00 UTC.
+MAINTENANCE_WEEKDAY: Final = 6
+MAINTENANCE_HOUR: Final = 3
+_READING_INSERT: Final = (
+    "INSERT INTO metrics_gauge (timestamp, start_timestamp, received_at, retention_days, "
+    "tenant_id, project_id, service_name, metric_name, metric_unit, resource_attrs, attrs, value) "
+    "FORMAT JSONEachRow"
+)
+_CHECKS: Final = """
+SELECT id::text, interval_seconds FROM checks WHERE project_id::text = $1 AND enabled
+"""
+
 _READ_BACK: Final = """
 SELECT count(), uniqExact(service_name), min(minute), max(minute), sum(request_count),
        sum(error_count), arraySum(sumForEachMerge(latency_buckets))
@@ -142,6 +177,29 @@ class Row:
     request_count: int
     error_count: int
     latency_buckets: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointRow:
+    service_name: str
+    span_kind: str
+    span_name: str
+    minute: datetime
+    request_count: int
+    error_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CheckRun:
+    """One `synthetic.check.status` reading."""
+
+    check_id: str
+    at: datetime
+    up: bool
+    outcome: str
+    final: bool
+    maintenance: bool
+    attempt: int
 
 
 def require_local(url: str, what: str) -> None:
@@ -251,6 +309,50 @@ def generate(
             at += timedelta(minutes=1)
 
 
+def endpoint_rows(rows: Iterable[Row]) -> Iterator[EndpointRow]:
+    """Each service minute split into endpoints that add up to it: a probe that never fails, and
+    two routes carrying the rest, failures on the routes. A route with no requests writes no row,
+    as the worker writes none."""
+    for row in rows:
+        probes = min(PROBES_PER_MINUTE, row.request_count - row.error_count)
+        rest = row.request_count - probes
+        main = min(rest, max(row.error_count, round(rest * MAIN_ROUTE_SHARE)))
+        main_errors = min(row.error_count, main)
+        split = (
+            (HEALTH_ENDPOINT, probes, 0),
+            (f"POST /{row.service_name}", main, main_errors),
+            (f"GET /{row.service_name}", rest - main, row.error_count - main_errors),
+        )
+        for name, requests, errors in split:
+            if requests > 0:
+                yield EndpointRow(
+                    row.service_name, INBOUND_KIND, name, row.minute, requests, errors
+                )
+
+
+def check_runs(
+    check_id: str, start: datetime, end: datetime, *, interval_seconds: int, seed: int
+) -> Iterator[CheckRun]:
+    """One confirmed run per interval from start to end inclusive. Now and then the first attempt
+    fails and a retry overrules it at the same moment, a run is down, or the prober errs; runs in
+    the weekly maintenance hour carry the maintenance flag."""
+    rng = random.Random(f"{seed}:{check_id}")
+    at = start
+    while at <= end:
+        maintenance = at.weekday() == MAINTENANCE_WEEKDAY and at.hour == MAINTENANCE_HOUR
+        roll = rng.random()
+        if roll < OVERRULED_SHARE:
+            yield CheckRun(check_id, at, False, "down", False, maintenance, 1)
+            yield CheckRun(check_id, at, True, "up", True, maintenance, 2)
+        elif roll < OVERRULED_SHARE + DOWN_SHARE:
+            yield CheckRun(check_id, at, False, "down", True, maintenance, 1)
+        elif roll < OVERRULED_SHARE + DOWN_SHARE + PROBER_ERROR_SHARE:
+            yield CheckRun(check_id, at, False, "prober_error", True, maintenance, 1)
+        else:
+            yield CheckRun(check_id, at, True, "up", True, maintenance, 1)
+        at += timedelta(seconds=interval_seconds)
+
+
 def window(now: datetime, weeks: int, earliest: datetime | None) -> tuple[datetime, datetime]:
     """The minutes to seed: `weeks` back from just before the live data, never overlapping rows the
     project already has, which would be added to rather than replaced."""
@@ -277,6 +379,74 @@ def _json_row(project: Project, row: Row) -> dict[str, Any]:
         "error_count": row.error_count,
         "latency_buckets": row.latency_buckets,
     }
+
+
+def _endpoint_json(project: Project, row: EndpointRow) -> dict[str, Any]:
+    return {
+        "tenant_id": project.tenant_id,
+        "derived_retention_days": project.derived_retention_days,
+        "project_id": project.project_id,
+        "service_name": row.service_name,
+        "span_kind": row.span_kind,
+        "span_name": row.span_name,
+        "minute": int(row.minute.timestamp()),
+        "request_count": row.request_count,
+        "error_count": row.error_count,
+    }
+
+
+def _reading_json(project: Project, run: CheckRun) -> dict[str, Any]:
+    stamp = run.at.strftime("%Y-%m-%d %H:%M:%S.000")
+    return {
+        "timestamp": stamp,
+        "start_timestamp": stamp,
+        "received_at": stamp,
+        "retention_days": project.derived_retention_days,
+        "tenant_id": project.tenant_id,
+        "project_id": project.project_id,
+        "service_name": PROBER_SERVICE,
+        "metric_name": CHECK_STATUS_METRIC,
+        "metric_unit": "1",
+        "resource_attrs": {"synthetic": {"check": {"id": run.check_id, "type": "http"}}},
+        "attrs": {
+            "synthetic": {
+                "check": {
+                    "outcome": run.outcome,
+                    "run": {"id": f"seed-{run.check_id}-{int(run.at.timestamp())}-{run.attempt}"},
+                    "attempt": run.attempt,
+                    "final": run.final,
+                    "maintenance": run.maintenance,
+                    "location": "local",
+                }
+            }
+        },
+        "value": 1.0 if run.up else 0.0,
+    }
+
+
+def _write(client: Any, statement: str, rows: Iterator[dict[str, Any]]) -> int:
+    batch: list[str] = []
+    written = 0
+    for row in rows:
+        batch.append(json.dumps(row, separators=(",", ":")))
+        if len(batch) == BATCH_ROWS:
+            client.command(statement, data="\n".join(batch).encode())
+            written += len(batch)
+            batch.clear()
+    if batch:
+        client.command(statement, data="\n".join(batch).encode())
+        written += len(batch)
+    return written
+
+
+async def _project_checks(postgres: str, project_id: str) -> list[tuple[str, int]]:
+    import asyncpg
+
+    connection = await asyncpg.connect(postgres)
+    try:
+        return [(str(row[0]), int(row[1])) for row in await connection.fetch(_CHECKS, project_id)]
+    finally:
+        await connection.close()
 
 
 async def _resolve(postgres: str, project: str, org: str) -> Project:
@@ -328,6 +498,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--weeks", type=int, default=4, help="how far back (default 4)")
     parser.add_argument("--seed", type=int, default=6, help="the same seed writes the same rows")
     parser.add_argument("--rpm", type=float, default=120.0, help="the busiest service's peak rpm")
+    parser.add_argument(
+        "--checks",
+        help="comma-separated check ids to write readings for, every minute (default: the "
+        "project's enabled checks at their own intervals; none with --tenant-id)",
+    )
     args = parser.parse_args(argv)
 
     require_local(args.clickhouse, "ClickHouse")
@@ -358,22 +533,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{project.timezone}, retention {project.derived_retention_days} d): {len(services)} "
         f"services, {start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC."
     )
-    batch: list[str] = []
-    written = 0
     zone = ZoneInfo(project.timezone)
     rates = client.query(_LIVE_RATES, parameters=ids).result_rows
     peaks = live_peaks({str(name): float(rate) for name, rate in rates}, datetime.now(UTC), zone)
     rows = generate(services, start, end, zone, args.rpm, args.seed, peaks)
-    for row in rows:
-        batch.append(json.dumps(_json_row(project, row), separators=(",", ":")))
-        if len(batch) == BATCH_ROWS:
-            client.command(_INSERT, data="\n".join(batch).encode())
-            written += len(batch)
-            batch.clear()
-            print(f"  {written} rows")
-    if batch:
-        client.command(_INSERT, data="\n".join(batch).encode())
-        written += len(batch)
+    written = _write(client, _INSERT, (_json_row(project, row) for row in rows))
+    # The same seed generates the same rows, so a second pass splits them into endpoints
+    # without holding weeks of rows in memory.
+    again = generate(services, start, end, zone, args.rpm, args.seed, peaks)
+    written_endpoints = _write(
+        client, _ENDPOINT_INSERT, (_endpoint_json(project, e) for e in endpoint_rows(again))
+    )
+    print(f"  {written} rows, {written_endpoints} endpoint rows")
+
+    if args.checks:
+        checks = [(name.strip(), 60) for name in args.checks.split(",") if name.strip()]
+    elif args.tenant_id:
+        checks = []
+    else:
+        checks = asyncio.run(_project_checks(args.postgres, project.project_id))
+    for check_id, interval in checks:
+        readings = _write(
+            client,
+            _READING_INSERT,
+            (
+                _reading_json(project, run)
+                for run in check_runs(
+                    check_id, start, end, interval_seconds=interval, seed=args.seed
+                )
+            ),
+        )
+        print(f"  {readings} readings for check {check_id}")
 
     count, kinds, first, last, requests, errors, bucketed = client.query(
         _READ_BACK, parameters={**ids, "start": start, "end": end}

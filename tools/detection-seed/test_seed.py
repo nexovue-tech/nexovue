@@ -1,4 +1,9 @@
-"""The seeded history's shape, its reproducibility and its buckets, without a store."""
+"""The seeded history's shape, its reproducibility and its buckets, without a store.
+
+F19 plan T2.6: endpoint rows that add up to their service's, with a `/health`-style
+probe every busy minute, and check readings holding every kind of run the uptime rule
+tells apart: confirmed, overruled, in maintenance, and `prober_error`.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +14,12 @@ from pathlib import Path
 
 import pytest
 from seed import (
+    HEALTH_ENDPOINT,
     LATENCY_BOUNDS,
     LATENCY_BUCKET_COUNT,
     Row,
+    check_runs,
+    endpoint_rows,
     generate,
     latency_bucket,
     live_peaks,
@@ -144,3 +152,48 @@ def test_any_host_but_localhost_is_refused(url: str) -> None:
 def test_localhost_is_allowed() -> None:
     for host in ("localhost", "127.0.0.1", "[::1]"):
         require_local(f"http://{host}:18123/nexovue", "ClickHouse")
+
+
+# ------------------------------------------------------------- F19, plan T2.6
+
+
+def test_endpoint_rows_add_up_to_their_service_and_a_probe_comes_every_busy_minute() -> None:
+    rows = _hour(WEDNESDAY)
+    endpoints = list(endpoint_rows(rows))
+    probed = 0
+    for row in rows:
+        mine = [
+            e for e in endpoints if e.service_name == row.service_name and e.minute == row.minute
+        ]
+        assert sum(e.request_count for e in mine) == row.request_count
+        assert sum(e.error_count for e in mine) == row.error_count
+        assert all(e.request_count > 0 and e.span_kind == "SERVER" for e in mine)
+        probes = [e for e in mine if e.span_name == HEALTH_ENDPOINT]
+        # A probe never fails, so a minute whose every request failed has none.
+        assert len(probes) <= 1 and all(probe.error_count == 0 for probe in probes)
+        probed += len(probes)
+    assert probed >= 0.9 * len(rows)
+    assert len({e.span_name for e in endpoints}) > 2
+
+
+def test_check_readings_hold_every_kind_of_run_the_uptime_rule_tells_apart() -> None:
+    start = WEDNESDAY - timedelta(weeks=1)
+    runs = list(check_runs("check-1", start, WEDNESDAY, interval_seconds=60, seed=6))
+    outcomes = {(run.outcome, run.final, run.maintenance) for run in runs}
+    assert ("up", True, False) in outcomes
+    assert ("down", False, False) in outcomes, "an attempt a retry overruled"
+    assert ("prober_error", True, False) in outcomes
+    assert any(run.maintenance for run in runs)
+    # An overruled attempt is followed, at its own moment, by the confirmed retry.
+    for overruled in (run for run in runs if not run.final):
+        retries = [r for r in runs if r.at == overruled.at and r.attempt == overruled.attempt + 1]
+        assert len(retries) == 1 and retries[0].final
+    confirmed = [run for run in runs if run.final]
+    assert len(confirmed) == 7 * 24 * 60 + 1
+
+
+def test_the_same_seed_writes_the_same_check_readings() -> None:
+    start = WEDNESDAY - timedelta(days=1)
+    first = list(check_runs("check-1", start, WEDNESDAY, interval_seconds=300, seed=3))
+    assert first == list(check_runs("check-1", start, WEDNESDAY, interval_seconds=300, seed=3))
+    assert len([run for run in first if run.final]) == 24 * 12 + 1

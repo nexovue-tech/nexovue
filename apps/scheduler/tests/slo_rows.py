@@ -1,12 +1,18 @@
-"""Exact rows for F19's live suites (plan T1.11): a service's and an endpoint's minutes
-written straight into the rollups, as the worker writes them, with day and night
-traffic, so a test knows every count it should read back.
+"""Exact rows for F19's live suites (plan T1.11, T2.3): a service's and an endpoint's
+minutes written straight into the rollups, as the worker writes them, with day and night
+traffic, and a check's `synthetic.check.status` readings in `metrics_gauge`, as the
+prober publishes them, so a test knows every count it should read back.
 
-`metrics_gauge` readings for check targets join this helper with their reader in T2.3.
+A reading carries the attributes the uptime rule reads (`nexovue_platform.readings`):
+outcome, whether it is the confirmed attempt, and whether it ran in maintenance. The
+prober writes those as an OTLP string, bool and int (`publish._run_attributes`); the
+JSON here holds the same types. Proved by the reader that counts them (T2.3,
+`test_slo_store_live.py`), which is why the founder moved it there on 2026-11-08.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,10 +21,13 @@ from zoneinfo import ZoneInfo
 
 from alert_fixtures import AlertTenant
 from clickhouse_connect.driver.client import Client
+from nexovue_platform.readings import METRIC_STATUS, UP_VALUE
 from nexovue_platform.slo import BUCKET_COUNT
 
 SERVICE_ROLLUP: Final = "service_stats_1m"
 ENDPOINT_ROLLUP: Final = "endpoint_stats_1m"
+READINGS: Final = "metrics_gauge"
+PROBER_SERVICE: Final = "nexovue-prober"
 MINUTE: Final = timedelta(minutes=1)
 _INSERT_BATCH: Final = 500
 # Day traffic from 08:00 to 20:00 local, night outside it (AC16, AC92: seed data
@@ -140,6 +149,69 @@ def write_endpoint(
             )
             """
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Run:
+    """One check run's status reading, with the attributes the uptime rule reads."""
+
+    at: datetime
+    up: bool = True
+    outcome: str = "up"
+    final: bool = True
+    maintenance: bool = False
+    attempt: int = 1
+    location: str = "local"
+
+
+def write_runs(client: Client, tenant: AlertTenant, check_id: str, runs: Sequence[Run]) -> None:
+    """One `synthetic.check.status` row per run, as the prober publishes it. Writing a
+    run twice is a redelivery, which the reader must count once (AC2)."""
+    rows = [_reading_row(tenant, check_id, run) for run in runs]
+    for batch in _batches(rows):
+        client.command(
+            f"""
+            INSERT INTO {READINGS}
+                (timestamp, start_timestamp, received_at, tenant_id, project_id, service_name,
+                 metric_name, metric_unit, resource_attrs, attrs, value)
+            VALUES {batch}
+            """
+        )
+
+
+def _reading_row(tenant: AlertTenant, check_id: str, run: Run) -> str:
+    stamp = _sql_string(run.at.strftime("%Y-%m-%d %H:%M:%S.000"))
+    resource = {"synthetic": {"check": {"id": check_id, "type": "http"}}}
+    attributes = {
+        "synthetic": {
+            "check": {
+                "outcome": run.outcome,
+                "run": {"id": f"{check_id}-{int(run.at.timestamp())}-{run.attempt}"},
+                "attempt": run.attempt,
+                "final": run.final,
+                "maintenance": run.maintenance,
+                "location": run.location,
+            }
+        }
+    }
+    fields = (
+        stamp,
+        stamp,
+        stamp,
+        _sql_string(str(tenant.org_id)),
+        _sql_string(str(tenant.project_id)),
+        _sql_string(PROBER_SERVICE),
+        _sql_string(METRIC_STATUS),
+        _sql_string("1"),
+        _sql_string(json.dumps(resource)),
+        _sql_string(json.dumps(attributes)),
+        repr(float(UP_VALUE if run.up else 0)),
+    )
+    return "(" + ", ".join(fields) + ")"
+
+
+def _sql_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _buckets(requests: int) -> list[int]:

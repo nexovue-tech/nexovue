@@ -13,6 +13,8 @@ screen and a message cannot disagree about a figure or a state (design, *Modules
   so a target's own name never enters an incident or a message.
 - **Latency boundaries** (FR3): the worker's 63 bucket boundaries, moved here from
   detection's method because the API needs them too and cannot import the scheduler.
+- **The suggestion** (FR7, FR8): plain arithmetic on four weeks, with no model (D10),
+  and what a check's interval allows.
 
 Every limit marked *a guess* is in the spec's register, *Cannot be proved before a customer*.
 """
@@ -21,6 +23,8 @@ from __future__ import annotations
 
 import enum
 import math
+import re
+import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
@@ -37,8 +41,10 @@ SERVICE_LATENCY: Final = "service_latency"
 ENDPOINT_AVAILABILITY: Final = "endpoint_availability"
 CHECK_AVAILABILITY: Final = "check_availability"
 KINDS: Final = (SERVICE_AVAILABILITY, SERVICE_LATENCY, ENDPOINT_AVAILABILITY, CHECK_AVAILABILITY)
-# What a person may create today: Step 1 counts service availability only; Step 2 adds the rest.
-CREATABLE_KINDS: Final = (SERVICE_AVAILABILITY,)
+# Every kind is creatable (Step 2). Endpoint latency is no kind at all: the endpoint
+# rollup holds a sampled quantile, not counts under a boundary (spec, *Out of scope*; AC4).
+CREATABLE_KINDS: Final = KINDS
+REQUEST_KINDS: Final = (SERVICE_AVAILABILITY, SERVICE_LATENCY, ENDPOINT_AVAILABILITY)
 
 OBJECTIVE_LOWEST: Final = Decimal("90")
 OBJECTIVE_HIGHEST: Final = Decimal("99.99")
@@ -50,6 +56,9 @@ TARGETS_PER_PROJECT: Final = 200
 NAME_LONGEST: Final = 120
 DESCRIPTION_LONGEST: Final = 500
 SERVICE_NAME_LONGEST: Final = 255
+ENDPOINT_NAME_LONGEST: Final = 255
+# FR34: endpoints a service availability target may leave out (a guess).
+LEFT_OUT_MOST: Final = 20
 SAMPLING_ANSWERS: Final = ("no", "yes", "not_sure")
 
 # ------------------------------------------------------------ queues and tasks
@@ -118,6 +127,55 @@ def boundary_at_or_under(asked_ms: float) -> int | None:
     if index < 0:
         return None
     return min(index, BOUNDARY_COUNT - 1)
+
+
+LOWEST_BOUNDARY_MS: Final = boundary_ms(0)
+HIGHEST_BOUNDARY_MS: Final = boundary_ms(BOUNDARY_COUNT - 1)
+
+
+def latency_refusal(asked_ms: float) -> str | None:
+    """Why a typed threshold is refused, beside the field; None when a boundary holds it.
+    Above the highest boundary is refused, not snapped to it (AC101)."""
+    if not math.isfinite(asked_ms) or asked_ms < LOWEST_BOUNDARY_MS:
+        return f"The finest threshold nexovue counts is {LOWEST_BOUNDARY_MS:.1f} ms."
+    if asked_ms > HIGHEST_BOUNDARY_MS * (1 + _BOUNDARY_TOLERANCE):
+        return f"The highest threshold nexovue counts is {HIGHEST_BOUNDARY_MS / 1000:.1f} s."
+    return None
+
+
+def at_or_under(buckets: Sequence[int], index: int) -> int:
+    """Requests at or under boundary `index`: buckets 0 to `index` (design, *Reading
+    latency from buckets*)."""
+    return sum(buckets[: index + 1])
+
+
+def boundary_holding(buckets: Sequence[int], share: Decimal) -> int | None:
+    """The lowest boundary at or under which at least `share` percent of the requests
+    fell; None with no requests, or when only the open top bucket reaches it."""
+    total = sum(buckets)
+    if total <= 0:
+        return None
+    needed = share * total / Decimal(100)
+    held = 0
+    for index in range(BOUNDARY_COUNT):
+        held += buckets[index]
+        if held >= needed:
+            return index
+    return None
+
+
+# ----------------------------------------------------------- health-check names
+
+# FR34 pre-ticks endpoints that look like a probe, so nothing is left out unseen. The
+# words are a guess at common probe paths, matched as a whole segment of the name.
+_HEALTH_CHECK: Final = re.compile(
+    r"(?:^|[\s/._-])(?:health(?:z|check)?|readyz?|readiness|livez?|liveness|ping)(?:$|[\s/._-])",
+    re.IGNORECASE,
+)
+
+
+def looks_like_health_check(endpoint: str) -> bool:
+    return _HEALTH_CHECK.search(endpoint) is not None
 
 
 # -------------------------------------------------------------------- objective
@@ -283,6 +341,11 @@ class DayCounts:
     total: int
     lost_minutes: int
     excluded_minutes: int = 0
+    # A check's runs (FR11): what its interval expected, what never came, and what ran
+    # in a maintenance window. None for a request kind.
+    expected_runs: int | None = None
+    missed_runs: int | None = None
+    maintenance_runs: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,7 +359,8 @@ class WindowFigures:
     lost_minutes: int
     excluded_minutes: int
     # Measured minutes over the window's minutes less excluded ones, from the first
-    # event (FR11); None when no minute of the window has passed since it.
+    # event (FR11); for a check, runs measured over runs expected outside maintenance.
+    # None when nothing of the window can be measured yet.
     coverage: float | None
 
 
@@ -326,6 +390,8 @@ def window_figures(
     )
     judged = considered - excluded
     coverage = max(0.0, (judged - lost) / judged) if judged > 0 else None
+    if any(counts.expected_runs is not None for _, counts in held):
+        coverage = _run_coverage([counts for _, counts in held])
     return WindowFigures(
         good=good,
         total=total,
@@ -335,6 +401,16 @@ def window_figures(
         excluded_minutes=excluded,
         coverage=coverage,
     )
+
+
+def _run_coverage(days: Sequence[DayCounts]) -> float | None:
+    """A check's coverage (FR11): missed runs lower it; runs in a maintenance window are
+    left out of it, as excluded time is (BR6)."""
+    expected = sum((day.expected_runs or 0) - (day.maintenance_runs or 0) for day in days)
+    missed = sum(day.missed_runs or 0 for day in days)
+    if expected <= 0:
+        return None
+    return max(0.0, (expected - missed) / expected)
 
 
 def _minutes_considered(
@@ -620,6 +696,133 @@ def ordered[Row](rows: Sequence[tuple[Row, Status]]) -> list[tuple[Row, Status]]
         return (0, severity, left)
 
     return sorted(rows, key=key)
+
+
+# ------------------------------------------------------------------ suggestion
+
+# FR7: the worst week rounds down to the next of these.
+SUGGESTION_STEPS: Final = tuple(
+    Decimal(step) for step in ("90", "95", "97", "98", "99", "99.5", "99.9", "99.95")
+)
+SUGGESTION_WEEKS: Final = 4
+DAYS_IN_A_WEEK: Final = 7
+# FR8: fewer days than this offer a labelled starting guess (D34; the 99.5 is a guess).
+SUGGESTION_DAYS_NEEDED: Final = 7
+STARTER_OBJECTIVE: Final = Decimal("99.5")
+# FR7: a latency suggestion is the boundary that held this share of requests, and the
+# target it proposes is that share.
+LATENCY_SUGGESTED_SHARE: Final = Decimal("95")
+
+
+class Suggested(enum.StrEnum):
+    """Where a suggestion came from, or why there is none (FR7, FR8)."""
+
+    FROM_WORST_WEEK = "from_worst_week"
+    # "Your worst week would have missed this."
+    FROM_TYPICAL_WEEK = "from_typical_week"
+    # "A starting guess, not from your data."
+    STARTER = "starter"
+    # Worst and typical weeks both below 90%: no suggestion, and why.
+    BELOW_LOWEST = "below_lowest"
+    # Too few events for the suggestion to be measurable (FR12): none; offer a check.
+    TOO_FEW = "too_few"
+
+
+@dataclass(frozen=True, slots=True)
+class Week:
+    """One 7-day window's events: requests or a check's counted runs."""
+
+    good: int
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class Suggestion:
+    """A suggestion and the arithmetic behind it, so the screen can show it (FR7)."""
+
+    outcome: Suggested
+    objective: Decimal | None
+    # Each week's figure, newest first; None for a week with no events.
+    weeks: tuple[Decimal | None, ...]
+    worst: Decimal | None = None
+    typical: Decimal | None = None
+    best: Decimal | None = None
+    # A latency suggestion's boundary, and each week's boundary holding 95%.
+    boundary_index: int | None = None
+    week_boundaries: tuple[int | None, ...] = ()
+
+
+def suggest_availability(weeks: Sequence[Week], *, days_of_data: int) -> Suggestion:
+    """FR7 for availability, and for a check's runs: the worst of four weeks rounded down
+    to a step, or the typical week when the worst is more than a step below it."""
+    figures = tuple(figure_percent(week.good, week.total) for week in weeks)
+    if days_of_data < SUGGESTION_DAYS_NEEDED:
+        return Suggestion(Suggested.STARTER, STARTER_OBJECTIVE, figures)
+    measured = sorted(figure for figure in figures if figure is not None)
+    if not measured:
+        return Suggestion(Suggested.TOO_FEW, None, figures)
+    worst, best = measured[0], measured[-1]
+    typical = Decimal(statistics.median(measured)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+
+    def suggested(outcome: Suggested, objective: Decimal | None = None) -> Suggestion:
+        return Suggestion(outcome, objective, figures, worst=worst, typical=typical, best=best)
+
+    worst_step, typical_step = _step_at_or_under(worst), _step_at_or_under(typical)
+    if typical_step is None:
+        return suggested(Suggested.BELOW_LOWEST)
+    if worst_step is None or typical_step - worst_step > 1:
+        outcome, step = Suggested.FROM_TYPICAL_WEEK, typical_step
+    else:
+        outcome, step = Suggested.FROM_WORST_WEEK, worst_step
+    objective = SUGGESTION_STEPS[step]
+    if allowed_failures(objective, sum(week.total for week in weeks)) < THIN_ALLOWED:
+        return suggested(Suggested.TOO_FEW)
+    return suggested(outcome, objective)
+
+
+def suggest_latency(weeks: Sequence[Sequence[int]], *, days_of_data: int) -> Suggestion:
+    """FR7 for latency: the lowest boundary that held 95% of requests in every week held,
+    so the worst week sets it, as it does for availability."""
+    holding = tuple(boundary_holding(buckets, LATENCY_SUGGESTED_SHARE) for buckets in weeks)
+    if days_of_data < SUGGESTION_DAYS_NEEDED:
+        return Suggestion(Suggested.STARTER, STARTER_OBJECTIVE, (), week_boundaries=holding)
+    total = sum(sum(buckets) for buckets in weeks)
+    held = [index for index in holding if index is not None]
+    if not held or allowed_failures(LATENCY_SUGGESTED_SHARE, total) < THIN_ALLOWED:
+        return Suggestion(Suggested.TOO_FEW, None, (), week_boundaries=holding)
+    return Suggestion(
+        Suggested.FROM_WORST_WEEK,
+        LATENCY_SUGGESTED_SHARE,
+        (),
+        boundary_index=max(held),
+        week_boundaries=holding,
+    )
+
+
+def _step_at_or_under(figure: Decimal) -> int | None:
+    """The index of the highest step at or under `figure`; None below the lowest."""
+    under = [index for index, step in enumerate(SUGGESTION_STEPS) if step <= figure]
+    return under[-1] if under else None
+
+
+# -------------------------------------------------------------- check intervals
+
+# The checks table's own floor (`interval_is_within_bounds`): "run it every minute".
+CHECK_FASTEST_INTERVAL_SECONDS: Final = 60
+_SECONDS_IN_A_DAY: Final = 86_400
+# FR16: a check tier needs 10 runs in its long window, so slower than 2.4 hours a run
+# no tier can judge it (a guess, in the register).
+CHECK_RUNS_TO_JUDGE: Final = 10
+CHECK_SLOWEST_JUDGED_SECONDS: Final = _SECONDS_IN_A_DAY // CHECK_RUNS_TO_JUDGE
+
+
+def expected_runs(interval_seconds: int, *, window_days: int, locations: int = 1) -> int:
+    """Runs a check's interval expects over a window, from each location it runs at."""
+    return window_days * _SECONDS_IN_A_DAY // interval_seconds * locations
+
+
+def alerts_can_judge_interval(interval_seconds: int) -> bool:
+    return interval_seconds <= CHECK_SLOWEST_JUDGED_SECONDS
 
 
 # ----------------------------------------------------------- facts from storage

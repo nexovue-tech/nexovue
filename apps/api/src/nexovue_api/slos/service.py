@@ -1,4 +1,9 @@
-"""Reliability targets: list, read, create, change, delete and restore (F19, Step 1).
+"""Reliability targets: list, read, create, change, delete and restore (F19).
+
+Four kinds (FR1), each with its own fields: a request kind names its service, an
+endpoint target its endpoint, a latency target its typed threshold, snapped down to a
+boundary (FR3), and a check target its check. Another kind's field is refused beside
+it, and a source is checked against the project at write (design, *Tenancy path*).
 
 The list reads Postgres alone: each target's row, its status and its stored days, so
 it answers with ClickHouse down (AC40, NFR3). Its state is the platform's one function
@@ -12,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final
@@ -48,6 +54,14 @@ TOO_MANY: Final = (
 )
 NAME_TAKEN: Final = "Another target in this project already has this name."
 NO_SUCH_SERVICE: Final = "This project has never heard from a service by that name."
+NAME_THE_SERVICE: Final = "Name the service to count."
+NAME_THE_ENDPOINT: Final = "Name the endpoint to count."
+GIVE_A_THRESHOLD: Final = "Give the response time a request must be at or under, in ms."
+CHOOSE_A_CHECK: Final = "Choose the check to count."
+NO_SUCH_CHECK: Final = "This project has no such check."
+ANSWER_SAMPLING: Final = "Say whether you sample before sending to nexovue."
+NOT_FOR_THIS_KIND: Final = "This kind of target does not take this."
+LEFT_OUT_TWICE: Final = "Each endpoint is left out once."
 SAME_DEFINITION: Final = (
     "A target with this definition already exists. Two would read the same in a message."
 )
@@ -56,6 +70,11 @@ _RECORDED: Final = (
     "name",
     "description",
     "service_name",
+    "endpoint_name",
+    "check_id",
+    "boundary_index",
+    "asked_ms",
+    "left_out_endpoints",
     "objective_percent",
     "window_days",
     "upstream_sampling",
@@ -63,7 +82,18 @@ _RECORDED: Final = (
 )
 # What is counted changed: the past must be counted again (FR28). The objective and the
 # window change the figure, not the counts, so they need no recount.
-_COUNTED: Final = frozenset({"service_name"})
+_COUNTED: Final = frozenset(
+    {"service_name", "endpoint_name", "check_id", "boundary_index", "left_out_endpoints"}
+)
+# The fields only some kinds take (design, *Data*), and which kinds.
+_FIELD_KINDS: Final = {
+    "service_name": slo.REQUEST_KINDS,
+    "upstream_sampling": slo.REQUEST_KINDS,
+    "endpoint_name": (slo.ENDPOINT_AVAILABILITY,),
+    "asked_ms": (slo.SERVICE_LATENCY,),
+    "left_out_endpoints": (slo.SERVICE_AVAILABILITY,),
+    "check_id": (slo.CHECK_AVAILABILITY,),
+}
 
 
 # ------------------------------------------------------------------------ reads
@@ -78,17 +108,11 @@ async def list_targets(
     live = [row for row in rows if row[0].deleted_at is None]
     recent = [row for row in rows if row[0].deleted_at and now - row[0].deleted_at < RESTORE_FOR]
     days = await _days(db, reader.org_id, [row[0] for row in [*live, *recent]], now, zone)
-    views = [
-        _view(target, status, days.get(target.id, {}), now=now, zone=zone)
-        for target, status, _ in live
-    ]
+    views = [_view(row, days.get(row[0].id, {}), now=now, zone=zone) for row in live]
     ordered = slo.ordered([(view, _status_of(view)) for view in views])
     return SloList(
         targets=[view for view, _ in ordered],
-        deleted=[
-            _deleted_line(target, name, days.get(target.id, {}), reader=reader)
-            for target, _, name in recent
-        ],
+        deleted=[_deleted_line(row, days.get(row[0].id, {}), reader=reader) for row in recent],
         zone=str(zone),
         has_services=await queries.has_services(db, org_id=reader.org_id, project_id=project_id),
     )
@@ -102,11 +126,11 @@ async def read_target(
     row = await queries.target_with_status(db, org_id=reader.org_id, target_id=target_id)
     if row is None or row[0].deleted_at is not None:
         raise NotFoundError(NO_SUCH_TARGET)
-    target, status, _ = row
+    target = row[0]
     project = await require_readable_project(db, reader=reader, project_id=target.project_id)
     zone = _zone_of(project)
     days = await _days(db, reader.org_id, [target], now, zone)
-    return _view(target, status, days.get(target.id, {}), now=now, zone=zone)
+    return _view(row, days.get(target.id, {}), now=now, zone=zone)
 
 
 # ----------------------------------------------------------------------- writes
@@ -121,16 +145,27 @@ async def create(
     now: datetime,
 ) -> SloView:
     org_id = identity.organization.id
-    project = await require_project(db, org_id=org_id, project_id=project_id)
+    await require_project(db, org_id=org_id, project_id=project_id)
     _refuse_objective(request.objective_percent)
-    await _refuse_unknown_service(db, org_id, project_id, request.service_name)
+    sent = request.model_dump(exclude_unset=True)
+    _refuse_other_kinds_fields(request.kind, sent)
+    source = await _source(
+        db,
+        org_id,
+        project_id,
+        request.kind,
+        service_name=request.service_name,
+        endpoint_name=request.endpoint_name,
+        check_id=request.check_id,
+        asked_ms=request.asked_ms,
+        left_out_endpoints=request.left_out_endpoints,
+        upstream_sampling=request.upstream_sampling,
+    )
     if await queries.live_count(db, org_id=org_id, project_id=project_id) >= (
         slo.TARGETS_PER_PROJECT
     ):
         raise ConflictError(TOO_MANY)
-    key = _definition_key(
-        request.kind, request.service_name, request.objective_percent, request.window_days
-    )
+    key = _definition_key(request.kind, source, request.objective_percent, request.window_days)
     await _refuse_taken(db, org_id, project_id, name=request.name, definition_key=key)
     target = SloTarget(
         org_id=org_id,
@@ -138,12 +173,17 @@ async def create(
         name=request.name,
         description=request.description,
         kind=request.kind,
-        service_name=request.service_name,
+        service_name=source.service_name,
+        endpoint_name=source.endpoint_name,
+        check_id=source.check_id,
+        boundary_index=source.boundary_index,
+        asked_ms=source.asked_ms,
+        left_out_endpoints=list(source.left_out_endpoints),
         objective_percent=request.objective_percent,
         window_days=request.window_days,
-        upstream_sampling=request.upstream_sampling,
+        upstream_sampling=source.upstream_sampling,
         # FR5: a customer who samples first gets false pages, so alerts start off.
-        enabled=request.upstream_sampling != "yes",
+        enabled=source.upstream_sampling != "yes",
         definition_key=key,
         created_by=identity.user.id,
         created_at=now,
@@ -163,7 +203,7 @@ async def create(
     audit.record_slo_created(db, target=target, actor_user_id=identity.user.id)
     await _queue_history(db, target)
     await db.commit()
-    return _view(target, None, {}, now=now, zone=_zone_of(project))
+    return await _fresh_view(db, identity, target.id, now)
 
 
 async def change(
@@ -179,14 +219,27 @@ async def change(
     sent = request.model_dump(exclude_unset=True, exclude_none=True)
     if "objective_percent" in sent:
         _refuse_objective(sent["objective_percent"])
-    if "service_name" in sent:
-        await _refuse_unknown_service(db, org_id, target.project_id, sent["service_name"])
+    _refuse_other_kinds_fields(target.kind, sent)
+    source = await _source(
+        db,
+        org_id,
+        target.project_id,
+        target.kind,
+        service_name=sent.get("service_name", target.service_name),
+        endpoint_name=sent.get("endpoint_name", target.endpoint_name),
+        check_id=sent.get("check_id", target.check_id),
+        asked_ms=sent.get("asked_ms", target.asked_ms),
+        left_out_endpoints=sent.get("left_out_endpoints", target.left_out_endpoints),
+        upstream_sampling=sent.get("upstream_sampling", target.upstream_sampling),
+        known_service=target.service_name,
+        known_check=target.check_id,
+    )
     before = _recorded(target)
     for field, value in sent.items():
         setattr(target, field, value)
-    key = _definition_key(
-        target.kind, target.service_name, target.objective_percent, target.window_days
-    )
+    target.boundary_index = source.boundary_index
+    target.left_out_endpoints = list(source.left_out_endpoints)
+    key = _definition_key(target.kind, source, target.objective_percent, target.window_days)
     await _refuse_taken(
         db,
         org_id,
@@ -196,7 +249,8 @@ async def change(
         other_than=target.id,
     )
     target.definition_key = key
-    recount = any(field in _COUNTED and before[field] != _recorded(target)[field] for field in sent)
+    after_change = _recorded(target)
+    recount = any(before[field] != after_change[field] for field in _COUNTED)
     if recount:
         target.definition_version += 1
     target.updated_at = now
@@ -285,8 +339,95 @@ def _zone_of(project: Project) -> ZoneInfo:
     return ZoneInfo(project.timezone or DEFAULT_TIMEZONE)
 
 
-def _definition_key(kind: str, service: str | None, objective: Decimal, window: int) -> str:
-    return slo.definition_key(kind, service_name=service, objective=objective, window_days=window)
+@dataclass(frozen=True, slots=True)
+class _Source:
+    """What a target counts, checked against its kind and its project."""
+
+    service_name: str | None = None
+    endpoint_name: str | None = None
+    check_id: uuid.UUID | None = None
+    boundary_index: int | None = None
+    asked_ms: float | None = None
+    left_out_endpoints: tuple[str, ...] = ()
+    upstream_sampling: str | None = None
+
+
+def _definition_key(kind: str, source: _Source, objective: Decimal, window: int) -> str:
+    return slo.definition_key(
+        kind,
+        service_name=source.service_name,
+        endpoint_name=source.endpoint_name,
+        check_id=source.check_id,
+        boundary_index=source.boundary_index,
+        objective=objective,
+        window_days=window,
+    )
+
+
+def _refuse_other_kinds_fields(kind: str, sent: Mapping[str, Any]) -> None:
+    """A field another kind takes is refused beside it, so an endpoint never reaches a
+    latency target (AC4) and a check target is never asked about sampling."""
+    for field, kinds in _FIELD_KINDS.items():
+        value = sent.get(field)
+        if value not in (None, [], ()) and kind not in kinds:
+            raise InvalidRequestError(NOT_FOR_THIS_KIND, field=field)
+
+
+async def _source(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    kind: str,
+    *,
+    service_name: str | None,
+    endpoint_name: str | None,
+    check_id: uuid.UUID | None,
+    asked_ms: float | None,
+    left_out_endpoints: Sequence[str],
+    upstream_sampling: str | None,
+    known_service: str | None = None,
+    known_check: uuid.UUID | None = None,
+) -> _Source:
+    """The kind's own fields, each required where the kind needs it (FR1, FR3, FR5,
+    FR34). A source is checked against the project unless it is the one already held:
+    a change of name alone does not re-ask, and a deleted check leaves its target
+    pointing at nothing, to read Source gone (AC70)."""
+    if kind == slo.CHECK_AVAILABILITY:
+        if check_id is None:
+            raise InvalidRequestError(CHOOSE_A_CHECK, field="check_id")
+        if check_id != known_check and not await queries.check_in_project(
+            db, org_id=org_id, project_id=project_id, check_id=check_id
+        ):
+            raise InvalidRequestError(NO_SUCH_CHECK, field="check_id")
+        return _Source(check_id=check_id)
+    if not service_name:
+        raise InvalidRequestError(NAME_THE_SERVICE, field="service_name")
+    if service_name != known_service:
+        await _refuse_unknown_service(db, org_id, project_id, service_name)
+    if upstream_sampling is None:
+        raise InvalidRequestError(ANSWER_SAMPLING, field="upstream_sampling")
+    source = _Source(service_name=service_name, upstream_sampling=upstream_sampling)
+    if kind == slo.ENDPOINT_AVAILABILITY:
+        if not endpoint_name:
+            raise InvalidRequestError(NAME_THE_ENDPOINT, field="endpoint_name")
+        return replace(source, endpoint_name=endpoint_name)
+    if kind == slo.SERVICE_LATENCY:
+        return replace(source, asked_ms=asked_ms, boundary_index=_boundary(asked_ms))
+    if len(set(left_out_endpoints)) != len(left_out_endpoints):
+        raise InvalidRequestError(LEFT_OUT_TWICE, field="left_out_endpoints")
+    return replace(source, left_out_endpoints=tuple(left_out_endpoints))
+
+
+def _boundary(asked_ms: float | None) -> int:
+    """FR3: the boundary at or under the typed threshold; outside the boundaries it is
+    refused beside the field (AC101)."""
+    if asked_ms is None:
+        raise InvalidRequestError(GIVE_A_THRESHOLD, field="asked_ms")
+    reason = slo.latency_refusal(asked_ms)
+    index = slo.boundary_at_or_under(asked_ms)
+    if reason is not None or index is None:
+        raise InvalidRequestError(reason or GIVE_A_THRESHOLD, field="asked_ms")
+    return index
 
 
 def _refuse_objective(objective: Decimal) -> None:
@@ -358,7 +499,11 @@ def _recorded(target: SloTarget) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for field in _RECORDED:
         value = getattr(target, field)
-        values[field] = str(value) if isinstance(value, Decimal) else value
+        if isinstance(value, Decimal | uuid.UUID):
+            value = str(value)
+        elif isinstance(value, list):
+            value = list(value)
+        values[field] = value
     return values
 
 
@@ -385,14 +530,22 @@ def _day_counts(row: SloDailyCount) -> slo.DayCounts:
         total=row.total,
         lost_minutes=row.lost_minutes,
         excluded_minutes=row.excluded_minutes,
+        expected_runs=row.expected_runs,
+        missed_runs=row.missed_runs,
+        maintenance_runs=row.maintenance_runs,
     )
 
 
-def _label(target: SloTarget) -> str:
+# A deleted check's target is still labelled, by what it was.
+_DELETED_CHECK: Final = "deleted check"
+
+
+def _label(target: SloTarget, check_name: str | None) -> str:
     return slo.subject_label(
         target.kind,
         service_name=target.service_name,
         endpoint_name=target.endpoint_name,
+        check_name=check_name or _DELETED_CHECK,
         boundary_index=target.boundary_index,
         objective=target.objective_percent,
         window_days=target.window_days,
@@ -400,13 +553,17 @@ def _label(target: SloTarget) -> str:
 
 
 def _view(
-    target: SloTarget,
-    status: SloStatus | None,
+    row: Sequence[Any],
     days: Mapping[date, slo.DayCounts],
     *,
     now: datetime,
     zone: ZoneInfo,
 ) -> SloView:
+    """One target from a row of (target, status, deleted-by name, check name, interval)."""
+    target: SloTarget = row[0]
+    status: SloStatus | None = row[1]
+    check_name: str | None = row[3]
+    check_interval: int | None = row[4]
     stored = slo.StoredTarget(
         kind=target.kind,
         objective=target.objective_percent,
@@ -421,7 +578,9 @@ def _view(
         longest_quiet_7d_minutes=status.longest_quiet_7d if status else 0,
         created_at=target.created_at,
     )
-    facts, figures = slo.facts_from_storage(stored, days, now=now, zone=zone)
+    facts, figures = slo.facts_from_storage(
+        stored, days, now=now, zone=zone, check_interval_seconds=check_interval
+    )
     state = slo.status_of(facts)
     left = slo.allowance_left(target.objective_percent, figures.total, figures.failures)
     return SloView(
@@ -431,11 +590,21 @@ def _view(
         description=target.description,
         kind=target.kind,
         service_name=target.service_name,
+        endpoint_name=target.endpoint_name,
+        check_id=target.check_id,
+        check_name=check_name,
+        check_interval_seconds=check_interval,
+        boundary_index=target.boundary_index,
+        boundary_ms=(
+            None if target.boundary_index is None else slo.boundary_ms(target.boundary_index)
+        ),
+        asked_ms=target.asked_ms,
+        left_out_endpoints=list(target.left_out_endpoints),
         objective_percent=target.objective_percent,
         window_days=target.window_days,
         upstream_sampling=target.upstream_sampling,
         enabled=target.enabled,
-        label=_label(target),
+        label=_label(target, check_name),
         allowance_words=slo.allowance_words(target.kind),
         state=state.state,
         variant=state.variant,
@@ -479,17 +648,18 @@ def _status_of(view: SloView) -> slo.Status:
 
 
 def _deleted_line(
-    target: SloTarget,
-    deleted_by_name: str | None,
+    row: Sequence[Any],
     days: Mapping[date, slo.DayCounts],
     *,
     reader: Reader,
 ) -> DeletedSlo:
+    target: SloTarget = row[0]
+    deleted_by_name: str | None = row[2]
     assert target.deleted_at is not None
     return DeletedSlo(
         id=target.id,
         name=target.name,
-        label=_label(target),
+        label=_label(target, row[3]),
         deleted_at=target.deleted_at,
         purged_on=(target.deleted_at + RESTORE_FOR).date(),
         days_held=len(days),
