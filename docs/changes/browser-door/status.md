@@ -259,3 +259,9 @@ Found while reading; recorded here rather than editing other features' documents
 2026-11-07 — founder approved the plan and answered decisions 1 to 5 as recommended; state Approved.
 2026-11-07 — all four steps built and validated (above); state Implemented; next action: coordinator review,
 `just check`, commit.
+
+## Founder answer, 2026-11-08
+
+The usage meter's writing of browser-door service names into Postgres `service_last_seen` (read by the "went silent"
+alert) is to be fixed **as its own small follow-up change** under `docs/changes/`, as recommended. It is not part of this
+record's approved scope.

@@ -98,7 +98,10 @@ test to `service_versions_1m` when it is built (its own status, *Documentation i
 
 ## Open decisions
 
-**None blocking.** Two readings made while building Step 1a, recorded so they can be overruled:
+**None blocking.** Readings made while building Step 1a. **Founder answer, 2026-11-08:** the last three below (the gate's
+rows, churn run once, the alert-delay row) are **accepted as recommended**: the gate stands as passed on demo data, and the
+alert evaluation start delay is added to Step 1b's sync-job task when the plan is next revised and measured before Step 1b
+is called done. The first two stay open to overrule:
 
 - **The name check refuses DEL (U+007F).** FR9 says "C0 and C1 control characters"; DEL is in neither range strictly, but
   it is Unicode category Cc with them. The check uses Cc, and the shared fixture states it. Overrule by removing the DEL
