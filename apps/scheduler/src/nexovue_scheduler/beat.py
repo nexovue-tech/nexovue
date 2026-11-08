@@ -61,6 +61,7 @@ from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.pollers.integrations import IntegrationDefinition, load_active_integrations
+from nexovue_scheduler.releases import RELEASES_QUEUE, SWEEP_RELEASES_TASK
 from nexovue_scheduler.settings import Settings
 
 # Task names come from the shared contract rather than imports, so beat does not
@@ -99,6 +100,11 @@ EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
 # F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
 CASES_SWEEP_SECONDS: Final = 300
 CASES_SWEEP_ENTRY: Final = "sweep:cases"
+
+# F28: releases seen in traffic, synced from the version rollup each minute on their own
+# capped queue (D31), so a slow read never takes an alert sweep's slot.
+RELEASE_SWEEP_SECONDS: Final = 60
+RELEASE_SWEEP_ENTRY: Final = "sweep:releases"
 
 # A payment's grace period is days long; an hour late ending it costs nothing.
 GRACE_SWEEP_SECONDS: Final = 3600
@@ -418,6 +424,7 @@ class Beat:
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
             CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
+            RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
         }
         # A customer's own install charges nobody, so no payment has a grace period to end.
         if self._settings.nexovue_deployment == HOSTED:

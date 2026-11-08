@@ -26,7 +26,8 @@ the probes: capped queues are claimed first, and together they ask for more seat
 than a container should give. So a worker given `uncapped_floor` lets its capped
 queues together hold at most `concurrency - uncapped_floor` slots, and each pass
 starts from the next capped queue, so none starves. `scheduler-light` keeps 4 of 8
-for probes and alert sweeps, whatever later features add.
+for probes and alert sweeps, whatever later features add: F19's `slo` queues and F28's
+`releases` included.
 
 **Stopping is orderly.** On SIGTERM it claims nothing more and waits for what it
 is running. A job still running when the process is killed outright keeps its
@@ -54,7 +55,7 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from nexovue_scheduler import metrics, slos
+from nexovue_scheduler import metrics, releases, slos
 from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE
 from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import child, queue, registry
@@ -79,6 +80,7 @@ REAP_SECONDS: Final = 5.0
 QUEUE_CAPS: Final[Mapping[str, int]] = {
     DETECTION_QUEUE: DETECTION_CONCURRENCY,
     **slos.QUEUE_CAPS,
+    **releases.QUEUE_CAPS,
 }
 # A child's own memory, beyond the pages it shares, past which it is replaced after a job.
 # A fresh child holds a few MiB of its own; the worst job measured, a project's hourly

@@ -17,7 +17,7 @@ from typing import Any, Final
 
 import pytest
 
-from nexovue_scheduler import slos
+from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE, JUDGE_PROJECT_TASK
 from nexovue_scheduler.detection.baselines import AHEAD, BASELINE_SPREAD, hourly_requests
@@ -110,9 +110,14 @@ def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> N
         "light.mumbai",
         DETECTION_QUEUE,
         *slos.QUEUES,
+        *releases.QUEUES,
     ]
     assert worker_queues("deliveries", region="mumbai") == ["deliveries"]
-    assert QUEUE_CAPS == {DETECTION_QUEUE: DETECTION_CONCURRENCY, **slos.QUEUE_CAPS}
+    assert QUEUE_CAPS == {
+        DETECTION_QUEUE: DETECTION_CONCURRENCY,
+        **slos.QUEUE_CAPS,
+        **releases.QUEUE_CAPS,
+    }
     assert DETECTION_CONCURRENCY == 2
 
 

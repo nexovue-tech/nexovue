@@ -53,6 +53,7 @@ from nexovue_api.profile import router as profile_router
 from nexovue_api.profiles import router as profiles_router
 from nexovue_api.projects import router as projects_router
 from nexovue_api.readsurface import router as read_spec_router
+from nexovue_api.releases import router as releases_router
 from nexovue_api.rum import router as rum_router
 from nexovue_api.servicemap import router as service_map_router
 from nexovue_api.services import router as services_router
@@ -150,6 +151,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(channel_tests_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
+    versioned.include_router(releases_router.router)
     versioned.include_router(integrations_router.router)
     versioned.include_router(services_router.router)
     versioned.include_router(service_map_router.router)

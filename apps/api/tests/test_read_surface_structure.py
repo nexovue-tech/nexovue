@@ -73,6 +73,10 @@ THE_SURFACE: Final = {
     "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",
     "nexovue_api/synthetics/router.py:list_runs": "GET /synthetics/checks/{check_id}/runs",
     "nexovue_api/deploys/router.py:list_deploys": "GET /deploys",
+    # F28: releases and their comparison. No sender text (FR54).
+    "nexovue_api/releases/router.py:list_releases": "GET /releases",
+    "nexovue_api/releases/router.py:get_release": "GET /releases/{release_id}",
+    "nexovue_api/releases/router.py:get_comparison": "GET /releases/{release_id}/comparison",
     "nexovue_api/llm_observability/router.py:list_llm_calls": "GET /llm/calls",
 }
 

@@ -18,7 +18,7 @@ import yaml
 
 import nexovue_api
 from nexovue_api.roles import command_for
-from nexovue_scheduler import slos
+from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_QUEUE
 from nexovue_scheduler.jobs.worker import QUEUE_CAPS
@@ -337,7 +337,29 @@ def test_slo_work_runs_on_scheduler_light_under_its_floor(layout: str, tmp_path:
         assert others == ["scheduler-light"], f"{layout}: {others} take {queue_name}"
     assert (_concurrency_of(light), _floor_of(light)) == (8, 4)
     capped = [name for name in queues["scheduler-light"] if name in QUEUE_CAPS]
-    assert set(capped) >= {DETECTION_QUEUE, *slos.QUEUES}
+    assert set(capped) >= {DETECTION_QUEUE, *slos.QUEUES, *releases.QUEUES}
+
+
+def test_the_release_sync_runs_on_scheduler_light_capped_under_its_floor(
+    layout: str, tmp_path: Path
+) -> None:
+    """F28 D31, AC72: the `releases` queue is `scheduler-light`'s and no other worker's,
+    capped at two seats inside the floor that keeps probes and alert sweeps 4 of 8."""
+    services = _render(layout, tmp_path)
+    argv = {
+        name: command_for(service["command"][0], service["command"][1:])
+        for name, service in services.items()
+        if name.startswith("scheduler-") and name != "scheduler-beat"
+    }
+    queues = {
+        name: _queues_of(arguments, services[name]["environment"]["PROBER_REGION"])
+        for name, arguments in argv.items()
+    }
+    for queue_name in releases.QUEUES:
+        assert QUEUE_CAPS[queue_name] == releases.QUEUE_CAPS[queue_name] == 2
+        others = [name for name, taken in queues.items() if queue_name in taken]
+        assert others == ["scheduler-light"], f"{layout}: {others} take {queue_name}"
+    assert (_concurrency_of(argv["scheduler-light"]), _floor_of(argv["scheduler-light"])) == (8, 4)
 
 
 def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
@@ -354,5 +376,6 @@ def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
     assert DETECTION_QUEUE in workers["scheduler-light"]
     assert "light.local" in workers["scheduler-light"]
     assert set(slos.QUEUES) <= set(workers["scheduler-light"])
+    assert set(releases.QUEUES) <= set(workers["scheduler-light"])
     assert _floor_of(dev["services"]["scheduler-light"]["command"].split()) == 4
     assert DETECTION_QUEUE not in workers["scheduler-deliveries"]

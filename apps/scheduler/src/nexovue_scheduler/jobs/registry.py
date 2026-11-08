@@ -28,6 +28,7 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.detection.project_job",
     "nexovue_scheduler.detection.baselines",
     "nexovue_scheduler.slos.job",
+    "nexovue_scheduler.releases.sync",
     "nexovue_scheduler.cases",
 )
 

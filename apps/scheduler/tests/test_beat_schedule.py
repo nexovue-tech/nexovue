@@ -29,6 +29,7 @@ from nexovue_scheduler.beat import (
     FILE_SWEEP_ENTRY,
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
+    RELEASE_SWEEP_ENTRY,
     Beat,
     _start_offset,
     _unchanged,
@@ -37,6 +38,7 @@ from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck
 from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.leader import LeaderLock
+from nexovue_scheduler.releases import RELEASES_QUEUE, SWEEP_RELEASES_TASK
 from nexovue_scheduler.settings import Settings
 
 ORG_ID = uuid.uuid4()
@@ -197,6 +199,19 @@ def test_cases_are_swept_every_five_minutes_on_light_by_a_registered_task() -> N
     assert sweep.interval_seconds == 300
     assert sweep.request.expires_seconds == 300
     assert CASES_SWEEP_TASK in registry.registered()
+
+
+def test_releases_are_swept_every_minute_on_their_own_capped_queue() -> None:
+    """F28 T1.10 (D31, AC72): the sweep and its project jobs run on `releases`, which
+    `scheduler-light` takes with a cap, so a slow read never holds an alert sweep's slot.
+    A sweep not started before the next is due is dropped."""
+    sweep = _scheduler()._sweep_entries()[RELEASE_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_RELEASES_TASK
+    assert sweep.request.queue == RELEASES_QUEUE
+    assert sweep.interval_seconds == 60
+    assert sweep.request.expires_seconds == 60
+    assert SWEEP_RELEASES_TASK in registry.registered()
 
 
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:

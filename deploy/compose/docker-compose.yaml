@@ -455,9 +455,9 @@ services:
     # Docker on Linux (CI's runner) only when asked. Probes, deliveries and the model reach it here.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # No --queues: the default is light, light.<region>, detection and the three SLO queues,
-    # each capped, and all capped queues together under the floor of 4 (F6 C23, F3 A56,
-    # F19 D66). Naming queues here would drop the region's probes.
+    # No --queues: the default is light, light.<region>, detection, the three SLO queues and
+    # releases, each capped, and all capped queues together under the floor of 4 (F6 C23,
+    # F3 A56, F19 D66, F28 D31). Naming queues here would drop the region's probes.
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --

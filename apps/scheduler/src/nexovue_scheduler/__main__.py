@@ -31,7 +31,7 @@ from nexovue_platform.telemetry.logging import configure_logging, get_logger
 from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from nexovue_scheduler import health, metrics, slos
+from nexovue_scheduler import health, metrics, releases, slos
 from nexovue_scheduler.beat import Beat
 from nexovue_scheduler.detection import DETECTION_QUEUE
 from nexovue_scheduler.jobs.worker import Worker
@@ -90,6 +90,7 @@ def worker_queues(named: str, *, region: str) -> list[str]:
         probe_queue(region),
         DETECTION_QUEUE,
         *slos.QUEUES,
+        *releases.QUEUES,
     ]
 
 

@@ -112,8 +112,9 @@ SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
 )
 
 # F6, AC28: detection judges one project at a time, so its statements bind the
-# project as well as the tenant.
-PROJECT_BOUND_PACKAGE: Final = "detection"
+# project as well as the tenant. F28 (T1.11): so does the release sync, whose reads
+# go through `alerts.telemetry`'s reader and so need no driver of their own.
+PROJECT_BOUND_PACKAGES: Final = ("detection", "releases")
 
 # ADR-023: the one module that may write telemetry. Every other module in either
 # service reads, or (the erasure) deletes.
@@ -537,12 +538,14 @@ def test_a_tenantless_read_is_allowed_in_its_own_module_only() -> None:
 
 
 def _in_project_bound_package(module: str) -> bool:
-    return module == PROJECT_BOUND_PACKAGE or module.startswith(f"{PROJECT_BOUND_PACKAGE}.")
+    return any(
+        module == package or module.startswith(f"{package}.") for package in PROJECT_BOUND_PACKAGES
+    )
 
 
 def test_no_detection_statement_reading_a_telemetry_table_omits_the_project_binding() -> None:
-    """A detection statement bound to the tenant alone would judge a project on its
-    siblings' telemetry."""
+    """A detection or release statement bound to the tenant alone would judge a project on
+    its siblings' telemetry."""
     unbound = [
         str(sql)
         for sql in _telemetry_sql(SCHEDULER_MODULES)

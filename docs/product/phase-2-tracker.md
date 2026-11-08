@@ -16,7 +16,7 @@ server; see foundation, *What A and B change*).
 |---|---|---|---|---|---|---|---|
 | 1 Detect | [F6 Anomaly detection](../features/anomaly-detection/status.md) | Done | Yes | Yes | Yes | Yes, PR #24 | After deploy |
 | — | [Browser-door change](../changes/browser-door/status.md) (owned by F28) | Done | — | Yes, 2026-11-07 | Built 2026-11-07, all four steps, live test passed on a local stack; on the branch 2026-11-07 | No | After deploy |
-| 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | Step 1a (2026-11-07); cost gate passed on demo data ([report](../research/release-rollup-cost-2026-11-07.md)). Step 1b next (the buyer round no longer gates it, foundation item 27) | No | After deploy |
+| 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | Step 1a (2026-11-07); cost gate passed on demo data ([report](../research/release-rollup-cost-2026-11-07.md)), its alert-delay row measured in Step 1b. Step 1b built 2026-11-08 (releases from traffic, the sync, `/releases` and the comparison by version; migration 0054, ADR-029), on `feature/phase-2`. Step 2 next | No | After deploy |
 | 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | Step 1 (2026-11-07); Step 2 (2026-11-07) except T2.9, which waits on F3 | No | After deploy |
 | 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ wait on F3's provider (F3 Step 4); not on the buyer round (foundation item 27) | No | After deploy |

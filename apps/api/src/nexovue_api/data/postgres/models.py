@@ -46,6 +46,7 @@ from nexovue_platform.detection import (
     SHIFT_REASONS,
     SIGNALS,
 )
+from nexovue_platform.releases import DEPLOY_STATES, OTHER_VERSION, START_BASES
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -2736,3 +2737,134 @@ class SloDeletedMonth(Base):
     __table_args__ = (
         Index("ix_slo_deleted_months_org_id_project_id_month", "org_id", "project_id", "month"),
     )
+
+
+class Release(Base):
+    """One version of one service in a project, from either door: counted in the version
+    rollup, or reported by a sender (F28, design 2, D2). Stored rather than derived, so
+    its first-seen time and id outlive the rollup's 35 days. Written by the scheduler's
+    sync (`releases/sync.py`) and, from Step 2, the deploy webhook."""
+
+    __tablename__ = "releases"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    version: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    first_seen_at: Mapped[OptionalTimestamp]
+    last_seen_at: Mapped[OptionalTimestamp]
+    first_reported_at: Mapped[OptionalTimestamp]
+    last_reported_at: Mapped[OptionalTimestamp]
+    report_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_state: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    # The latest arrival of a report or a count, never a sender's claim: retention reads it.
+    last_activity_at: Mapped[datetime] = mapped_column(
+        TimestampTz, nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_releases_org_id_id"),
+        UniqueConstraint(
+            "project_id", "service_name", "version", name="uq_releases_project_service_version"
+        ),
+        CheckConstraint(f"version NOT IN ('', '{OTHER_VERSION}')", name="version_is_a_release"),
+        CheckConstraint("service_name <> ''", name="service_is_named"),
+        CheckConstraint(
+            "first_seen_at IS NOT NULL OR first_reported_at IS NOT NULL", name="seen_or_reported"
+        ),
+        CheckConstraint("report_count >= 0", name="report_count_is_not_negative"),
+        CheckConstraint(f"last_state IN ({_quoted(DEPLOY_STATES)})", name="last_state_is_known"),
+        Index("ix_releases_last_activity_at", "last_activity_at"),
+    )
+
+
+class ReleasePeriod(Base):
+    """One stretch a release served (F28, D15, FR19). A past period only ever gains an
+    end; a version that comes back opens a new one."""
+
+    __tablename__ = "release_periods"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    release_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # The first counted minute once known, else the reported time (FR42).
+    started_at: Mapped[RequiredTimestamp]
+    start_basis: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    ended_at: Mapped[OptionalTimestamp]
+    previous_version: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
+    already_running: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    is_return: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    last_reading: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    mixed_environments: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "release_id"],
+            ["releases.org_id", "releases.id"],
+            ondelete="CASCADE",
+            name="fk_release_periods_release",
+        ),
+        UniqueConstraint(
+            "org_id", "release_id", "started_at", name="uq_release_periods_release_start"
+        ),
+        CheckConstraint(f"start_basis IN ({_quoted(START_BASES)})", name="start_basis_is_known"),
+        CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ended_after_started"),
+        CheckConstraint(
+            f"previous_version NOT IN ('', '{OTHER_VERSION}')",
+            name="previous_version_is_a_release",
+        ),
+        CheckConstraint(
+            "NOT (already_running AND is_return)", name="a_return_was_not_already_running"
+        ),
+        Index(
+            "uq_release_periods_one_open",
+            "org_id",
+            "release_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        Index(
+            "ix_release_periods_org_id_project_id_started_at",
+            "org_id",
+            "project_id",
+            text("started_at DESC"),
+            "id",
+        ),
+        Index(
+            "ix_release_periods_org_id_project_id_service_name_started_at",
+            "org_id",
+            "project_id",
+            "service_name",
+            text("started_at DESC"),
+        ),
+        Index(
+            "ix_release_periods_open",
+            "org_id",
+            "project_id",
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+    )
+
+
+class ReleaseSyncState(Base):
+    """How far the release sync has read a project's version rollup (F28, design 3,
+    step 10): the last minute read, never moved backwards."""
+
+    __tablename__ = "release_sync_state"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    synced_through: Mapped[RequiredTimestamp]

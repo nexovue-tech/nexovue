@@ -4,12 +4,14 @@
 
 **In development.** The founder approved the specification, design and plan on 2026-11-02. Plan Step 1a (the version
 rollup and its cost measurement) is on `feature/phase-2`, and its cost gate passed on demo data
-(2026-11-07). Step 1b waits on the one round of buyer conversations (foundation item 8), a hard stop.
+(2026-11-07). **Step 1b is on `feature/phase-2` (2026-11-08);** the buyer round no
+longer gates it (foundation item 27). Step 2 is next.
 
 
 ## Current task
 
-Step 1a is on `feature/phase-2` (2026-11-07). The cost gate's verdict is in
+**Step 1b is on `feature/phase-2`** (*Step 1b, built 2026-11-08*, below). Step 1a is on
+`feature/phase-2` (2026-11-07). The cost gate's verdict is in
 [`docs/research/release-rollup-cost-2026-11-07.md`](../../research/release-rollup-cost-2026-11-07.md).
 
 **The gate passed on demo data, development machine, not a server figure** (T1.7, AC21). Demo traffic, 50 services
@@ -21,6 +23,99 @@ own (`GOMEMLIMIT`, totals exact), so churn's ratios (21× rows, +15.8% memory, 2
 not judged against the demo's bounds. The tool first judged churn against the demo's ratios, and counted folding as
 inexact totals; both were fixed in `release_measure.py`, tests first. The alert evaluation start delay row cannot be
 measured before Step 1b. `sizing.md` is unchanged: no worker memory growth on the demo.
+
+## Step 1b, built 2026-11-08
+
+A release compared by version, on real traffic (plan T1.8 to T1.16). What exists now, read from the code:
+
+- **The record** (T1.8): Postgres migration **`0054_releases`** (the next free number after F19's 0053; F22 may also
+  take numbers in parallel, so the coordinator renumbers at commit if they collide), `releases`, `release_periods` and
+  `release_sync_state`, with models and `organizations/tables.py`. One open period per release and one period per
+  release and start are unique; '' and `__other__` are refused by the database. Roll forward only, like F19's.
+  **ADR-029** filed (the design's second proposed ADR). The third, the deploy envelope, is Step 2's.
+- **The comparison** (T1.9): `nexovue_platform/releases.py`, pure: the one name check (held to
+  `release-names.json`, as the Go side is), `storable`, `bucket_p95` (moved from detection's `method.py`, which
+  re-exports it), `compare_failure_share`, `compare_p95` and `choose_method`, the design's ordered list in full.
+- **The sync** (T1.10 to T1.13): `nexovue_scheduler/releases/` with `sweep:releases` on beat every minute, on its own
+  `releases` queue, capped at 2 under `scheduler-light`'s floor, in `worker_queues`' default and both compose files'
+  comments; `observe_project` under the project's session lock; the per-minute walk (`sync.walk`); writes sorted by
+  service and version in one transaction; `synced_through` forward only; 200 new releases a run; eviction past 50,000.
+  The store reads through `alerts.telemetry`'s reader, so it holds no driver. `test_detection_isolation.py` walks
+  detection and the alert roots and finds no path to the sync. The one cross-tenant statement, the sweep's
+  `_MOVED_SINCE_SYNC`, is named in the scheduler Postgres tenancy test.
+- **The API** (T1.14): `GET /releases` (window overlap, service and version filters, keyset page, the window's
+  totals, `has_any` and `latest` for the three empties), `GET /releases/{id}`, `GET /releases/{id}/comparison`
+  (`period`, `window` of 1, 6 or 24 hours, to the settled minute). On the read surface and `setup/api.md`; the
+  `/releases` prefix is on the telemetry rate-limit tier, as the design says, though only the comparison reads
+  ClickHouse.
+- **The console** (T1.15): `/releases` in Signals after Errors, and `/releases/$releaseId` with the opening sentence
+  (`role=status`), the two blocks with a table from `md` and stacked lines on a phone, the window tabs, the facts and
+  periods, each section failing on its own; `shared/format/version.ts` for long versions.
+- **AC22** (T1.16) and **the gate's alert evaluation start delay** (added to T1.10 by the founder on 2026-11-08):
+  both measured and passed on demo data (cost report, *Addendum, Step 1b*): about 60 seconds from the settled
+  minute to the release row, against 3 minutes; and an alert sweep claimed in 0.049 s (median) with 51 release
+  jobs queued and one on a 360,000-row first read, against 0.071 s with none.
+
+**AC28, recorded as a fact.** F6's project job over four weeks at 0.2% failing, then 40 minutes at 0.8% mixed (3% on a
+fifth of traffic), **opened no finding**: its minimum change at normal sensitivity is 2 percentage points
+(`detection/method.py`, `SENSITIVITIES`). A 30% control opened a critical one, so the harness can open one. The
+release page reads the same rollout side by side, 3.0% against 0.25%, "higher". `test_releases_live.py` asserts both,
+so a change in F6 shows there.
+
+**Readings made while building, against the plan's or design's wording** (none blocking; each open to overrule):
+
+- **`LOG_EDGES` had already moved** to `nexovue_platform/slo.py` with F19, so T1.9 moves only `bucket_p95`.
+- **`releases.store` is not added to the raw-client list** (T1.11): it reads through `alerts.telemetry`'s reader, as
+  F19's `slos/store.py` does, so one module fewer holds the driver. `PROJECT_BOUND_PACKAGE` became
+  `PROJECT_BOUND_PACKAGES = ("detection", "releases")`.
+- **The sync reads the hour before its new minutes again, not five minutes.** The 60-minute rule needs that hour, so
+  a version first counted in rows that arrived late within it also gets its true first minute. The design's stated
+  risk now reads "more than an hour late". A first run reads exactly 6 hours.
+- **How an end is dated** (the design names the rule, not the minute): a takeover ends a period at the first minute
+  of the other version's 10-minute run; a quiet end at the minute after its last request. "Named requests" leaves out
+  '' and `__other__`.
+- **Every version first counted in a service's first counted minute is already running** (connecting mid-rollout).
+- **Every request failing on both sides** has a spread: the pooled share is held one request from 1, as the design
+  holds it one from 0.
+- **The comparison response leaves out** `incomplete`, `minutes_differing`, `versions_combined` and
+  `mixed_environments` until T4.1 computes them, rather than answering `false`. `time_before_after` is computed from
+  the version rows when every row has no version (those rows are the service's totals, FR16); T4.1 adds last week
+  and completeness. No release has a reported time before T2.2, so it cannot occur yet.
+- **The sync's figures are log fields, not Prometheus metrics** (`release_sync`: `duration_ms`, rows read, new
+  releases and periods; `release_sync_bounded`: rows skipped, evictions, the cap). Jobs run in child processes, which
+  export no metrics in this codebase; the `releases` queue's age is the existing per-queue gauge.
+- **The list's empty state links the setup documentation only.** The Deploys section it would also link is T2.6.
+
+**Tests, each seen failing first** (outputs kept in the session's scratch space):
+
+- `test_platform_releases.py`: collection failed on the missing module, then 47 passed.
+- `test_deletion_live.py`: failed naming the three unclassified tables, then 25 passed.
+- `test_release_sync.py`: failed on the missing package, then 21 passed (one fixed in the code on the way: the cap
+  stopped a run on a minute bringing nothing new).
+- `test_beat_schedule.py` and `test_compose_contract.py`: failed on the missing beat entry and queue, then 71 passed.
+- `test_tenant_chokepoint_structure.py`: with the project predicate removed from the store, failed naming
+  `releases.store`; restored, 18 passed. `test_detection_isolation.py`: with an import of the sync placed inside a
+  function in `alerts/silence.py`, failed naming the chain; removed, 5 passed.
+  `test_scheduler_postgres_tenancy_structure.py`: failed naming `_MOVED_SINCE_SYNC`, then 14 passed.
+- `test_release_sync_live.py` (13) was written after the walk: its first run failed on a fixture mistake (a version
+  name colliding with a junk one); with eviction removed from the code, the 50,000-release case failed; restored, 13
+  passed.
+- `test_read_surface_structure.py`: failed on the three new reader routes, then passed with `setup/api.md` updated.
+- `test_detection_coordinator.py`: failed on the worker's default queues, then passed.
+- Web: `comparison.test.ts` failed with no module, then 18 passed; `route-manifest.test.ts` failed on the missing
+  Signals entry, then passed; `ReleasesScreen.test.ts` (9) failed 2 with the empty and zero-result branches broken,
+  then passed. `version.test.ts` (3) was written with its formatter and not seen failing.
+- `test_releases.py` (14) and `test_releases_live.py` (13) were written after the routes; they passed on first run.
+
+**Counts.** Offline, `packages/py-platform`, `apps/scheduler`, `apps/api` and `packages/contracts` tests with live suites
+left out: 9,142 passed and 1 failed, the worker-defaults test above, then fixed. Live, on this machine's stores:
+`test_release_sync_live.py`, `test_releases_live.py`, `test_deletion_live.py`, `test_jobs_live.py`,
+`test_detection_project_job_live.py`, `test_detection_shifts_live.py`: 106 passed. Web: the releases folder, the
+route manifest and the version formatter, 38 passed. `uv run mypy .`, `ruff check .`, `ruff format --check .`,
+`pnpm -r typecheck`, `biome check` on the changed web files and `verify-tokens.js`: clean.
+
+**Not run:** `just check` (the coordinator's); the full live suites beyond those named; Go (no Go file changed);
+Design QA in a browser at 375px (Gates); `test_erasure_live.py` (unchanged, needs SeaweedFS).
 
 ## Step 1a, built 2026-11-07
 
@@ -90,15 +185,21 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
-Coordinator: review and commit Step 1a, with the cost report. Step 1b waits on the founder's buyer round (foundation
-item 8); its Postgres migration
-takes the next number after F22's `0051`. The browser-door change (`docs/changes/browser-door/`) must extend its live
-test to `service_versions_1m` when it is built (its own status, *Documentation impact*).
+Coordinator: review and commit Step 1b (migration `0054`, ADR-029; renumber either if F22 took it). Then Step 2, a
+person can set it up. `docs/architecture/database.md` gains the three tables in T5.7, as planned.
 
 
 ## Open decisions
 
-**None blocking.** Readings made while building Step 1a. **Founder answer, 2026-11-08:** the last three below (the gate's
+**One reading from Step 1b, not blocking.** **The per-run cap of 200 new releases never splits a minute.**
+`synced_through` is kept by the minute, so a strict cap would stop the sync for good on any minute holding more than
+200 new versions (500 services each first counted in one minute is enough: the measurement saw 1,000 in one run). The
+walk therefore takes a whole minute even past the cap, and stops only before a later minute that would cross it
+(`sync.walk`, `test_one_minute_over_the_cap_is_still_taken_so_a_run_always_moves`). Options: keep this (recommended:
+the cap still bounds every later minute, and a first run is bounded by its 6 hours and the arrival caps); or keep the
+minute but split its writes across runs, which needs a second position inside a minute. Overrule by saying which.
+
+**From Step 1a, none blocking.** Readings made while building Step 1a. **Founder answer, 2026-11-08:** the last three below (the gate's
 rows, churn run once, the alert-delay row) are **accepted as recommended**: the gate stands as passed on demo data, and the
 alert evaluation start delay is added to Step 1b's sync-job task when the plan is next revised and measured before Step 1b
 is called done. The first two stay open to overrule:
@@ -124,8 +225,7 @@ The customer conversations (foundation item 8) and the browser-door change (item
 
 ## Blocked
 
-- **Founder decision, 2026-11-08:** Step 1b no longer waits on the buyer round (foundation item 27); it is next on lane A.
-- **Step 1b waits for the one round of customer conversations** (foundation item 8).
+- **Founder decision, 2026-11-08:** Step 1b no longer waits on the buyer round (foundation item 27). Built 2026-11-08.
 - **Step 4 is blocked on the shared browser-door change** (below; foundation item 7, D58). **F28 owns it** (foundation item 22,
   2026-11-02). The plan holds no task for it yet; they are added when the plan is next revised.
   **2026-11-07:** the browser-door change is built (all four steps; its live test asserts `service_versions_1m` too,
@@ -540,7 +640,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-07
+2026-11-08
 
 ## Founder approval, 2026-11-02
 

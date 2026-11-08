@@ -11,8 +11,9 @@
 - **F6 is merged.** Findings, `service_stats_1m`, `detection_sweep`, the settled minute and migrations 0041 to 0050 exist
   only on `feature/anomaly-detection` (`anomaly-detection/status.md`). No F28 branch starts before that.
 - **The specification and design are approved.** D1 no longer differs from the foundation (`phase-2-foundation.md:547`).
-- **The one round of customer conversations has been held before Step 1b,** as the founder approved on 2026-11-02
-  (foundation, *Founder decisions*, 8). F28's questions are in `spec.md`, *Founder decisions needed*.
+- ~~**The one round of customer conversations has been held before Step 1b,** as the founder approved on 2026-11-02
+  (foundation, *Founder decisions*, 8).~~ **Withdrawn by the founder, 2026-11-08 (foundation item 27):** the buyer round
+  is a validation milestone, not a gate; Step 1b is built without it, and its answers are read afterwards.
 - **Before Step 4:** the one browser-door change (foundation section 9, shared with F3 and F19's P2) has filtered browser-door SERVER and CONSUMER spans out of `service_stats_1m` and `service_versions_1m` at one point, with a test that sends such a span and finds it in neither (AC17, D55). No labelled-exposure path: the founder
   approved the change first (foundation, *Founder decisions*, 7; D58).
 - **Other features' documents agree** as of the reconciliation on 2026-11-02 (`status.md`).
@@ -127,33 +128,41 @@ disappears if the gate fails. Run a query and see the printed counts equal to `r
 
 ### Step 1b — A release compared by version, on real traffic
 
-Only after the gate, and after the one round of customer conversations (foundation, *Founder decisions*, 8).
+Only after the gate. The buyer round no longer gates it (founder, 2026-11-08, foundation item 27).
 
 *Judgeable:* Run `just dev` and `tools/release-demo rolling`. Open `/releases`. Without any webhook, `release-demo` appears with two versions. Open the new one and read
 "Side by side over N minutes: failure share X% on v2 against Y% on v1", with the counts matching what the tool printed it sent. Run `swap` and read a before-and-after, with a block for since the rollout finished.
 
-- [ ] **T1.8** — `apps/api/migrations/versions/0051_releases.py` (*new*), `data/postgres/models.py`, `organizations/tables.py`,
+- [x] **T1.8** — *Built 2026-11-08 as `0054_releases.py`, the next free number (F22 and F19 took 0051 to 0053). `erasure/`
+  needs no change: the scheduler's erasure covers ClickHouse only, and Postgres deletion is `organizations/tables.py`.*
+  `apps/api/migrations/versions/0051_releases.py` (*new*), `data/postgres/models.py`, `organizations/tables.py`,
   `erasure/` · `releases`, `release_periods`, `release_sync_state` · proved by `test_deletion_live.py`,
   `test_postgres_tenancy_structure.py`
-- [ ] **T1.9** — `packages/py-platform/src/nexovue_platform/releases.py` (*new*), `scheduler/detection/method.py` · moves
+- [x] **T1.9** — *Built 2026-11-08. `LOG_EDGES` had already moved to `nexovue_platform/slo.py` with F19, so only
+  `bucket_p95` moves here, reading those edges; `method.py` re-exports it.* `packages/py-platform/src/nexovue_platform/releases.py` (*new*), `scheduler/detection/method.py` · moves
   `LOG_EDGES`, `bucket_p95`; adds `choose_method` as the design's ordered list, `compare_failure_share`, `compare_p95`, the four words, warm-up, and name check · proved by
   `packages/py-platform` tests (*new*: `test_platform_releases.py`, every row, both sides of z = 3, 0 of 20 against 5 of 20; AC32, AC33), `test_detection_method.py` unchanged and passing,
   `test_cross_service_contracts.py`
-- [ ] **T1.10** — `apps/scheduler/src/nexovue_scheduler/releases/__init__.py`, `sync.py`, `store.py` (*new*),
+- [x] **T1.10** — *Built 2026-11-08. The founder's 2026-11-08 answer added the gate's alert evaluation start delay to this
+  task: measured, and passed (cost report, *Addendum, Step 1b*). The sync reads the hour before its new minutes again,
+  not five minutes, since the 60-minute rule needs it (status, *Step 1b*).* `apps/scheduler/src/nexovue_scheduler/releases/__init__.py`, `sync.py`, `store.py` (*new*),
   `jobs/registry.py`, `jobs/worker.py` (`QUEUE_CAPS`), `__main__.py` (`worker_queues`), `deploy/compose/nexovue.yaml`, `beat.py` · `sweep:releases`, `observe_project`, own queue, expiry, lock, skip, per-minute walk, periods, first-version flag, per-row skip, `synced_through` rule, per-run bounds, cap and eviction · proved by
   `apps/scheduler/tests/test_release_sync.py`, `test_release_sync_live.py` (*new*: AC24, AC25, AC55, AC56, AC58, AC60, AC72, a late partition, a return during an outage, sparse two-version traffic, a quiet service's swap ending its period, one stray request opening no return, opposite-order writes, rollback's previous version), `test_beat_schedule.py`
-- [ ] **T1.11** — `apps/api/tests/test_tenant_chokepoint_structure.py` · add `releases.store` to `SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT`, and make `PROJECT_BOUND_PACKAGE` a tuple including `releases` · proved by that test, and `apps/scheduler/tests/test_release_store.py` (*new*) with `tenant_statements`
-- [ ] **T1.12** — `apps/scheduler/tests/test_detection_isolation.py` (*new*) · walks imports transitively, at module level and inside functions, from every `detection` module and from `alerts/` `sweeps`, `thresholds`, `new_errors`, `silence`, `check_state`, `incidents`, `rules`, `outbox` and `messages`. None may reach `nexovue_scheduler.releases` or read its tables. `alerts/delivery.py` and `alerts/tasks.py` are outside the roots, by name (AC42's structure half, D51) · proved by that test
-- [ ] **T1.13** — `apps/api/tests/test_scheduler_postgres_tenancy_structure.py` (exists, from F6; a second file of this name would stop collection, as these folders have no `__init__.py`) · `releases/` statements join what it reads, each cross-tenant one named with its reason · proved by that test, and `test_release_sync_live.py` with two organizations sharing a service and version (AC77)
-- [ ] **T1.14** — `apps/api/src/nexovue_api/releases/router.py`, `service.py`, `queries.py`, `schemas.py` (*new*), `main.py`,
+- [x] **T1.11** — *Built 2026-11-08 without adding `releases.store` to the raw-client list: like F19's `slos/store.py`, it reads
+  through `alerts.telemetry`'s reader and holds no driver, so the list stays as it was.* `apps/api/tests/test_tenant_chokepoint_structure.py` · add `releases.store` to `SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT`, and make `PROJECT_BOUND_PACKAGE` a tuple including `releases` · proved by that test, and `apps/scheduler/tests/test_release_store.py` (*new*) with `tenant_statements`
+- [x] **T1.12** — `apps/scheduler/tests/test_detection_isolation.py` (*new*) · walks imports transitively, at module level and inside functions, from every `detection` module and from `alerts/` `sweeps`, `thresholds`, `new_errors`, `silence`, `check_state`, `incidents`, `rules`, `outbox` and `messages`. None may reach `nexovue_scheduler.releases` or read its tables. `alerts/delivery.py` and `alerts/tasks.py` are outside the roots, by name (AC42's structure half, D51) · proved by that test
+- [x] **T1.13** — `apps/api/tests/test_scheduler_postgres_tenancy_structure.py` (exists, from F6; a second file of this name would stop collection, as these folders have no `__init__.py`) · `releases/` statements join what it reads, each cross-tenant one named with its reason · proved by that test, and `test_release_sync_live.py` with two organizations sharing a service and version (AC77)
+- [x] **T1.14** — *Built 2026-11-08. AC28's F6 half is recorded: F6 opened no finding on the 0.8% mixed figure (its minimum
+  change at normal sensitivity is 2 points), and a 30% control opened a critical one.* `apps/api/src/nexovue_api/releases/router.py`, `service.py`, `queries.py`, `schemas.py` (*new*), `main.py`,
   `ratelimit/policy.py` · `GET /releases` with its version filter and overlap window, `GET /releases/{id}`, `GET /releases/{id}/comparison` for `side_by_side` and
   `version_before_after`, with two blocks and `require_readable_project`, reading to the settled minute. Fixed paths are declared before `/{id}` · proved by
   `apps/api/tests/test_releases.py`, `test_releases_live.py` (*new*: AC26, AC28, AC31, AC35, AC62, AC63; AC28's mixed figure is computed directly from `service_stats_1m`, and it records F6's behaviour by running the project job), `test_ratelimit_coverage.py`,
   `test_read_surface_structure.py`
-- [ ] **T1.15** — `apps/web/src/features/releases/api.ts`, `ReleasesScreen.tsx`, `ReleaseScreen.tsx`, `comparison.ts` (*new*), `apps/web/src/shared/format/version.ts` (*new*),
+- [x] **T1.15** — `apps/web/src/features/releases/api.ts`, `ReleasesScreen.tsx`, `ReleaseScreen.tsx`, `comparison.ts` (*new*), `apps/web/src/shared/format/version.ts` (*new*),
   `app/router.tsx`, `app/routes/route-manifest.ts` · list and page: sentence, table, states, phone layout, zone, formatter · proved by
   `features/releases/comparison.test.ts` (AC66), `ReleasesScreen.test.ts` (*new*: AC27), `route-manifest.test.ts`
-- [ ] **T1.16** — timed check with `release-demo`, in the cost report's addendum · first settled span to visible release (AC22). One demo measurement, not a unit test
+- [x] **T1.16** — *Done 2026-11-08: about 60 seconds from the settled minute to the release row (cost report, *Addendum,
+  Step 1b*).* timed check with `release-demo`, in the cost report's addendum · first settled span to visible release (AC22). One demo measurement, not a unit test
 
 ### Step 2 — A person can set it up
 
@@ -274,8 +283,8 @@ no test server is rented (item 9). The whole-server fit on 16 GB waits for Oracl
 - [x] Design approval: 2026-11-02
 - [x] **Plan approval:** 2026-11-02
 - [ ] F6 merged
-- [x] Step 1a cost gate: passed on demo data, 2026-11-07 ([report](../../research/release-rollup-cost-2026-11-07.md)). Its alert evaluation start delay row cannot be measured before Step 1b's sync job exists, and no Step 1b task holds it yet (status, *Open decisions*)
-- [ ] The one round of customer conversations held, before Step 1b (foundation item 8)
+- [x] Step 1a cost gate: passed on demo data, 2026-11-07 ([report](../../research/release-rollup-cost-2026-11-07.md)). Its alert evaluation start delay row was added to T1.10 by the founder's answer of 2026-11-08, measured there, and passed
+- [x] ~~The one round of customer conversations held, before Step 1b (foundation item 8)~~ No longer a gate (foundation item 27, 2026-11-08)
 - [ ] F6 browser-door change, before Step 4. F28 owns it (foundation item 22, approved 2026-11-02); its tasks are added when this plan is next revised
 - [ ] Implementation
 - [ ] Tests

@@ -348,10 +348,10 @@ services:
 
   scheduler-light:
     <<: [*service-defaults, *nexovue-image]
-    # Probes, the alert sweeps, anomaly detection and reliability targets: `light`,
-    # `light.<region>`, `detection`, `slo`, `slo_counts` and `slo_history`. The capped queues
-    # together hold at most 4 of its eight slots, so probes and alert sweeps keep 4 (F6 D32,
-    # F3 A56, F19 D66).
+    # Probes, the alert sweeps, anomaly detection, reliability targets and the release sync:
+    # `light`, `light.<region>`, `detection`, `slo`, `slo_counts`, `slo_history` and `releases`.
+    # The capped queues together hold at most 4 of its eight slots, so probes and alert sweeps
+    # keep 4 (F6 D32, F3 A56, F19 D66, F28 D31).
     command: ["scheduler-light"]
     healthcheck: *scheduler-healthcheck
     environment:

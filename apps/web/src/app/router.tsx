@@ -20,6 +20,7 @@ import { scopedService } from "@/features/logs/search";
 import { severityFilterById } from "@/features/logs/severity";
 import { metricFilters } from "@/features/metrics/filters";
 import { parseProfilesSearch } from "@/features/profiles/search";
+import { parseReleaseSearch } from "@/features/releases/search";
 import { rumFilters } from "@/features/rum/filters";
 import { SERVICE_MAP_FILTERS } from "@/features/servicemap/filters";
 import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
@@ -89,6 +90,14 @@ const EditRuleScreen = lazyRouteComponent(
 const NewRuleScreen = lazyRouteComponent(
   () => import("@/features/alerts/RuleEditor"),
   "NewRuleScreen",
+);
+const ReleasesScreen = lazyRouteComponent(
+  () => import("@/features/releases/ReleasesScreen"),
+  "ReleasesScreen",
+);
+const ReleaseScreen = lazyRouteComponent(
+  () => import("@/features/releases/ReleaseScreen"),
+  "ReleaseScreen",
 );
 const SlosScreen = lazyRouteComponent(() => import("@/features/slos/SlosScreen"), "SlosScreen");
 const SloScreen = lazyRouteComponent(() => import("@/features/slos/SloScreen"), "SloScreen");
@@ -431,6 +440,21 @@ const incidentRoute = createRoute({
   component: IncidentScreen,
 });
 
+// F28: releases, after Errors in Signals. A release's page reads one period, the
+// latest when `?period=` is absent.
+const releasesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/releases",
+  component: ReleasesScreen,
+});
+
+const releaseRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/releases/$releaseId",
+  component: ReleaseScreen,
+  validateSearch: parseReleaseSearch,
+});
+
 // F19: reliability targets. `new` is static, so it is never read as a target id.
 const slosRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -720,6 +744,8 @@ const routeTree = rootRoute.addChildren([
     ruleRoute,
     incidentRoute,
     slosRoute,
+    releasesRoute,
+    releaseRoute,
     newSloRoute,
     sloRoute,
     editSloRoute,

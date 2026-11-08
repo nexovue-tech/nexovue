@@ -249,6 +249,9 @@ TELEMETRY_PATHS: Final = (
     # F19 D59: the SLO suggestion and burn line. Not `/slos`, which reads Postgres only
     # and must answer while ClickHouse is down (AC40).
     f"{API_PREFIX}/slo-readings",
+    # F28: the comparison reads the version rollup. The list and a release read Postgres,
+    # and share the tier as one prefix (design, *Rate limits*).
+    f"{API_PREFIX}/releases",
 )
 
 # Probes must answer while the API is being hammered; that is the whole point

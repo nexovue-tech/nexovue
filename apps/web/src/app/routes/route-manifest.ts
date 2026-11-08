@@ -26,6 +26,7 @@ export type NavPath =
   | "/profiles"
   | "/llm"
   | "/errors"
+  | "/releases"
   | "/logs"
   | "/rum"
   | "/synthetics"
@@ -71,6 +72,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/profiles", title: "Profiles" },
       { path: "/llm", title: "LLM calls" },
       { path: "/errors", title: "Errors" },
+      // F28: after Errors. A release is context for what the other screens show.
+      { path: "/releases", title: "Releases" },
       { path: "/logs", title: "Logs" },
     ],
   },

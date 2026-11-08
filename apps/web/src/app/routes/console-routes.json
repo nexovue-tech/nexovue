@@ -21,6 +21,8 @@
   "/onboarding",
   "/overview",
   "/profiles",
+  "/releases",
+  "/releases/$releaseId",
   "/reset-password",
   "/rum",
   "/service-map",

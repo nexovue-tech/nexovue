@@ -92,6 +92,8 @@ describe("the sidebar", () => {
       "/slos/new",
       "/slos/$sloId",
       "/slos/$sloId/edit",
+      // F28: reached from the releases list's rows.
+      "/releases/$releaseId",
       "/settings/channels/$channelId",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.
@@ -146,6 +148,12 @@ describe("the front door (F20 Step 1, FR1, FR2)", () => {
 });
 
 describe("the checked-in route list (FR43, AC54)", () => {
+  it("offers Releases in Signals, right after Errors (F28 design, `/releases`)", () => {
+    const signals = NAV_SECTIONS.find((section) => section.label === "Signals");
+    const paths = signals?.items.map((item) => item.path) ?? [];
+    expect(paths.indexOf("/releases")).toBe(paths.indexOf("/errors") + 1);
+  });
+
   it("matches the router exactly, so the scheduler's link test reads the truth", () => {
     // `console-routes.json` exists because the scheduler cannot import the
     // console: its own test (`test_alert_links.py`) holds every link a message

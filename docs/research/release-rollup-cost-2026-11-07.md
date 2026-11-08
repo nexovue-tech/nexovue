@@ -8,8 +8,8 @@
 > 2026-11-07 on branch `wt/f28` from the runs listed below. Nothing here approves anything: it gives the founder the
 > numbers behind the gate.
 >
-> **Status:** Gate passed on demo data. Every design row that Step 1a can measure passed. One row, the alert
-> evaluation start delay, cannot be measured until Step 1b exists (*What was not measured*).
+> **Status:** Gate passed on demo data. Every design row that Step 1a can measure passed. The sixth row, the alert
+> evaluation start delay, was measured with Step 1b's sync job on 2026-11-08 and passed (*Addendum, Step 1b*).
 
 ## The result in plain words
 
@@ -71,7 +71,7 @@ like that is exact but has *inexact versions*: the screen says "Versions were co
 | Worker peak memory | Demo | −0.3%: largest peak 53.7 MiB with versions against 53.9 MiB baseline | At most +15% | Pass |
 | Bytes on disk per request | Demo | 1.101× at most (runs: 1.078, 1.096, 1.101) | At most 2× | Pass |
 | Many services with many versions on every partition, at the arrival caps | Churn | Worker peak 151.4 MiB; totals exact in 1 of 1 runs, all 40 services folded into `__other__` | Under `GOMEMLIMIT`, 1,088 MiB; totals exact | Pass |
-| Alert evaluation start delay | — | Not measured | Within 10 seconds of baseline | Not measured (*below*) |
+| Alert evaluation start delay | — | Measured in Step 1b | Within 10 seconds of baseline | Passed: 0.049 s median against 0.071 s (*Addendum, Step 1b*) |
 
 **On the memory row.** The tool compares the largest peak of each set, which is −0.3%. Compared by the median of each
 set's peaks instead, it is +2.9% (53.1 against 51.6 MiB). Both are far under 15%, and the spread within each set (51.2
@@ -176,9 +176,8 @@ applied per endpoint). Assuming its rows cost what `endpoint_stats_1m`'s do:
 
 ## What was not measured, and why
 
-- **Alert evaluation start delay** (the gate's sixth row: within 10 seconds of baseline, with N projects and one on a
-  long first read). It measures the release sync job's effect on the scheduler, and that job is built in Step 1b.
-  It must be measured there, before Step 1b is called done.
+- **Alert evaluation start delay** (the gate's sixth row). Not measurable before Step 1b's sync job existed; measured
+  on 2026-11-08 with it (*Addendum, Step 1b*), as the founder accepted on 2026-11-08.
 - **Whether the whole server fits in 16 GB.** No test server is rented; this waits for the Oracle deployment after
   Phase 2 (foundation, *What A and B change*, and spec, founder decision 24's *Where "fits" is checked*).
 - **The worker inside its 1.25 GB container.** It ran as a host process here, held only by `GOMEMLIMIT`.
@@ -238,3 +237,55 @@ Not measured here: Alert evaluation start delay: needs Step 1b's sync job, which
 
 The run results (eight JSON files) and the driver's log were kept in the session's scratch space, not committed; the
 churn result alone is 7 MB of per-version mismatch rows.
+
+## Addendum, Step 1b (2026-11-08)
+
+**Demo data, development machine, not a server figure.** Both measurements ran on this machine's own stores
+(`f28-pg`, `f28-ch`, `f28-kafka` in Docker, on non-default ports), with the receiver, the worker, beat and a
+`scheduler-light`-shaped worker (8 slots, an uncapped floor of 4) run from source on branch `wt/f28`.
+
+### The alert evaluation start delay (the gate's sixth row)
+
+**Passed.** 51 projects (10 organizations of 5, and one more of its own) each had six hours of version rows; one
+held 500 services with 2 versions over 360 minutes, 360,000 rows, so its first read was long. Each sample cleared every
+project's sync state, so each job was a first run, queued all 51 `releases.observe_project` jobs at once, slow project
+first, then queued one alert threshold sweep exactly as beat does and timed enqueue to claim, polling every 20 ms.
+The baseline queued the sweep with no release job.
+
+| | Samples | Median | Max |
+|---|---|---|---|
+| Baseline, no release jobs | 8 | 0.071 s | 0.844 s (the first sample, a cold worker) |
+| 51 release jobs queued, one on a 360,000-row first read | 8 | 0.049 s | 0.054 s |
+
+While loaded, at most 2 release jobs ran at once (the `releases` cap), with 9 to 51 waiting. The slow project's
+first run took 4.1 to 5.3 seconds, reading 360,000 rows and creating 1,000 releases. The bound is 10 seconds of
+baseline; the loaded delay sat at the poll's resolution. What keeps it there is the queue's cap of 2 inside the floor
+that leaves 4 of 8 slots to probes and alert sweeps (`jobs/worker.py`), not the job being fast.
+
+The 1,000 new releases in one run are above the design's 200 a run: all 1,000 were first counted in one minute, and
+the sync takes a whole minute even past the cap, or one busy minute would stop it for good (`sync.walk`; F28
+`status.md`, *Open decisions*).
+
+### First settled span to visible release (AC22, T1.16)
+
+**Passed: about 60 seconds, against 3 minutes.** `tools/release-demo send rolling` (120 requests a minute, `v1`
+handing to `v2` from minute 3 over 6 minutes, 14 minutes) went through the real receiver, with no webhook. A
+watcher read the settled minute and `releases` every 2 seconds.
+
+| Version | First counted minute | Settled through it at | Release row at | From settled to visible |
+|---|---|---|---|---|
+| `v1` | 17:23 | 17:27:57 | 17:28:59 | 62 s |
+| `v2` | 17:26 | 17:30:56 | 17:31:56 | 60 s |
+
+The release appears on the release sweep after the minute settles; the sweep runs each minute. The settled minute
+itself trailed the spans by about 4 to 5 minutes on this stack, which is detection's settling (F6) and is not
+counted in AC22, which measures from the first settled span.
+
+`send.py verify` then printed 708 requests and 2 errors on `v1`, 979 and 40 on `v2`, equal to what the receiver
+accepted, with the version rows summing to `service_stats_1m`. The API's comparison service, read against the same
+stores, gave `v1` as already running, and `v2` against `v1` in two blocks: side by side from 17:26 to 17:33, 399
+requests and 14 errors on `v2` against 441 and 0 on `v1`, failure share higher; then since the rollout finished,
+17:33 to 17:40, 580 and 26 against `v1`'s equal stretch before, 267 and 2, not clearly different. The two blocks'
+`v2` counts add to the 979 sent.
+
+**Not measured:** the 2-second first-numbers target (AC67) waits for Step 4.

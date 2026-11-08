@@ -181,6 +181,14 @@ CROSS_TENANT_STATEMENTS: Final = (
         f"{_SWEEP}: deleted targets past restoring, purged one by one, each in its own "
         "transaction binding its own `org_id` (F19 FR31)",
     ),
+    # Releases seen in traffic (F28 T1.13, D48): the sweep finds whose services have moved;
+    # each project's job then binds the `org_id` read from the project's own row.
+    _across(
+        "releases.sync",
+        "_MOVED_SINCE_SYNC",
+        "the release sweep's hand-out: every organization's projects whose services have sent "
+        "anything since their last sync, so each is handed its own job (F28 design 3, step 1)",
+    ),
     # The job queue and its metrics.
     _across("jobs.queue", "_CLAIM", "a worker claims due jobs of every organization"),
     _across("jobs.queue", "_FINISH", "a claimed job, by its id and this worker's lease"),
@@ -486,6 +494,8 @@ def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
         "nexovue_scheduler.detection.events",
         "nexovue_scheduler.cases",
     } <= modules
+    # F28 T1.13: the release sync's statements are held too.
+    assert "nexovue_scheduler.releases.sync" in modules
 
 
 def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None:
