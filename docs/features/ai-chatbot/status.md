@@ -49,6 +49,7 @@ Step 1 is committed (5988d88). The founder runs the Step 1 demonstration for the
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Steps 2 to 7 are built in full, not gated on the buyer round (foundation item 27); they still need F3's provider (F3 Step 4).
 - **Steps 2 to 8 are blocked on F3 being built** and on the buyer round's continue rule. Step 7 is also blocked on F22, and one tool in Step 3 on F28.
 - ~~All steps blocked on F6 merging~~ — F6 merged 2026-11-02 (PR #24), and the founder approved these documents, so Step 1 was built.
 

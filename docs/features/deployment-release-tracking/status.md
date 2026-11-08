@@ -124,6 +124,7 @@ The customer conversations (foundation item 8) and the browser-door change (item
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Step 1b no longer waits on the buyer round (foundation item 27); it is next on lane A.
 - **Step 1b waits for the one round of customer conversations** (foundation item 8).
 - **Step 4 is blocked on the shared browser-door change** (below; foundation item 7, D58). **F28 owns it** (foundation item 22,
   2026-11-02). The plan holds no task for it yet; they are added when the plan is next revised.

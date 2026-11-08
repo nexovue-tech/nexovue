@@ -41,6 +41,7 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Step 1 no longer waits on the buyer round or the GitHub trial (foundation items 27, 28; changes D64). GitHub checks run against a simulated GitHub; the founder runs the real trial after Phase 2.
 - **Everything in the plan is blocked** on F6 merging, then F28, F3, F22 and F4 being built.
 - **Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64). Design approval is no longer blocked: the founder approved it first.
 - **Step 2b is blocked** on F3's provider (F3 Step 4) and on F3's consent screen naming rung 2b.

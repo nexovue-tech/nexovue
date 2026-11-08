@@ -73,6 +73,7 @@ A skeptical review (architect, developer, UX, sales, marketing, customer, securi
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Step 2 onward no longer waits on the buyer round (foundation item 27); the full builder is built, not templates only.
 - **Step 1 is built** (F6 merged, D58); it waits only on the coordinator's review and commit.
 - **Step 2 onward** waits on the buyer round (the foundation's founder decision 8) and decision 1, and under the approved stage order, on the chain.
 - **Step 5 onward** waits on F28.

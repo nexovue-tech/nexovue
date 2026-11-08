@@ -338,6 +338,7 @@ committed now with T2.9 unticked, waiting on F3, because F3's
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Steps 3 to 6 are built against a simulated GitHub; T3.0's manifest-flow trial and T5.2's real webhook are run by the founder after Phase 2 (foundation item 28). Step 7 (Jira) still waits on Atlassian's written answer.
 Nothing is blocked now. Implementation waits on approval of the specification, design and plan, and on F6 merging. T0.1 is approved (2026-11-02) and can be sent now. Step 7 waits for Atlassian's written answer, 4 weeks at most. T5.2 (a real webhook delivery, AC130) waits for the Oracle deployment, since no test server is rented.
 
 ## Risks

@@ -183,6 +183,7 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Step 4 onward no longer waits on the demand gate (foundation item 27); it is built in full.
 - Nothing blocks Step 3's commit; its three open decisions ask for confirmation.
 - Nothing blocked Steps 2 and 3. Step 1 is on `feature/phase-2` (2026-11-08); T2.3 now also writes the helper's `metrics_gauge` rows.
 - **Plan Step 4 onward** waits on the demand gate, and on precondition P2: a separate change keeping browser-door spans out of the rollups. **F19's release waits on P2 too.** It has no record yet. Foundation item 7 sets it before Stage 1 reaches a customer, and F28 owns it (item 22, 2026-11-02).

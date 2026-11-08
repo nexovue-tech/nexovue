@@ -16,15 +16,15 @@ server; see foundation, *What A and B change*).
 |---|---|---|---|---|---|---|---|
 | 1 Detect | [F6 Anomaly detection](../features/anomaly-detection/status.md) | Done | Yes | Yes | Yes | Yes, PR #24 | After deploy |
 | — | [Browser-door change](../changes/browser-door/status.md) (owned by F28) | Done | — | Yes, 2026-11-07 | Built 2026-11-07, all four steps, live test passed on a local stack; on the branch 2026-11-07 | No | After deploy |
-| 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | Step 1a (2026-11-07); cost gate passed on demo data ([report](../research/release-rollup-cost-2026-11-07.md)). Step 1b waits on the buyer round (foundation item 8) | No | After deploy |
+| 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | Step 1a (2026-11-07); cost gate passed on demo data ([report](../research/release-rollup-cost-2026-11-07.md)). Step 1b next (the buyer round no longer gates it, foundation item 27) | No | After deploy |
 | 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | Step 1 (2026-11-07); Step 2 (2026-11-07) except T2.9, which waits on F3 | No | After deploy |
-| 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ wait on F3 and the buyer round | No | After deploy |
+| 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ wait on F3's provider (F3 Step 4); not on the buyer round (foundation item 27) | No | After deploy |
 | 5 Fix | [F5 AI solution](../features/ai-solution/status.md) | Done | Yes | Yes | No | No | After deploy |
 | 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | Yes | Yes | Step 1 and Step 2 (2026-11-08); T2.7, judging the suggestions, waits for the founder. Step 3, the monthly answer (2026-11-08); three questions for the founder in its status | No | After deploy |
 | 6 Around | [F20 Dashboards](../features/dashboards/status.md) | Done | Yes | Yes | Step 1 (2026-11-02); Steps 2+ not started | No | After deploy |
 
-**All seven features' specs, designs and plans, and the foundation, approved by the founder on 2026-11-02.** F6 merged on 2026-11-02 (PR #24). Each feature starts as *The order of work* below allows, on the one branch `feature/phase-2`. Founder questions open: **none** (all approved 2026-11-02). F19's SLO work runs on `scheduler-light`, not a new container (F19 D66, 2026-11-02). Waiting on outside parties: Atlassian's written
+**All seven features' specs, designs and plans, and the foundation, approved by the founder on 2026-11-02.** F6 merged on 2026-11-02 (PR #24). Each feature starts as *The order of work* below allows, on the one branch `feature/phase-2`. Founder questions open: **none** (all approved 2026-11-02). **2026-11-08:** the buyer round is a validation milestone, not a gate, and real-GitHub checks wait for the founder's test after Phase 2 (foundation items 27, 28). F19's SLO work runs on `scheduler-light`, not a new container (F19 D66, 2026-11-02). Waiting on outside parties: Atlassian's written
 answer for Jira (F22 Step 7); the lawyer's review (foundation items 3 and 16).
 
 ## The order of work
@@ -43,10 +43,10 @@ What each feature needs before it can start, read from the documents (foundation
 | F3 Steps 1 to 2c (facts, no AI) | F28's release functions (F28 Step 1b to 3) |
 | F3 Steps 3 to 7 (AI container, provider, wording) | F3 Step 2b go decision |
 | F22 Steps 1 and 2 (cases on findings) | F6 |
-| F22 Steps 3 to 6 (GitHub connection) | F22 Step 2 |
+| F22 Steps 3 to 6 (GitHub connection) | F22 Step 2. Built against a simulated GitHub; the founder tests real GitHub after Phase 2 (foundation item 28) |
 | F22 Step 7 (Jira) | Atlassian's written yes |
-| F4 Steps 2 onward (chat panel) | F3's provider (F3 Step 4); the buyer-conversation rule (foundation, *Founder decisions*) |
-| F5 Steps 1 and 2 (deploy line, brief; the checks) | F28's release facts and F3's fix brief; the buyer round and the GitHub trial (F5 D64) |
+| F4 Steps 2 onward (chat panel) | F3's provider (F3 Step 4). Not the buyer round (foundation item 27, 2026-11-08) |
+| F5 Steps 1 and 2 (deploy line, brief; the checks) | F28's release facts and F3's fix brief. Not the buyer round or the GitHub trial (foundation items 27, 28, 2026-11-08) |
 | F5 Step 2b (general suggestion without code access) | F5 Step 2; F3's provider (F3 Step 4). **Not F22,** so it can ship before rung 3 (F5 D72) |
 | F5 Steps 3 onward (rung 3 and up) | F22's GitHub connection (F22 Steps 3 to 6) |
 | F19 Steps 1 to 3 | F6; for T1.5, F3's floor (F3 T1.7), or F19 builds it first (F19 plan P3) |
