@@ -2,7 +2,7 @@
 
 ## Current verified behavior
 
-Postgres holds control-plane state: organizations, users, sessions, projects, API/site keys, plans and billing arrangements, checks, integrations, deploy events, source-map metadata, usage, audit log, and alerting — notification channels (secrets sealed per ADR-010), rules, per-subject evaluation positions, incidents, the notifications outbox and its delivery log (ADR-013), per-service last-seen times written by the usage meter, per-day usage including profile samples (shown, not billed while profiling is in preview), and the error groups each project has seen.
+Postgres holds control-plane state: organizations, users, sessions, projects, API/site keys, plans and billing arrangements, checks, integrations, deploy events, source-map metadata, usage, audit log, and alerting — notification channels (secrets sealed per ADR-010), rules, per-subject evaluation positions, incidents, the notifications outbox and its delivery log (ADR-013), per-service last-seen times written by the usage meter (from every door but the browser's), per-day usage including profile samples (shown, not billed while profiling is in preview), and the error groups each project has seen.
 
 Anomaly detection (F6, migrations 0041 to 0049) added:
 

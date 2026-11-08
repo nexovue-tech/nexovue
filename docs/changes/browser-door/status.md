@@ -265,3 +265,5 @@ Found while reading; recorded here rather than editing other features' documents
 The usage meter's writing of browser-door service names into Postgres `service_last_seen` (read by the "went silent"
 alert) is to be fixed **as its own small follow-up change** under `docs/changes/`, as recommended. It is not part of this
 record's approved scope.
+
+Opened as [`docs/changes/browser-door-last-seen/`](../browser-door-last-seen/change.md) on 2026-11-08.
