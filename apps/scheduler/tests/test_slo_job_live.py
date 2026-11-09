@@ -681,15 +681,25 @@ def _traffic(
     write_service(client, tenant, SERVICE, counts)
 
 
+# The incidents `judge_slos` writes are about one target each (`slo:<id>`, its burn and
+# its notices). The dev stack's delivery sweep, which CI runs beside this suite, also
+# files a project's *not being judged* notice under `slo_burn` (`slo-project:<id>:blind`,
+# FR13b): rightly, since these tests judge minutes hours old. It is not this suite's
+# subject (`test_slo_blind_live.py` is), so each read here leaves it out.
+_ABOUT_A_TARGET: Final = "subject_key LIKE 'slo:%'"
+
+
 async def _incidents(engine: AsyncEngine, tenant: AlertTenant) -> list[Any]:
     async with engine.connect() as connection:
         return list(
             await connection.execute(
                 text(
-                    """
+                    f"""
                     SELECT id, subject_key, subject_label, severity, resolved_at, detail,
                            rule_name, is_event
-                    FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn'
+                    FROM incidents
+                    WHERE org_id = :org_id AND condition_kind = 'slo_burn'
+                      AND {_ABOUT_A_TARGET}
                     ORDER BY opened_at, id
                     """
                 ),
@@ -702,10 +712,11 @@ async def _notifications(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple
     async with engine.connect() as connection:
         rows = await connection.execute(
             text(
-                """
+                f"""
                 SELECT n.kind, n.severity FROM notifications n
                 JOIN incidents i ON i.id = n.incident_id
                 WHERE n.org_id = :org_id AND i.condition_kind = 'slo_burn'
+                  AND i.{_ABOUT_A_TARGET}
                 ORDER BY n.created_at, n.id
                 """
             ),
@@ -1273,7 +1284,8 @@ async def test_t5_2_a_burn_s_incident_says_which_service_and_type_it_is_about(
             await connection.execute(
                 text(
                     "SELECT about_key, about_signal, about_endpoint, about_check_id "
-                    "FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn'"
+                    "FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn' "
+                    f"AND {_ABOUT_A_TARGET}"
                 ),
                 {"org_id": project.org_id},
             )

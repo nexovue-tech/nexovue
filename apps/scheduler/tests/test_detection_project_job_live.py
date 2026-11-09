@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -62,7 +63,7 @@ from nexovue_platform.detection import TOO_MANY_SERVICES_KEY, WINDOW_REQUESTS_KE
 from nexovue_platform.evidence import GATHER_EVIDENCE_TASK
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from nexovue_scheduler.alerts import incidents
 from nexovue_scheduler.alerts.rules import Rule
@@ -79,6 +80,7 @@ from nexovue_scheduler.detection.projects import ActiveProject, active_projects
 from nexovue_scheduler.detection.store import (
     READINGS_TABLE,
     DetectionStore,
+    ProjectBinding,
     bind_project,
 )
 from nexovue_scheduler.jobs.registry import SoftTimeLimit
@@ -1532,7 +1534,7 @@ async def test_a_person_resolving_while_the_job_closes_and_opens_cannot_deadlock
 
 
 async def _evidence_jobs(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple[str, str, float]]:
-    """F3's queued gathers for the tenant: (finding, reason, seconds of delay)."""
+    """F3's gathers still in the queue for the tenant: (finding, reason, seconds of delay)."""
     async with engine.connect() as connection:
         rows = await connection.execute(
             text(
@@ -1544,11 +1546,95 @@ async def _evidence_jobs(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple
         return [(row.kwargs["finding_id"], row.kwargs["reason"], float(row.delay)) for row in rows]
 
 
+# F3's gathers are proved by the transaction that added them, never by the queue: the dev
+# stack's own `evidence` worker, which CI runs beside this suite, claims an immediate gather
+# within a second and deletes it once it has run (`jobs/queue.py`, `_FINISH`). So what a
+# transaction wrote is read inside it, on its own connection (rows whose `xmin` is its id),
+# and whether it committed is asked of Postgres afterwards (`pg_xact_status`), which no
+# worker can change.
+_THIS_TRANSACTION: Final = "pg_current_xact_id()"
+_WRITTEN_HERE: Final = f"xmin = {_THIS_TRANSACTION}::xid"
+
+
+@dataclass(frozen=True, slots=True)
+class _Transaction:
+    """One service transaction of the project job, as it stood just before its commit."""
+
+    xact: int
+    # Each finding this transaction inserted or changed: its state.
+    findings: dict[str, str]
+    # Each gather it added: (finding, reason, seconds of delay).
+    gathers: list[tuple[str, str, float]]
+
+
+async def _this_transaction(connection: AsyncConnection, org_id: object) -> _Transaction:
+    xact = (
+        await connection.execute(text(f"SELECT CAST({_THIS_TRANSACTION}::text AS bigint)"))
+    ).scalar_one()
+    findings = await connection.execute(
+        text(f"SELECT id, state FROM findings WHERE org_id = :org_id AND {_WRITTEN_HERE}"),
+        {"org_id": org_id},
+    )
+    gathers = await connection.execute(
+        text(
+            "SELECT kwargs, extract(epoch FROM run_after - created_at) AS delay FROM jobs "
+            f"WHERE org_id = :org_id AND task = :task AND {_WRITTEN_HERE} ORDER BY run_after"
+        ),
+        {"org_id": org_id, "task": GATHER_EVIDENCE_TASK},
+    )
+    return _Transaction(
+        xact=xact,
+        findings={str(row.id): row.state for row in findings},
+        gathers=[
+            (row.kwargs["finding_id"], row.kwargs["reason"], float(row.delay)) for row in gathers
+        ],
+    )
+
+
+async def _fates(engine: AsyncEngine, transactions: list[_Transaction]) -> list[str]:
+    """Whether each transaction committed or aborted, from Postgres's commit log."""
+    async with engine.connect() as connection:
+        return [
+            (
+                await connection.execute(
+                    text("SELECT pg_xact_status(CAST(:xact AS xid8))"), {"xact": each.xact}
+                )
+            ).scalar_one()
+            for each in transactions
+        ]
+
+
+@pytest.fixture
+def service_transactions(monkeypatch: pytest.MonkeyPatch) -> list[_Transaction]:
+    """Each service transaction the project job runs, read at its last statement
+    (`_advance`, which moves the service's judged minute), on the transaction's own
+    connection."""
+    seen: list[_Transaction] = []
+    advance = project_job._advance
+
+    async def observed(
+        connection: AsyncConnection,
+        binding: ProjectBinding,
+        state: ServiceState,
+        judged: datetime,
+        signals: dict[str, Any],
+    ) -> None:
+        await advance(connection, binding, state, judged, signals)
+        seen.append(await _this_transaction(connection, binding.org_id))
+
+    monkeypatch.setattr(project_job, "_advance", observed)
+    return seen
+
+
 async def test_an_opening_adds_its_two_reads_and_a_close_its_last_in_its_transaction(
-    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    service_transactions: list[_Transaction],
 ) -> None:
     """F3 AC2, AC79: opening adds `opened` now and `settled` in 5 minutes, and closing adds
-    `closed`, each in the transaction that changed the finding (A1)."""
+    `closed`, each in the transaction that changed the finding (A1), and both committed."""
     _seed_four_weeks(administrator, project)
     await _baselines(engine, store, project)
     minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
@@ -1556,14 +1642,23 @@ async def test_an_opening_adds_its_two_reads_and_a_close_its_last_in_its_transac
     await _judge_through(engine, store, project, minutes)
 
     (finding,) = await _findings(engine, project)
-    jobs = await _evidence_jobs(engine, project)
-    assert [(f, reason) for f, reason, _ in jobs] == [
-        (str(finding.id), "opened"),
-        (str(finding.id), "settled"),
-        (str(finding.id), "closed"),
+    assert (finding.state, finding.closed_reason) == ("closed", "recovered")
+    finding_id = str(finding.id)
+    wrote = [each for each in service_transactions if finding_id in each.findings]
+    opening = wrote[0]
+    closing = next(each for each in wrote if each.findings[finding_id] == "closed")
+    assert opening.findings[finding_id] == "open"
+    # Only the opening and the closing added gathers, and each its own.
+    assert [each for each in service_transactions if each.gathers] == [opening, closing]
+    assert [(f, reason) for f, reason, _ in opening.gathers] == [
+        (finding_id, "opened"),
+        (finding_id, "settled"),
     ]
-    delays = {reason: delay for _, reason, delay in jobs}
-    assert delays["opened"] < 5 and 295 < delays["settled"] < 305
+    assert [(f, reason) for f, reason, _ in closing.gathers] == [(finding_id, "closed")]
+    delays = {reason: delay for _, reason, delay in opening.gathers + closing.gathers}
+    assert delays["opened"] < 5 and 295 < delays["settled"] < 305 and delays["closed"] < 5
+    # Each was committed with the change it rides on.
+    assert await _fates(engine, [opening, closing]) == ["committed", "committed"]
 
 
 async def test_an_opening_that_fails_to_commit_leaves_no_job_behind(
@@ -1590,12 +1685,26 @@ async def test_an_opening_that_fails_to_commit_leaves_no_job_behind(
             text("DELETE FROM jobs WHERE org_id = :org_id"), {"org_id": project.org_id}
         )
 
-    async def killed(*_: object, **__: object) -> None:
+    dying: list[_Transaction] = []
+
+    async def killed(connection: AsyncConnection, binding: ProjectBinding, *_: object) -> None:
+        dying.append(await _this_transaction(connection, binding.org_id))
         raise RuntimeError("killed between the opening and the commit")
 
     monkeypatch.setattr(project_job, "_advance", killed)
     with pytest.raises(RuntimeError, match="killed"):
         await judge_project(engine, store, project.project_id, settled=opening, now=opening)
 
+    # The opening and its two reads were written in the transaction that was killed...
+    (killed_opening,) = dying
+    (finding_id,) = killed_opening.findings
+    assert killed_opening.findings[finding_id] == "open"
+    assert [(f, reason) for f, reason, _ in killed_opening.gathers] == [
+        (finding_id, "opened"),
+        (finding_id, "settled"),
+    ]
+    # ...and it aborted, so neither survives: Postgres's own record, which no worker
+    # claiming from the queue can change.
+    assert await _fates(engine, dying) == ["aborted"]
     assert await _findings(engine, project) == []
     assert await _evidence_jobs(engine, project) == []

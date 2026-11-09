@@ -22,6 +22,7 @@ from __future__ import annotations
 import socket
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -46,9 +47,10 @@ from detection_history import seed as _seed
 from detection_history import seed_four_weeks as _seed_four_weeks
 from detection_history import span as _span
 from live import require_stack
-from nexovue_platform.evidence import GATHER_EVIDENCE_TASK
+from nexovue_platform.evidence import EVIDENCE_QUEUE, GATHER_EVIDENCE_TASK
+from nexovue_platform.jobs import JobRequest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.detection import project_job
 from nexovue_scheduler.detection.store import DetectionStore
@@ -105,6 +107,38 @@ class _ReadsFail:
             raise ConnectionError("ClickHouse is down for the evidence job")
 
         return failing
+
+
+# The dev stack's own `evidence` worker, which CI runs beside this suite, claims a due
+# gather within a second and runs it with the real store, before any arm has chosen what
+# the evidence job does: measured, the `opened` and `closed` gathers had already run in
+# every arm, `unregistered` and `backed_up` included. So the outage's gathers are added to
+# a queue no worker claims, and each arm alone decides which of them run, and how.
+_HELD_QUEUE: Final = "evidence-held-by-test-detection-unmoved"
+
+
+def _hold_gathers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Detection adds its gathers as it would, in the opening's transaction, to the held
+    queue instead of the `evidence` one."""
+    enqueue = queue.enqueue
+
+    async def held(connection: AsyncConnection, request: JobRequest, *, wake: bool = False) -> None:
+        if request.task == GATHER_EVIDENCE_TASK:
+            assert request.queue == EVIDENCE_QUEUE
+            request = replace(request, queue=_HELD_QUEUE)
+        await enqueue(connection, request, wake=wake)
+
+    monkeypatch.setattr(queue, "enqueue", held)
+
+
+async def _explanations(engine: AsyncEngine, tenant: AlertTenant) -> int:
+    """How many evidence records any gather has written for the tenant."""
+    async with engine.connect() as connection:
+        written = await connection.execute(
+            text("SELECT count(*) FROM finding_explanations WHERE org_id = :org_id"),
+            {"org_id": tenant.org_id},
+        )
+        return int(written.scalar_one())
 
 
 async def _projection(engine: AsyncEngine, tenant: AlertTenant) -> tuple[list[Any], list[Any]]:
@@ -204,9 +238,13 @@ ARMS: Final[dict[str, Callable[[AsyncEngine, AlertTenant], Awaitable[None]]]] = 
 
 
 async def test_detection_and_its_alerts_are_the_same_in_every_step_1_arm(
-    engine: AsyncEngine, store: DetectionStore, administrator: Client
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC48, Step 1: the opened and resolved rows match whatever the evidence job does."""
+    _hold_gathers(monkeypatch)
     projections: dict[str, tuple[list[Any], list[Any]]] = {}
     for arm, evidence in ARMS.items():
         tenant = await make_tenant(engine, with_check=False)
@@ -214,6 +252,10 @@ async def test_detection_and_its_alerts_are_the_same_in_every_step_1_arm(
             delete_after_run(table, str(tenant.org_id))
         try:
             await _outage(engine, store, administrator, tenant)
+            # Every gather the outage asked for waits, none has run: the arm's to decide.
+            gathers = sorted(job["reason"] for job in await _queued_gathers(engine, tenant))
+            assert gathers == ["closed", "opened", "settled"], arm
+            assert await _explanations(engine, tenant) == 0, arm
             await evidence(engine, tenant)
             projections[arm] = await _projection(engine, tenant)
         finally:

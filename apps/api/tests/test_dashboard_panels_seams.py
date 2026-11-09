@@ -7,7 +7,8 @@ disconnect, a real uvicorn server:
 
 - **AC19, live, ClickHouse's limit first.** With the statement limit below the batch's
   deadline, ClickHouse answers `TIMEOUT_EXCEEDED` and the panel reads `timed_out`,
-  never `refused` or `failed`, and the response is a 200 carrying the panels that read.
+  never `refused` or `failed`, and the response is a 200 carrying the panels that read,
+  inside the batch's deadline counted from the request's arrival.
 - **AC18.** A client that drops mid-batch: scans not started do not start, and every
   cap place is free once the statement ends. What ClickHouse did with the running
   statement is recorded in `system.processes` and printed.
@@ -43,9 +44,15 @@ from test_findings_cases_live import Team, _team, db  # noqa: F401
 
 from nexovue_api.dashboardpanels import scans, service, shared_reads
 from nexovue_api.dashboardpanels.caps import DASHBOARD_SCANS_PER_PROCESS
-from nexovue_api.dashboardpanels.shared_reads import Answer, ReadKey, SharedReads
+from nexovue_api.dashboardpanels.shared_reads import (
+    TIMEOUT_EXCEEDED,
+    Answer,
+    ReadKey,
+    SharedReads,
+)
 from nexovue_api.dashboards.compile import PROJECT_TREND, ScanKey
-from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.data.clickhouse.base import TenantScopedRepository, server_error_code
+from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.settings import API_PREFIX
 
 # Half a second a row, one row a block, so ClickHouse checks its limit between rows.
@@ -77,8 +84,15 @@ async def acme(db: AsyncSession) -> Team:  # noqa: F811
 
 
 @pytest.fixture
-def slow_reader(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """The project trend's reader replaced by the slow statement; each start is recorded."""
+def stopped_with() -> list[int | None]:
+    """ClickHouse's error code for each slow statement that ended in an error."""
+    return []
+
+
+@pytest.fixture
+def slow_reader(monkeypatch: pytest.MonkeyPatch, stopped_with: list[int | None]) -> list[float]:
+    """The project trend's reader replaced by the slow statement; each start is recorded,
+    and how each that failed was stopped."""
     started: list[float] = []
 
     async def slow(
@@ -89,7 +103,11 @@ def slow_reader(monkeypatch: pytest.MonkeyPatch) -> list[float]:
         window_end: datetime,
     ) -> Answer:
         started.append(time.monotonic())
-        rows = await repository.query(SLOW_SQL, {"project_id": project_id, "rows": SLOW_ROWS})
+        try:
+            rows = await repository.query(SLOW_SQL, {"project_id": project_id, "rows": SLOW_ROWS})
+        except Exception as error:
+            stopped_with.append(server_error_code(error))
+            raise
         return Answer(value=rows, rows=len(rows), read_at=datetime.now(UTC))
 
     monkeypatch.setitem(scans.READERS, PROJECT_TREND, slow)
@@ -131,6 +149,7 @@ async def test_ac19_clickhouses_own_limit_first_reads_timed_out_and_the_rest_ans
     acme: Team,
     reader: AsyncClient,  # noqa: F811
     slow_reader: list[float],
+    stopped_with: list[int | None],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(service, "SHARED_READ_STATEMENT_SECONDS", SHORT_LIMIT_SECONDS)
@@ -140,9 +159,9 @@ async def test_ac19_clickhouses_own_limit_first_reads_timed_out_and_the_rest_ans
         _panel("p_slow", "project_trend", signal="rate"),
         _panel("p_fast", "service_trend", service="checkout", signal="rate"),
     )
-    started = time.monotonic()
-
     async with _app_client(db, acme, acme.member, reader) as client:
+        # AC19's clock starts at the request's arrival; building the app is the harness's.
+        sent = time.monotonic()
         answer = await client.get(
             f"{API_PREFIX}/dashboard-panels/read",
             params={
@@ -151,12 +170,18 @@ async def test_ac19_clickhouses_own_limit_first_reads_timed_out_and_the_rest_ans
                 "range": "1h",
             },
         )
+        answered = time.monotonic() - sent
 
     assert answer.status_code == 200
     panels = answer.json()["panels"]
     assert panels["p_slow"] == {"state": "timed_out", "kind": "project_trend"}
     assert panels["p_fast"]["state"] in {"not_in_project", "empty", "ok"}
-    assert time.monotonic() - started < SHORT_LIMIT_SECONDS + 3
+    # ClickHouse's own limit fired first: the statement was stopped by TIMEOUT_EXCEEDED
+    # before the batch answered, which the batch's deadline (20 s) could not have done,
+    # since the reader profile lets a statement run 30 s.
+    assert stopped_with == [TIMEOUT_EXCEEDED]
+    # AC19's promise: the batch never spends more than its deadline from arrival.
+    assert answered < PANEL_READ_DEADLINE_SECONDS, f"answered in {answered:.1f} s"
 
 
 # ------------------------------------------------------------------- AC18
