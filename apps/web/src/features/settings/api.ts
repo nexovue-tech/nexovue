@@ -231,6 +231,8 @@ export interface ConnectionView {
   last_failure: string | null;
   last_failure_status: number | null;
   repositories: ConnectionPlace[];
+  /** Issues this connection keeps in step: Disconnect's real count (FR32). */
+  synced_links?: number;
 }
 
 export interface ConnectionsOverview {

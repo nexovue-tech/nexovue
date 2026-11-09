@@ -73,6 +73,44 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "This email carries no details on purpose. The case page has the evidence "
         "and the notes.",
     ),
+    Message.CASE_TRACKER_CLOSED: (
+        "The issue for a case on {service} was closed, so the case is resolved",
+        "The tracker issue linked to a case on {service} was closed, so nexovue resolved "
+        "the case.\n\nIf that was wrong, reopen it in nexovue:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence and "
+        "the notes.",
+    ),
+    Message.CASE_TRACKER_CLOSED_SIGNAL_OPEN: (
+        "The issue for a case on {service} was closed, and the problem is still measured",
+        "The tracker issue linked to a case on {service} was closed, but the signal has not "
+        "recovered, so the case stays open in nexovue. It resolves by itself once the signal "
+        "recovers, or you can resolve it now:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence and "
+        "the notes.",
+    ),
+    Message.CASE_IDLE_WARNING: (
+        "A case on {service} ends by itself on {ends_on}",
+        "Nobody has acted on a case on {service} in nexovue for a while. It ends by itself "
+        "on {ends_on} unless someone adds a note or resolves it:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence and "
+        "the notes.",
+    ),
+    Message.CONNECTION_NEEDS_ATTENTION: (
+        "{tracker} needs attention in nexovue",
+        "nexovue cannot use its {tracker} connection: {what} Issues are not kept in step "
+        "until it is fixed. Cases still work.\n\nFix it here:\n\n{link}",
+    ),
+    Message.CONNECTION_FAILING: (
+        "nexovue has not reached {tracker} for a day",
+        "nexovue has not reached {tracker} since {failing_since} and keeps trying: {what} "
+        "Issues are not kept in step meanwhile. Cases still work.\n\n"
+        "See the connection:\n\n{link}",
+    ),
+    Message.CONNECTION_EXPIRING: (
+        "The {tracker} credential nexovue uses expires on {expires_on}",
+        "The {tracker} credential nexovue uses expires on {expires_on}. Replace it before "
+        "then, or issues stop being kept in step:\n\n{link}",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform.alerts.model import SEVERITIES
+from nexovue_platform.connections import COMMENT_KINDS, ISSUE_STATES
 from nexovue_platform.detection import CASE_RESOLUTIONS, CLOSED_REASONS, FINDING_EVENT_KINDS
 
 # Who did a thing to a case: a person, nexovue itself, or the tracker's side.
@@ -318,13 +319,18 @@ def join_open_parameters(
 
 
 # What the synced issue should become, and the one comment owed with it (BR10,
-# D72). `finding_links` arrives with Step 4; the statement is shared from the
-# start so the API, the sync and the sweep cannot drift on its shape.
+# D72). Shared so the API, the sync and the sweep cannot drift on its shape. When
+# the act wants what the tracker was last seen to say, nothing is pending: the
+# wanted state goes back to null, and so does a comment owed with no change to make.
 SET_WANTED_STATE_SQL: Final = """
 UPDATE finding_links
-SET wanted_state = :wanted_state, comment_wanted = :comment_wanted, next_sync_at = :at
+SET wanted_state = CASE WHEN seen_state IS NOT DISTINCT FROM :wanted_state THEN NULL
+                        ELSE :wanted_state END,
+    comment_wanted = CASE WHEN seen_state IS NOT DISTINCT FROM :wanted_state THEN NULL
+                          ELSE :comment_wanted END,
+    next_sync_at = :at
 WHERE org_id = :org_id AND finding_id = :finding_id
-  AND role = 'synced' AND sync_status <> 'stopped'
+  AND role = 'synced' AND sync_status NOT IN ('stopped', 'refused')
 RETURNING id
 """
 
@@ -333,10 +339,14 @@ def set_wanted_state_parameters(
     *,
     org_id: Any,
     finding_id: Any,
-    wanted_state: str | None,
+    wanted_state: str,
     comment_wanted: str | None,
     at: datetime,
 ) -> dict[str, Any]:
+    if wanted_state not in ISSUE_STATES:
+        raise ValueError(f"wanted_state must be one of {ISSUE_STATES}, got {wanted_state!r}")
+    if comment_wanted is not None and comment_wanted not in COMMENT_KINDS:
+        raise ValueError(f"comment_wanted must be one of {COMMENT_KINDS}, got {comment_wanted!r}")
     return {
         "org_id": str(org_id),
         "finding_id": str(finding_id),
@@ -344,6 +354,21 @@ def set_wanted_state_parameters(
         "comment_wanted": comment_wanted,
         "at": at,
     }
+
+
+# Whatever resolves a case ends a hold (D73): the synced issue's "closed in the tracker
+# while the signal was open" mark goes in that transaction, so the page stops saying so.
+CLEAR_HOLD_SQL: Final = """
+UPDATE finding_links
+SET tracker_closed_at = NULL
+WHERE org_id = :org_id AND finding_id = :finding_id
+  AND role = 'synced' AND sync_status <> 'stopped' AND tracker_closed_at IS NOT NULL
+RETURNING id
+"""
+
+
+def clear_hold_parameters(*, org_id: Any, finding_id: Any) -> dict[str, Any]:
+    return {"org_id": str(org_id), "finding_id": str(finding_id)}
 
 
 # One owed case email (D90, AC94): a row per email, so a second owed before the

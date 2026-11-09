@@ -219,6 +219,49 @@ class EarlierCase(BaseModel):
     case_activity_at: datetime
 
 
+LinkStatus = Literal[
+    "creating",
+    "promoting",
+    "in_sync",
+    "waiting",
+    "needs_attention",
+    "refused",
+    "gone",
+    "not_followed",
+    "stopped",
+]
+LinkRole = Literal["synced", "reference"]
+IssueState = Literal["open", "closed"]
+
+
+class CaseLink(BaseModel):
+    """One tracker issue on a case (F22, FR35 to FR41), as a person reads it. The address
+    is built by nexovue from the strict key, never stored (D81); no title or tracker
+    text exists to show. A token never sees links (FR20)."""
+
+    id: uuid.UUID
+    kind: str | None
+    role: LinkRole
+    sync_status: LinkStatus
+    # `acme/api#412`; None while it is being created, or if creation was refused.
+    external_key: str | None
+    url: str | None
+    # The repository it lives in, by its strict key; None once that place is gone.
+    place_key: str | None
+    seen_state: IssueState | None
+    wanted_state: IssueState | None
+    # A comment is owed and not yet written (BR10).
+    comment_owed: bool
+    # Closed in the tracker while the case signal was open: the hold (D73).
+    tracker_closed_at: datetime | None
+    last_synced_at: datetime | None
+    created_at: datetime
+    # Why it waits or needs a person, as an enum (FR44); the console words it.
+    last_failure: str | None
+    # Whether a retry can help (FR44): offered only then.
+    retry_helps: bool
+
+
 class FindingForMember(FindingDetail):
     """A signed-in person's view of one finding. An API token never sees these fields:
     they name a person and quote what they wrote (design 2.1, item 8), or prepare an
@@ -257,6 +300,8 @@ class FindingForMember(FindingDetail):
     deletes_on: datetime | None
     # How many findings that joined this case are still kept (FR24, AC112).
     joined_kept_count: int
+    # ---- the case's tracker issues (F22 T4.3), the root's for a joined finding.
+    links: list[CaseLink] = Field(default_factory=list)
 
 
 # Long enough for a sentence or two about why; bounded so a reason is not a document.
@@ -288,6 +333,8 @@ class CaseChangeRequest(BaseModel):
     assignee_id: uuid.UUID | None = None
     expected_assignee_id: uuid.UUID | None = None
     expected_case_state: CaseState | None = None
+    # FR6, D72: resolve here and leave the synced issue open: no close, no comment.
+    leave_issue_open: bool = False
 
 
 class CaseChanged(BaseModel):
@@ -404,3 +451,30 @@ class FindingStats(BaseModel):
     # Each service with a finding opened in the window, most false alarms first. A
     # project finding spans several services, so it counts for the project alone.
     services: list[ServiceFindingStats]
+
+
+class IssuePreview(BaseModel):
+    """Exactly what an issue would say (FR35, AC83): fixed words, numbers and the
+    service's strict name, built by the same function the job writes with."""
+
+    place_id: uuid.UUID
+    place_key: str
+    title: str
+    body: str
+    # BR12: a public repository nobody allowed refuses creation; the panel says so.
+    public: bool
+    refusal: str | None
+
+
+class CreateLinkRequest(BaseModel):
+    """`POST /findings/{id}/links`: create an issue in one of the connection's places.
+    Attaching a pasted address as a reference is Step 6's (FR40)."""
+
+    place_id: uuid.UUID
+
+
+class LinkChanged(BaseModel):
+    """What a link act did: the finding as it now is, and the link it made or moved."""
+
+    finding: FindingForMember
+    link_id: uuid.UUID

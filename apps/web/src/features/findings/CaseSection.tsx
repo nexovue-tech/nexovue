@@ -11,6 +11,7 @@ import { useCan, useSession } from "@/shared/identity";
 import type { EmailOutcome, FindingDetail } from "./api";
 import { useCaseChange, useRootCase } from "./api";
 import { CaseLine } from "./CaseLine";
+import { CreateIssuePanel } from "./CreateIssuePanel";
 import type { CaseAction } from "./finding-page";
 import {
   caseActions,
@@ -21,6 +22,9 @@ import {
   keptSentence,
   SIGNAL_NAMES,
 } from "./finding-page";
+import { LinksList } from "./LinksList";
+import type { IssueOutcome } from "./link-words";
+import { holdLine, resolveChoice, resolveDoneSentence, syncedLink } from "./link-words";
 import { NoteBox } from "./NoteBox";
 import { ReassignPanel } from "./ReassignPanel";
 import { Timeline } from "./Timeline";
@@ -50,12 +54,13 @@ export function CaseSection({
   const session = useSession();
   const inSupportView = Boolean(session.data?.support_view);
   const canOperate = useCan("operate_cases") && !inSupportView;
+  const admin = useCan("manage_connections");
   const viewerId = session.data?.user.id ?? null;
   const rootQuery = useRootCase(finding.root_finding_id);
   const change = useCaseChange(finding.id);
   // FR13: Reopen that case acts on the earlier case, not on this finding.
   const reopenEarlier = useCaseChange(finding.earlier_case?.id ?? finding.id);
-  const [armed, setArmed] = useState<"resolve" | "reassign" | null>(null);
+  const [armed, setArmed] = useState<"resolve" | "reassign" | "create-issue" | null>(null);
   const [done, setDone] = useState("");
   const [changedMeanwhile, setChangedMeanwhile] = useState("");
   const line = useRef<HTMLParagraphElement>(null);
@@ -80,6 +85,24 @@ export function CaseSection({
 
   const landOnTheLine = () => setTimeout(() => line.current?.focus(), 0);
 
+  const choice = resolveChoice(root);
+  const issueOutcome = (input: Parameters<typeof change.mutate>[0]): IssueOutcome | null => {
+    if (choice.kind === "held") return "already_closed";
+    if (choice.kind !== "synced") return null;
+    return input.leave_issue_open ? "left_open" : "will_close";
+  };
+  const doneSentence = (action: CaseAction, input: Parameters<typeof change.mutate>[0]) => {
+    const outcome = action === "resolve" ? issueOutcome(input) : null;
+    if (outcome == null || (choice.kind !== "synced" && choice.kind !== "held")) {
+      return caseDoneSentence(action, { hasPagerDuty });
+    }
+    // Spec, *Words after an action*: the issue's line, then FR48's when it applies.
+    const pagerDuty = hasPagerDuty
+      ? " PagerDuty is not told, so a live page stays until the signal recovers."
+      : "";
+    return `${resolveDoneSentence(choice.issueKey, outcome)}${pagerDuty}`;
+  };
+
   const run = (action: CaseAction, input: Parameters<typeof change.mutate>[0]) => {
     setDone("");
     setChangedMeanwhile("");
@@ -87,7 +110,7 @@ export function CaseSection({
     change.mutate(input, {
       onSuccess: () => {
         setArmed(null);
-        setDone(caseDoneSentence(action, { hasPagerDuty }));
+        setDone(doneSentence(action, input));
         landOnTheLine();
       },
       onError: (error) => {
@@ -107,6 +130,9 @@ export function CaseSection({
   const earlier = isJoined ? null : (finding.earlier_case ?? null);
   const ending = caseEndingSentence(root, zone);
   const kept = keptSentence(root, zone);
+  const hold = root.case_state === "investigating" ? holdLine(root, zone) : null;
+  const links = root.links ?? [];
+  const canCreateIssue = canOperate && root.case_state !== "resolved" && syncedLink(root) == null;
 
   return (
     <section aria-label="The case" className="flex flex-col gap-3">
@@ -130,6 +156,12 @@ export function CaseSection({
         </p>
       ) : null}
       <CaseLine ref={line} view={{ finding: root, root, viewerId, zone }} />
+      {hold != null ? (
+        // D73, AC93: the tracker closed it while the problem is still measured.
+        <p className={`text-ink text-sm ${PROSE}`} data-testid="hold-line">
+          {hold}
+        </p>
+      ) : null}
       {earlier != null ? (
         // FR9, FR13: the service's earlier case, named and linked.
         <p className={`text-ink text-sm ${PROSE}`}>
@@ -203,11 +235,10 @@ export function CaseSection({
               pending={change.isPending && armed !== "resolve"}
               pendingLabel="Resolving"
               onClick={() => {
-                // FR6: one tap with the signal closed; a confirmation that says
-                // so when the problem is still measured. The synced-link
-                // confirmations arrive with the links in Step 4.
-                if (root.case_signal === "open") setArmed("resolve");
-                else run("resolve", { case_state: "resolved" });
+                // FR6, AC92: one tap only with no synced issue and the signal closed;
+                // otherwise a confirmation that names what Resolve does.
+                if (choice.kind === "one_tap") run("resolve", { case_state: "resolved" });
+                else setArmed("resolve");
               }}
             >
               Resolve
@@ -220,6 +251,15 @@ export function CaseSection({
               onClick={() => setArmed("reassign")}
             >
               Reassign
+            </Button>
+          ) : null}
+          {canCreateIssue ? (
+            <Button
+              variant="secondary"
+              className={CASE_ACTION}
+              onClick={() => setArmed("create-issue")}
+            >
+              Create an issue
             </Button>
           ) : null}
           {actions.reopen ? (
@@ -235,20 +275,34 @@ export function CaseSection({
         </div>
       ) : null}
 
-      {armed === "resolve" ? (
+      {armed === "resolve" && choice.kind !== "one_tap" ? (
         <ConfirmPanel label="Resolve">
-          <p className={PROSE}>
-            The signal is still open: the problem is still being measured. Resolving says the work
-            is done anyway.
-          </p>
-          <div className="flex gap-2">
+          {choice.sentences.map((sentence) => (
+            <p key={sentence} className={PROSE}>
+              {sentence}
+            </p>
+          ))}
+          {choice.kind === "signal_open" ? (
+            <p className={PROSE}>Resolving says the work is done anyway.</p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
             <Button
-              pending={change.isPending}
+              pending={change.isPending && !change.variables?.leave_issue_open}
               pendingLabel="Resolving"
               onClick={() => run("resolve", { case_state: "resolved" })}
             >
-              Resolve
+              {choice.kind === "synced" ? "Resolve and close the issue" : "Resolve"}
             </Button>
+            {choice.kind === "synced" ? (
+              <Button
+                variant="secondary"
+                pending={change.isPending && Boolean(change.variables?.leave_issue_open)}
+                pendingLabel="Resolving"
+                onClick={() => run("resolve", { case_state: "resolved", leave_issue_open: true })}
+              >
+                Resolve here, leave the issue open
+              </Button>
+            ) : null}
             <Button
               variant="secondary"
               onClick={() => {
@@ -302,11 +356,38 @@ export function CaseSection({
         <InlineFailure title="That case could not be reopened" error={reopenEarlier.error} />
       ) : null}
 
+      {armed === "create-issue" ? (
+        <CreateIssuePanel
+          findingId={finding.id}
+          admin={admin}
+          onCreated={() => {
+            setArmed(null);
+            onOwnAct();
+            setDone("Asked for the issue. The link below shows when it exists.");
+            landOnTheLine();
+          }}
+          onCancel={() => {
+            setArmed(null);
+            landOnTheLine();
+          }}
+        />
+      ) : null}
+
       {inSupportView ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>Hidden during support view</p>
       ) : (
         <NoteBox findingId={finding.id} />
       )}
+
+      <LinksList
+        findingId={finding.id}
+        links={links}
+        caseActive={root.case_state === "investigating"}
+        admin={admin}
+        canOperate={canOperate}
+        viewerId={viewerId}
+        zone={zone}
+      />
 
       <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Timeline</h3>
       <Timeline findingId={finding.id} zone={zone} />

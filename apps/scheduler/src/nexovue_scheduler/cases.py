@@ -12,7 +12,11 @@ the repair of races the design accepts rather than prevents:
 4. **ends untouched cases** (FR49): taken and nothing more, with the root and every
    joined finding closed for 72 hours, as `recovered_untouched`;
 5. **starts the idle warning** at 76 days, owing one `idle_warning` email (FR26,
-   D90). Sending owed emails, and a synced issue's comment, arrive with Step 4.
+   D90), and asking the synced issue for its one idle comment, which the sync job
+   writes (AC97): the sweep itself makes no tracker call and holds no tracker key;
+6. **sends what is owed** (`case_emails.py`): case emails, and each connection's
+   failure and expiry notices (FR33), from `scheduler-light`, which holds the mail
+   settings.
 
 It runs with no connection and no tracker, which is why it is not in
 `connections`. It holds no person, so its endings write `audit_log` with no actor,
@@ -37,23 +41,19 @@ from nexovue_platform.cases import (
     CASE_IDLE_WARNING_AHEAD,
     CASE_JOIN_WINDOW,
     CASE_UNTOUCHED_AFTER,
-    DETACH_OPEN_JOINED_SQL,
-    RECORD_CASE_AUDIT_SQL,
     RECORD_EMAIL_OWED_SQL,
-    RECORD_FINDING_EVENT_SQL,
-    RESOLVE_CASE_SQL,
-    case_audit_parameters,
-    detach_open_joined_parameters,
     email_owed_parameters,
-    finding_event_parameters,
-    resolve_case_parameters,
 )
+from nexovue_platform.email import build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import TextClause, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from nexovue_scheduler import case_emails
+from nexovue_scheduler.case_endings import end_case, record_event
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
+from nexovue_scheduler.settings import get_settings
 
 logger = get_logger(__name__)
 
@@ -61,10 +61,6 @@ CASES_SWEEP_TASK: Final = "nexovue_scheduler.cases.sweep"
 
 # How many cases one step takes in one sweep; the next sweep takes the rest.
 STEP_BATCH: Final = 500
-
-# The audit action every case ending writes, as the API's `audit.CASE_RESOLVED`.
-CASE_RESOLVED_ACTION: Final = "case.resolved"
-_FINDING_TARGET: Final = "finding:{}"
 
 
 @dataclass(slots=True)
@@ -77,6 +73,8 @@ class SweepOutcome:
     ended_idle: int = 0
     ended_untouched: int = 0
     warned: int = 0
+    emailed: int = 0
+    connections_told: int = 0
 
 
 # ------------------------------------------------- the first reads, across tenants
@@ -120,7 +118,8 @@ _IDLE_CASES: Final = text(
     LIMIT :batch
     """
 )
-# The root and every joined finding closed before `closed_before`, nothing beyond taking.
+# The root and every joined finding closed before `closed_before`, nothing beyond taking,
+# and no link: a case with a tracker issue never ends by silence (design, step 3; AC90).
 _UNTOUCHED_CASES: Final = text(
     """
     SELECT root.org_id, root.id FROM findings AS root
@@ -130,6 +129,9 @@ _UNTOUCHED_CASES: Final = text(
           SELECT 1 FROM findings AS joined
           WHERE joined.org_id = root.org_id AND joined.root_finding_id = root.id
             AND (joined.state = 'open' OR joined.closed_at >= :closed_before))
+      AND NOT EXISTS (
+          SELECT 1 FROM finding_links AS link
+          WHERE link.org_id = root.org_id AND link.finding_id = root.id)
     LIMIT :batch
     """
 )
@@ -217,6 +219,9 @@ _LOCK_UNTOUCHED: Final = text(
           SELECT 1 FROM findings AS joined
           WHERE joined.org_id = :org_id AND joined.root_finding_id = root.id
             AND (joined.state = 'open' OR joined.closed_at >= :closed_before))
+      AND NOT EXISTS (
+          SELECT 1 FROM finding_links AS link
+          WHERE link.org_id = :org_id AND link.finding_id = root.id)
     FOR NO KEY UPDATE OF root SKIP LOCKED
     """
 )
@@ -235,6 +240,17 @@ _MARK_WARNED: Final = text(
     WHERE org_id = :org_id AND id = :id
     """
 )
+# FR26, BR10: the synced issue's one idle-warning comment in its case's life, written by
+# the sync job; marked here so a later idle spell never asks again (AC96, AC97).
+_ASK_IDLE_COMMENT: Final = text(
+    """
+    UPDATE finding_links
+    SET comment_wanted = 'idle_warning', idle_warning_at = :at, next_sync_at = :at
+    WHERE org_id = :org_id AND finding_id = :id AND role = 'synced'
+      AND sync_status NOT IN ('stopped', 'refused', 'creating', 'not_followed')
+      AND idle_warning_at IS NULL AND comment_wanted IS NULL AND wanted_state IS NULL
+    """
+)
 
 
 # ------------------------------------------------------------------ the writes
@@ -250,60 +266,12 @@ async def _event(
     **fields: Any,
 ) -> None:
     """One timeline event, nexovue's own, through the shared writer (AC24)."""
-    await connection.execute(
-        text(RECORD_FINDING_EVENT_SQL),
-        finding_event_parameters(
-            kind, org_id=org_id, finding_id=finding_id, actor_kind="system", at=at, **fields
-        ),
-    )
+    await record_event(connection, kind, org_id=org_id, finding_id=finding_id, at=at, **fields)
 
 
 async def _locked(connection: AsyncConnection, statement: TextClause, **values: Any) -> Any:
     """The locked row, or None when it changed or another transaction holds it."""
     return (await connection.execute(statement, values)).first()
-
-
-async def _end_case(
-    connection: AsyncConnection, *, org_id: Any, root_id: Any, resolution: str, at: datetime
-) -> bool:
-    """The ending every resolver shares (AC103): resolve, detach the open joined
-    findings with their events, the resolution's event, and an audit row naming
-    nobody. The API's `findings/cases._resolve_root` runs the same statements."""
-    resolved = await connection.execute(
-        text(RESOLVE_CASE_SQL),
-        resolve_case_parameters(
-            org_id=org_id, finding_id=root_id, resolution=resolution, at=at, resolved_by=None
-        ),
-    )
-    if resolved.first() is None:
-        return False
-    detached = await connection.execute(
-        text(DETACH_OPEN_JOINED_SQL),
-        detach_open_joined_parameters(org_id=org_id, root_finding_id=root_id),
-    )
-    for left_id in detached.scalars():
-        await _event(
-            connection,
-            "finding_left_case",
-            org_id=org_id,
-            finding_id=root_id,
-            at=at,
-            left_finding_id=left_id,
-        )
-    await _event(
-        connection, "case_resolved", org_id=org_id, finding_id=root_id, at=at, resolution=resolution
-    )
-    await connection.execute(
-        text(RECORD_CASE_AUDIT_SQL),
-        case_audit_parameters(
-            org_id=org_id,
-            actor_user_id=None,
-            action=CASE_RESOLVED_ACTION,
-            target=_FINDING_TARGET.format(root_id),
-            detail={"resolution": resolution},
-        ),
-    )
-    return True
 
 
 # ------------------------------------------------------------------- the steps
@@ -427,7 +395,7 @@ async def _end_where(
                 is None
             ):
                 continue
-            if await _end_case(
+            if await end_case(
                 connection,
                 org_id=candidate.org_id,
                 root_id=candidate.id,
@@ -463,14 +431,24 @@ async def _start_warnings(engine: AsyncEngine, *, now: datetime) -> int:
                     org_id=candidate.org_id, finding_id=candidate.id, kind="idle_warning", at=now
                 ),
             )
+            await connection.execute(
+                _ASK_IDLE_COMMENT, {"org_id": candidate.org_id, "id": candidate.id, "at": now}
+            )
             warned += 1
     return warned
 
 
-async def sweep(engine: AsyncEngine, *, now: datetime) -> SweepOutcome:
+async def sweep(
+    engine: AsyncEngine,
+    *,
+    now: datetime,
+    email_sender: case_emails.Sender | None = None,
+    app_base_url: str = "",
+) -> SweepOutcome:
     """One pass of every step, in an order where each sees the last's work: the
     heals before the endings, so an ending detaches what a heal just joined, and
-    the endings before the warning, so a case past 90 days ends unwarned."""
+    the endings before the warning, so a case past 90 days ends unwarned; and the
+    emails last, so what this pass owed goes out with it."""
     outcome = SweepOutcome()
     outcome.unassigned = await _clear_assignees(engine, now=now)
     outcome.left = await _heal_left_on_resolved(engine, now=now)
@@ -492,12 +470,39 @@ async def sweep(engine: AsyncEngine, *, now: datetime) -> SweepOutcome:
         closed_before=now - CASE_UNTOUCHED_AFTER,
     )
     outcome.warned = await _start_warnings(engine, now=now)
+    outcome.emailed = await case_emails.send_owed_case_emails(
+        engine, sender=email_sender, app_base_url=app_base_url
+    )
+    outcome.connections_told = await case_emails.tell_connection_admins(
+        engine, sender=email_sender, app_base_url=app_base_url, now=now
+    )
     return outcome
+
+
+_sender: case_emails.Sender | None = None
+_sender_built = False
+
+
+def _email_sender() -> case_emails.Sender | None:
+    """Built once per process; with no mail configured, owed emails wait."""
+    global _sender, _sender_built
+    if not _sender_built:
+        configured = get_settings().email
+        _sender = build_email_sender(configured) if configured else None
+        _sender_built = True
+    return _sender
 
 
 @task(CASES_SWEEP_TASK)
 def sweep_cases() -> None:
-    outcome = with_engine(lambda engine: sweep(engine, now=datetime.now(UTC)))
+    outcome = with_engine(
+        lambda engine: sweep(
+            engine,
+            now=datetime.now(UTC),
+            email_sender=_email_sender(),
+            app_base_url=get_settings().app_base_url,
+        )
+    )
     changed = {name: count for name, count in asdict(outcome).items() if count}
     if changed:
         logger.info("cases swept", **changed)

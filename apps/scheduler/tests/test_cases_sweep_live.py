@@ -410,3 +410,255 @@ async def test_a_sweep_with_nothing_to_do_changes_nothing(
         None,
     )
     assert await _events(engine, tenant, root) == []
+
+
+# ------------------------------------------------------------- Step 4 (T4.3, T4.6)
+
+
+async def _place(engine: AsyncEngine, tenant: AlertTenant) -> tuple[uuid.UUID, uuid.UUID]:
+    async with engine.begin() as connection:
+        connection_id = (
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state, sealed_credential, "
+                    "github_app_id, github_installation_id) VALUES (:org, 'github', 'working', "
+                    ":key, :app, 1) RETURNING id"
+                ),
+                {"org": tenant.org_id, "key": b"sealed", "app": uuid.uuid4().int % 10**9},
+            )
+        ).scalar_one()
+        place_id = (
+            await connection.execute(
+                text(
+                    "INSERT INTO connection_repositories (org_id, connection_id, external_id, key, "
+                    "is_private) VALUES (:org, :connection, '42', 'acme/api', true) RETURNING id"
+                ),
+                {"org": tenant.org_id, "connection": connection_id},
+            )
+        ).scalar_one()
+    return connection_id, place_id
+
+
+async def _synced_link(
+    engine: AsyncEngine, tenant: AlertTenant, finding: uuid.UUID, number: int = 1
+) -> uuid.UUID:
+    connection_id, place_id = await _place(engine, tenant)
+    async with engine.begin() as connection:
+        link_id: uuid.UUID = (
+            await connection.execute(
+                text(
+                    "INSERT INTO finding_links (org_id, finding_id, connection_id, place_id, role, "
+                    "sync_status, external_id, external_key, seen_state) VALUES (:org, :finding, "
+                    ":connection, :place, 'synced', 'in_sync', :id, :key, 'open') RETURNING id"
+                ),
+                {
+                    "org": tenant.org_id,
+                    "finding": finding,
+                    "connection": connection_id,
+                    "place": place_id,
+                    "id": str(5000000 + number),
+                    "key": f"acme/api#{number}",
+                },
+            )
+        ).scalar_one()
+    return link_id
+
+
+async def test_a_case_with_a_link_is_never_ended_as_untouched(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """AC90: a link stops the untouched end, as a note does, and neither acknowledges.
+    Even a link whose act left `case_worked_at` unset holds it (design step 3)."""
+    long_ago = NOW - CASE_UNTOUCHED_AFTER - HOUR
+    linked = await _finding(engine, tenant, started_at=long_ago - DAY, closed_at=long_ago)
+    await _active_case(engine, tenant, linked, acted_at=long_ago - DAY, worked=False)
+    await _synced_link(engine, tenant, linked)
+
+    outcome = await cases.sweep(engine, now=NOW)
+
+    row = await _row(engine, tenant, linked)
+    assert row.case_state == "investigating"
+    assert row.acknowledged_at is None
+    assert outcome.ended_untouched == 0
+
+
+async def test_the_idle_warning_asks_the_synced_issue_for_one_comment_in_its_life(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """FR26, AC97, AC96: one comment request on the synced link, written by the sync job
+    later; a second idle spell asks for none, and the sweep itself calls nothing."""
+    root = await _finding(engine, tenant, started_at=NOW - 80 * DAY, closed_at=NOW - 79 * DAY)
+    warn_at = NOW - (CASE_IDLE_LIMIT - CASE_IDLE_WARNING_AHEAD) - HOUR
+    await _active_case(engine, tenant, root, acted_at=warn_at)
+    link_id = await _synced_link(engine, tenant, root)
+
+    await cases.sweep(engine, now=NOW)
+
+    [link] = await rows(engine, "SELECT * FROM finding_links WHERE id = :id", id=link_id)
+    assert (link.comment_wanted, link.idle_warning_at, link.next_sync_at) == (
+        "idle_warning",
+        NOW,
+        NOW,
+    )
+
+    # The comment went; a person acted; a second spell warns, and asks for no comment.
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE finding_links SET comment_wanted = NULL WHERE id = :id"), {"id": link_id}
+        )
+    later = NOW + CASE_IDLE_LIMIT
+    await _set(
+        engine,
+        tenant,
+        root,
+        case_activity_at=later - (CASE_IDLE_LIMIT - CASE_IDLE_WARNING_AHEAD) - HOUR,
+    )
+    await cases.sweep(engine, now=later)
+    [link] = await rows(engine, "SELECT * FROM finding_links WHERE id = :id", id=link_id)
+    assert link.comment_wanted is None
+    assert (await _row(engine, tenant, root)).case_warned_at == later
+
+
+class RecordingEmail:
+    def __init__(self, *, failing: bool = False) -> None:
+        self.failing = failing
+        self.sent: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def send(self, *, to: str, message: Any, data: dict[str, Any], **_: Any) -> None:
+        from nexovue_platform.email import EmailError
+
+        self.sent.append((to, message, data))
+        if self.failing:
+            raise EmailError("refused on purpose")
+
+
+async def _owe(engine: AsyncEngine, tenant: AlertTenant, finding: uuid.UUID, *kinds: str) -> None:
+    async with engine.begin() as connection:
+        for offset, kind in enumerate(kinds):
+            await connection.execute(
+                text(
+                    "INSERT INTO finding_emails_owed (org_id, finding_id, kind, at) "
+                    "VALUES (:org, :finding, :kind, :at)"
+                ),
+                {"org": tenant.org_id, "finding": finding, "kind": kind, "at": NOW + offset * HOUR},
+            )
+
+
+async def test_two_emails_owed_before_one_sweep_are_both_sent_to_the_assignee(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """AC94, D90: a row per email, deleted before its send; the assignee is told, by
+    `scheduler-light`, with no title, note or tracker text."""
+    from nexovue_platform.email import Message
+
+    member = await _member(engine, tenant)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE users SET email_verified_at = :now WHERE id = :id"),
+            {"now": NOW, "id": member},
+        )
+    root = await _finding(engine, tenant, started_at=NOW - DAY, closed_at=NOW - HOUR)
+    await _active_case(engine, tenant, root, acted_at=NOW - HOUR, assignee=member)
+    await _owe(engine, tenant, root, "idle_warning", "tracker_closed")
+    sender = RecordingEmail()
+
+    await cases.sweep(engine, now=NOW, email_sender=sender, app_base_url="https://n.example")
+
+    (address,) = await rows(engine, "SELECT email FROM users WHERE id = :id", id=member)
+    assert [(to, message) for to, message, _ in sender.sent] == [
+        (address.email, Message.CASE_IDLE_WARNING),
+        (address.email, Message.CASE_TRACKER_CLOSED),
+    ]
+    for _, _, data in sender.sent:
+        assert data["service"] == "checkout"
+        assert data["link"] == f"https://n.example/findings/{root}"
+    assert (
+        await rows(engine, "SELECT id FROM finding_emails_owed WHERE finding_id = :id", id=root)
+        == []
+    )
+
+
+async def test_with_nobody_assigned_owners_and_admins_are_told_and_a_failed_send_is_not_repeated(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    from nexovue_platform.email import Message
+
+    admin = await _member(engine, tenant, role="admin")
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE users SET email_verified_at = :now WHERE id = :id"),
+            {"now": NOW, "id": admin},
+        )
+    await _member(engine, tenant, role="admin")  # unverified: not told
+    root = await _finding(engine, tenant, started_at=NOW - DAY, closed_at=NOW - HOUR)
+    await _active_case(engine, tenant, root, acted_at=NOW - HOUR)
+    await _owe(engine, tenant, root, "tracker_closed_signal_open")
+    sender = RecordingEmail(failing=True)
+
+    await cases.sweep(engine, now=NOW, email_sender=sender, app_base_url="https://n.example")
+    await cases.sweep(engine, now=NOW, email_sender=sender, app_base_url="https://n.example")
+
+    assert {message for _, message, _ in sender.sent} == {Message.CASE_TRACKER_CLOSED_SIGNAL_OPEN}
+    # The owner and the verified admin were each tried once; the refused row is not owed again.
+    assert len(sender.sent) == 2
+    assert (
+        await rows(engine, "SELECT id FROM finding_emails_owed WHERE finding_id = :id", id=root)
+        == []
+    )
+
+
+async def test_without_a_mail_sender_owed_emails_wait(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    root = await _finding(engine, tenant, started_at=NOW - DAY, closed_at=NOW - HOUR)
+    await _active_case(engine, tenant, root, acted_at=NOW - HOUR)
+    await _owe(engine, tenant, root, "tracker_closed")
+    await cases.sweep(engine, now=NOW)
+    assert (
+        len(
+            await rows(engine, "SELECT id FROM finding_emails_owed WHERE finding_id = :id", id=root)
+        )
+        == 1
+    )
+
+
+async def test_a_connection_needing_attention_tells_owners_and_admins_once_per_episode(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """FR33, AC78: one email across repeated failures; a second only after recovery and
+    a new failure; failing tells only after 24 hours; the expiry email is independent."""
+    from nexovue_platform.email import Message
+
+    connection_id, _ = await _place(engine, tenant)
+    sender = RecordingEmail()
+
+    async def state(**columns: Any) -> None:
+        assignments = ", ".join(f"{name} = :{name}" for name in columns)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(f"UPDATE connections SET {assignments} WHERE id = :id"),
+                {"id": connection_id, **columns},
+            )
+
+    async def sweep(at: datetime) -> list[Any]:
+        sender.sent.clear()
+        await cases.sweep(engine, now=at, email_sender=sender, app_base_url="https://n.example")
+        return [message for _, message, _ in sender.sent]
+
+    await state(state="needs_attention", last_failure="unauthorized")
+    assert await sweep(NOW) == [Message.CONNECTION_NEEDS_ATTENTION]
+    assert await sweep(NOW + HOUR) == []
+    # Working again clears the marker (the jobs' state machine does); a new episode tells.
+    await state(state="working", failure_told_at=None, last_failure=None)
+    await state(state="needs_attention", last_failure="app_not_installed")
+    assert await sweep(NOW + 2 * HOUR) == [Message.CONNECTION_NEEDS_ATTENTION]
+
+    await state(state="failing", failure_told_at=None, failing_since=NOW, last_failure="timed_out")
+    assert await sweep(NOW + 23 * HOUR) == []
+    assert await sweep(NOW + 25 * HOUR) == [Message.CONNECTION_FAILING]
+
+    await state(token_expires_on=(NOW + 10 * DAY).date())
+    assert await sweep(NOW + 26 * HOUR) == [Message.CONNECTION_EXPIRING]
+    assert await sweep(NOW + 27 * HOUR) == []
+    [row] = await rows(engine, "SELECT * FROM connections WHERE id = :id", id=connection_id)
+    assert row.failure_told_at is not None and row.expiry_told_at is not None

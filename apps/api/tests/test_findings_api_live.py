@@ -71,6 +71,8 @@ MEMBER_ONLY_FIELDS: Final = {
     "case_ends_by",
     "deletes_on",
     "joined_kept_count",
+    # F22 T4.3: the case's tracker issues (FR20, AC22: a token never reads them).
+    "links",
 }
 # A person's feed row beyond a token's (F22 FR23, AC71): who has the case, the case's
 # end in its last days, and in a case filter, the project.

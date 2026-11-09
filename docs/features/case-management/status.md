@@ -2,13 +2,205 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09.
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured).
 
 
 ## Current task
 
-Step 3 (2026-11-08): the connection, and a working GitHub App, built and tested against
-a simulated GitHub, on `feature/phase-2` (migration 0055, ADR-030). Next: Step 4.
+Step 4 is on `feature/phase-2` (2026-11-09): create a GitHub issue, and stay in step by
+polling, built and tested against a simulated GitHub (migration 0061, ADR-035). Seven
+open decisions below, none blocking the commit.
+
+
+## Step 4 built, 2026-11-09
+
+Plan tasks T4.1 to T4.7, with the notes in `plan.md`. **T4.8 (the written script against
+real GitHub) is not yet run: the founder runs it after Phase 2 (foundation item 28); its
+result is not faked. T4.9 (memory) is not run** (below). **Migration 0061**
+(`0061_finding_links.py`, `down_revision` "0055" until the coordinator re-chains after
+F20's 0056, F28's 0057 and F19's 0058 to 0060); ClickHouse untouched. **ADR-035** filed
+(*Trackers are reconciled, and a webhook only rings the doorbell*), with the index; the
+design's copy points to it. **Kind-agnostic, as the founder asked (foundation item 29):**
+the sync (`connections/sync.py`) and the comparison (`compare.py`) name no tracker; the
+issue calls are the `Tracker` protocol's (`trackers.py`), and GitHub is still the one
+adapter. `issue_text()` already writes Jira's ADF form beside GitHub's Markdown.
+
+What exists now:
+
+- **T4.1** `nexovue_platform/connections.py`: `IssueFacts` (finding id, signal, ratio,
+  severity, since, strict name, link back; nothing else), built only by `issue_facts()`
+  and re-checked by `from_json()` when thawed; `issue_text()` in GitHub's Markdown and
+  Jira's ADF (doc, paragraph and text nodes, the name under a code mark); the fixed
+  comments (`comment_text()`), and the close reason by how the case ended. The shared
+  job builders `sync_job()`/`refresh_job()`; `jobs.ENQUEUE_UNLESS_WAITING`, the
+  conditional insert (AC48); `cases.CLEAR_HOLD_SQL`; `SET_WANTED_STATE_SQL` now leaves
+  nothing pending when the act wants what was last seen.
+- **T4.2** migration 0061: `finding_links` with no address column; one synced issue per
+  case and per issue (stopped links hold neither slot); one issue per case once in any
+  role; strict key and id patterns; facts only while `creating`; inventories
+  (`organizations/tables.py`) and the model held equal to the frozen words.
+- **T4.3** `findings/links.py`, `findings/link_sync.py`, routes in `findings/router.py`:
+  `GET /findings/{id}/links/preview`, `POST /findings/{id}/links` (the only writer of
+  `creating`, AC88), `POST .../links/{link_id}/retry`, `DELETE .../links/{link_id}`, each
+  `MayOperateCases`, in `POLICY_OF`, audited per the design's table
+  (`link.issue_requested`, `link.removed`; retry none). A resolve, false alarm or new
+  normal asks the issue to close with one comment, unless the person leaves it open or
+  it is held; a reopen asks it to reopen; each adds one sync job. `PATCH /case` takes
+  `leave_issue_open`. A finding's page carries `links` (a token's never). Disconnect
+  stops every link in its transaction and frees each case's slot; `GET /connections`
+  carries the real count, `synced_links`.
+- **T4.4** `connections/compare.py`: the table, rows 1 to 11 (7 decided where the reopen
+  meets the index).
+- **T4.5** `connections/sync.py`: `sync_connection` (ids-only kwargs, `org_id` bound on
+  every read, the lease by compare-and-set, the pause, 50 links oldest first, the state
+  read before each call, writes a second apart, the run ending at the first timeout,
+  connection failure, 5xx, rate limit or refused key, backoff 1 minute doubling to an
+  hour with spread, `retry-after` obeyed, tokens narrowed to one repository with
+  `issues: write` and `metadata: read` and revoked at the end); creation with
+  `first_attempt_at` committed first, the public check before every create, and
+  find-existing on a retry once the tracker's list is believed settled
+  (`search_settles_seconds`: 0 for GitHub, by its documentation); the comment committed
+  as written before it is posted; `sweep_connections` (one sync job per connection with
+  a due link, and the **hourly repository refresh**); beat adds the sweep every 30
+  seconds **only while a connection is live and connections are on** (AC118's beat
+  clause, founder 2026-11-09); a refresh that finds a repository again resumes its
+  links. `connections/store.py` holds loading and the state write (a connection back at
+  `working` clears `failure_told_at`). The simulated GitHub now has issues (create,
+  read, close with a reason, reopen, comment, list by creator and time with a stated
+  delay, delete, transfer, a repository leaving the installation, commit-then-drop) and
+  `tracker_harness.py` kills a spawned worker with `SIGKILL` at each named fault point.
+- **T4.6** `nexovue_scheduler/case_emails.py`, called by `cases_sweep` on `light`: owed
+  case emails (`tracker_closed`, `tracker_closed_signal_open`, `idle_warning`), each row
+  deleted and committed before its send, to the assignee or to verified owners and
+  admins (`_VERIFIED_ADMINS`, new beside `_VERIFIED_OWNERS`); a connection's failure
+  email (needs attention, or failing 24 hours) and expiry email (14 days ahead), each
+  with its own marker. The idle warning asks the synced issue for its one idle comment
+  (`idle_warning_at`), which the sync writes; a case with any link never ends as
+  untouched. Six new `Message` members and templates. `case_endings.py` is the
+  scheduler's one ending (resolve, detach, end a hold, event, audit), run by the sweep
+  and the sync alike.
+- **T4.7** `features/findings/link-words.ts` (words by status, reader and age; the
+  resolve and false-alarm choices naming the issue; the hold line; the status-region
+  announcement; Copy my notes from the person's own notes), `LinksList.tsx`,
+  `CreateIssuePanel.tsx`, `CaseSection.tsx` (Create an issue, the hold line, resolve's
+  three confirmations, the links after the note box), `FindingScreen.tsx` (link moves
+  in the status region; the false alarm's line and success naming the issue),
+  `ConnectionsScreen.tsx` (Disconnect's real count and the step: delete the App).
+
+### Unverified until the founder's real-GitHub run (T4.8; foundation item 28)
+
+Everything about GitHub's issues was read from documentation and replayed by the fake:
+`POST /repos/{r}/issues` taking `labels` and answering `id` and `number`; the label's
+outcome under `issues: write` (AC84); `state_reason` on `PATCH` and its values,
+including what a `Fixes #n` merge sets; 410 for a deleted issue, 404 for one not found,
+301 with a `Location` for a transferred one, and the JSON read there; the list's
+`creator=<slug>[bot]`, `since` and `state=all`, and that it sees a new issue at once (a
+retry trusts it); a token narrowed by `repository_ids`, and 422 when the installation no
+longer reaches one; the rate-limit headers; and how GitHub renders the issue text,
+including whether `GH-12` or a hexadecimal name links in a title (AC41). The issue
+fixtures say so in their `_source`.
+
+### Where the code needed more than the plan named
+
+- **Columns beyond the design's:** `finding_links.idle_warning_at` (one idle comment per
+  link in its case's life, AC96) and `gone_at` (row 9's daily re-read for a week).
+- **`finding_links.frozen_facts` is `JSONB(none_as_null=True)`**: SQLAlchemy writes
+  Python `None` as JSON `null` otherwise, which the "facts only while creating" check
+  refused when a disconnect stopped a link (caught by the disconnect test).
+- **A stopped link may have no key** (a disconnect before its creation was known); the
+  check allows `stopped` beside `creating` and `refused`.
+- **A link whose repository row is gone** (`SET NULL`) is refused if being created, else
+  needs a person, and the run goes on (found in review, test seen failing).
+- **The sweep's untouched end also requires no link** (design step 3), not only
+  `case_worked_at`.
+- **`recording_site`** gained a callable default and a dropped reply; **the fake's App
+  and installation ids** are per test in the sync suite, since the pair is unique across
+  tenants and suites run side by side.
+- **New files the plan did not name:** `findings/links.py`, `findings/link_sync.py`,
+  `connections/sync.py`, `connections/store.py`, `case_emails.py`, `case_endings.py`,
+  `link-words.ts`, and the test files named below.
+- `test_notifications_console.py` and `test_findings_api_live.py` hold inventories the
+  new messages and the `links` field had to join.
+
+### Validation run (read, not inferred)
+
+Against this worktree's own Postgres (`f22s4-pg`, port 45432, Postgres 18, migrated to
+0061) and ClickHouse (`f22s4-ch`, ports 48123 and 49000, 39 migrations), torn down
+afterwards.
+
+- **Seen failing first, then passing:** `test_issue_text.py` (ImportError on the
+  committed module; then 85 passed); the model and frozen-word tests (collection error);
+  `test_deletion_live.py` (`finding_links` does not exist; then 26 passed); the index
+  tests (13 failed on 0055; 13 passed on 0061); `test_connections_compare.py`
+  (ImportError; 24 passed); `test_connections_sync_live.py` (ImportError without
+  `sync.py`; then its first run found the lease taken on the real clock in the harness
+  test, and five test faults; then 49 passed, including the placeless-link test seen
+  failing with a `TypeError`); the beat tests (ImportError; 18 passed); the tenancy test
+  (it named `_CONNECTIONS_DUE`, then `_OWED` and `_TO_TELL`, until each was a named
+  exception); `test_findings_links_live.py` (22 of 25 failed on the committed API code,
+  the three passing ones asserting that nothing happens; then a real defect, JSON
+  `null`; then 25 passed); the sweep's six new tests (5 failed, the sixth asserts
+  nothing happens; then 15 passed); `link-words.test.ts` (no module; 29 passed);
+  `FindingLinks.test.ts` and the disconnect counts (11 failed on the committed screens;
+  then passed); the two inventories (`test_notifications_console`,
+  `test_findings_api_live`, failed on the new members and field).
+  **Not seen failing first, checked by a negative control instead:** the AC89 seam test
+  (failed when `github.py` read the environment); the parity test (failed when the
+  ending's audit action changed). **The five new `test_case_transitions.py` rows, seen
+  failing after the fact** (2026-11-09, at the coordinator's request): with
+  `nexovue_platform/cases.py` copied aside and its new behaviour stubbed (`CLEAR_HOLD_SQL`
+  without its `org_id` bind, `SET_WANTED_STATE_SQL` no longer nulling a wanted state equal to
+  the seen one, `set_wanted_state_parameters` without its vocabulary checks), all five
+  failed (5 failed, 15 passed); restored from the copy, 20 passed. Each guards behaviour new
+  in this step, so none only restates older code.
+- `apps/scheduler/tests` with 6 workers: **5,153 passed**, 11 failed, 24 errors. The
+  errors are the four suites that refuse to start without Kafka, DNS or the object
+  store (`test_connect_guard`, `test_detection_failure_live`, `test_detection_settle_live`,
+  `test_erasure_live`); 3 failures are `test_alert_telemetry_live.py`, which needs the
+  seeded dev project; the other 8 were `test_connections_github_live.py` colliding with
+  the sync suite on the fake's fixed App id, fixed in the sync suite, after which both
+  together: **66 passed**.
+- `apps/api/tests` with 4 workers, migration suites aside: **5,075 passed**, 20 failed,
+  3 skipped, 91 errors; the two failures this step caused (the inventories) were fixed
+  and pass (39). The rest need the running dev stack (receiver, seeded data, object
+  store, system logs): `test_traces_live`, `test_metrics_live`, `test_services_live`,
+  `test_synthetics_live`, `test_seed_live`, `test_dbstats_live`,
+  `test_clickhouse_system_logs_live`, `test_backups_live` and others in areas this step
+  did not touch. The six migration suites, one at a time: **48 passed**, ending at 0061.
+- `packages/py-platform/tests`: **272 passed**.
+- Web: **1,731 passed** in 147 files (the two new test files rerun after their issue
+  numbers changed: 37 passed); `pnpm -r --if-present run typecheck` clean; Biome clean on
+  `features/findings` and `features/settings` and on the two JSON fixtures;
+  `verify-tokens.js` clean (issue numbers in tests are two digits, since `#412` reads as
+  a colour to it).
+- `uv run mypy .`: no issues in 834 files; `ruff check` and `ruff format --check` clean.
+- **Not run:** `just check` (the coordinator's); T4.8 and every real-GitHub check; T4.9;
+  the promtool tests; any browser (layout, AC66 and AC108's hand list, are Design QA's).
+
+### Not built in Step 4, and why
+
+- **T4.8**: real GitHub, the founder's after Phase 2 (foundation item 28).
+- **T4.9**: the measurement belongs to the built `scheduler-connections` container; this
+  session built none, and a bare process's figure would not be the container's.
+  `sizing.md` keeps the 384 MB guess.
+- **T3.13's oldest-due-link alert** still waits: links now exist, and nothing exports
+  the oldest due link's age yet. It is T3.13's remainder, not a Step 4 task.
+
+### Residual risks
+
+- **Everything GitHub-facing is proved against the authors' reading of GitHub's pages.**
+- **An error other than a tracker failure on one link** (a database refusal while
+  adopting or moving an issue, say) fails the whole run, and the next run meets it
+  again; the lease is released, but that connection's other links wait behind it.
+- **A retry while the connection is paused** adds a job that does nothing until the
+  pause ends.
+- **A comment taken and then not posted is lost** (a kill between, or a refusal): "at
+  most one" is the promise, as designed.
+- **An issue created while its link was removed or the connection disconnected** stays
+  in the tracker with its link back and nothing in nexovue pointing to it; a creating
+  link cannot be removed, which narrows this to a disconnect mid-call.
+- The resolve parity (AC103) is proved row by row; reopening by person and by sync shares
+  `REOPEN_CASE_SQL` and is not compared row by row.
 
 
 ## Step 3 built, 2026-11-08
@@ -470,15 +662,57 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-Step 4 (create an issue, sync by polling), which also builds `sweep_connections`, beat's
-half of AC118 and the hourly repository refresh (founder, 2026-11-09).
-After Phase 2, the founder runs T3.0 and the hand checks of T3.9 against real GitHub and a
-real browser (foundation item 28). T2.9 waits on F3; Step 7 on Atlassian.
+The coordinator commits Step 4 (re-chaining 0061 after 0060). The founder answers the
+open decisions below. Then Step 5 (webhooks make it faster), which must keep to ADR-035.
+T4.9 measures the built container. After Phase 2, the founder runs T3.0, T3.9's hand
+checks and T4.8 against real GitHub and a real browser (foundation item 28). T2.9 waits
+on F3; Step 7 on Atlassian.
 
 
 ## Open decisions
 
-None open. **Founder answers, 2026-11-09:** all four from Step 3 as recommended (option A each), kept below for the record. AC32 amended in `spec.md`; the beat clause and hourly refresh moved to T4.5 in `plan.md`; the *Session ended* row deleted and `jira` deferred to Step 7 in `design.md`.
+**From Step 4 (2026-11-09).** None blocks the commit; each is built as recommended.
+
+**1. Creating an issue on a resolved case.** The spec does not say. Built: refused
+with "This case is resolved. Reopen it to create an issue for it." *Option A
+(recommended):* keep it: an issue for finished work would be closed at once. *Option B:*
+allow it and close it straight after creation.
+
+**2. Removing a link while its issue is being created.** Built: refused ("This issue is
+still being created. Remove it once it has been."), so the job never writes an issue
+nothing points to. *Option A (recommended):* keep it. *Option B:* allow it and accept an
+unlinked issue.
+
+**3. The member's line with nothing connected.** The design says "Ask an admin to
+connect GitHub or Jira."; the founder's answer 4 of 2026-11-09 keeps Jira off screens
+until Atlassian answers. Built: "Ask an admin to connect GitHub." *Option A
+(recommended):* add Jira with Step 7, as for the rail.
+
+**4. Words the spec does not give.** New fixed text, built and needing the founder's
+eye: the close comments ("The nexovue case for this issue was resolved, so nexovue
+closed it." and the false-alarm and new-normal forms); the three case emails and three
+connection emails (`email/templates.py`); the link words for each failure by reader
+(`link-words.ts`); "Asked for the issue. The link below shows when it exists."; and
+Disconnect's count ("12 issues stop syncing. The issues stay in GitHub."). *Recommended:*
+review the wording once on the built screen; nothing structural rests on it.
+
+**5. AC4's "make no tracker call".** A recovery itself makes no call and changes no link
+(tested); the active case's link is still read on its 5-minute poll, which is a call.
+*Recommended:* read AC4 as "the recovery makes no call", as built; the alternative,
+pausing reads while recovered, would hide a close made in the tracker.
+
+**6. A `failing` connection keeps calling.** The design's step 5 says a run stops "if
+not working". Built: a run goes on in `working` and `failing`, and stops in
+`needs_attention`, `setting_up` or `disconnected`; otherwise a failing connection could
+never recover by itself. *Option A (recommended):* keep it, and amend the design's
+line. *Option B:* stop in `failing` and recover only by a person's test.
+
+**7. A rate limit counts toward `failing`.** Five rate-limited runs in a row make the
+connection `failing` (the state machine counts every passing failure). *Recommended:*
+keep it: five straight limits is a real problem worth showing; the pause already obeys
+`retry-after`.
+
+**Step 3's, answered by the founder on 2026-11-09:** all four from Step 3 as recommended (option A each), kept below for the record. AC32 amended in `spec.md`; the beat clause and hourly refresh moved to T4.5 in `plan.md`; the *Session ended* row deleted and `jira` deferred to Step 7 in `design.md`.
 
 **1. AC32's list of API modules allowed a network client.** AC32 says the list "holds
 `billing/razorpay.py` alone". Evidence: `apps/api/src/nexovue_api/data/objectstore/store.py`

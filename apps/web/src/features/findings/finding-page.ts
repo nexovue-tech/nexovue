@@ -21,6 +21,7 @@ import type {
   TimelineEvent,
 } from "./api";
 import { CLOSED_AS, NOBODY_HAS_TAKEN_THIS, resolutionWords } from "./finding-words";
+import { issueEventSentence } from "./link-words";
 
 /**
  * What a finding's page says and offers (FR31, design *The finding page*), apart from
@@ -496,6 +497,6 @@ export function eventSentence(event: TimelineEvent): string {
     case "explained":
       return "The explanation joined this finding";
     default:
-      return event.kind.replaceAll("_", " ");
+      return issueEventSentence(event) ?? event.kind.replaceAll("_", " ");
   }
 }

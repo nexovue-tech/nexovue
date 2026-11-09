@@ -57,6 +57,15 @@ class Message(Enum):
     # F22. Someone else assigned a person a case (FR5): the fact, the service in
     # its strict form, the severity, a link — never a finding title or a note.
     CASE_ASSIGNED = "case_assigned"
+    # F22 Step 4 (D28, FR26, FR33): what a sweep owes about a case or a connection. Each
+    # carries the service's strict name, a link and fixed words: never a finding title,
+    # a note, or anything a tracker said.
+    CASE_TRACKER_CLOSED = "case_tracker_closed"
+    CASE_TRACKER_CLOSED_SIGNAL_OPEN = "case_tracker_closed_signal_open"
+    CASE_IDLE_WARNING = "case_idle_warning"
+    CONNECTION_NEEDS_ATTENTION = "connection_needs_attention"
+    CONNECTION_FAILING = "connection_failing"
+    CONNECTION_EXPIRING = "connection_expiring"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

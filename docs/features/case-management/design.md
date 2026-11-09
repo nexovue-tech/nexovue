@@ -882,19 +882,9 @@ All arithmetic or guesses. Nothing is measured.
 
 Written here, not in `docs/decisions/`. Each takes the next free number when approved.
 
-### Proposed ADR: Trackers are reconciled, and a webhook only rings the doorbell
+### Filed: Trackers are reconciled, and a webhook only rings the doorbell
 
-**Status:** Proposed. **Context.** Two systems hold a status. Either can be unreachable or written to by someone else. Neither GitHub's nor Jira's pages read promise delivery order, and a self-hosted install may not be reachable at all.
-
-**Decision.**
-
-1. Each synced link stores `seen_state` and `wanted_state`. One function compares them with a fresh read, per *The comparison*.
-2. A webhook, once its signature is proved, only makes that function run sooner. Nothing in its body changes a case, and it adds no job.
-3. Polling alone must be enough.
-4. No delivery table.
-5. Only status crosses, plus fixed comments within BR10's limit.
-
-**Consequences.** Duplicates, order and replay stop mattering. An unreachable install works. It costs a charged read per active link on a timer, and up to five minutes of delay without a webhook. It does not suit a future feature that needs every change, such as syncing comments. That would need its own decision.
+Filed as [ADR-035](../../decisions/ADR-035-trackers-are-reconciled-and-a-webhook-only-rings-the-doorbell.md) on 2026-11-09, when Step 4 built the reconcile. The text that stood here is that record now.
 
 ### Proposed ADR: A case is a finding's columns, with one active case per service
 

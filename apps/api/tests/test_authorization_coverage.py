@@ -176,6 +176,10 @@ POLICY_OF: Final = {
     # is in EXEMPT instead: its gate is authorship, which no role names.
     "nexovue_api/findings/router.py:change_case": "MayOperateCases",
     "nexovue_api/findings/router.py:add_case_note": "MayOperateCases",
+    # F22 Step 4: a case's tracker issue, created, retried or removed by a working role.
+    "nexovue_api/findings/router.py:create_issue": "MayOperateCases",
+    "nexovue_api/findings/router.py:retry_issue": "MayOperateCases",
+    "nexovue_api/findings/router.py:remove_issue": "MayOperateCases",
     # F19: reliability targets, every working role's (D20, foundation section 5).
     "nexovue_api/slos/router.py:create_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:change_slo": "MayConfigureSlos",

@@ -202,6 +202,43 @@ export interface EarlierCase {
   case_activity_at: string;
 }
 
+export type LinkStatus =
+  | "creating"
+  | "promoting"
+  | "in_sync"
+  | "waiting"
+  | "needs_attention"
+  | "refused"
+  | "gone"
+  | "not_followed"
+  | "stopped";
+
+/**
+ * One tracker issue on a case (F22 FR35 to FR41). Its address is built by nexovue from
+ * the strict key (D81); there is no title or tracker text to show. A token never reads it.
+ */
+export interface CaseLink {
+  id: string;
+  kind: string | null;
+  role: "synced" | "reference";
+  sync_status: LinkStatus;
+  /** `acme/api#412`; null while being created, or when creation was refused. */
+  external_key: string | null;
+  url: string | null;
+  place_key: string | null;
+  seen_state: "open" | "closed" | null;
+  wanted_state: "open" | "closed" | null;
+  comment_owed: boolean;
+  /** Closed in the tracker while the case signal was open: a hold (D73). */
+  tracker_closed_at: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+  /** Why it waits or needs a person, as an enum; words by reader (FR44). */
+  last_failure: string | null;
+  /** Whether a retry can help (FR44): offered only then. */
+  retry_helps: boolean;
+}
+
 /** One finding as its page reads it (FR31). */
 export interface FindingDetail extends Finding, CasePeople {
   /** Empty once the readings have expired, and always for a project finding (AC40). */
@@ -225,6 +262,8 @@ export interface FindingDetail extends Finding, CasePeople {
   deletes_on?: string | null;
   /** How many findings that joined this case are still kept (FR24). */
   joined_kept_count?: number;
+  /** The case's tracker issues, the root's on a joined finding (F22 T4.3). */
+  links?: CaseLink[];
 }
 
 /** One timeline row (FR16). A person's fields; a token gets kinds and times. */
@@ -522,6 +561,8 @@ export interface CaseChangeInput {
   assignee_id?: string | null;
   expected_assignee_id?: string | null;
   expected_case_state?: CaseState | null;
+  /** FR6, D72: resolve here and leave the synced issue open. */
+  leave_issue_open?: boolean;
 }
 
 function refreshAfterCaseChange(
@@ -605,5 +646,105 @@ export function useFindingAction(findingId: string) {
       // Every service's, by prefix: a project finding spans several.
       void queryClient.invalidateQueries({ queryKey: servicesDetectionKey(projectId) });
     },
+  });
+}
+
+// ---------------------------------------------------------- tracker issues (F22 T4.7)
+
+/** What a person may pick an issue's repository from: the connection's places. Declared
+ * here, as the members picker is, because a feature never imports another feature. */
+export interface IssuePlace {
+  id: string;
+  key: string;
+  is_private: boolean;
+  is_reachable: boolean;
+}
+
+export interface IssueConnection {
+  id: string;
+  kind: string;
+  state: "setting_up" | "working" | "failing" | "needs_attention" | "disconnected";
+  repositories?: IssuePlace[];
+}
+
+export interface IssueConnections {
+  available: boolean;
+  unavailable_reason: "hosted" | "off" | null;
+  connections: IssueConnection[];
+}
+
+/** The connections, for the Create an issue panel; read only when the panel opens. */
+export function useIssueConnections(enabled: boolean) {
+  return useQuery({
+    queryKey: ["connections"] as const,
+    enabled,
+    queryFn: ({ signal }) => apiClient.get<IssueConnections>("connections", { signal }),
+  });
+}
+
+export interface IssuePreview {
+  place_id: string;
+  place_key: string;
+  title: string;
+  body: string;
+  public: boolean;
+  /** Why creating here would be refused, in the person's words; null when it would not. */
+  refusal: string | null;
+}
+
+/** FR35: exactly what will be written, before it is. Nothing is sent to read it. */
+export function useIssuePreview(findingId: string, placeId: string | null) {
+  return useQuery({
+    queryKey: ["findings", "issue-preview", findingId, placeId] as const,
+    enabled: placeId != null,
+    queryFn: ({ signal }) =>
+      apiClient.get<IssuePreview>(`findings/${encodeURIComponent(findingId)}/links/preview`, {
+        signal,
+        searchParams: { place_id: placeId ?? "" },
+      }),
+  });
+}
+
+export interface LinkChanged {
+  finding: FindingDetail;
+  link_id: string;
+}
+
+/** The click: the link is `creating`, and sync writes the issue (FR35). */
+export function useCreateIssue(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "create-issue", findingId],
+    mutationFn: (placeId: string) =>
+      apiClient.post<LinkChanged>(`findings/${encodeURIComponent(findingId)}/links`, {
+        place_id: placeId,
+      }),
+    onSuccess: (changed) => refreshAfterCaseChange(queryClient, findingId, changed.finding),
+  });
+}
+
+/** FR44: read and act on a waiting issue again, where that can help. */
+export function useRetryLink(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "retry-link", findingId],
+    mutationFn: (linkId: string) =>
+      apiClient.post<LinkChanged>(
+        `findings/${encodeURIComponent(findingId)}/links/${encodeURIComponent(linkId)}/retry`,
+      ),
+    onSuccess: (changed) => refreshAfterCaseChange(queryClient, findingId, changed.finding),
+  });
+}
+
+/** Remove an issue here; it stays in the tracker. */
+export function useRemoveLink(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "remove-link", findingId],
+    mutationFn: (linkId: string) =>
+      apiClient.delete<FindingDetail>(
+        `findings/${encodeURIComponent(findingId)}/links/${encodeURIComponent(linkId)}`,
+      ),
+    onSuccess: (finding) => refreshAfterCaseChange(queryClient, findingId, finding),
   });
 }

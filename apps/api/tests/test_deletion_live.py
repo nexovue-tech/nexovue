@@ -63,6 +63,7 @@ from nexovue_api.data.postgres.models import (
     ErrorGroupWatermark,
     Finding,
     FindingIncident,
+    FindingLink,
     Incident,
     Integration,
     Job,
@@ -178,6 +179,7 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     # F20: dashboards belong to the organization, and their versions go with them.
     "dashboards",
     "dashboard_versions",
+    "finding_links",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -256,6 +258,8 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     # F20 (AC12): live dashboards and one deleted one, each with a kept version.
     "dashboards": ROWS_PER_TABLE,
     "dashboard_versions": ROWS_PER_TABLE,
+    # F22 Step 4: each finding's synced issue, on the connection and one of its places.
+    "finding_links": ROWS_PER_TABLE,
 }
 
 
@@ -789,7 +793,8 @@ async def _write_detection_project_rows(db: AsyncSession, tenant: Tenant, now: d
 
 async def _write_connection_rows(db: AsyncSession, tenant: Tenant) -> None:
     """F22: a working GitHub connection started by the tenant's person, with a sealed
-    key (ciphertext stand-in) and the repositories it reaches."""
+    key (ciphertext stand-in), the repositories it reaches, and each finding's synced
+    issue on one of them."""
     connection_id = uuid.uuid4()
     db.add(
         Connection(
@@ -816,6 +821,28 @@ async def _write_connection_rows(db: AsyncSession, tenant: Tenant) -> None:
             for index in range(ROWS_PER_TABLE)
         ]
     )
+    await db.flush()
+    findings = (await db.scalars(select(Finding.id).where(Finding.org_id == tenant.org_id))).all()
+    place = await db.scalar(
+        select(ConnectionRepository.id).where(ConnectionRepository.org_id == tenant.org_id)
+    )
+    db.add_all(
+        [
+            FindingLink(
+                org_id=tenant.org_id,
+                finding_id=finding_id,
+                connection_id=connection_id,
+                place_id=place,
+                role="synced",
+                sync_status="in_sync",
+                external_id=str(1000 + index),
+                external_key=f"acme/repository-0#{index + 1}",
+                seen_state="open",
+            )
+            for index, finding_id in enumerate(findings)
+        ]
+    )
+    await db.flush()
 
 
 async def _write_dashboard_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
@@ -844,7 +871,6 @@ async def _write_dashboard_rows(db: AsyncSession, tenant: Tenant, now: datetime)
                 saved_at=now,
             )
         )
-    await db.flush()
 
 
 async def _row_counts(db: AsyncSession, tenant: Tenant) -> dict[str, int]:

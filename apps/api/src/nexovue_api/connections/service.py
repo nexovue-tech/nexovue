@@ -154,6 +154,9 @@ async def overview(
     places = await queries.places_of(
         session, org_id=org_id, connection_ids=[row.id for row in rows]
     )
+    synced = await queries.synced_link_counts(
+        session, org_id=org_id, connection_ids=[row.id for row in rows]
+    )
     moment = now or datetime.now(UTC)
     return ConnectionsOverview(
         available=True,
@@ -162,15 +165,23 @@ async def overview(
         connections=[
             ConnectionView(id=row.id, kind=row.kind, state=row.state)
             if support_view
-            else _view(row, [place for place in places if place.connection_id == row.id], moment)
+            else _view(
+                row,
+                [place for place in places if place.connection_id == row.id],
+                moment,
+                synced_links=synced.get(row.id, 0),
+            )
             for row in rows
         ],
     )
 
 
-def _view(row: Connection, places: list[ConnectionRepository], now: datetime) -> ConnectionView:
+def _view(
+    row: Connection, places: list[ConnectionRepository], now: datetime, *, synced_links: int = 0
+) -> ConnectionView:
     installed = row.github_installation_id is not None
     return ConnectionView(
+        synced_links=synced_links,
         id=row.id,
         kind=row.kind,
         state=row.state,
@@ -488,6 +499,9 @@ async def disconnect(
     row.sealed_credential = row.sealed_webhook_secret = row.sealed_manifest_code = None
     row.setup_state_hash = None
     row.sync_lease_until = None
+    # FR32, AC37: every link stops in this transaction and frees its case's synced slot;
+    # the issues stay in the tracker, and their keys stay here as text.
+    await queries.stop_links(session, org_id=org_id, connection_id=row.id)
     for hook in hooks:
         await hook(session, org_id, row.id)
     audit.record_connection_event(

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Query, status
 from nexovue_platform.connections import strict_name
 from nexovue_platform.email import EmailError, EmailSender, Message
 
@@ -24,12 +24,13 @@ from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, Tenant
 from nexovue_api.auth.policy import MayConfigureDetection, MayOperateAlerts, MayOperateCases
 from nexovue_api.deps import AppSettings, DbSession, EmailAvailable, OptionalEmail
 from nexovue_api.errors.exceptions import InvalidRequestError
-from nexovue_api.findings import cases, service
+from nexovue_api.findings import cases, links, service
 from nexovue_api.findings.schemas import (
     CaseChanged,
     CaseChangeRequest,
     CaseFilter,
     CaseNote,
+    CreateLinkRequest,
     FalseAlarmRequest,
     FeedState,
     FindingChanged,
@@ -37,6 +38,8 @@ from nexovue_api.findings.schemas import (
     FindingForMember,
     FindingListResponse,
     FindingStats,
+    IssuePreview,
+    LinkChanged,
     NoteRequest,
     NoteWritten,
     TimelineResponse,
@@ -188,7 +191,12 @@ async def change_case(
         )
     elif request.case_state is not None:
         change = await cases.set_case_state(
-            db, actor=identity.user, finding_id=finding_id, wanted=request.case_state, now=now
+            db,
+            actor=identity.user,
+            finding_id=finding_id,
+            wanted=request.case_state,
+            now=now,
+            leave_issue_open=request.leave_issue_open,
         )
     else:
         raise InvalidRequestError("Say what to change: a case_state, or an assignee_id.")
@@ -326,4 +334,115 @@ async def accept_new_normal(
 ) -> FindingChanged:
     return await service.accept_new_normal(
         db, repository, actor=identity.user, finding_id=finding_id, now=datetime.now(UTC)
+    )
+
+
+# ------------------------------------------------------- tracker issues (T4.3)
+
+
+@router.get(
+    "/{finding_id}/links/preview",
+    summary="Exactly what a new issue would say, before it is created",
+)
+async def preview_issue(
+    identity: MayOperateCases,
+    db: DbSession,
+    settings: AppSettings,
+    finding_id: uuid.UUID,
+    place_id: Annotated[uuid.UUID, Query(description="The repository it would go to")],
+) -> IssuePreview:
+    """FR35: built here, from the case's facts; nothing is sent anywhere."""
+    return await links.preview(
+        db,
+        actor=identity.user,
+        finding_id=finding_id,
+        place_id=place_id,
+        base_url=settings.app_base_url,
+    )
+
+
+@router.post(
+    "/{finding_id}/links",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a tracker issue for the case; sync writes it",
+)
+async def create_issue(
+    identity: MayOperateCases,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    settings: AppSettings,
+    finding_id: uuid.UUID,
+    request: CreateLinkRequest,
+) -> LinkChanged:
+    """The link is `creating` and a job is added; the result arrives without the person
+    waiting on the page (FR35)."""
+    now = datetime.now(UTC)
+    root, link_id = await links.create(
+        db,
+        actor=identity.user,
+        finding_id=finding_id,
+        place_id=request.place_id,
+        base_url=settings.app_base_url,
+        now=now,
+    )
+    view = await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=root.id,
+        now=now,
+        email_available=email is not None,
+    )
+    return LinkChanged(finding=view, link_id=link_id)
+
+
+@router.post(
+    "/{finding_id}/links/{link_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Read and act on a waiting issue again now",
+)
+async def retry_issue(
+    identity: MayOperateCases,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    finding_id: uuid.UUID,
+    link_id: uuid.UUID,
+) -> LinkChanged:
+    now = datetime.now(UTC)
+    root = await links.retry(
+        db, actor=identity.user, finding_id=finding_id, link_id=link_id, now=now
+    )
+    view = await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=root.id,
+        now=now,
+        email_available=email is not None,
+    )
+    return LinkChanged(finding=view, link_id=link_id)
+
+
+@router.delete("/{finding_id}/links/{link_id}", summary="Remove an issue here; it stays there")
+async def remove_issue(
+    identity: MayOperateCases,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    finding_id: uuid.UUID,
+    link_id: uuid.UUID,
+) -> FindingForMember:
+    now = datetime.now(UTC)
+    root = await links.remove(
+        db, actor=identity.user, finding_id=finding_id, link_id=link_id, now=now
+    )
+    return await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=root.id,
+        now=now,
+        email_available=email is not None,
     )

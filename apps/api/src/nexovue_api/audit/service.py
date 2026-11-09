@@ -156,6 +156,10 @@ CASE_ASSIGNED: Final = "case.assigned"
 CASE_RESOLVED: Final = "case.resolved"
 CASE_REOPENED: Final = "case.reopened"
 CASE_NOTE_DELETED: Final = "note.deleted"
+# F22 Step 4. Requesting an issue sends data to a third party; removing a link changes
+# what the case follows (design, *Audit*). A retry repeats a recorded act: none.
+LINK_ISSUE_REQUESTED: Final = "link.issue_requested"
+LINK_REMOVED: Final = "link.removed"
 # F22. Connecting sends data to a third party, and a key replaced or a connection
 # removed changes who can write to a customer's tracker (design, *Audit*).
 CONNECTION_CREATED: Final = "connection.created"

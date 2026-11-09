@@ -33,7 +33,16 @@ from nexovue_platform.alerts.model import (
     SEVERITIES,
 )
 from nexovue_platform.cases import CASE_EMAIL_KINDS, EVENT_ACTOR_KINDS, NOTE_MAX_LENGTH
-from nexovue_platform.connections import CONNECTION_FAILURES, CONNECTION_KINDS, CONNECTION_STATES
+from nexovue_platform.connections import (
+    COMMENT_KINDS,
+    CONNECTION_FAILURES,
+    CONNECTION_KINDS,
+    CONNECTION_STATES,
+    ISSUE_STATES,
+    LINK_FAILURES,
+    LINK_ROLES,
+    LINK_STATUSES,
+)
 from nexovue_platform.detection import (
     CASE_RESOLUTIONS,
     CASE_STATES,
@@ -2073,6 +2082,121 @@ class ConnectionRepository(Base):
             ondelete="SET NULL (public_allowed_by)",
             name="fk_connection_repositories_public_allowed_by",
         ),
+    )
+
+
+class FindingLink(Base):
+    """A case's tracker issue (F22, FR35 to FR41): the one synced issue whose status
+    follows the case, or a reference shown beside it. No address is stored (D81): the
+    console builds it from `external_key`, which a strict pattern holds. `seen_state`
+    and `wanted_state` are what the reconcile compares (design, *The comparison*)."""
+
+    __tablename__ = "finding_links"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Always the case's root.
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    place_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    sync_status: Mapped[str] = mapped_column(Text, nullable=False)
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seen_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wanted_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment_wanted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment_written_at: Mapped[OptionalTimestamp]
+    # The one idle-warning comment this link may carry in its case's life (BR10).
+    idle_warning_at: Mapped[OptionalTimestamp]
+    # Closed in the tracker while the case signal was open: a hold (D73).
+    tracker_closed_at: Mapped[OptionalTimestamp]
+    # The preview's facts, while the issue is being created (AC83). `None` is SQL NULL,
+    # not JSON `null`, or the check that facts live only while creating would refuse it.
+    frozen_facts: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    first_attempt_at: Mapped[OptionalTimestamp]
+    next_sync_at: Mapped[OptionalTimestamp]
+    last_synced_at: Mapped[OptionalTimestamp]
+    gone_at: Mapped[OptionalTimestamp]
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
+    last_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_failure_field: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_finding_links_org_id_id"),
+        UniqueConstraint(
+            "finding_id", "connection_id", "external_id", name="uq_finding_links_issue_per_case"
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_links_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "connection_id"],
+            ["connections.org_id", "connections.id"],
+            ondelete="SET NULL (connection_id)",
+            name="fk_finding_links_connection",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "place_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="SET NULL (place_id)",
+            name="fk_finding_links_place",
+        ),
+        CheckConstraint(f"role IN ({_quoted(LINK_ROLES)})", name="role_is_known"),
+        CheckConstraint(f"sync_status IN ({_quoted(LINK_STATUSES)})", name="status_is_known"),
+        CheckConstraint(
+            f"(seen_state IS NULL OR seen_state IN ({_quoted(ISSUE_STATES)})) "
+            f"AND (wanted_state IS NULL OR wanted_state IN ({_quoted(ISSUE_STATES)}))",
+            name="issue_states_are_known",
+        ),
+        CheckConstraint(
+            f"comment_wanted IS NULL OR comment_wanted IN ({_quoted(COMMENT_KINDS)})",
+            name="comment_is_known",
+        ),
+        CheckConstraint(
+            f"last_failure IS NULL OR last_failure IN ({_quoted(LINK_FAILURES)})",
+            name="failure_is_known",
+        ),
+        CheckConstraint(
+            "(sync_status = 'creating') = (frozen_facts IS NOT NULL)",
+            name="facts_frozen_while_creating",
+        ),
+        CheckConstraint(
+            "sync_status <> 'creating' OR role = 'synced'", name="only_a_synced_link_is_created"
+        ),
+        CheckConstraint(
+            "sync_status IN ('creating', 'refused', 'stopped') OR external_key IS NOT NULL",
+            name="a_link_names_its_issue",
+        ),
+        CheckConstraint("failures >= 0", name="failures_count_up"),
+        Index(
+            "uq_finding_links_one_synced_per_case",
+            "finding_id",
+            unique=True,
+            postgresql_where=text("role = 'synced' AND sync_status <> 'stopped'"),
+        ),
+        Index(
+            "uq_finding_links_synced_once",
+            "connection_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("role = 'synced' AND sync_status <> 'stopped'"),
+        ),
+        Index(
+            "ix_finding_links_due",
+            "connection_id",
+            "next_sync_at",
+            postgresql_where=text("next_sync_at IS NOT NULL"),
+        ),
+        Index("ix_finding_links_org_id_finding_id", "org_id", "finding_id"),
     )
 
 

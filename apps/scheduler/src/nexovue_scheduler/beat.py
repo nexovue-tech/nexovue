@@ -41,6 +41,7 @@ from nexovue_platform.checks.task import (
     probe_queue,
     time_limits_for,
 )
+from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.deployment import HOSTED
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
@@ -100,6 +101,12 @@ EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
 # F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
 CASES_SWEEP_SECONDS: Final = 300
 CASES_SWEEP_ENTRY: Final = "sweep:cases"
+
+# F22 T4.5: due tracker links and each connection's hourly refresh, handed to
+# `scheduler-connections` every 30 seconds (a guess), and only while a connection is live
+# and connections are on (AC118), so no job waits for a role that is not running.
+CONNECTIONS_SWEEP_SECONDS: Final = 30
+CONNECTIONS_SWEEP_ENTRY: Final = "sweep:connections"
 
 # F28: releases seen in traffic, synced from the version rollup each minute on their own
 # capped queue (D31), so a slow read never takes an alert sweep's slot.
@@ -190,6 +197,8 @@ class Beat:
         self._measure_due_at = 0.0
         self._entries: dict[str, Entry] = {}
         self._refresh_due_at = 0.0
+        # Whether a tracker connection is live, read with the schedule (F22 T4.5).
+        self.connections_live = False
 
         # What the heartbeat reports. Counters rather than gauges, because the
         # question that matters is "is it still moving", and a number that has
@@ -323,6 +332,10 @@ class Beat:
                 self._engine, all_locations=self._settings.probe_locations
             )
             integrations = await load_active_integrations(self._engine)
+            async with self._engine.connect() as connection:
+                self.connections_live = await metrics.connections_live(
+                    connection, enabled=self._settings.connections_enabled
+                )
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
             # the entries we already hold are still correct, and dropping them
@@ -430,6 +443,12 @@ class Beat:
             CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
             RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
         }
+        if self.connections_live:
+            wanted[CONNECTIONS_SWEEP_ENTRY] = (
+                SWEEP_CONNECTIONS_TASK,
+                CONNECTIONS_SWEEP_SECONDS,
+                CONNECTIONS_INTERACTIVE_QUEUE,
+            )
         # A customer's own install charges nobody, so no payment has a grace period to end.
         if self._settings.nexovue_deployment == HOSTED:
             wanted[GRACE_SWEEP_ENTRY] = (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE)

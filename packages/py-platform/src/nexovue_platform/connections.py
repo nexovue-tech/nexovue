@@ -10,13 +10,23 @@ the fixed words instead (AC82). The check runs before the strict form replaces
 
 It also holds the connection vocabulary both services share (Step 3): the API adds
 connection jobs by these names and the scheduler runs them, so neither imports the
-other. Step 4 adds `issue_text()`; every outbound rendering must come back here.
+other. Step 4 adds `issue_text()` and the fixed comments, the one place an issue's
+words are made: the API renders the preview with it and the sync job the issue, from
+the same frozen facts (AC83).
 """
 
 from __future__ import annotations
 
+import math
 import re
-from typing import Final
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Final
+
+from nexovue_platform.alerts.model import SEVERITIES
+from nexovue_platform.detection import SIGNALS
+from nexovue_platform.jobs import JobRequest
 
 # What an issue or email says when the name itself must not leave (D48).
 A_SERVICE: Final = "a service"
@@ -53,7 +63,24 @@ CONVERT_MANIFEST_TASK: Final = "nexovue_scheduler.connections.convert_manifest"
 REFRESH_CONNECTION_TASK: Final = "nexovue_scheduler.connections.refresh"
 # "Test this connection" (FR30), and the first test after setup or a new key.
 CHECK_CONNECTION_TASK: Final = "nexovue_scheduler.connections.check"
-CONNECTION_TASKS: Final = (CONVERT_MANIFEST_TASK, REFRESH_CONNECTION_TASK, CHECK_CONNECTION_TASK)
+# Reads, compares and writes one connection's due links (design, *The job*).
+SYNC_CONNECTION_TASK: Final = "nexovue_scheduler.connections.sync"
+# Beat's, every 30 seconds while a tracker connection is live: one sync job per
+# connection with a due link, and each connection's hourly repository refresh.
+SWEEP_CONNECTIONS_TASK: Final = "nexovue_scheduler.connections.sweep"
+CONNECTION_TASKS: Final = (
+    CONVERT_MANIFEST_TASK,
+    REFRESH_CONNECTION_TASK,
+    CHECK_CONNECTION_TASK,
+    SYNC_CONNECTION_TASK,
+    SWEEP_CONNECTIONS_TASK,
+)
+
+# A sync job not started within this is dropped: the next sweep adds another (design).
+SYNC_JOB_EXPIRES_SECONDS: Final = 60
+# Its limits, a guess: a run that reaches the soft one stops cleanly, the rest stay due.
+SYNC_SOFT_LIMIT_SECONDS: Final = 240
+SYNC_HARD_LIMIT_SECONDS: Final = 270
 
 # What a connection test leaves in `job_results`, and how long it waits to be read.
 CONNECTION_TEST_RESULT_KIND: Final = "connection_test"
@@ -89,8 +116,8 @@ NEEDS_ATTENTION: Final = "needs_attention"
 DISCONNECTED: Final = "disconnected"
 LIVE_STATES: Final = tuple(state for state in CONNECTION_STATES if state != DISCONNECTED)
 
-# A synced or reference link's status (spec, *Link and connection states*); the table
-# that holds them arrives with Step 4 and freezes this list in its migration.
+# A synced or reference link's status (spec, *Link and connection states*), frozen by
+# the `finding_links` migration.
 LINK_STATUSES: Final = (
     "creating",
     "promoting",
@@ -119,6 +146,74 @@ CONNECTION_FAILURES: Final = (
     "manifest_refused",
     "unexpected_answer",
 )
+
+# A link's own failure: a connection's, plus what one issue or repository can do. An
+# enum and never a provider's text; the console words each by reader (FR44).
+LINK_FAILURES: Final = (
+    "unreachable",
+    "timed_out",
+    "server_error",
+    "rate_limited",
+    "unauthorized",
+    "unexpected_answer",
+    # The repository answers nothing to this App any more (design, row 10).
+    "repository_unreachable",
+    # A transfer took the issue to a repository this connection does not reach (row 11).
+    "moved_out_of_reach",
+    # Reopened in the tracker while another case is active on the service (row 7).
+    "reopen_blocked",
+    # The tracker refused a status write or comment for a lasting reason.
+    "write_refused",
+    # BR12: a public repository nobody allowed.
+    "public_repository",
+)
+LINK_ROLES: Final = ("synced", "reference")
+SYNCED: Final = "synced"
+# What a tracker's issue is, as nexovue stores it: open or closed, nothing more (BR10).
+ISSUE_STATES: Final = ("open", "closed")
+CREATING: Final = "creating"
+IN_SYNC: Final = "in_sync"
+STOPPED: Final = "stopped"
+NOT_FOLLOWED: Final = "not_followed"
+
+# The poll schedule (D49), one function of the case's state: guesses all.
+ACTIVE_POLL: Final = timedelta(minutes=5)
+RESOLVED_POLL: Final = timedelta(hours=1)
+# A resolved case's link is followed this long, then `not_followed` (FR39, AC85).
+FOLLOW_AFTER_RESOLVE: Final = timedelta(days=30)
+# A 404 from a repository still readable is read again daily for a week (row 9).
+GONE_RECHECK: Final = timedelta(days=1)
+GONE_RECHECK_FOR: Final = timedelta(days=7)
+# Each connection's repositories are read again hourly (FR42), by `sweep_connections`.
+REPOSITORY_REFRESH: Final = timedelta(hours=1)
+# A refusal once this many issues are being created on one connection (spec, a guess).
+MAX_CREATING_PER_CONNECTION: Final = 20
+
+
+def sync_job(*, org_id: str, connection_id: str) -> JobRequest:
+    """One `sync_connection` job, the same from a click and from the sweep, so the
+    conditional insert (`jobs.ENQUEUE_UNLESS_WAITING`) sees a waiting one (AC48)."""
+    return JobRequest(
+        task=SYNC_CONNECTION_TASK,
+        queue=CONNECTIONS_QUEUE,
+        kwargs=connection_job_arguments(org_id=org_id, connection_id=connection_id),
+        org_id=org_id,
+        expires_seconds=SYNC_JOB_EXPIRES_SECONDS,
+        soft_limit_seconds=SYNC_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=SYNC_HARD_LIMIT_SECONDS,
+    )
+
+
+def refresh_job(*, org_id: str, connection_id: str) -> JobRequest:
+    """One repository refresh, as the hourly sweep adds it."""
+    return JobRequest(
+        task=REFRESH_CONNECTION_TASK,
+        queue=CONNECTIONS_INTERACTIVE_QUEUE,
+        kwargs=connection_job_arguments(org_id=org_id, connection_id=connection_id),
+        org_id=org_id,
+        expires_seconds=SYNC_JOB_EXPIRES_SECONDS,
+    )
+
 
 # A failing connection becomes `failing` after this many straight failures (AC79).
 FAILURES_BEFORE_FAILING: Final = 5
@@ -172,6 +267,27 @@ def is_repository_key(key: str) -> bool:
     return _REPOSITORY_KEY.fullmatch(key) is not None
 
 
+def is_issue_key(key: str) -> bool:
+    """Whether `key` is a GitHub `owner/name#number` or a Jira key, the only forms an
+    issue is stored by (FR40)."""
+    return (
+        _GITHUB_ISSUE_KEY.fullmatch(key) is not None or _JIRA_ISSUE_KEY.fullmatch(key) is not None
+    )
+
+
+def github_issue_key(repository: str, number: int) -> str | None:
+    """`owner/name#number`, or None when either part is outside the strict forms."""
+    key = f"{repository}#{number}"
+    return key if _GITHUB_ISSUE_KEY.fullmatch(key) is not None else None
+
+
+def split_github_issue_key(key: str) -> tuple[str, int]:
+    issue = _GITHUB_ISSUE_KEY.fullmatch(key)
+    if issue is None:
+        raise ValueError("the key is not a GitHub issue key")
+    return issue["repository"], int(issue["number"])
+
+
 def link_url(kind: str, site: str | None, external_key: str) -> str:
     """The issue's address, built here from its strict key (D81): `finding_links` stores
     no address, so one an outside system chose can never reach a colleague's click."""
@@ -187,3 +303,233 @@ def link_url(kind: str, site: str | None, external_key: str) -> str:
             raise ValueError("the key is not a Jira issue key")
         return f"https://{site}/browse/{external_key}"
     raise ValueError(f"a {kind} connection does not hold issues")
+
+
+# ------------------------------------------------------------------ issue text
+# Design, *Issue text: outbound escaping*. Facts are a typed value holding numbers,
+# enums, the strict name and nexovue's own link back: there is no field a title, a
+# note, an endpoint or a model's words could arrive by (AC42, D48). A preview and the
+# issue the job writes render the same frozen facts, so their bytes match (AC83).
+
+_SIGNAL_TITLE: Final = {
+    "slower": "slower than normal",
+    "failing": "failing more than normal",
+    "traffic": "losing traffic",
+}
+# What moved, and the pronoun its range takes: "errors" are plural.
+_SIGNAL_MEASURE: Final = {
+    "slower": ("latency", "its"),
+    "failing": ("errors", "their"),
+    "traffic": ("traffic", "its"),
+}
+# A ratio at or past this reads as a whole number: "25x", not "25.0x".
+_WHOLE_RATIO_FROM: Final = 10
+_LINK_BACK: Final = re.compile(r"https?://[^\s<>`\[\]()]+/findings/(?P<finding>[0-9a-f-]{36})")
+_FACT_FIELDS: Final = frozenset(
+    {"finding_id", "signal", "ratio", "severity", "since", "service", "link_back"}
+)
+SIGNIN_LINE: Final = "This link needs a nexovue account. Ask your admin for an invitation."
+ISSUE_LABEL: Final = "nexovue"
+
+
+@dataclass(frozen=True, slots=True)
+class IssueFacts:
+    """What an issue may say. Frozen on the link at the click (`frozen_facts`)."""
+
+    finding_id: str
+    signal: str
+    # The leading signal's current reading over its normal; None when either is missing.
+    ratio: float | None
+    severity: str
+    since: datetime
+    # Already in strict form, or the fixed words `a service`.
+    service: str
+    # nexovue's own address for the finding, built from `APP_BASE_URL`.
+    link_back: str
+
+    def __post_init__(self) -> None:
+        if self.signal not in SIGNALS:
+            raise ValueError(f"signal must be one of {SIGNALS}")
+        if self.severity not in SEVERITIES:
+            raise ValueError(f"severity must be one of {SEVERITIES}")
+        if self.ratio is not None and (not math.isfinite(self.ratio) or self.ratio < 0):
+            raise ValueError("ratio must be a finite, non-negative number")
+        if self.service != A_SERVICE and strict_name(self.service) != self.service:
+            raise ValueError("service must be in strict form")
+        link = _LINK_BACK.fullmatch(self.link_back)
+        if link is None or link["finding"] != self.finding_id:
+            raise ValueError("link_back must be nexovue's address for this finding")
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self) | {"since": self.since.astimezone(UTC).isoformat()}
+
+    @classmethod
+    def from_json(cls, frozen: dict[str, Any]) -> IssueFacts:
+        """The copy frozen at the click, checked again: it is a stored value, and a
+        tampered one must not reach a tracker."""
+        if set(frozen) != _FACT_FIELDS:
+            raise ValueError("frozen facts hold exactly the issue's fields")
+        try:
+            since = datetime.fromisoformat(frozen["since"])
+            ratio = frozen["ratio"]
+            return cls(
+                finding_id=str(uuid.UUID(str(frozen["finding_id"]))),
+                signal=frozen["signal"],
+                ratio=None if ratio is None else float(ratio),
+                severity=frozen["severity"],
+                since=since,
+                service=frozen["service"],
+                link_back=frozen["link_back"],
+            )
+        except (TypeError, KeyError, AttributeError) as unreadable:
+            raise ValueError("frozen facts are not readable") from unreadable
+
+
+def finding_link_back(base_url: str, finding_id: uuid.UUID | str) -> str:
+    return f"{base_url.rstrip('/')}/findings/{finding_id}"
+
+
+def issue_facts(
+    *,
+    finding_id: uuid.UUID | str,
+    signal: str,
+    current: float | None,
+    normal: float | None,
+    severity: str,
+    since: datetime,
+    service_name: str | None,
+    base_url: str,
+) -> IssueFacts:
+    """A finding's facts as an issue may carry them; the only way to build one."""
+    ratio = None if current is None or not normal else current / normal
+    return IssueFacts(
+        finding_id=str(uuid.UUID(str(finding_id))),
+        signal=signal,
+        ratio=ratio,
+        severity=severity,
+        since=since,
+        service=strict_name(service_name),
+        link_back=finding_link_back(base_url, finding_id),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class IssueText:
+    """One issue in each tracker's form: GitHub's Markdown, Jira's ADF."""
+
+    title: str
+    markdown: str
+    adf: dict[str, Any]
+
+
+def _times(ratio: float) -> str:
+    if ratio >= _WHOLE_RATIO_FROM:
+        return f"{round(ratio)}x"
+    return f"{round(ratio, 1):g}x"
+
+
+def _what_moved(facts: IssueFacts) -> str:
+    measure, its = _SIGNAL_MEASURE[facts.signal]
+    if facts.signal == "traffic":
+        if facts.ratio is None:
+            return f"{measure}, below {its} normal range"
+        return f"{measure}, {round(facts.ratio * 100)}% of {its} normal range"
+    if facts.ratio is None:
+        return f"{measure}, above {its} normal range"
+    return f"{measure}, {_times(facts.ratio)} {its} normal range"
+
+
+def _utc_minute(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _paragraph(*parts: tuple[str, bool]) -> dict[str, Any]:
+    """An ADF paragraph of plain text nodes; a part marked True carries the code mark."""
+    return {
+        "type": "paragraph",
+        "content": [
+            {"type": "text", "text": words, **({"marks": [{"type": "code"}]} if code else {})}
+            for words, code in parts
+            if words
+        ],
+    }
+
+
+def _adf(paragraphs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"type": "doc", "version": 1, "content": paragraphs}
+
+
+def issue_text(facts: IssueFacts) -> IssueText:
+    """The issue, from fixed sentences and numbers alone. The strict name sits in a
+    code span (GitHub) or a code mark (Jira); a title has no code span, so `GH-12` or a
+    hexadecimal name could still link there, which T4.8 renders against GitHub."""
+    named = facts.service != A_SERVICE
+    lines = [
+        f"What moved: {_what_moved(facts)}",
+        f"Since: {_utc_minute(facts.since)}",
+        f"Severity: {facts.severity}",
+    ]
+    link_lines = [f"Evidence, and the case: {facts.link_back}", SIGNIN_LINE]
+    on = f"`{facts.service}`" if named else facts.service
+    markdown = (
+        f"nexovue detected this on {on}.\n\n"
+        + "".join(f"- {line}\n" for line in lines)
+        + "\n"
+        + "".join(f"{line}\n" for line in link_lines)
+    )
+    opening = _paragraph(("nexovue detected this on ", False), (facts.service, named), (".", False))
+    adf = _adf(
+        [opening, *(_paragraph((line, False)) for line in [*lines, *link_lines])],
+    )
+    return IssueText(
+        title=f"nexovue: {_SIGNAL_TITLE[facts.signal]} on {facts.service}",
+        markdown=markdown,
+        adf=adf,
+    )
+
+
+# ------------------------------------------------------------------- comments
+# BR10: one fixed sentence per value of `finding_links.comment_wanted`, naming nobody.
+
+COMMENT_KINDS: Final = ("resolved", "false_alarm", "new_normal", "idle_warning")
+IDLE_WARNING: Final = "idle_warning"
+_COMMENTS: Final = {
+    "resolved": "The nexovue case for this issue was resolved, so nexovue closed it.",
+    "false_alarm": "The nexovue case for this issue ended as a false alarm, so nexovue closed it.",
+    "new_normal": "The nexovue case for this issue ended as the new normal, so nexovue closed it.",
+    "idle_warning": (
+        "nexovue will end its case for this issue on {ends_on} if nobody acts in nexovue. "
+        "The issue stays open."
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CommentText:
+    markdown: str
+    adf: dict[str, Any]
+
+
+def comment_text(kind: str, *, ends_on: date | None) -> CommentText:
+    if kind not in _COMMENTS:
+        raise ValueError(f"comment must be one of {COMMENT_KINDS}")
+    if kind == IDLE_WARNING and ends_on is None:
+        raise ValueError("the idle warning names the date the case ends")
+    words = _COMMENTS[kind].format(
+        ends_on="" if ends_on is None else f"{ends_on.day} {ends_on:%b %Y}"
+    )
+    return CommentText(markdown=words, adf=_adf([_paragraph((words, False))]))
+
+
+# The comment a person's ending owes with its close (FR38's table): a resolve and a new
+# normal close as completed, a false alarm as not planned.
+COMMENT_FOR_RESOLUTION: Final = {
+    "resolved": "resolved",
+    "false_alarm": "false_alarm",
+    "new_normal": "new_normal",
+}
+
+
+def close_reason_for(comment_wanted: str | None) -> str:
+    """GitHub's `state_reason` for nexovue's own close."""
+    return "not_planned" if comment_wanted == "false_alarm" else "completed"

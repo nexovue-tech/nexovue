@@ -1,5 +1,6 @@
-"""The connection jobs (F22 plan T3.6): converting a GitHub manifest code, refreshing what
-a connection reaches, and the connection test (FR30).
+"""The connection jobs (F22 plan T3.6, T4.5): converting a GitHub manifest code, refreshing
+what a connection reaches, the connection test (FR30), and the sync and its sweep, whose
+work is `sync.py`'s.
 
 **Kind-agnostic.** A job loads its connection, opens what it needs, asks the adapter for
 its kind (`trackers.tracker_for`), and writes what it learned through one state machine
@@ -18,11 +19,10 @@ an enum and a status. No lock is held across a call out.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, SealError, keyring_from
+from nexovue_platform.checks.sealing import ConfiguredKeys, SealError
 from nexovue_platform.connections import (
     CHECK_CONNECTION_TASK,
     CONNECTION_CREDENTIAL_PURPOSE,
@@ -33,21 +33,29 @@ from nexovue_platform.connections import (
     CONVERT_MANIFEST_TASK,
     GITHUB,
     REFRESH_CONNECTION_TASK,
-    TRACKER_KINDS,
+    SWEEP_CONNECTIONS_TASK,
+    SYNC_CONNECTION_TASK,
     connection_secret_owner,
 )
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from nexovue_scheduler.connections import github, states, trackers
-from nexovue_scheduler.connections.trackers import Reach, StoredConnection, TrackerFailure
+from nexovue_scheduler.connections import github, states, sync, trackers
+from nexovue_scheduler.connections.store import (
+    Loaded,
+    box,
+    load_connection,
+    stored_connection,
+    write_standing,
+)
+from nexovue_scheduler.connections.trackers import Reach, TrackerFailure
 from nexovue_scheduler.jobs import results
 from nexovue_scheduler.jobs.registry import Retry, task
 from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.settings import get_settings
 
-__all__ = ["Retry", "check", "convert_manifest", "refresh"]
+__all__ = ["Retry", "check", "convert_manifest", "refresh", "sync"]
 
 logger = get_logger(__name__)
 
@@ -58,15 +66,6 @@ _PASSING_CONVERSION_FAILURES: Final = ("unreachable", "timed_out", "server_error
 # ------------------------------------------------------------------- statements
 # Every one binds `org_id` and the connection's id (AC129).
 
-_LOAD: Final = text(
-    """
-    SELECT id, org_id, kind, state, sealed_credential, sealed_manifest_code, setup_expires_at,
-           github_app_id, github_installation_id, consecutive_failures, failing_since,
-           last_failure, last_failure_status
-    FROM connections
-    WHERE org_id = :org_id AND id = :connection_id AND state <> 'disconnected'
-    """
-)
 _DROP_CODE: Final = text(
     """
     UPDATE connections SET sealed_manifest_code = NULL, last_failure = :failure,
@@ -82,16 +81,6 @@ _STORE_APP: Final = text(
         last_failure = NULL, last_failure_status = NULL
     WHERE org_id = :org_id AND id = :connection_id AND sealed_manifest_code IS NOT NULL
       AND state = 'setting_up'
-    """
-)
-_STAND: Final = text(
-    """
-    UPDATE connections
-    SET state = :state, consecutive_failures = :consecutive_failures,
-        failing_since = :failing_since, last_failure = :last_failure,
-        last_failure_status = :last_failure_status,
-        last_ok_at = COALESCE(:last_ok_at, last_ok_at)
-    WHERE org_id = :org_id AND id = :connection_id AND state <> 'disconnected'
     """
 )
 _BIND: Final = text(
@@ -116,60 +105,29 @@ _UNREACHED_PLACES: Final = text(
       AND NOT (external_id = ANY(CAST(:reached AS text[])))
     """
 )
-
-
-@dataclass(frozen=True, slots=True)
-class _Loaded:
-    row: Any
-
-    @property
-    def standing(self) -> states.Standing:
-        return states.Standing(
-            state=self.row.state,
-            consecutive_failures=self.row.consecutive_failures,
-            failing_since=self.row.failing_since,
-            last_failure=self.row.last_failure,
-            last_failure_status=self.row.last_failure_status,
-        )
-
-
-async def _load(engine: AsyncEngine, org_id: str, connection_id: str) -> _Loaded | None:
-    async with engine.connect() as connection:
-        row = (
-            await connection.execute(_LOAD, {"org_id": org_id, "connection_id": connection_id})
-        ).one_or_none()
-    if row is None or row.kind not in TRACKER_KINDS:
-        logger.info("a connection job found no live connection", connection_id=connection_id)
-        return None
-    return _Loaded(row)
-
-
-def _box(keys: ConfiguredKeys, purpose: str) -> SealedBox:
-    return SealedBox(keyring_from(keys.current, keys.previous), purpose=purpose)
+# Design, row 10: links waiting on a repository that answers again resume at once (AC52).
+_RESUME_LINKS: Final = text(
+    """
+    UPDATE finding_links SET next_sync_at = :at
+    WHERE org_id = :org_id AND connection_id = :connection_id
+      AND last_failure = 'repository_unreachable'
+      AND sync_status NOT IN ('stopped', 'refused')
+      AND place_id IN (
+          SELECT id FROM connection_repositories
+          WHERE org_id = :org_id AND connection_id = :connection_id AND is_reachable)
+    """
+)
 
 
 async def _stand(
     engine: AsyncEngine, org_id: str, connection_id: str, standing: states.Standing
 ) -> None:
-    async with engine.begin() as connection:
-        await connection.execute(
-            _STAND,
-            {
-                "org_id": org_id,
-                "connection_id": connection_id,
-                "state": standing.state,
-                "consecutive_failures": standing.consecutive_failures,
-                "failing_since": standing.failing_since,
-                "last_failure": standing.last_failure,
-                "last_failure_status": standing.last_failure_status,
-                "last_ok_at": standing.last_ok_at,
-            },
-        )
+    await write_standing(engine, org_id, connection_id, standing)
 
 
 async def _failed(
     engine: AsyncEngine,
-    loaded: _Loaded,
+    loaded: Loaded,
     failure: TrackerFailure,
     *,
     now: datetime,
@@ -185,30 +143,10 @@ async def _failed(
     return standing
 
 
-def _stored(loaded: _Loaded, keys: ConfiguredKeys) -> StoredConnection:
-    """The row's facts and its opened credential; `TrackerFailure` if it will not open."""
-    row = loaded.row
-    if row.sealed_credential is None:
-        raise TrackerFailure("app_not_installed")
-    try:
-        credential = _box(keys, CONNECTION_CREDENTIAL_PURPOSE).open(
-            bytes(row.sealed_credential),
-            owner=connection_secret_owner(str(row.org_id), str(row.id)),
-        )
-    except (SealError, ValueError) as unreadable:
-        raise TrackerFailure("key_unreadable") from unreadable
-    return StoredConnection(
-        kind=row.kind,
-        credential=credential,
-        github_app_id=row.github_app_id,
-        github_installation_id=row.github_installation_id,
-    )
-
-
 def _tracker(
-    loaded: _Loaded, keys: ConfiguredKeys, endpoint: github.GitHubEndpoint | None
+    loaded: Loaded, keys: ConfiguredKeys, endpoint: github.GitHubEndpoint | None
 ) -> trackers.Tracker:
-    stored = _stored(loaded, keys)
+    stored = stored_connection(loaded, keys)
     if endpoint is None:
         return trackers.tracker_for(stored, private_allowed=_private_allowed())
     return github.GitHubTracker.for_connection(stored, endpoint)
@@ -228,7 +166,7 @@ async def convert_manifest(
 ) -> None:
     """Open the code, trade it for the App's key and webhook secret, seal both, and null
     the code in that one transaction (design, *Connecting GitHub*, step 4)."""
-    loaded = await _load(engine, org_id, connection_id)
+    loaded = await load_connection(engine, org_id, connection_id)
     row = None if loaded is None else loaded.row
     if row is None or row.kind != GITHUB or row.sealed_manifest_code is None:
         return
@@ -238,7 +176,7 @@ async def convert_manifest(
         return
     owner = connection_secret_owner(org_id, connection_id)
     try:
-        code = _box(keys, CONNECTION_MANIFEST_CODE_PURPOSE).open(
+        code = box(keys, CONNECTION_MANIFEST_CODE_PURPOSE).open(
             bytes(row.sealed_manifest_code), owner=owner
         )
     except (SealError, ValueError):
@@ -263,12 +201,12 @@ async def convert_manifest(
             _STORE_APP,
             {
                 **ids,
-                "credential": _box(keys, CONNECTION_CREDENTIAL_PURPOSE).seal(
+                "credential": box(keys, CONNECTION_CREDENTIAL_PURPOSE).seal(
                     converted.private_key, owner=owner
                 ),
                 "webhook_secret": None
                 if webhook is None
-                else _box(keys, CONNECTION_WEBHOOK_SECRET_PURPOSE).seal(webhook, owner=owner),
+                else box(keys, CONNECTION_WEBHOOK_SECRET_PURPOSE).seal(webhook, owner=owner),
                 "app_id": converted.app_id,
                 "app_slug": converted.app_slug,
             },
@@ -300,7 +238,7 @@ async def refresh(
 ) -> None:
     """Bind the connection's own installation and read every place it reaches. A place
     no longer listed stays, unreachable, so its links can say so (design, row 10)."""
-    loaded = await _load(engine, org_id, connection_id)
+    loaded = await load_connection(engine, org_id, connection_id)
     if loaded is None:
         return
     try:
@@ -336,6 +274,7 @@ async def _write_reach(
         await connection.execute(
             _UNREACHED_PLACES, {**ids, "reached": [place.external_id for place in reach.places]}
         )
+        await connection.execute(_RESUME_LINKS, {**ids, "at": now})
 
 
 # -------------------------------------------------------------------- the test
@@ -353,7 +292,7 @@ async def check(
 ) -> None:
     """Prove the stored credential works, move the state, and leave the result for the
     person who asked, under their organization (FR30)."""
-    loaded = await _load(engine, org_id, connection_id)
+    loaded = await load_connection(engine, org_id, connection_id)
     if loaded is None:
         return
     try:
@@ -426,3 +365,27 @@ def check_task(*, org_id: str, connection_id: str, request_id: str | None = None
             request_id=request_id,
         )
     )
+
+
+@task(SYNC_CONNECTION_TASK)
+def sync_task(*, org_id: str, connection_id: str) -> None:
+    with_engine(
+        lambda engine: sync.sync_connection(
+            engine,
+            org_id=org_id,
+            connection_id=connection_id,
+            keys=_keys(),
+            tracker_of=lambda stored: trackers.tracker_for(
+                stored, private_allowed=_private_allowed()
+            ),
+        )
+    )
+
+
+@task(SWEEP_CONNECTIONS_TASK)
+def sweep_task() -> None:
+    syncs, refreshes = with_engine(
+        lambda engine: sync.sweep_connections(engine, now=datetime.now(UTC))
+    )
+    if syncs or refreshes:
+        logger.info("connections swept", syncs=syncs, refreshes=refreshes)

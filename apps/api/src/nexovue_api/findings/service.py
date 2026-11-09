@@ -39,7 +39,7 @@ from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Finding as FindingRow
 from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import cases, queries
+from nexovue_api.findings import cases, links, queries
 from nexovue_api.findings.schemas import (
     CaseEndsBy,
     CaseFilter,
@@ -577,6 +577,9 @@ async def _member_view(
         case_ends_by=keeping.ends_by,
         deletes_on=keeping.deletes_on,
         joined_kept_count=keeping.joined_kept_count,
+        links=await links.links_of(
+            session, org_id=row.org_id, root_id=row.root_finding_id or row.id
+        ),
     )
 
 

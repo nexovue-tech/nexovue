@@ -52,7 +52,7 @@ from nexovue_api.errors.exceptions import (
     NotFoundError,
     PermissionDeniedError,
 )
-from nexovue_api.findings import queries
+from nexovue_api.findings import link_sync, queries
 from nexovue_api.findings.schemas import EmailOutcome
 
 NOT_FOUND: Final = "No such finding."
@@ -144,6 +144,42 @@ async def _root_of(
         if row.root_finding_id == root.id:
             return root
     return await _lock(session, org_id=org_id, finding_id=finding_id)
+
+
+# What the link routes (`links.py`) share with every other case act.
+load_finding = _load
+root_for_act = _root_of
+
+
+async def record_event(
+    session: AsyncSession,
+    kind: str,
+    row: FindingRow,
+    *,
+    at: datetime,
+    actor: User,
+    **fields: Any,
+) -> uuid.UUID:
+    return await _event(session, kind, row, at=at, **fields, **_person(actor))
+
+
+async def start_case_without_assignee(
+    session: AsyncSession, row: FindingRow, actor: User, *, at: datetime
+) -> FindingRow:
+    """A link starts a case with nobody assigned and no acknowledgement (D70, AC99)."""
+    return await _start_case(session, row, actor, at=at, assign_actor=False)
+
+
+def note_act_beyond_taking(root: FindingRow, actor: User, *, at: datetime) -> None:
+    """A note or a link is a person's act (FR26) and the first beyond taking (FR49):
+    the idle clock restarts, a warning ends, and the untouched end no longer applies."""
+    if root.case_state != "investigating":
+        return
+    root.case_activity_at = at
+    root.case_warned_at = None
+    root.case_worked_at = root.case_worked_at or at
+    if root.assignee_id == actor.id:
+        root.assignee_acted_at = at
 
 
 async def _named_assignee(session: AsyncSession, root: FindingRow) -> str:
@@ -295,11 +331,18 @@ async def set_case_state(
     finding_id: uuid.UUID,
     wanted: Literal["investigating", "resolved"],
     now: datetime,
+    leave_issue_open: bool = False,
 ) -> CaseChange:
     """`PATCH /case`'s state half: resolved resolves; investigating takes a finding
     with no case or an unassigned case, and reopens a resolved one (FR1, FR6)."""
     if wanted == "resolved":
-        return await resolve(session, actor=actor, finding_id=finding_id, now=now)
+        return await resolve(
+            session,
+            actor=actor,
+            finding_id=finding_id,
+            now=now,
+            leave_issue_open=leave_issue_open,
+        )
     peeked = await _load(session, org_id=actor.org_id, finding_id=finding_id)
     if peeked.root_finding_id is not None:
         peeked = await _load(session, org_id=actor.org_id, finding_id=peeked.root_finding_id)
@@ -460,24 +503,39 @@ async def _assignment_email(
 
 
 async def resolve(
-    session: AsyncSession, *, actor: User, finding_id: uuid.UUID, now: datetime
+    session: AsyncSession,
+    *,
+    actor: User,
+    finding_id: uuid.UUID,
+    now: datetime,
+    leave_issue_open: bool = False,
 ) -> CaseChange:
     """FR6: resolve an active case. In the same transaction, any open joined
-    finding leaves it (D44) and becomes a plain finding."""
+    finding leaves it (D44) and becomes a plain finding, and the synced issue is
+    asked to close with one comment, unless the person leaves it open (D72)."""
     root = await _root_of(session, org_id=actor.org_id, finding_id=finding_id)
     if root.case_state != "investigating":
         raise ConflictError(
             ALREADY_RESOLVED if root.case_state == "resolved" else CHANGED_MEANWHILE
         )
-    await _resolve_root(session, root, actor, resolution="resolved", at=now)
+    await _resolve_root(
+        session, root, actor, resolution="resolved", at=now, leave_issue_open=leave_issue_open
+    )
     await session.commit()
     return CaseChange(root=root, email=NO_EMAIL)
 
 
 async def _resolve_root(
-    session: AsyncSession, root: FindingRow, actor: User | None, *, resolution: str, at: datetime
+    session: AsyncSession,
+    root: FindingRow,
+    actor: User | None,
+    *,
+    resolution: str,
+    at: datetime,
+    leave_issue_open: bool = False,
 ) -> None:
-    """The shared ending every resolver runs (AC103): resolve, detach, events, audit."""
+    """The shared ending every resolver runs (AC103): resolve, detach, end a hold,
+    events, audit; and, being a person's, what the synced issue should become (FR38)."""
     resolved = await session.execute(
         text(RESOLVE_CASE_SQL),
         resolve_case_parameters(
@@ -499,6 +557,9 @@ async def _resolve_root(
         await _event(
             session, "finding_left_case", root, at=at, left_finding_id=left_id, **actor_fields
         )
+    await link_sync.want_for_resolve(
+        session, root, resolution=resolution, leave_issue_open=leave_issue_open, at=at
+    )
     await _event(session, "case_resolved", root, at=at, resolution=resolution, **actor_fields)
     await _audit(session, audit.CASE_RESOLVED, root, actor, {"resolution": resolution})
     await session.refresh(root)
@@ -529,6 +590,7 @@ async def reopen(
     # A reopen is an act beyond taking (FR49).
     root.case_worked_at = root.case_worked_at or now
     await _join_open(session, root, actor, at=now)
+    await link_sync.want_for_reopen(session, root, at=now)
     await _event(session, "case_reopened", root, at=now, **_person(actor))
     await _audit(session, audit.CASE_REOPENED, root, actor)
     await session.commit()

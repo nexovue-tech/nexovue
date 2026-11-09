@@ -100,8 +100,10 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "finding_events": "findings",
     "finding_notes": "findings",
     "finding_emails_owed": "findings",
-    # F22. What a connection reaches goes with the connection.
+    # F22. What a connection reaches goes with the connection. A case's tracker
+    # issues go with its finding; a connection or place that goes leaves them as text.
     "connection_repositories": "connections",
+    "finding_links": "findings",
     # F19. Targets and their change history go with the project; status and daily
     # counts with their target. The history and a purged target's months have no key
     # to the target, because they outlive its purge (FR31, D46).

@@ -379,6 +379,23 @@ describe("a connection that exists (FR31, AC113)", () => {
   });
 });
 
+describe("disconnect says the real counts (AC114)", () => {
+  it.each([
+    [12, "12 issues stop syncing. The issues stay in GitHub."],
+    [1, "1 issue stops syncing. The issue stays in GitHub."],
+    [0, "No issue is syncing now."],
+  ])("with %i synced issues", async (count, words) => {
+    stubApi("owner", overview([view({ synced_links: count })]));
+    const { container } = await mount(ConnectionsScreen, "/settings/connections");
+    const open = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Disconnect",
+    );
+    await act(async () => open?.click());
+    expect(container.textContent).toContain(words);
+    expect(container.textContent).toContain("To stop it for good, delete the App in GitHub.");
+  });
+});
+
 describe("whose screen it is", () => {
   it.each(["member", "viewer"] as const)("a %s is told who can open it", async (role) => {
     stubApi(role, overview([view()]));

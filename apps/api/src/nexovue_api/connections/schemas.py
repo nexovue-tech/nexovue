@@ -86,6 +86,8 @@ class ConnectionView(BaseModel):
     last_failure: str | None = None
     last_failure_status: int | None = None
     repositories: list[ConnectionPlace] = Field(default_factory=list)
+    # Issues whose status this connection keeps in step: Disconnect's real count (FR32).
+    synced_links: int = 0
 
 
 class ConnectionsOverview(BaseModel):

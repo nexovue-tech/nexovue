@@ -14,6 +14,8 @@ import { useConnections, useConnectionTest, useDisconnect, useReplaceAppKey } fr
 import {
   ACTION_LABEL,
   DISCONNECT_LEAVES,
+  DISCONNECT_STEP,
+  disconnectCount,
   EMAIL_OFF,
   failureFix,
   STATUS_ONLY,
@@ -211,7 +213,11 @@ function Connected({ connection }: { connection: ConnectionView }) {
       <TestOutcome result={test.data} error={test.error} />
       {replacing ? <ReplaceKey connectionId={connection.id} /> : null}
       {disconnecting ? (
-        <Disconnect connectionId={connection.id} onCancel={() => setDisconnecting(false)} />
+        <Disconnect
+          connectionId={connection.id}
+          syncedLinks={connection.synced_links ?? 0}
+          onCancel={() => setDisconnecting(false)}
+        />
       ) : null}
       <Repositories places={connection.repositories} />
     </section>
@@ -281,11 +287,21 @@ function ReplaceKey({ connectionId }: { connectionId: string }) {
   );
 }
 
-function Disconnect({ connectionId, onCancel }: { connectionId: string; onCancel: () => void }) {
+function Disconnect({
+  connectionId,
+  syncedLinks,
+  onCancel,
+}: {
+  connectionId: string;
+  syncedLinks: number;
+  onCancel: () => void;
+}) {
   const disconnect = useDisconnect();
   return (
     <ConfirmPanel label="Disconnect GitHub">
+      <p className="max-w-prose text-ink text-sm">{disconnectCount(syncedLinks)}</p>
       <p className="max-w-prose text-ink text-sm">{DISCONNECT_LEAVES}</p>
+      <p className="max-w-prose text-ink text-sm">{DISCONNECT_STEP}</p>
       <div className="mt-3 flex flex-wrap gap-3">
         <Button
           pending={disconnect.isPending}

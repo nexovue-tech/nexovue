@@ -183,6 +183,15 @@ class QueueReadings:
     connections_active: int = 0
 
 
+async def connections_live(connection: AsyncConnection, *, enabled: bool) -> bool:
+    """Whether a tracker connection is live and connections are on. Beat reads it for
+    `connections_active` and to decide whether `sweep_connections` is scheduled; with
+    connections turned off nothing is expected to run, whatever rows remain (AC118)."""
+    return enabled and bool(
+        await connection.scalar(_CONNECTIONS_ACTIVE, {"kinds": list(TRACKER_KINDS)})
+    )
+
+
 async def read_queues(
     connection: AsyncConnection, *, now: datetime, connections_enabled: bool = True
 ) -> QueueReadings:
@@ -197,10 +206,7 @@ async def read_queues(
         _DETECTION_EVENTS, {"recent_seconds": DETECTION_EVENTS_RECENT_SECONDS}
     )
     recent = dict.fromkeys(DETECTION_EVENT_KINDS, 0) | {row.kind: int(row.recent) for row in events}
-    # With connections turned off nothing is expected to run, whatever rows remain (AC118).
-    connected = connections_enabled and bool(
-        await connection.scalar(_CONNECTIONS_ACTIVE, {"kinds": list(TRACKER_KINDS)})
-    )
+    connected = await connections_live(connection, enabled=connections_enabled)
     return QueueReadings(
         jobs_ready={row.queue: int(row.ready) for row in jobs},
         oldest_ready_seconds={row.queue: float(row.oldest) for row in jobs},

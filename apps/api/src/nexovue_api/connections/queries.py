@@ -5,13 +5,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from nexovue_platform.connections import DISCONNECTED, GITHUB, SETTING_UP
-from sqlalchemy import select, update
+from nexovue_platform.connections import DISCONNECTED, GITHUB, SETTING_UP, STOPPED, SYNCED
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
     Connection,
     ConnectionRepository,
+    FindingLink,
     JobResult,
     Organization,
 )
@@ -122,3 +123,43 @@ async def test_outcome(
         )
     )
     return payload
+
+
+async def synced_link_counts(
+    session: AsyncSession, *, org_id: uuid.UUID, connection_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Live synced links per connection: what a disconnect would stop (FR32, AC114)."""
+    if not connection_ids:
+        return {}
+    rows = await session.execute(
+        select(FindingLink.connection_id, func.count())
+        .where(
+            FindingLink.org_id == org_id,
+            FindingLink.connection_id.in_(connection_ids),
+            FindingLink.role == SYNCED,
+            FindingLink.sync_status != STOPPED,
+        )
+        .group_by(FindingLink.connection_id)
+    )
+    return {connection_id: int(count) for connection_id, count in rows.all() if connection_id}
+
+
+async def stop_links(session: AsyncSession, *, org_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """A disconnect's links: stopped, nothing pending, no hold, no facts kept (FR32)."""
+    await session.execute(
+        update(FindingLink)
+        .where(
+            FindingLink.org_id == org_id,
+            FindingLink.connection_id == connection_id,
+            FindingLink.sync_status != STOPPED,
+        )
+        .values(
+            sync_status=STOPPED,
+            next_sync_at=None,
+            frozen_facts=None,
+            wanted_state=None,
+            comment_wanted=None,
+            tracker_closed_at=None,
+        )
+        .execution_options(synchronize_session=False)
+    )

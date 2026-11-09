@@ -58,6 +58,10 @@ STATEMENTS: Final[dict[str, tuple[str, dict[str, Any]]]] = {
             at=AT,
         ),
     ),
+    "clear_hold": (
+        cases.CLEAR_HOLD_SQL,
+        cases.clear_hold_parameters(org_id=ORG, finding_id=uuid.uuid4()),
+    ),
     "email_owed": (
         cases.RECORD_EMAIL_OWED_SQL,
         cases.email_owed_parameters(
@@ -103,6 +107,23 @@ def test_a_resolve_clears_the_idle_warning() -> None:
     reopened case and repeat the email."""
     assert "case_warned_at = NULL" in cases.RESOLVE_CASE_SQL
     assert "case_warned_at = NULL" in cases.REOPEN_CASE_SQL
+
+
+def test_a_person_s_act_that_wants_what_was_last_seen_leaves_nothing_pending() -> None:
+    """Design, *The comparison*: wanting what the tracker last said is not a change."""
+    assert "seen_state IS NOT DISTINCT FROM :wanted_state THEN NULL" in cases.SET_WANTED_STATE_SQL
+
+
+@pytest.mark.parametrize(
+    ("wanted", "comment"), [("resolved", None), (None, None), ("closed", "thanks")]
+)
+def test_a_wanted_state_or_comment_outside_the_vocabulary_is_refused(
+    wanted: Any, comment: Any
+) -> None:
+    with pytest.raises(ValueError):
+        cases.set_wanted_state_parameters(
+            org_id=ORG, finding_id=uuid.uuid4(), wanted_state=wanted, comment_wanted=comment, at=AT
+        )
 
 
 def test_an_unknown_resolution_is_refused() -> None:

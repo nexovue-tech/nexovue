@@ -30,6 +30,8 @@ def test_every_task_name_is_the_scheduler_s_connections_package() -> None:
         connections.CONVERT_MANIFEST_TASK,
         connections.REFRESH_CONNECTION_TASK,
         connections.CHECK_CONNECTION_TASK,
+        connections.SYNC_CONNECTION_TASK,
+        connections.SWEEP_CONNECTIONS_TASK,
     } == set(names)
 
 

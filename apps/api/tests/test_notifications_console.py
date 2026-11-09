@@ -154,6 +154,36 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "severity": "critical",
             "link": "https://app.nexovue.com/findings/1",
         },
+        # F22 Step 4: what the cases sweep owes about a case and a connection.
+        Message.CASE_TRACKER_CLOSED: {
+            "service": "checkout",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        Message.CASE_TRACKER_CLOSED_SIGNAL_OPEN: {
+            "service": "checkout",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        Message.CASE_IDLE_WARNING: {
+            "service": "checkout",
+            "ends_on": "16 Nov 2026",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        Message.CONNECTION_NEEDS_ATTENTION: {
+            "tracker": "GitHub",
+            "what": "the App was uninstalled.",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
+        Message.CONNECTION_FAILING: {
+            "tracker": "GitHub",
+            "what": "the tracker did not answer in time.",
+            "failing_since": "2026-11-08 14:02 UTC",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
+        Message.CONNECTION_EXPIRING: {
+            "tracker": "Jira",
+            "expires_on": "23 Nov 2026",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 

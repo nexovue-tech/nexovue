@@ -18,7 +18,13 @@ import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
 import { setSelectedProjectId, useSelection } from "@/shared/selection";
 
-import type { FindingDetail, FindingSignal, FindingSignalKind, SignalSeries } from "./api";
+import type {
+  CaseLink,
+  FindingDetail,
+  FindingSignal,
+  FindingSignalKind,
+  SignalSeries,
+} from "./api";
 import { useFinding, useFindingAction } from "./api";
 import { CaseSection } from "./CaseSection";
 import { backLinkLabel, parseFeedSearch } from "./feed-filter";
@@ -37,6 +43,12 @@ import {
   signalPlot,
   successSentence,
 } from "./finding-page";
+import {
+  falseAlarmIssueSentence,
+  linkAnnouncement,
+  resolveDoneSentence,
+  syncedLink,
+} from "./link-words";
 
 const TONE_TEXT = {
   critical: "text-critical-text",
@@ -160,7 +172,8 @@ function useChangeAnnouncements(finding: FindingDetail): {
 } {
   const [message, setMessage] = useState("");
   const previous = useRef<
-    { state: string; caseState: string | null; assignee: string | null } | undefined
+    | { state: string; caseState: string | null; assignee: string | null; links: CaseLink[] }
+    | undefined
   >(undefined);
   const ownActAt = useRef(0);
 
@@ -169,6 +182,7 @@ function useChangeAnnouncements(finding: FindingDetail): {
       state: finding.state,
       caseState: finding.case_state,
       assignee: finding.assignee_id ?? null,
+      links: finding.links ?? [],
     };
     const before = previous.current;
     previous.current = now;
@@ -188,8 +202,17 @@ function useChangeAnnouncements(finding: FindingDetail): {
           : `Assigned to ${finding.assignee_name ?? "someone"} now.`,
       );
     }
+    // FR45, AC105: a link's status moving is announced; its age never is.
+    const links = linkAnnouncement(before.links, now.links);
+    if (links != null) changes.push(links);
     if (changes.length > 0) setMessage(changes.join(" "));
-  }, [finding.state, finding.case_state, finding.assignee_id, finding.assignee_name]);
+  }, [
+    finding.state,
+    finding.case_state,
+    finding.assignee_id,
+    finding.assignee_name,
+    finding.links,
+  ]);
 
   return {
     message,
@@ -282,6 +305,11 @@ function Controls({
   // Also decides whether a false alarm returns the finding's minutes to the normal (D28).
   const canConfigure = useCan("configure_detection");
   const allowed = availableActions(finding, { canOperate, canConfigure });
+  // FR7, AC58: a false alarm on a root with an active case closes its synced issue.
+  const issueClosed =
+    finding.root_finding_id == null && finding.case_state === "investigating"
+      ? falseAlarmIssueSentence(finding)
+      : null;
   const act = useFindingAction(finding.id);
   const quiet = useQuietService(finding.project_id, finding.service_name ?? "");
   const [armed, setArmed] = useState<Armed>();
@@ -295,6 +323,8 @@ function Controls({
 
   const run = (action: DoneAction) => {
     const wasOpen = finding.state !== "closed";
+    // AC58: the success line names the issue too, closed by sync or already closed.
+    const issueDone = issueClosedDone(finding);
     setDone("");
     setChangedMeanwhile("");
     act.mutate(
@@ -302,7 +332,11 @@ function Controls({
       {
         onSuccess: (changed) => {
           setArmed(undefined);
-          setDone(successSentence(action, changed, { wasOpen }));
+          setDone(
+            [successSentence(action, changed, { wasOpen }), issueDone]
+              .filter((part) => part != null)
+              .join(" "),
+          );
         },
         onError: (error) => {
           if (!isConflict(error)) return;
@@ -414,6 +448,7 @@ function Controls({
               ? " Its minutes become part of the normal again."
               : " Its minutes stay out of the normal: only an admin's mark returns them."}
           </p>
+          {issueClosed != null ? <p className={PROSE}>{issueClosed}</p> : null}
           <label className="flex flex-col gap-1.5">
             <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
               Why (optional)
@@ -678,4 +713,13 @@ function Feedback({ finding }: { finding: FindingDetail }) {
       <p className={`text-ink text-sm ${PROSE}`}>{finding.feedback_reason}</p>
     </section>
   );
+}
+
+/** After a false alarm or new normal that ended the case: what happens to its issue. */
+function issueClosedDone(finding: FindingDetail): string | null {
+  if (finding.root_finding_id != null || finding.case_state !== "investigating") return null;
+  const link = syncedLink(finding);
+  if (link?.external_key == null) return null;
+  const closed = link.tracker_closed_at != null || link.seen_state === "closed";
+  return resolveDoneSentence(link.external_key, closed ? "already_closed" : "will_close");
 }

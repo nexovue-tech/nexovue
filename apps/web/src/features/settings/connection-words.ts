@@ -17,6 +17,15 @@ export const NEEDS_ATTENTION_BANNER = "GitHub needs attention. Open settings.";
 export const TEST_WORKS = "The connection works.";
 export const DISCONNECT_LEAVES =
   "This deletes the stored key and stops all sync. The App stays in your GitHub account until you delete it there. A backup may hold a sealed copy.";
+/** FR32: the step that ends it on GitHub's side (D38). */
+export const DISCONNECT_STEP = "To stop it for good, delete the App in GitHub.";
+
+/** FR32, AC114: how many synced issues a disconnect stops, from the real count. */
+export function disconnectCount(syncedLinks: number): string {
+  if (syncedLinks === 0) return "No issue is syncing now.";
+  if (syncedLinks === 1) return "1 issue stops syncing. The issue stays in GitHub.";
+  return `${syncedLinks} issues stop syncing. The issues stay in GitHub.`;
+}
 export const INVALID_SETUP = "This setup link is not valid. Nothing was changed.";
 export const EXPIRED_SETUP = "This setup link has expired. Nothing was changed.";
 

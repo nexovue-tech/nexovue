@@ -266,6 +266,27 @@ CROSS_TENANT_STATEMENTS: Final = (
         f"{_SWEEP}: untouched cases 72 hours after recovery (FR49)",
     ),
     _across("cases", "_DUE_WARNINGS", f"{_SWEEP}: active cases owed their idle warning (FR26)"),
+    # What the cases sweep sends (F22 T4.6): each first read finds what is owed in every
+    # organization; each row is then taken in its own transaction binding its `org_id`.
+    _across(
+        "case_emails",
+        "_OWED",
+        f"{_SWEEP}: the case emails owed, oldest first, each sent once (D90, AC94)",
+    ),
+    _across(
+        "case_emails",
+        "_TO_TELL",
+        f"{_SWEEP}: the connections whose admins are owed a failure or expiry email (FR33)",
+    ),
+    # Tracker sync (F22 T4.5): the sweep finds which connections have a due link or a due
+    # refresh; each job it adds carries the connection's own `org_id`, and the job binds
+    # it on every read (AC129).
+    _across(
+        "connections.sync",
+        "_CONNECTIONS_DUE",
+        f"{_SWEEP}: the connections with a due link or a due hourly refresh, so each is "
+        "handed its own job (design, *The job*)",
+    ),
     # Billing and erasure.
     _across("billing", "_END_LAPSED_GRACE", f"{_SWEEP}: subscriptions whose grace ended"),
     _across(
@@ -516,6 +537,8 @@ def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
     assert "nexovue_scheduler.releases.sync" in modules
     # F22 T3.6: the connection jobs bind the job's own organization on every read (AC129).
     assert "nexovue_scheduler.connections.tasks" in modules
+    # F22 T4.5: and so does the sync, its sweep aside.
+    assert {"nexovue_scheduler.connections.sync", "nexovue_scheduler.connections.store"} <= modules
 
 
 def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None:
