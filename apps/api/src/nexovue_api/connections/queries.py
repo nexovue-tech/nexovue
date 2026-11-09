@@ -72,7 +72,7 @@ async def live_github_connection(session: AsyncSession, *, org_id: uuid.UUID) ->
 
 
 async def lock_setup(
-    session: AsyncSession, *, org_id: uuid.UUID, state_hash: bytes
+    session: AsyncSession, *, org_id: uuid.UUID, state_hash: str
 ) -> Connection | None:
     """The setup this `state` was issued for, in the caller's organization, if unused."""
     found: Connection | None = await session.scalar(

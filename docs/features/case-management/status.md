@@ -202,6 +202,16 @@ afterwards.
 - The resolve parity (AC103) is proved row by row; reopening by person and by sync shares
   `REOPEN_CASE_SQL` and is not compared row by row.
 
+**CI fix, 2026-11-09: a setup's state hash is hex text (migration 0065).** CI (run
+42650457940) failed `test_keys_live.py::test_every_binary_column_is_a_sealed_column_the_rotation_reseals`:
+0055 stored `connections.setup_state_hash` as `bytea`, and that test holds every binary
+column to be a sealed one the key rotation reseals (F28 AC3). The column was wrong, not
+the test: a hash is not sealed and cannot be resealed, and naming it as an exception
+would make "binary means sealed" false, the property that stops a sealed column being
+left out of `keys.SEALED_COLUMNS`. Every other token hash in the schema is 64 hex
+characters, so 0065 converts this one with `encode(…, 'hex')` and the code compares a
+`hexdigest()`. The design names the column and not its type, so it needs no change.
+
 
 ## Step 3 built, 2026-11-08
 

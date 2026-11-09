@@ -236,7 +236,7 @@ async def test_starting_creates_a_private_app_s_manifest_and_keeps_only_the_stat
 
     row = await _row(db, started.connection_id)
     assert (row.kind, row.state, row.setup_user_id) == ("github", "setting_up", tenant.user.id)
-    assert row.setup_state_hash == hashlib.sha256(started.state.encode()).digest()
+    assert row.setup_state_hash == hashlib.sha256(started.state.encode()).hexdigest()
     assert row.setup_expires_at == NOW + timedelta(hours=1)
     manifest = started.manifest
     assert manifest["public"] is False

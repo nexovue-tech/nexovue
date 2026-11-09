@@ -56,11 +56,17 @@ READER_DSN: Final = os.environ.get(
 WRITER_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
 )
-# The latency tolerance AC14 uses, set by T2.8's measurement (below and `status.md`): a
-# merge of 30,000 samples over ten stored parts, read 20 times through one route, never
-# moved, on ClickHouse 26.3. ClickHouse still documents `quantile` as non-deterministic,
-# so a difference here one day means measuring again, not widening this by hand.
-LATENCY_TOLERANCE: Final = 0.0
+# The latency tolerance AC14 uses past 8,192 samples, set by T2.8 (below and `status.md`).
+# `quantilesMerge` keeps a reservoir of 8,192; merging more samples than that draws from
+# each state, and a read whose stored parts are not yet merged merges them in parallel,
+# in whatever order its threads finish, so two reads of one window can disagree. The
+# bound is that sampling error: for this fixture's p50 (30,000 samples, 0 to 996 ms) one
+# read's standard error is 0.95%, and 20 reads, taken as independent draws (which
+# overstates it), span more than 6.65% once in 10,000 runs. Measured: 2.6% over 450
+# parallel reads with merges held, 0.6% in CI run 42650457940. p95 and p99 sit tighter,
+# so one figure covers all three. At or under 8,192 samples none is dropped, and AC14
+# compares to the digit.
+LATENCY_TOLERANCE: Final = 0.07
 SLOT_WAIT: Final = 5.0
 T2_8_READS: Final = 20
 
@@ -270,10 +276,11 @@ async def test_ac14_panels_equal_the_routes_they_came_from_over_a_fixed_window(
     assert _line(panels["p_errors"], "error_rate") == [
         point["error_rate"] for point in overview["points"]
     ]
+    # 2,400 samples in the window: under the reservoir, so to the digit (AC14).
     for quantile in ("p50_ms", "p95_ms", "p99_ms"):
-        assert _line(panels["p_latency"], quantile) == pytest.approx(
-            [point[quantile] for point in overview["points"]], rel=LATENCY_TOLERANCE, abs=0
-        )
+        assert _line(panels["p_latency"], quantile) == [
+            point[quantile] for point in overview["points"]
+        ]
     [checkout] = trend["services"]
     assert _line(panels["p_checkout"], "requests_per_minute") == [
         point["requests_per_minute"] for point in checkout["points"]

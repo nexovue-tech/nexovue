@@ -82,6 +82,8 @@ The coordinator commits Step 5 after `just check`, restoring 0063's `down_revisi
 
 **Files the plan's tasks do not name, and why.** `slos/burns.py` and `slos/alerting.py` keep `job.py` (over 1,000 lines already) to the hand-out and counting; `alerts/slo_words.py` keeps a burn's words testable alone and scanned by AC13; `slos/exclusions.py` the same for the routes. `test_projects.py`, `test_deletion_live.py` and `test_channels_live.py` count default rules, so a third changed their numbers. `test_slo_words.py` treats a placeholder inside a string (`${x}`, Python's `{x}`) as code, so the scan can read Python.
 
+**CI fix, 2026-11-09: a fourth suite counted default rules.** `test_apikeys_live.py::test_an_organization_cannot_revoke_another_organizations_key` lists a new tenant's whole audit, and still expected two `alert_rule.created`; CI (run 42650457940) found the third, from *Reliability targets*. The test was stale, not the code: FR25 makes this rule "like the other default rules", `provision_project` records each default rule in the creating person's name inside the creating transaction (`alerts/defaults.py`), and `test_projects.py` already asserts three such entries. A default rule is a rule the person's act of creating a project made, so it is audited as theirs, as F21's and F6's are. The test now expects three.
+
 **Decisions taken while building, within the design.** Each is the founder's to overrule.
 
 - **Running out needs no rule** (FR10): `burning_since` is set from the first held minute and cleared 10 minutes after the first minute no tier holds, as `step()` resolves, or after a measured silent day; a minute no tier can judge changes neither.

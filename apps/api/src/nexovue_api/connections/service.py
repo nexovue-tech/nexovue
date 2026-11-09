@@ -120,8 +120,8 @@ def _box(keys: ConfiguredKeys, purpose: str) -> SealedBox:
     return SealedBox(keyring_from(keys.current, keys.previous), purpose=purpose)
 
 
-def _state_hash(state: str) -> bytes:
-    return hashlib.sha256(state.encode()).digest()
+def _state_hash(state: str) -> str:
+    return hashlib.sha256(state.encode()).hexdigest()
 
 
 def _refuse_where_unavailable(availability: Availability) -> None:

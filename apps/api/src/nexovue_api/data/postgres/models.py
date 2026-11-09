@@ -2004,8 +2004,9 @@ class Connection(Base):
     sealed_webhook_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # GitHub's one-hour manifest code, between the redirect and its conversion (AC74).
     sealed_manifest_code: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    # SHA-256 of a setup's one-time `state`; the raw value is never stored.
-    setup_state_hash: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # SHA-256 of a setup's one-time `state`, in hex like every other token hash; the raw
+    # value is never stored. Not binary: every binary column holds a sealed value (0062).
+    setup_state_hash: Mapped[str | None] = mapped_column(String(SHA256_HEX_LENGTH), nullable=True)
     setup_expires_at: Mapped[OptionalTimestamp]
     setup_user_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     github_app_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
