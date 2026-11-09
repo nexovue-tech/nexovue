@@ -1029,6 +1029,7 @@ async def test_ac85_a_burn_states_the_last_deploy_its_finding_and_the_project_s_
                 service_name=name,
                 deployed_at=at,
                 source="webhook",
+                delivery_id=f"ac85-{name}",
             )
         )
     finding = Finding(
@@ -1081,6 +1082,7 @@ async def test_ac85_no_deploy_recorded_is_told_apart_from_deploys_not_connected(
             service_name="cart",
             deployed_at=incident.opened_at - timedelta(days=1),
             source="webhook",
+            delivery_id="ac85-cart-earlier",
         )
     )
     target.deleted_at = datetime.now(UTC)
