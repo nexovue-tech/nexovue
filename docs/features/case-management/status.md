@@ -2,14 +2,128 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured).
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2.
 
 
 ## Current task
 
-Step 4 is on `feature/phase-2` (2026-11-09): create a GitHub issue, and stay in step by
-polling, built and tested against a simulated GitHub (migration 0061, ADR-035). Seven
-open decisions below, none blocking the commit.
+Step 5 is on `feature/phase-2` (2026-11-09): a tracker's signed webhook makes the issue it
+names be read sooner, and nothing else (ADR-035, point 2). No migration and no new ADR.
+Four new open decisions (8 to 11), none blocking the commit.
+
+
+## Step 5 built, 2026-11-09
+
+Plan task T5.1, with its note in `plan.md`. **T5.2 (a real webhook delivery reaching a
+real server) is not yet run: the founder runs it after Phase 2, once a reachable server
+exists (foundation item 28); its result is not faked, and AC130 stays open.** No
+migration: the webhook writes only `finding_links.next_sync_at`, through indexes 0061
+already made. No new ADR: ADR-035 governs, and its point 2 is what was built.
+**Kind-agnostic (foundation item 29):** the route, the lookup, the signature check and the
+update name no tracker; each kind's signature header and issue id are one `WebhookForm`
+in `connections/webhooks.py`, with GitHub's alone. Jira adds its form with Step 7.
+
+What exists now:
+
+- `POST /api/v1/connections/webhook/{connection_id}` (`connections/router.py`,
+  `receive_connection_webhook`): no session; the raw body read as bytes and refused at the
+  first byte past 1 MiB (D29), before any signature is looked at; answers 204.
+- `service.ring_from_webhook`: no `CONNECTION_SECRET_KEY` is a 503; the connection is
+  loaded by id alone (`queries.live_webhook_connection`, the one unscoped connection
+  statement, in `test_postgres_tenancy_structure.py`'s `EXEMPT` with its reason, AC139);
+  not found, disconnected, a kind with no webhook form, no secret, a secret that will not
+  open (logged by connection id) and a bad signature are one refusal, 401, in the same
+  words. The header comes from the connection's kind; the HMAC is
+  `deploys.signatures.matching_secret`, constant time over the raw bytes. A signed body
+  naming no issue is answered and does nothing. Nothing from the body sets a case or a
+  link's status; no job is added (D50); nothing is stored or audited.
+- `queries.ring_links`: binds the matched connection's `org_id`, brings the next read of
+  every link to that issue forward to now, or to 30 seconds after its last read if that is
+  later, and only if that is sooner than it was. A link with no read scheduled (not
+  followed, stopped, gone, waiting for a person) and a link in backoff are left alone.
+- `ratelimit/policy.py`: tier `connection-webhook`, 120 a minute per address, on the
+  prefix `/api/v1/connections/webhook/`, apart from the `/connections` routes people use.
+- `test_authorization_coverage.py`: `receive_connection_webhook` in `EXEMPT`, with its
+  reason, beside `receive_deploys`.
+
+### Unverified until the founder's real-GitHub run (T5.2; foundation item 28)
+
+That GitHub signs an App's deliveries with `X-Hub-Signature-256: sha256=<hex HMAC-SHA256
+of the raw body>` was read on GitHub's *Validating webhook deliveries* page on 2026-11-09
+(through search results; `docs.github.com` is not reachable from the build session). That
+an `issues` delivery carries `issue.id`, the REST issue's id the sync stores as
+`external_id`, was **not** confirmed: the payload page could not be reached. A delivery
+without it rings nothing, and polling still follows the issue. The tests build the
+delivery from the authors' reading, marked so in `webhooks.py`.
+
+### Where the code needed more than the plan named
+
+- **A new file, `connections/webhooks.py`**, holding each kind's form, so the service and
+  the route stay tracker-neutral.
+- **The update's conditions beyond the design's** (open decisions 8 and 9): the 30-second
+  rule schedules the read rather than skipping it, and a link with no read scheduled or in
+  backoff is not revived.
+- **204, not 200.** The design says "answer 200"; the route answers 204 with no body, as
+  nothing is returned. GitHub treats any 2xx as delivered (general knowledge, unverified).
+- **The match is on the issue's id** (open decision 11).
+- **A fourth copy of the bounded body read** (`deploys`, `billing`, `checkfiles` hold the
+  other three). Merging them is outside this feature's files: residual risk below.
+
+### Validation run (read, not inferred)
+
+Against this worktree's own Postgres (`f22s5-pg`, port 45432, Postgres 18, migrated to
+0065) and ClickHouse (`f22s5-ch`, ports 48123 and 49000), torn down afterwards.
+
+- **Seen failing first, then passing:** `test_connections_webhook_live.py`, 36 tests: all
+  36 failed on the committed API code (no route, no service function); then 36 passed.
+  **Negative controls on the built code:** removing `ring_links`' status, backoff,
+  read-gap and "already sooner" conditions failed 8 (the replay, read-gap, five
+  never-revived and already-due tests); replacing the read gap with plain `now` failed the
+  read-gap test; each restored from a saved copy, 36 passed. `test_postgres_tenancy_structure.py`
+  and `test_authorization_coverage.py` failed on the new lookup and route until each
+  `EXEMPT` entry was added (2 failed; then 2,319 passed). `test_ratelimit.py`'s and
+  `test_ratelimit_callers.py`'s new tests: an ImportError on the committed policy, and,
+  with the tier built but left out of `_OWN_TIERS`, both failed on behaviour (the default
+  tier; a 121st delivery answered 200); restored, 70 passed with `test_ratelimit_coverage.py`.
+  The six new tests in `test_connections_sync_live.py`: on the committed API code the
+  three webhook tests failed; the other three exercise Step 4's polling and lease, so
+  each was proved by a control instead: the lease's held-check removed failed the
+  two-jobs test, the active poll doubled failed the polling test, the resolved poll
+  doubled failed the hourly reopen test; `sync.py` restored from a saved copy, 6 passed.
+- **The suites that inventory or share what this touches**, together with 4 workers:
+  every `apps/scheduler/tests/test_connections_*.py`, `test_connections_live.py`,
+  `test_connections_webhook_live.py`, `test_findings_links_live.py`, `test_keys_live.py`,
+  `test_deletion_live.py`, `test_apikeys_live.py`, `test_no_tracker_calls_in_api.py`, the
+  three tenancy-structure suites, `test_authorization_coverage.py`, the rate-limit suites,
+  `test_deploys.py`, the detection and SLO prune suites and `test_beat_schedule.py`:
+  **2,923 passed**, none failed. This step adds no table, sealed column, audit entry,
+  rule or sweep; its live tests write one tenant's rows inside a rolled-back transaction
+  (API) or under per-test tenants and App ids (scheduler), so a concurrent sweep meets
+  nothing of theirs half-written.
+- **Every non-live suite** in `apps/api/tests`, `apps/scheduler/tests` and
+  `packages/py-platform/tests`, with the webhook suite, 6 workers: **10,207 passed**, 6
+  failed, 18 errors, each read: ClickHouse tables absent (this worktree's ClickHouse was
+  not migrated; Step 5 touches no ClickHouse), the dev stack not running, or no DNS
+  (`test_connect_guard`). `test_migration_rules.py` (39), `test_setup_schema.py` (2) and
+  `test_finding_links_schema_live.py` (13) passed, one at a time. The sync and webhook
+  suites rerun after formatting: 91 passed.
+- `uv run mypy .`: no issues in 893 files; `ruff check` and `ruff format --check` clean;
+  `pnpm -r --if-present run typecheck` clean and `verify-tokens.js` clean (no web file
+  changed, so Biome and the web tests were not run).
+- **Not run:** `just check` (the coordinator's); T5.2 and every real-GitHub check; a
+  delivery through the real Caddy.
+
+### Residual risks
+
+- **Everything GitHub-facing is proved against the authors' reading of GitHub's pages**,
+  and `issue.id` in a delivery is not confirmed (above).
+- **A connection id is unguessable but not secret**: it is in the webhook's address,
+  which GitHub holds. A caller who learns it still cannot ring without the secret, and a
+  refusal reads the same whether the row exists or not; the lookup's timing differs.
+- **Four copies of the bounded body read.** A shared helper is a change-work item outside
+  F22's files.
+- **A link in backoff is not hurried by a webhook**, so a change during a link's backoff
+  arrives when the backoff ends, as FR39 allows.
 
 
 ## Step 4 built, 2026-11-09
@@ -672,14 +786,45 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-The coordinator commits Step 4 (re-chaining 0061 after 0060). The founder answers the
-open decisions below. Then Step 5 (webhooks make it faster), which must keep to ADR-035.
-T4.9 measures the built container. After Phase 2, the founder runs T3.0, T3.9's hand
+The coordinator commits Step 5 (no migration to re-chain). The founder answers open
+decisions 8 to 11 below, with Step 4's. Then Step 6 (reference links, mapping and public
+repositories). T4.9 measures the built container. After Phase 2, the founder runs T3.0, T3.9's hand
 checks and T4.8 against real GitHub and a real browser (foundation item 28). T2.9 waits
 on F3; Step 7 on Atlassian.
 
 
 ## Open decisions
+
+**From Step 5 (2026-11-09).** None blocks the commit; each is built as recommended.
+
+**8. The 30-second rule schedules the read; it does not skip it.** The design's update
+leaves alone a link read in the last 30 seconds, so a replay cannot cost more than two
+reads a minute. Built that way, an issue closed within 30 seconds after a read waits for
+the 5-minute poll, which breaks AC46's minute. Built: the read is set to the later of now
+and 30 seconds after the last read, and only when that is sooner than it was; replays
+then write nothing, and reads stay at most two a minute (tested both ways). *Option A
+(recommended):* keep it, and amend the design's line. *Option B:* the design's rule, and
+loosen AC46 to "within 60 seconds unless read in the last 30".
+
+**9. A webhook revives no link that has no read scheduled, and keeps a link's backoff.**
+The design excludes only `not_followed` and `stopped`. A link waiting for a person after a
+refused write, or `gone` for good, also has no read scheduled; ringing it would retry a
+write the design says waits for a person's Retry. Backoff is FR39's to lengthen. *Option A
+(recommended):* keep it: a webhook only makes a scheduled read sooner. *Option B:* the
+design's two exclusions alone.
+
+**10. No handler seam for F5's `pull_request` events.** The plan and design name one;
+F5's own design removed its use ("F22's webhook carrying a `pull_request` event", F5 D33:
+poll only), and a seam no feature registers is unused code. *Option A (recommended):*
+leave it out, and strike it from T5.1 and the design. *Option B:* build the registry now,
+empty.
+
+**11. A GitHub delivery is matched by the issue's id.** The design's parse names the
+"repository id and issue number", while its update matches `external_id`, which the sync
+stores as GitHub's REST issue `id`. Built: `issue.id` against `external_id`, the update's
+reading, in one indexed comparison. Whether a delivery carries `issue.id` is unverified
+until T5.2. *Option A (recommended):* keep it, and amend the design's parse line; if T5.2
+finds no `issue.id`, match the repository's `external_id` and the number instead.
 
 **From Step 4 (2026-11-09).** None blocks the commit; each is built as recommended.
 

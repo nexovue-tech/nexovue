@@ -69,6 +69,21 @@ def test_a_connection_test_has_its_own_allowance() -> None:
     assert tier_for_path(f"{API_PREFIX}/connections") is DEFAULT_TIER
 
 
+def test_a_connection_webhook_has_its_own_allowance() -> None:
+    """F22 T5.1: a tracker's webhook is unauthenticated until its signature holds, so it is
+    counted apart from the `/connections` routes people use, at 120 a minute (a guess)."""
+    from nexovue_api.ratelimit.policy import CONNECTION_WEBHOOK_PREFIX, CONNECTION_WEBHOOK_TIER
+
+    path = f"{API_PREFIX}/connections/webhook/0b8f5a52-6c55-4a1e-9f0e-6f1d3f0a7c11"
+    assert path.startswith(CONNECTION_WEBHOOK_PREFIX)
+    assert tier_for_path(path) is CONNECTION_WEBHOOK_TIER
+    assert CONNECTION_WEBHOOK_TIER.quota.limit == 120
+    assert CONNECTION_WEBHOOK_TIER.quota.window_seconds == 60
+    assert not CONNECTION_WEBHOOK_TIER.quota.exact
+    # A connection's own routes stay where they were.
+    assert tier_for_path(f"{API_PREFIX}/connections/github/manifest") is DEFAULT_TIER
+
+
 A_TOKEN = f"{API_TOKEN_PREFIX}CIreadsCIreadsCIreadsCIreadsCIre"
 
 

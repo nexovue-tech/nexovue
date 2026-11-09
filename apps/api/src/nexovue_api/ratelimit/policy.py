@@ -152,6 +152,15 @@ CONNECTION_TEST_PREFIX: Final = "/api/v1/connection-tests"
 CONNECTION_TEST_TIER: Final = Tier(
     quota=Quota(name="connection-tests", limit=10, window_seconds=60)
 )
+# F22 T5.1. A tracker's webhook is unauthenticated until its signature holds, like the
+# deploy webhook, so it is counted per address before anything is verified, apart from the
+# `/connections` routes signed-in people use. 120 a minute, a guess (design, *Webhook
+# handling*): a busy repository's deliveries, and a refused one costs nothing, since
+# polling is the base.
+CONNECTION_WEBHOOK_PREFIX: Final = "/api/v1/connections/webhook/"
+CONNECTION_WEBHOOK_TIER: Final = Tier(
+    quota=Quota(name="connection-webhook", limit=120, window_seconds=60)
+)
 # Parsing an OpenAPI description or a Postman collection is CPU the caller chose.
 CHECK_IMPORT_PREFIX: Final = "/api/v1/check-imports"
 CHECK_IMPORT_TIER: Final = Tier(quota=Quota(name="check-import", limit=20, window_seconds=60))
@@ -164,6 +173,7 @@ HEARTBEAT_PREFIX: Final = "/api/v1/heartbeat/"
 HEARTBEAT_TIER: Final = Tier(quota=Quota(name="heartbeat", limit=120, window_seconds=60))
 
 _OWN_TIERS: Final = (
+    (CONNECTION_WEBHOOK_PREFIX, CONNECTION_WEBHOOK_TIER),
     (RUN_NOW_PREFIX, RUN_NOW_TIER),
     (SEND_TEST_PREFIX, SEND_TEST_TIER),
     (CONNECTION_TEST_PREFIX, CONNECTION_TEST_TIER),

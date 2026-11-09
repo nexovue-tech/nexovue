@@ -22,16 +22,17 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, keyring_from
+from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, SealError, keyring_from
 from nexovue_platform.connections import (
     CHECK_CONNECTION_TASK,
     CONNECTION_CREDENTIAL_PURPOSE,
     CONNECTION_MANIFEST_CODE_PURPOSE,
     CONNECTION_TEST_RESULT_KIND,
+    CONNECTION_WEBHOOK_SECRET_PURPOSE,
     CONNECTIONS_INTERACTIVE_QUEUE,
     CONVERT_MANIFEST_TASK,
     DISCONNECTED,
@@ -45,11 +46,12 @@ from nexovue_platform.connections import (
     is_manifest_code,
 )
 from nexovue_platform.jobs import JobRequest
+from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
-from nexovue_api.connections import jobs, queries
+from nexovue_api.connections import jobs, queries, webhooks
 from nexovue_api.connections.schemas import (
     MAX_PRIVATE_KEY_CHARS,
     Availability,
@@ -63,12 +65,16 @@ from nexovue_api.connections.schemas import (
     SetupStep,
 )
 from nexovue_api.data.postgres.models import Connection, ConnectionRepository
+from nexovue_api.deploys.signatures import matching_secret
 from nexovue_api.errors.exceptions import (
     ConflictError,
     DependencyUnavailableError,
     InvalidRequestError,
     NotFoundError,
+    UnauthenticatedError,
 )
+
+logger = get_logger(__name__)
 
 # GitHub's manifest code, and so this setup, lasts an hour (its manifest page).
 SETUP_LIFETIME: Final = timedelta(hours=1)
@@ -99,6 +105,13 @@ _NOT_CONNECTED: Final = "GitHub is not connected yet."
 _NOT_A_KEY: Final = "This is not a GitHub App private key. Upload the .pem file GitHub gave you."
 _NO_SUCH_CONNECTION: Final = "No such connection."
 _ORGANIZATION_NAME: Final = "That is not a GitHub organization name."
+# One refusal for every webhook that does not prove itself (design, *Webhook handling*): an
+# unknown or disconnected connection, one with no secret, and a bad signature read alike.
+WEBHOOK_REFUSED: Final = "This webhook was not signed by this connection's secret."
+WEBHOOK_UNCHECKABLE: Final = "This webhook cannot be checked right now. Nothing was changed."
+# A webhook's read comes at least this long after the link's last read, so a replayed
+# delivery costs at most two reads a minute (AC48). Beat's sweep runs as often (30 s).
+WEBHOOK_READ_GAP: Final = timedelta(seconds=30)
 _PEM: Final = re.compile(
     r"-----BEGIN (RSA )?PRIVATE KEY-----\n[A-Za-z0-9+/=\n]+\n-----END (RSA )?PRIVATE KEY-----\n?"
 )
@@ -512,3 +525,62 @@ async def disconnect(
         connection_id=row.id,
         kind=row.kind,
     )
+
+
+# ----------------------------------------------------------------- the webhook
+
+
+async def ring_from_webhook(
+    session: AsyncSession,
+    *,
+    connection_id: uuid.UUID,
+    body: bytes,
+    headers: Mapping[str, str],
+    keys: ConfiguredKeys,
+    now: datetime,
+) -> None:
+    """A signed webhook makes its issue's links be read sooner, and does nothing else.
+
+    ADR-035, point 2: nothing in the body sets a case, no job is added (D50) and nothing is
+    stored or audited. The next sweep finds the due link, so the change arrives within
+    about a minute. The signature header comes from the connection's kind (design), never
+    from the request, and the organization from the connection whose secret matched.
+    """
+    if not keys.current:
+        raise DependencyUnavailableError(WEBHOOK_UNCHECKABLE)
+    connection = await queries.live_webhook_connection(session, connection_id=connection_id)
+    form = webhooks.WEBHOOK_FORMS.get(connection.kind) if connection is not None else None
+    secret = _webhook_secret(connection, keys) if connection is not None else None
+    if connection is None or form is None or secret is None:
+        raise UnauthenticatedError(WEBHOOK_REFUSED)
+    signed = matching_secret(
+        body=body, header_value=headers.get(form.signature_header), secrets=[secret]
+    )
+    if signed is None:
+        raise UnauthenticatedError(WEBHOOK_REFUSED)
+    issue_id = webhooks.issue_id_in(form, body)
+    if issue_id is None:
+        return
+    await queries.ring_links(
+        session,
+        org_id=connection.org_id,
+        connection_id=connection.id,
+        external_id=issue_id,
+        now=now,
+        read_gap=WEBHOOK_READ_GAP,
+    )
+
+
+def _webhook_secret(connection: Connection, keys: ConfiguredKeys) -> str | None:
+    """The connection's webhook secret, or None when it has none or it will not open. One
+    that will not open is logged for the operator by id alone, and refused as no match."""
+    if connection.sealed_webhook_secret is None:
+        return None
+    try:
+        return _box(keys, CONNECTION_WEBHOOK_SECRET_PURPOSE).open(
+            bytes(connection.sealed_webhook_secret),
+            owner=connection_secret_owner(str(connection.org_id), str(connection.id)),
+        )
+    except (SealError, ValueError):
+        logger.error("connection_webhook_secret_unreadable", connection_id=str(connection.id))
+        return None

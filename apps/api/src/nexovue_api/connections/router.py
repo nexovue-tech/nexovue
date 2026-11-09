@@ -4,14 +4,20 @@ everything that changes a connection is an owner's or admin's (`MANAGE_CONNECTIO
 GitHub's redirect lands on a console route, which posts its `code` and `state` here:
 writing on a `POST`, not a `GET` callback, keeps the step under the support view's
 read-only rule and the authorization coverage test (design, step 3).
+
+`POST /connections/webhook/{connection_id}` is the one route here with no session: a
+tracker's webhook, proved by its HMAC over the raw body, so the body is read as bytes, and
+bounded before it is buffered, as the deploy webhook's is. It only rings the doorbell
+(ADR-035).
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Final
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayManageConnections
@@ -27,9 +33,15 @@ from nexovue_api.connections.schemas import (
     StartGitHubRequest,
 )
 from nexovue_api.deps import AppSettings, DbSession, EmailAvailable
+from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.settings import Settings
 
 router = APIRouter(prefix="/connections", tags=["connections"])
+
+# D29, a guess: an `issues` delivery is a few kilobytes, and a refused one costs nothing,
+# since polling is the base. The edge allows far more (`Caddyfile`, 65 MiB).
+MAX_WEBHOOK_BYTES: Final = 1024 * 1024
+WEBHOOK_TOO_LARGE: Final = "A webhook delivery must be at most 1 MiB."
 
 
 def availability_of(settings: Settings) -> Availability:
@@ -37,6 +49,24 @@ def availability_of(settings: Settings) -> Availability:
         deployment=settings.nexovue_deployment,
         enabled=settings.connections_enabled,
         app_base_url=settings.app_base_url,
+    )
+
+
+@router.post(
+    "/webhook/{connection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="A tracker's signed webhook: read the issue it names sooner, and nothing else",
+)
+async def receive_connection_webhook(
+    db: DbSession, settings: AppSettings, request: Request, connection_id: uuid.UUID
+) -> None:
+    await service.ring_from_webhook(
+        db,
+        connection_id=connection_id,
+        body=await _bounded_body(request),
+        headers=request.headers,
+        keys=settings.connection_keys,
+        now=datetime.now(UTC),
     )
 
 
@@ -147,3 +177,16 @@ async def disconnect(
         connection_id=connection_id,
         hooks=tuple(service.DISCONNECT_HOOKS),
     )
+
+
+async def _bounded_body(request: Request) -> bytes:
+    """The raw bytes, refused at the first byte past the cap: Content-Length is the
+    caller's word, so the cap holds on what arrives."""
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_WEBHOOK_BYTES:
+            raise InvalidRequestError(WEBHOOK_TOO_LARGE)
+        chunks.append(chunk)
+    return b"".join(chunks)

@@ -5,8 +5,9 @@
 Accepted 2026-11-02, with the F22 design
 ([`design.md`](../features/case-management/design.md), *Proposed ADRs*, revision 2).
 Filed 2026-11-09, when Step 4 built the reconcile (`connections/compare.py`,
-`connections/sync.py`). Its webhook half (point 2) is built by Step 5, which must keep
-to it.
+`connections/sync.py`). Its webhook half (point 2) was built by Step 5 on 2026-11-09
+(`connections/webhooks.py`, `service.ring_from_webhook`), against a simulated GitHub; a
+real delivery is F22 T5.2, the founder's after Phase 2.
 
 ## Context
 

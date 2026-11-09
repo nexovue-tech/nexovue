@@ -1,11 +1,22 @@
-"""The connection statements the API runs (F22). Every one binds the caller's `org_id`."""
+"""The connection statements the API runs (F22). Every one binds the caller's `org_id`,
+except :func:`live_webhook_connection`, the webhook's first read (AC139): a webhook's
+caller has proved nothing yet, so the organization is read off the connection whose secret
+then matched, and every statement after it binds that.
+"""
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from nexovue_platform.connections import DISCONNECTED, GITHUB, SETTING_UP, STOPPED, SYNCED
+from nexovue_platform.connections import (
+    DISCONNECTED,
+    GITHUB,
+    NOT_FOLLOWED,
+    SETTING_UP,
+    STOPPED,
+    SYNCED,
+)
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -161,5 +172,55 @@ async def stop_links(session: AsyncSession, *, org_id: uuid.UUID, connection_id:
             comment_wanted=None,
             tracker_closed_at=None,
         )
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def live_webhook_connection(
+    session: AsyncSession, *, connection_id: uuid.UUID
+) -> Connection | None:
+    """The connection a webhook names, by id alone.
+
+    Not scoped by `org_id`, deliberately: the caller is an unauthenticated tracker that has
+    proved nothing yet, and the id in the path is all it has said. The signature over the
+    secret sealed on this row is what proves it, and the organization is then read off this
+    row, never off the request (AC139, as `live_webhook_secrets` for deploys).
+    """
+    found: Connection | None = await session.scalar(
+        select(Connection).where(Connection.id == connection_id, Connection.state != DISCONNECTED)
+    )
+    return found
+
+
+async def ring_links(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    external_id: str,
+    now: datetime,
+    read_gap: timedelta,
+) -> None:
+    """Bring forward the next read of every link to this issue that is already followed.
+
+    Only ever sooner (ADR-035): a link with no read scheduled is left alone, because that is
+    a link not followed, stopped, gone, or waiting for a person after a refused write, and a
+    webhook must revive none of them. A link in backoff keeps its backoff (FR39). The read
+    is set to now, or to `read_gap` after the last read if that is later, so a replayed
+    delivery costs at most two reads a minute (AC48) and a change made just after a read
+    still arrives within the minute (AC46). A link already due sooner keeps its place.
+    """
+    soonest = func.greatest(now, func.coalesce(FindingLink.last_synced_at + read_gap, now))
+    await session.execute(
+        update(FindingLink)
+        .where(
+            FindingLink.org_id == org_id,
+            FindingLink.connection_id == connection_id,
+            FindingLink.external_id == external_id,
+            FindingLink.sync_status.not_in((NOT_FOLLOWED, STOPPED)),
+            FindingLink.failures == 0,
+            FindingLink.next_sync_at > soonest,
+        )
+        .values(next_sync_at=soonest)
         .execution_options(synchronize_session=False)
     )

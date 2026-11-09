@@ -27,13 +27,21 @@ What is proved here, each through `sync_connection` itself:
 - a job naming another organization's connection doing nothing (AC129), and a held
   lease stopping a second run;
 - `sweep_connections` adding one job per connection however often it runs (AC48's
-  conditional insert), and each connection's hourly refresh.
+  conditional insert), and each connection's hourly refresh;
+- Step 5's webhook, through the API's own handling and then the sweep and this job: an
+  active case resolved within a poll by polling alone, a resolved one reopened within the
+  hour, and within a minute with a signed webhook, even just after a read (AC46); a
+  delivery replayed 100 times adding no job and costing at most two reads a minute, and
+  two jobs started together making one run (AC48).
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import uuid
 from collections.abc import Iterator
@@ -49,6 +57,7 @@ from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, generate_
 from nexovue_platform.connections import (
     ACTIVE_POLL,
     CONNECTION_CREDENTIAL_PURPOSE,
+    CONNECTION_WEBHOOK_SECRET_PURPOSE,
     REFRESH_CONNECTION_TASK,
     RESOLVED_POLL,
     SYNC_CONNECTION_TASK,
@@ -58,7 +67,7 @@ from nexovue_platform.connections import (
     issue_text,
 )
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tracker_fake import FakeGitHub, serve_fake_github
 from tracker_harness import (
     COMMENT_POINTS,
@@ -1310,3 +1319,190 @@ async def test_a_link_whose_repository_row_is_gone_needs_attention_and_the_run_g
     assert (await _link(engine, healthy)).last_synced_at == world.clock.now
     # Only the issue the test arranged: nothing was created for the refused link.
     assert len(world.github.issues_in("acme/web")) == 1
+
+
+# ------------------------------------- webhooks make it faster (Step 5, ADR-035)
+
+WEBHOOK_SECRET: Final = "a-webhook-secret-github-gave"
+# AC46's webhook bound, a guess: the doorbell's 30 seconds after a read, then the sweep's.
+WEBHOOK_ARRIVES_WITHIN: Final = timedelta(seconds=60)
+SWEEP_EVERY: Final = timedelta(seconds=30)
+
+
+async def _with_webhook_secret(engine: AsyncEngine, world: World) -> None:
+    box = SealedBox(
+        keyring_from(KEYS.current, KEYS.previous), purpose=CONNECTION_WEBHOOK_SECRET_PURPOSE
+    )
+    sealed = box.seal(
+        WEBHOOK_SECRET,
+        owner=connection_secret_owner(str(world.tenant.org_id), str(world.connection_id)),
+    )
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE connections SET sealed_webhook_secret = :secret WHERE id = :id"),
+            {"secret": sealed, "id": world.connection_id},
+        )
+
+
+async def _deliver(engine: AsyncEngine, world: World, key: str) -> None:
+    """GitHub's signed `issues` delivery for this issue, through the API's own handling."""
+    from nexovue_api.connections import service as api_connections
+
+    issue = world.github.issue(key)
+    body = json.dumps(
+        {"action": issue.state, "issue": {"id": issue.id, "number": issue.number}}
+    ).encode()
+    signature = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    async with AsyncSession(engine) as session:
+        await api_connections.ring_from_webhook(
+            session,
+            connection_id=world.connection_id,
+            body=body,
+            headers={"X-Hub-Signature-256": f"sha256={signature}"},
+            keys=KEYS,
+            now=world.clock.now,
+        )
+        await session.commit()
+
+
+async def _beat_until_synced(engine: AsyncEngine, world: World, *, within: timedelta) -> None:
+    """Beat's sweep every 30 seconds, and the job it adds run at once, until `within`."""
+    waited = timedelta()
+    while waited <= within:
+        before = await _jobs(engine, world, SYNC_CONNECTION_TASK)
+        await sync.sweep_connections(engine, now=world.clock.now)
+        if await _jobs(engine, world, SYNC_CONNECTION_TASK) > before:
+            await _sync(engine, world)
+            return
+        world.clock.advance(SWEEP_EVERY)
+        waited += SWEEP_EVERY
+    raise AssertionError(f"no sync job was added within {within}")
+
+
+async def test_ac46_polling_alone_resolves_an_active_case_within_one_poll(
+    engine: AsyncEngine, world: World
+) -> None:
+    finding = await _case(engine, world)
+    _, key = await _synced(engine, world, finding)
+    await _sync(engine, world)
+    world.github.close(key)
+    closed_at = world.clock.now
+
+    await _beat_until_synced(engine, world, within=ACTIVE_POLL)
+
+    assert (await _finding(engine, finding)).case_state == "resolved"
+    assert world.clock.now - closed_at == ACTIVE_POLL
+
+
+async def test_ac46_polling_alone_reopens_a_resolved_case_within_an_hour(
+    engine: AsyncEngine, world: World
+) -> None:
+    finding = await _case(engine, world, case_state="resolved")
+    _, key = await _synced(engine, world, finding, seen="closed")
+    await _sync(engine, world)
+    world.github.reopen(key)
+    reopened_at = world.clock.now
+
+    await _beat_until_synced(engine, world, within=RESOLVED_POLL)
+
+    assert (await _finding(engine, finding)).case_state == "investigating"
+    assert world.clock.now - reopened_at <= RESOLVED_POLL
+
+
+@pytest.mark.parametrize("after_read", [timedelta(seconds=1), timedelta(minutes=2)])
+async def test_ac46_a_signed_webhook_resolves_an_active_case_within_a_minute(
+    engine: AsyncEngine, world: World, after_read: timedelta
+) -> None:
+    """Closed just after a read, or long after it: within 60 seconds either way."""
+    await _with_webhook_secret(engine, world)
+    finding = await _case(engine, world)
+    _, key = await _synced(engine, world, finding)
+    await _sync(engine, world)
+    world.clock.advance(after_read)
+    world.github.close(key)
+    closed_at = world.clock.now
+
+    await _deliver(engine, world, key)
+    await _beat_until_synced(engine, world, within=WEBHOOK_ARRIVES_WITHIN)
+
+    assert (await _finding(engine, finding)).case_state == "resolved"
+    assert world.clock.now - closed_at <= WEBHOOK_ARRIVES_WITHIN
+
+
+async def test_ac48_a_replayed_delivery_adds_no_job_and_reads_at_most_twice_a_minute(
+    engine: AsyncEngine, world: World
+) -> None:
+    await _with_webhook_secret(engine, world)
+    finding = await _case(engine, world)
+    _, key = await _synced(engine, world, finding)
+    await _sync(engine, world)
+    reads_from = len(world.github.calls("/repos/"))
+
+    # A minute of beat, with the delivery replayed 100 times between each sweep.
+    for _ in range(2):
+        world.clock.advance(SWEEP_EVERY)
+        for _ in range(100):
+            await _deliver(engine, world, key)
+        assert await _jobs(engine, world, SYNC_CONNECTION_TASK) == 0
+        await sync.sweep_connections(engine, now=world.clock.now)
+        await _sync(engine, world)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM jobs WHERE org_id = :org"), {"org": world.tenant.org_id}
+            )
+
+    issue_reads = [
+        call
+        for call in world.github.calls("/repos/")[reads_from:]
+        if call.method == "GET" and call.path.endswith(f"/issues/{world.github.issue(key).number}")
+    ]
+    assert len(issue_reads) <= 2
+    assert (await _finding(engine, finding)).case_state == "investigating"
+
+
+async def test_ac48_two_jobs_started_together_make_one_run(
+    engine: AsyncEngine, world: World
+) -> None:
+    """D50 accepts a second unclaimed job from two inserts at one instant; the lease stops
+    it making any call. The first run is held mid-way, between two writes, while the
+    second starts."""
+    keys = []
+    for _ in range(2):
+        finding = await _case(
+            engine, world, case_state="resolved", service=f"s-{uuid.uuid4().hex[:6]}"
+        )
+        keys.append((await _synced(engine, world, finding, wanted="closed"))[1])
+    holding, held = asyncio.Event(), asyncio.Event()
+
+    async def pause(_: float) -> None:
+        holding.set()
+        await held.wait()
+
+    def run() -> asyncio.Task[list[str]]:
+        return asyncio.create_task(
+            sync.sync_connection(
+                engine,
+                keys=KEYS,
+                tracker_of=_tracker_of(world),
+                clock=world.clock,
+                pause=pause,
+                **world.ids,
+            )
+        )
+
+    first, second = run(), run()
+    await asyncio.wait_for(holding.wait(), timeout=30)
+    finished, _ = await asyncio.wait(
+        {first, second}, timeout=30, return_when=asyncio.FIRST_COMPLETED
+    )
+    [loser] = finished
+    calls_while_held = len(world.github.site.requests)
+    assert loser.result() == []
+    held.set()
+    results = sorted([await first, await second], key=len)
+
+    assert results[0] == [] and len(results[1]) == 2
+    assert calls_while_held > 0
+    closes = [call for call in _writes(world.github) if call[0] == "PATCH"]
+    assert len(closes) == 2
+    assert all(world.github.issue(key).state == "closed" for key in keys)

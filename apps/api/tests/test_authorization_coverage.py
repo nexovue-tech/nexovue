@@ -57,6 +57,10 @@ EXEMPT: Final = {
     # signature over the raw body is the gate, and door 4a's whole security
     # model rests on it rather than on a session.
     "receive_deploys",
+    # F22 T5.1, unauthenticated for the same reason: a tracker's webhook, gated by the HMAC
+    # over the raw body with the connection's own secret. It changes no record but when an
+    # issue is next read (ADR-035), adds no job, and is bounded by its own rate tier.
+    "receive_connection_webhook",
     # Unauthenticated: it is how an account comes into existence.
     "sign_up",
     # Unauthenticated: the console reporting its own errors, which a sign-in
