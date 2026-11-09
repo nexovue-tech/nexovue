@@ -4,8 +4,8 @@ go 1.27.3
 
 require (
 	github.com/ClickHouse/ch-go v0.75.0
-	github.com/caarlos0/env/v11 v11.4.1
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/caarlos0/env/v11 v11.4.2
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/lmittmann/tint v1.2.1
 	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0
 	github.com/prometheus/client_golang v1.25.0
@@ -29,7 +29,7 @@ require (
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -49,13 +49,13 @@ require (
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
-	google.golang.org/grpc v1.84.0 // indirect
+	google.golang.org/grpc v1.85.0 // indirect
 )
 
 // packages/contracts is a workspace member, never published. The replace keeps
