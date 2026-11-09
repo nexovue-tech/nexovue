@@ -95,6 +95,10 @@ describe("the sidebar", () => {
       // F28: reached from the releases list's rows.
       "/releases/$releaseId",
       "/settings/channels/$channelId",
+      // F22: reached from the Connections screen and from GitHub's own redirects.
+      "/settings/connections/github/start",
+      "/settings/connections/github/return",
+      "/settings/connections/github/installed",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.
       "/admin/onboard",

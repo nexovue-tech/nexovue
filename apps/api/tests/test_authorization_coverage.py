@@ -206,6 +206,14 @@ POLICY_OF: Final = {
     "nexovue_api/channels/router.py:set_quiet_hours": "MayManageChannels",
     "nexovue_api/channels/router.py:delete_channel": "MayManageChannels",
     "nexovue_api/channels/test_router.py:send_test": "MayManageChannels",
+    # F22. Every change to a tracker connection is an owner's or admin's (FR34); a test
+    # makes our infrastructure call the tracker, so it is too.
+    "nexovue_api/connections/router.py:start_github": "MayManageConnections",
+    "nexovue_api/connections/router.py:complete_github": "MayManageConnections",
+    "nexovue_api/connections/router.py:refresh_github": "MayManageConnections",
+    "nexovue_api/connections/router.py:replace_credential": "MayManageConnections",
+    "nexovue_api/connections/router.py:disconnect": "MayManageConnections",
+    "nexovue_api/connections/test_router.py:test_connection": "MayManageConnections",
     "nexovue_api/checksecrets/router.py:write_secret": "MayManageCheckSecrets",
     "nexovue_api/checksecrets/router.py:delete_secret": "MayManageCheckSecrets",
     "nexovue_api/checksecrets/router.py:write_variable": "MayManageCheckSecrets",
@@ -252,6 +260,8 @@ POLICY_OF: Final = {
 # nothing: a viewer reading every screen must not read these.
 SECRET_READS: Final = {
     "nexovue_api/deploys/router.py:read_webhook_secrets": "MayManageCredentials",
+    # F22 AC79: what a connection test found is the tester's, as the test is.
+    "nexovue_api/connections/test_router.py:connection_test_result": "MayManageConnections",
     # Not a secret, but the organization's history of who did what: an owner's
     # and an admin's to read (FR36, AC38).
     "nexovue_api/audit/router.py:read_audit_log": "MayReadAudit",

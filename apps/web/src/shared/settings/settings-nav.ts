@@ -16,6 +16,7 @@ export type SettingsPath =
   | "/settings/audit"
   | "/settings/support"
   | "/settings/channels"
+  | "/settings/connections"
   | "/settings/projects"
   | "/settings/billing"
   | "/settings/usage";
@@ -119,6 +120,13 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
           "email",
           "on-call",
         ],
+      },
+      {
+        path: "/settings/connections",
+        title: "Connections",
+        // F22: GitHub (and, once Atlassian answers, Jira, which nothing names until then).
+        requires: "manage_connections",
+        keywords: ["github", "issues", "tracker", "app", "repository", "integration"],
       },
       {
         path: "/settings/projects",

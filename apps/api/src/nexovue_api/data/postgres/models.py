@@ -32,6 +32,7 @@ from nexovue_platform.alerts.model import (
     SEVERITIES,
 )
 from nexovue_platform.cases import CASE_EMAIL_KINDS, EVENT_ACTOR_KINDS, NOTE_MAX_LENGTH
+from nexovue_platform.connections import CONNECTION_FAILURES, CONNECTION_KINDS, CONNECTION_STATES
 from nexovue_platform.detection import (
     CASE_RESOLUTIONS,
     CASE_STATES,
@@ -1888,6 +1889,123 @@ class FindingEmailOwed(Base):
     )
 
 
+class Connection(Base):
+    """A tracker connection (F22, FR28): one live row per organization and kind. On a
+    self-hosted install a GitHub connection is the organization's own private App,
+    whose key and webhook secret are sealed under `CONNECTION_SECRET_KEY` and opened
+    only by `scheduler-connections` (FD10). Every sealed column is in
+    `keys.SEALED_COLUMNS`. `github_fix` is F5's App, which F22 ignores."""
+
+    __tablename__ = "connections"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    sealed_credential: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    sealed_webhook_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # GitHub's one-hour manifest code, between the redirect and its conversion (AC74).
+    sealed_manifest_code: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # SHA-256 of a setup's one-time `state`; the raw value is never stored.
+    setup_state_hash: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    setup_expires_at: Mapped[OptionalTimestamp]
+    setup_user_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    github_app_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    github_app_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    jira_site: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    sync_lease_until: Mapped[OptionalTimestamp]
+    paused_until: Mapped[OptionalTimestamp]
+    last_ok_at: Mapped[OptionalTimestamp]
+    failing_since: Mapped[OptionalTimestamp]
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    last_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_failure_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    failure_told_at: Mapped[OptionalTimestamp]
+    expiry_told_at: Mapped[OptionalTimestamp]
+    repositories_read_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_connections_org_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "setup_user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (setup_user_id)",
+            name="fk_connections_setup_user",
+        ),
+        CheckConstraint(f"kind IN ({_quoted(CONNECTION_KINDS)})", name="kind_is_known"),
+        CheckConstraint(f"state IN ({_quoted(CONNECTION_STATES)})", name="state_is_known"),
+        CheckConstraint(
+            f"last_failure IS NULL OR last_failure IN ({_quoted(CONNECTION_FAILURES)})",
+            name="failure_is_known",
+        ),
+        Index(
+            "uq_connections_org_id_kind_live",
+            "org_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("state <> 'disconnected'"),
+        ),
+        Index(
+            "uq_connections_github_installation",
+            "github_app_id",
+            "github_installation_id",
+            unique=True,
+        ),
+    )
+
+
+class ConnectionRepository(Base):
+    """What a connection reaches: a GitHub repository or a Jira project, by its strict
+    key, never its free-text name. A *place* in code (F22, design *Connections*)."""
+
+    __tablename__ = "connection_repositories"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    public_allowed_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    public_allowed_at: Mapped[OptionalTimestamp]
+    public_told_at: Mapped[OptionalTimestamp]
+    jira_issue_type_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jira_done_transition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jira_reopen_transition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_reachable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_connection_repositories_org_id_id"),
+        UniqueConstraint(
+            "connection_id", "external_id", name="uq_connection_repositories_external_id"
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "connection_id"],
+            ["connections.org_id", "connections.id"],
+            ondelete="CASCADE",
+            name="fk_connection_repositories_connection",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "public_allowed_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (public_allowed_by)",
+            name="fk_connection_repositories_public_allowed_by",
+        ),
+    )
+
+
 # `org_id` leads the key of every table below that is upserted, so no conflict
 # can reach another tenant's row (design, *Findings and their state*).
 
@@ -2276,7 +2394,7 @@ class ApiTokenUsageDaily(Base):
 # SHA-256, hex, of a token, ticket, challenge or code — never the value itself.
 TOKEN_FINGERPRINT_LENGTH: Final = 64
 ONE_TIME_TOKEN_PURPOSES: Final = ("verify_email", "reset_password", "change_email")
-JOB_RESULT_KINDS: Final = ("check_run", "channel_test")
+JOB_RESULT_KINDS: Final = ("check_run", "channel_test", "connection_test")
 
 
 class SessionRecord(Base):

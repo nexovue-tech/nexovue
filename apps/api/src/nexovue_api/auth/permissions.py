@@ -29,6 +29,9 @@ class Action(StrEnum):
     CONFIGURE_SLOS = "configure_slos"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
+    # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
+    # disconnect GitHub or Jira. They hold repository access, so not day-to-day work.
+    MANAGE_CONNECTIONS = "manage_connections"
     MANAGE_CHECK_SECRETS = "manage_check_secrets"
     CONFIGURE_PROJECTS = "configure_projects"
     # Anomaly detection's sensitivity, mutes and new normals, and every *anomaly
@@ -64,6 +67,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.UPLOAD_SOURCE_MAPS: _EVERYONE_WHO_WORKS,
     Action.CONFIGURE_SLOS: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
+    Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: _ADMINISTRATORS,

@@ -23,6 +23,8 @@ RETRY: str = "jobs-test.retry"
 SPAN: str = "jobs-test.span"
 DIE: str = "jobs-test.die"
 WHO: str = "jobs-test.who"
+# F22 AC34: writes the child's `sys.modules`, for `test_connections_have_no_ai.py`.
+LOADED: str = "jobs-test.loaded"
 GROW: str = "jobs-test.grow"
 # A real task module this suite never names: imported in a child only if it was preloaded.
 PRELOADED: str = "nexovue_scheduler.detection.baselines"
@@ -99,3 +101,15 @@ def grow(*, path: str, mebibytes: int) -> None:
     """Keeps `mebibytes` of its own memory after it ends."""
     _kept.append(bytearray(os.urandom(1024)) * (mebibytes * 1024))
     _write(path, f"pid {os.getpid()} grew")
+
+
+@task(LOADED)
+def loaded() -> None:
+    """Records every module this child holds, and how many objects it inherited frozen from
+    its forkserver's preload, where the no-AI suite reads them."""
+    import json
+    import tempfile
+
+    record = {"modules": sorted(sys.modules), "frozen": gc.get_freeze_count()}
+    target = Path(tempfile.gettempdir()) / "nexovue-connections-child-modules.json"
+    target.write_text(json.dumps(record))

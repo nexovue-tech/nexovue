@@ -222,3 +222,52 @@ async def test_detection_events_of_the_last_fifteen_minutes_are_counted_by_kind(
     expired, guarded = holds.HOLD_EXPIRED, holds.GUARD_ENGAGED
     assert after.detection_events_recent[expired] == before.detection_events_recent[expired] + 1
     assert after.detection_events_recent[guarded] == before.detection_events_recent[guarded]
+
+
+async def test_beat_says_whether_any_tracker_connection_is_live(engine: AsyncEngine) -> None:
+    """F22 AC118, AC123: `connections_active` is what lets the monitor tell a role left out on
+    purpose from one that died. It reads the rows, so it is beat's to say, and it is 0 while
+    connections are turned off, or when only F5's own App is connected."""
+    org_id = uuid.uuid4()
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            # Every live connection in this database, ended for this transaction only.
+            await connection.execute(
+                text(
+                    "UPDATE connections SET state = 'disconnected', sealed_credential = NULL, "
+                    "sealed_webhook_secret = NULL, sealed_manifest_code = NULL, "
+                    "setup_state_hash = NULL WHERE state <> 'disconnected'"
+                )
+            )
+            none = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(
+                text("INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'M')"),
+                {"id": org_id, "slug": f"metrics-{org_id.hex[:12]}"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state) "
+                    "VALUES (:org, 'github_fix', 'working')"
+                ),
+                {"org": org_id},
+            )
+            fix_only = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state) "
+                    "VALUES (:org, 'github', 'setting_up')"
+                ),
+                {"org": org_id},
+            )
+            one = await metrics.read_queues(connection, now=datetime.now(UTC))
+            turned_off = await metrics.read_queues(
+                connection, now=datetime.now(UTC), connections_enabled=False
+            )
+        finally:
+            await transaction.rollback()
+
+    assert (none.connections_active, fix_only.connections_active) == (0, 0)
+    assert (one.connections_active, turned_off.connections_active) == (1, 0)
+    metrics.publish(one)
+    assert metrics.CONNECTIONS_ACTIVE._value.get() == 1

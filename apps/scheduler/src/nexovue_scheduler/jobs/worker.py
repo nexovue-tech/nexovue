@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import asyncpg
+from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
 from nexovue_platform.jobs import NOTIFY_CHANNEL
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -81,6 +82,8 @@ QUEUE_CAPS: Final[Mapping[str, int]] = {
     DETECTION_QUEUE: DETECTION_CONCURRENCY,
     **slos.QUEUE_CAPS,
     **releases.QUEUE_CAPS,
+    # F22: tracker sync holds at most 2 of `scheduler-connections`' 3 slots (AC86).
+    CONNECTIONS_QUEUE: CONNECTIONS_QUEUE_CAP,
 }
 # A child's own memory, beyond the pages it shares, past which it is replaced after a job.
 # A fresh child holds a few MiB of its own; the worst job measured, a project's hourly
@@ -90,9 +93,20 @@ MAX_CHILD_PRIVATE_BYTES: Final = 64 * 2**20
 _PRIVATE_LINES: Final = ("Private_Clean:", "Private_Dirty:")
 
 # Not `fork`: a child must share no socket, thread or event loop with this process. The
-# forkserver is a fresh process that has only imported the task modules.
+# forkserver is a fresh process that has only imported one task set's modules.
 _CHILDREN = multiprocessing.get_context("forkserver")
-_CHILDREN.set_forkserver_preload(["nexovue_scheduler.jobs.preload"])
+_CHILDREN.set_forkserver_preload([registry.PRELOAD_OF["all"]])
+
+
+def use_task_set(name: str) -> tuple[str, ...]:
+    """Choose what this process's forkserver preloads, and return the set's modules.
+
+    Called before the first `Slot`: the forkserver starts with the first child, and keeps
+    the preload it started with for the life of the process."""
+    if name not in registry.TASK_SETS:
+        raise ValueError(f"no task set is called {name!r}; known: {sorted(registry.TASK_SETS)}")
+    _CHILDREN.set_forkserver_preload([registry.PRELOAD_OF[name]])
+    return registry.TASK_SETS[name]
 
 
 def private_bytes(pid: int) -> int | None:

@@ -17,6 +17,7 @@ export type Action =
   | "upload_source_maps"
   | "configure_slos"
   | "manage_channels"
+  | "manage_connections"
   | "manage_check_secrets"
   | "configure_projects"
   | "configure_detection"

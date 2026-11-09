@@ -287,6 +287,14 @@ services:
       # enable two-factor sign-in, and production refuses to start.
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
       CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
+      # F22. Seals a tracker connection's App key, webhook secret and manifest code, and
+      # re-seals them on a rotation. Held here and by `scheduler-connections` alone (FD10,
+      # AC33); never through `control-plane-env`. `nexovue upgrade` adds one when missing.
+      CONNECTION_SECRET_KEY: ${CONNECTION_SECRET_KEY:?set CONNECTION_SECRET_KEY}
+      CONNECTION_SECRET_PREVIOUS_KEYS: ${CONNECTION_SECRET_PREVIOUS_KEYS:-}
+      # Whether tracker connections run on this install (AC118): the same setting that
+      # starts `scheduler-connections` (`deploy/nexovue`) and that beat reads.
+      NEXOVUE_CONNECTIONS: ${NEXOVUE_CONNECTIONS:-yes}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # What the console hands a customer to export to: the edge's ingest name.
@@ -335,6 +343,9 @@ services:
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      # F22: beat says whether a connection is live (`connections_active`), and none is
+      # while connections are turned off, so nothing pages for a role left out.
+      NEXOVUE_CONNECTIONS: ${NEXOVUE_CONNECTIONS:-yes}
     depends_on:
       <<: *after-setup
       seaweedfs:
@@ -407,6 +418,40 @@ services:
     deploy:
       resources:
         limits:
+          memory: 384M
+
+  # F22. Every GitHub (and later Jira) call, and nothing else: a slow tracker holds one of
+  # these slots, never a probe's or an alert's (foundation section 6). Optional, behind the
+  # `connections` profile that `NEXOVUE_CONNECTIONS=yes` turns on (AC118); hosted has none
+  # until founder decision 3. Narrow settings, not `control-plane-env` (D80, AC33): the
+  # tracker key and Postgres, and no Kafka, check key, mail or object store.
+  scheduler-connections:
+    <<: [*service-defaults, *nexovue-image]
+    profiles: ["connections"]
+    command: ["scheduler-connections"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      ENV: production
+      NEXOVUE_DEPLOYMENT: self-hosted
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      SCHEDULER_ROLE: connections
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # The link back in an issue, and the App's own addresses (design, *Issue text*).
+      APP_BASE_URL: https://${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
+      CONNECTION_SECRET_KEY: ${CONNECTION_SECRET_KEY:?set CONNECTION_SECRET_KEY}
+      CONNECTION_SECRET_PREVIOUS_KEYS: ${CONNECTION_SECRET_PREVIOUS_KEYS:-}
+    depends_on:
+      <<: *after-setup
+      # Its job queue and everything it writes are in Postgres.
+      postgres:
+        condition: service_healthy
+      scheduler-beat:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          # A guess, copied from scheduler-deliveries (design, *Capacity*); F22 T4.9 measures it.
           memory: 384M
 
   # ---------- the monitor, ready to connect (design.md §10) ----------

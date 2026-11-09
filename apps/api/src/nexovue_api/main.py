@@ -31,6 +31,8 @@ from nexovue_api.checkruns import router as check_runs_router
 from nexovue_api.checks import router as checks_router
 from nexovue_api.checksecrets import router as check_secrets_router
 from nexovue_api.clientlogs import router as client_logs_router
+from nexovue_api.connections import router as connections_router
+from nexovue_api.connections import test_router as connection_tests_router
 from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.detection import router as detection_router
@@ -149,6 +151,8 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(detection_router.router)
     versioned.include_router(channels_router.router)
     versioned.include_router(channel_tests_router.router)
+    versioned.include_router(connections_router.router)
+    versioned.include_router(connection_tests_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(releases_router.router)

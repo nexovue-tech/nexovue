@@ -42,3 +42,6 @@ services:
 
   scheduler-deliveries:
     environment: *laptop-control-plane
+
+  scheduler-connections:
+    environment: *laptop-control-plane

@@ -36,6 +36,9 @@ KNOWN_VARIABLES = (
     "CHECK_SECRET_PREVIOUS_KEYS",
     "CREDENTIAL_ENCRYPTION_KEY",
     "CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS",
+    "CONNECTION_SECRET_KEY",
+    "CONNECTION_SECRET_PREVIOUS_KEYS",
+    "NEXOVUE_CONNECTIONS",
 )
 
 
@@ -156,10 +159,11 @@ def _settings(*, env: str, otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT) -> Settin
         otlp_endpoint=otlp_endpoint,
         check_secret_key=DEPLOYED_KEYS["CHECK_SECRET_KEY"],
         credential_encryption_key=DEPLOYED_KEYS["CREDENTIAL_ENCRYPTION_KEY"],
+        connection_secret_key=DEPLOYED_KEYS["CONNECTION_SECRET_KEY"],
     )
 
 
-@pytest.mark.parametrize("missing", ["CHECK_SECRET_KEY", "CREDENTIAL_ENCRYPTION_KEY"])
+@pytest.mark.parametrize("missing", sorted(DEPLOYED_KEYS))
 def test_production_refuses_to_start_without_either_encryption_key(
     monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
@@ -178,6 +182,16 @@ def test_production_refuses_to_start_without_either_encryption_key(
     with pytest.raises(SettingsError) as refused:
         get_settings()
     assert missing in str(refused.value)
+
+
+@pytest.mark.parametrize(("value", "on"), [("yes", True), ("no", False), ("", True)])
+def test_connections_follow_the_install_s_setting(
+    monkeypatch: pytest.MonkeyPatch, value: str, on: bool
+) -> None:
+    """F22 AC118: the same `NEXOVUE_CONNECTIONS` the scheduler reads; on unless `no`."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "NEXOVUE_CONNECTIONS": value})
+
+    assert get_settings().connections_enabled is on
 
 
 def test_development_starts_without_the_encryption_keys(monkeypatch: pytest.MonkeyPatch) -> None:

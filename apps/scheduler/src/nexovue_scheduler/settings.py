@@ -24,6 +24,12 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
 
 Environment = Literal["development", "staging", "production"]
+# Which keys this process may hold (F3's mechanism, F22 D80): `full` is every role but
+# the narrow ones; `connections` is `scheduler-connections`, which holds the tracker key
+# and nothing else, so it runs with no Kafka and no check key. Open to new values.
+SchedulerRole = Literal["full", "connections"]
+FULL_ROLE: Final = "full"
+CONNECTIONS_ROLE: Final = "connections"
 LogLevel = Literal["debug", "info", "warn", "error"]
 LogFormat = Literal["json", "console"]
 
@@ -45,12 +51,18 @@ class Settings(BaseSettings):
     # Hosted, or a customer's own install (nexovue_platform.deployment); only the
     # hosted service has payments whose grace period a sweep ends.
     nexovue_deployment: Deployment = DEFAULT_DEPLOYMENT
+    scheduler_role: SchedulerRole = FULL_ROLE
+    # Whether tracker connections run on this install (`NEXOVUE_CONNECTIONS`, F22 AC118):
+    # the same setting the API reads, and the one that starts `scheduler-connections`.
+    # On unless set to `no`.
+    connections_enabled: bool = Field(default=True, validation_alias="NEXOVUE_CONNECTIONS")
 
     # --- infrastructure, named identically in every service -----------------
     postgres_dsn: PostgresDsn
     # NoDecode keeps pydantic-settings from JSON-decoding the value, so the
-    # validator below sees the comma-separated string the Go services read.
-    kafka_brokers: Annotated[list[str], NoDecode, Field(min_length=1)]
+    # validator below sees the comma-separated string the Go services read. Required
+    # for the `full` role only (`_role_has_what_it_needs`).
+    kafka_brokers: Annotated[list[str], NoDecode] = []
 
     # --- publishing ---------------------------------------------------------
     # Named here rather than shared, the same way the receiver and the worker
@@ -164,18 +176,42 @@ class Settings(BaseSettings):
     # that is the worst blind spot there is — the checker failing silently.
     beat_heartbeat_seconds: Annotated[int, Field(gt=0)] = 60
 
+    # --- tracker connections (F22) --------------------------------------------
+    # Opens a connection's sealed App key and webhook secret. Held by the API and
+    # `scheduler-connections` alone (FD10, AC33).
+    connection_secret_key: str = ""
+    connection_secret_previous_keys: str = ""
+
     # Where this process answers /healthz, /readyz and /metrics (`health.py`).
     # Internal: no edge routes it. Every role uses the same port in its own
     # container.
     health_addr: str = ":8081"
 
     @model_validator(mode="after")
-    def _check_key_is_set_in_production(self) -> Settings:
-        """A deployed prober opens check and channel secrets (readiness blocker 17);
-        without the key every check that uses one fails as our error."""
-        if self.env == "production" and not self.check_secret_key:
-            raise ValueError("CHECK_SECRET_KEY is not set; production opens secrets with it.")
+    def _role_has_what_it_needs(self) -> Settings:
+        """Each role demands its own keys and no other's (F22 D80, F3).
+
+        `full`: Kafka carries every check result, and a deployed prober opens check and
+        channel secrets (readiness blocker 17). `connections`: production opens tracker
+        keys, and must not be handed Kafka or the check key to start."""
+        if self.scheduler_role == FULL_ROLE:
+            if not self.kafka_brokers:
+                raise ValueError("KAFKA_BROKERS is not set; this role publishes to Kafka.")
+            if self.env == "production" and not self.check_secret_key:
+                raise ValueError("CHECK_SECRET_KEY is not set; production opens secrets with it.")
+        elif self.env == "production" and not self.connection_secret_key:
+            raise ValueError(
+                "CONNECTION_SECRET_KEY is not set; production opens connection keys with it."
+            )
         return self
+
+    @field_validator("connections_enabled", mode="before")
+    @classmethod
+    def _connections_unless_no(cls, value: object) -> object:
+        """`deploy/nexovue` writes `yes` or `no`; anything but `no` leaves them on."""
+        if isinstance(value, str):
+            return value.strip().lower() != "no"
+        return value
 
     @model_validator(mode="after")
     def _mail_is_real_in_production(self) -> Settings:
@@ -221,6 +257,11 @@ class Settings(BaseSettings):
     def check_secret_keys(self) -> ConfiguredKeys:
         """Check and channel secrets' keyring, as configured. The API holds the same."""
         return ConfiguredKeys(self.check_secret_key, self.check_secret_previous_keys)
+
+    @property
+    def connection_secret_keys(self) -> ConfiguredKeys:
+        """Tracker connections' keyring (F22). The API holds the same."""
+        return ConfiguredKeys(self.connection_secret_key, self.connection_secret_previous_keys)
 
     @property
     def email(self) -> EmailSettings | None:

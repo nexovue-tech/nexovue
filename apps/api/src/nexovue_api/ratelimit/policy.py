@@ -139,6 +139,12 @@ RUN_NOW_TIER: Final = Tier(quota=Quota(name="check-run-now", limit=30, window_se
 # testing a channel sends a handful, and anything more is using us to post.
 SEND_TEST_PREFIX: Final = "/api/v1/channel-tests"
 SEND_TEST_TIER: Final = Tier(quota=Quota(name="channel-send-test", limit=10, window_seconds=60))
+# F22. A connection test makes our infrastructure call a tracker on the caller's word,
+# so it is a send test's kind of request, with the same tight allowance.
+CONNECTION_TEST_PREFIX: Final = "/api/v1/connection-tests"
+CONNECTION_TEST_TIER: Final = Tier(
+    quota=Quota(name="connection-tests", limit=10, window_seconds=60)
+)
 # Parsing an OpenAPI description or a Postman collection is CPU the caller chose.
 CHECK_IMPORT_PREFIX: Final = "/api/v1/check-imports"
 CHECK_IMPORT_TIER: Final = Tier(quota=Quota(name="check-import", limit=20, window_seconds=60))
@@ -153,6 +159,7 @@ HEARTBEAT_TIER: Final = Tier(quota=Quota(name="heartbeat", limit=120, window_sec
 _OWN_TIERS: Final = (
     (RUN_NOW_PREFIX, RUN_NOW_TIER),
     (SEND_TEST_PREFIX, SEND_TEST_TIER),
+    (CONNECTION_TEST_PREFIX, CONNECTION_TEST_TIER),
     (CHECK_IMPORT_PREFIX, CHECK_IMPORT_TIER),
     (CHECK_FILE_PREFIX, CHECK_FILE_TIER),
     (HEARTBEAT_PREFIX, HEARTBEAT_TIER),

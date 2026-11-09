@@ -2,14 +2,197 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Step 1 is on `feature/phase-2`** (commit 0094862). **Step 2 (2026-11-07) except T2.9, which waits on F3**: built on the worktree branch `wt/f22`, to be committed with T2.9 unticked (founder, 2026-11-07); T2.9 is built once F3 lands.
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09.
 
 
 ## Current task
 
-Step 2 (2026-11-07) except T2.9, which waits on F3. On `feature/phase-2` (commit 631c027). Next: the
-judgeable checks of Steps 1 and 2 on a dev stack, then Step 3, which needs the
-founder's GitHub test organization first.
+Step 3 (2026-11-08): the connection, and a working GitHub App, built and tested against
+a simulated GitHub, on `feature/phase-2` (migration 0055, ADR-030). Next: Step 4.
+
+
+## Step 3 built, 2026-11-08
+
+Plan tasks T3.1 to T3.13, with the notes below and in `plan.md`. **T3.0 is not yet run:
+the founder runs it after Phase 2 (foundation item 28); its result is not faked.** Built
+against a **simulated GitHub**, by the founder's decision of 2026-11-08: nothing here has
+spoken to GitHub. **Migration 0055** (`0055_connections.py`); ClickHouse untouched.
+**ADR-030** filed (*`scheduler-connections` makes every tracker call, on narrow settings*),
+with the decisions index. The reconcile-and-doorbell ADR stays proposed in `design.md`:
+nothing in Step 3 rests on it, and Step 4 builds the sync it governs.
+
+**Kind-agnostic, as the founder asked (foundation item 29).** One `connections` table with
+`kind` (`github`, `jira`, `github_fix`); the scheduler's jobs (`connections/tasks.py`) load
+any tracker kind and write what they learn through one state machine (`states.py`); the
+per-kind boundary is `connections/trackers.py` (`Tracker`, `tracker_for`), and GitHub is the
+one adapter (`connections/github.py`). No Jira code exists; `tracker_for` refuses a `jira`
+row. Nothing on a screen names Jira (T0.1).
+
+What exists now:
+
+- **T3.1** `nexovue_platform/connections.py`: queues `connections` (cap 2) and
+  `connections-interactive`, the three task names, purposes bound to
+  `org_id:connection_id`, connection states, link statuses, the failure words,
+  `link_url()` (strict keys only), `is_repository_key`, `is_github_account`,
+  `is_manifest_code`.
+- **T3.2** `scheduler-connections`: `roles.py`; `SCHEDULER_ROLE` (`full` | `connections`),
+  which decides whether Kafka and the check key are demanded; `--tasks`, `TASK_SETS`,
+  `PRELOAD_OF` and `worker.use_task_set`, chosen before the first child; `QUEUE_CAPS` gains
+  `connections: 2`. Compose: the service behind the `connections` profile in `nexovue.yaml`
+  with an exact environment and no `control-plane-env`; entries in the quickstart and build
+  overlays and the dev stack; **none in `nexovue.hosted.yaml`** (asserted). F3 had not
+  merged, so this built F3's mechanism for F3 to take over.
+- **T3.3** `deploy/nexovue`: `write_secrets` writes `CONNECTION_SECRET_KEY`, and
+  `add_missing_secrets` adds it to older settings without touching what exists
+  (`KEYS_ADDED_LATER`); `keys.py` gains the keyring; `key-rotation.md` names the key.
+- **T3.4** migration 0055: `connections` (setup columns, three sealed columns, state,
+  failure enum and HTTP status, a consecutive-failure count, `repositories_read_at`),
+  `connection_repositories`; `UNIQUE (org_id, id)` on both; one live row per organization
+  and kind; disconnected means every secret null; inventories and `SEALED_COLUMNS`
+  updated; `job_results` may hold `connection_test` (check replaced `NOT VALID`, then
+  validated). Upgrade, downgrade and upgrade run clean on a fresh database.
+- **T3.5** `apps/api/src/nexovue_api/connections/`: `MANAGE_CONNECTIONS` (owner, admin) in
+  every copy of the action list; `GET /connections` (a support view gets kinds and states
+  only); `POST /connections/github/manifest` (hosted and off refused with the spec's
+  sentences; an abandoned setup past its hour is marked disconnected first, AC76; one with
+  an App is kept); `/github/manifest/complete` (state hash, issuing person, expiry; the code
+  sealed and its conversion job added **on the same transaction**, ids only, AC74);
+  `/github/refresh`; `DELETE /connections/{id}` (every secret null in that transaction,
+  disconnect hooks for F5, audit).
+- **T3.6** the scheduler's `connections/` package and PyJWT (`pyjwt[crypto]`, RS256):
+  conversion (the code nulled in the same transaction; client id and secret dropped; a code
+  past its hour never sent; GitHub down retries within the hour), binding the App's own
+  installation (none or two binds nothing, AC38), repositories read page by page with a
+  token narrowed to `metadata: read` and revoked after, places no longer listed marked
+  unreachable, the connection test, and the state machine (`failing` only after 5 straight).
+- **T3.7** `test_connections_have_no_ai.py` (the walk from `TASK_SETS["connections"]`, the
+  role's two queues, and a running child from the connections preload holding no AI module,
+  no `clickhouse_connect`, `confluent_kafka` or `boto3`, nor detection);
+  `test_no_tracker_calls_in_api.py` (open decision 1).
+- **T3.8** `POST /connection-tests`, `GET /connection-tests/{request_id}` on their own tier
+  (10 a minute); the wait ends its read transaction between polls.
+- **T3.9** the Caddyfile's start route, with the console's policy word for word except
+  `form-action 'self' https://github.com`, set with Caddy's `>` (set and defer, per Caddy's
+  `header` documentation); `GitHubStartScreen` posts GitHub's manifest form.
+- **T3.10** `/settings/connections` (`ConnectionsScreen.tsx`, `connection-words.ts`), the
+  return and installed pages, the rail entry (`manage_connections`), and the console-wide
+  banner (`ConnectionsBanner.tsx` in `AppShell`).
+- **T3.11** `POST /connections/{id}/credential`: a new App key re-sealed in place, audited,
+  and tested.
+- **T3.12** `NEXOVUE_CONNECTIONS` (default `yes`) in `write_choices`; `compose_profiles`
+  turns on the `connections` profile unless `no` or hosted; `services_to_stop` names
+  `scheduler-connections` only where it runs; the API and beat read the same setting.
+  **Not built: beat's sweep clause** (open decision 2).
+- **T3.13** beat exports `nexovue_scheduler_connections_active` (an `EXISTS` over live
+  tracker connections, 0 while connections are off; a named cross-tenant exception);
+  `NexovueConnectionsMissing` and its scrape job; `sizing.md` corrected to 13.75 GB and the
+  role's 384 MB guess added.
+
+### The simulated GitHub, and what it is shaped from
+
+`apps/scheduler/tests/tracker_fake.py`, on `recording_site` (real sockets, the guarded libcurl
+client, a private address), answers the routes the code calls: `POST /app-manifests/{code}/conversions`,
+`GET /app`, `GET /app/installations`, `POST /app/installations/{id}/access_tokens`,
+`GET /installation/repositories` (paged) and `DELETE /installation/token`, and 404 for
+anything else. It is stateful: a code converts once; the App's JWT is verified (RS256 with
+the key the conversion handed out, `iss`, `iat`, `exp` at most 10 minutes); tokens are minted
+per request, record the permissions asked for, and stop working when revoked; a route's
+answer can be replaced to drive a failure. Its answers come from `fixtures/github/*.json`,
+each carrying a `_source` note.
+
+**docs.github.com could not be fetched from the build session**, so the shapes were read
+through web search on 2026-11-08 (GitHub's own pages, as indexed): *Registering a GitHub App
+from a manifest* and the REST *Create a GitHub App from a manifest*; *Generating an
+installation access token*; *Generating a JWT for a GitHub App*; the REST *Installations*
+pages (*List repositories accessible to the app installation*, *Revoke an installation
+access token*). PyJWT's installation page for the `crypto` extra. Caddy's `header` page for
+the `>` prefix.
+
+### Unverified until the founder's real-GitHub run (T3.0, T4.8; foundation item 28)
+
+- The manifest flow from a private address, through the real console behind Caddy: that the
+  form posts under the start route's policy, that the redirect back passes, and that GitHub
+  accepts `hook_attributes.active: false` with `default_events: [issues]` (AC73).
+- Whether `installation` and `installation_repositories` events need asking for. Nothing
+  relies on them: binding reads `GET /app/installations`. **The hourly refresh is not
+  scheduled yet** (open decision 2), so until Step 4 a refresh runs when GitHub returns a
+  person to `installed`, on Test, and by `POST /connections/github/refresh`.
+- **The unreachable install** (polling only): built as `active: false`, never tried.
+- Who must act in GitHub (an organization owner, or someone allowed to manage Apps).
+- The conversion's answer (`id`, `slug`, `pem`, `webhook_secret`, `client_id`,
+  `client_secret`; 201); the JWT's `iss` as the App id (GitHub's current page recommends the
+  client id and accepts the App id, by search); `GET /app/installations`' shape; that a
+  private App installs only on its owner's account (so one installation is expected); a
+  token request narrowed by `permissions`; `GET /installation/repositories` carrying
+  `full_name` and `private` (general knowledge, not confirmed by the search); revocation
+  answering 204; GitHub's rate-limit 403 headers.
+- The App's install page (`https://github.com/apps/<slug>/installations/new`), used also for
+  *Choose repositories on GitHub*; the 34-character App name limit and its uniqueness.
+- Calls through a company egress proxy (D83).
+
+### Where the code needed more than the plan named
+
+- **`job_results` kinds** were frozen (`check_run`, `channel_test`); 0055 adds `connection_test`.
+- **`recording_site`** gained a configurable `default` reply, so the fake answers 404 for an
+  unknown path, as GitHub does (it answered 200 before, which hid a refused code).
+- **`test_detection_coordinator.py`** and **`test_billing.py`** pinned the old queue caps and
+  the old set of production keys; both updated.
+- **The dev stack is the hosted product** (`NEXOVUE_DEPLOYMENT: hosted`), where connections
+  are refused by design; trying a setup locally needs the API run self-hosted.
+- **Two lines of the design were not built as written** and are open decisions 3 and 4.
+
+### Validation run (read, not inferred)
+
+Against a private Postgres **16** at port 26543 (`/var/lib/postgresql/f22-pg`, outside the
+scratch folder because the session's `/tmp` tree became unreadable to the `postgres` user),
+because the Docker daemon was not running and starting it was refused. Postgres 16 lacks
+18's `uuidv7()`, so a SQL stand-in was added to that database and `template1`, for the
+test store only. No Kafka, ClickHouse or object store.
+
+- **Seen failing first, then passing:** T3.1 vocabulary (30 failed, AttributeError);
+  T3.4 deletion and keys suites (collection errors, then a real `KeyError: 'connections'`
+  in the deletion statements, fixed); the model/migration test (seen failing against a
+  mutated migration); T3.3 install secrets (2 failed, KeyError); T3.2 settings and role
+  (8 failed); AC34 suite (5 failed); T3.6 states and GitHub suites (ImportError), then two
+  real defects: the `job_results` check and the fake's 200 for unknown paths; T3.5 API
+  suite (ImportError); AC32 (failed until the routes existed, then found the object store,
+  open decision 1); the connection-test tier (1 failed); the compose contract (11 failed);
+  T3.12 install functions (11 failed); `connections_active` and its tenancy exception
+  (2 failed); the Caddyfile route (2 failed); the rail entry (1 failed); the console suite
+  (import failure); after review, the hosted screen's description (failed against the old
+  description) and the poll's transaction (failed with a rollback, passes with a commit).
+  **Not seen failing:** the cross-service contract for connection jobs, written after the
+  tasks; the restore stop list's Compose test (checked by a negative control instead).
+- `apps/scheduler/tests`: **4,932 passed, 0 failed**; 13 suites refuse to start without
+  Kafka, ClickHouse or DNS, as designed (52 collection errors across 4 workers).
+- `apps/api/tests`, every suite but the six migration suites: **4,766 passed, 1 failed,
+  3 skipped**; 26 suites refuse to start without ClickHouse. The one failure,
+  `test_apikeys_live.py::test_an_organization_cannot_revoke_another_organizations_key`,
+  orders audit rows by their `uuidv7` id: Postgres 18's function is monotonic within a
+  millisecond, the test store's Postgres 16 stand-in is not, so rows written in one
+  millisecond sort either way. It passed before the database was seeded, and touches nothing
+  this step changed; it should be rerun on Postgres 18. The six migration suites, one at a
+  time (they downgrade the database they share): **48 passed**. The seed suites, after the
+  development seed: **14 passed, 1 skipped**.
+- `packages/py-platform/tests`: **135 passed**. Web: **1,660 passed** in 142 files;
+  `pnpm -r --if-present run typecheck` clean; Biome clean on the changed files;
+  `verify-tokens.js` clean.
+- `uv run mypy .`: no issues in 801 files; `ruff check` and `ruff format --check` clean.
+- **Not run:** `just check` (the coordinator's); the promtool rule tests (no Docker, and
+  downloading promtool was refused); the real-Caddy header check; any browser; T3.0 and every
+  real-GitHub check; `shellcheck` (not installed); the 13 scheduler and 30 API suites that
+  need ClickHouse, Kafka or DNS.
+
+### Residual risks
+
+- **Everything GitHub-facing is proved against the authors' reading of GitHub's pages,**
+  through search snippets, not the pages themselves. The fake can be wrong in the same way
+  the code is.
+- **The role's 384 MB is a guess;** T4.9 measures it.
+- **A compromise of `scheduler-connections` still reaches all of Postgres** (one shared
+  account) until T8.7.
+- **The connection test's result waits up to 30 seconds** in the console (three 10-second
+  waits); a slower test reads as "has not finished".
 
 
 ## Step 2 built, 2026-11-07
@@ -287,22 +470,50 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-Step 2 is committed (631c027) with T2.9 unticked; T2.9 is built when F3's evidence job lands. Step 3 waits on the founder's free GitHub test organization (foundation decision 23).
-Then the judgeable checks of Steps 1 and 2 on a dev stack
-(`just detection-seed`, `just detection-fault --service checkout`, take, note,
-`--clear`, the fault again, *Active cases*, an untouched case's end line),
-recorded here. Step 3 needs the founder's GitHub test organization (D93), asked
-for at the time. T2.9 is built once F3's `evidence/gather.py` exists. Step 7
-(Jira) still waits on Atlassian's written answer; T0.1's question should be sent
-if it has not been. The two tracker ADRs are filed when Step 3 starts.
+Step 4 (create an issue, sync by polling), which also builds `sweep_connections`, beat's
+half of AC118 and the hourly repository refresh (founder, 2026-11-09).
+After Phase 2, the founder runs T3.0 and the hand checks of T3.9 against real GitHub and a
+real browser (foundation item 28). T2.9 waits on F3; Step 7 on Atlassian.
 
 
 ## Open decisions
 
-None for the founder. Items 1 and 3 of the founder decisions were approved on
-2026-11-02, as recommended; item 2 is foundation item 6 (*Founder answers,
-2026-11-02*, below). Step 7 waits on Atlassian's written answer, not on the
-founder.
+None open. **Founder answers, 2026-11-09:** all four from Step 3 as recommended (option A each), kept below for the record. AC32 amended in `spec.md`; the beat clause and hourly refresh moved to T4.5 in `plan.md`; the *Session ended* row deleted and `jira` deferred to Step 7 in `design.md`.
+
+**1. AC32's list of API modules allowed a network client.** AC32 says the list "holds
+`billing/razorpay.py` alone". Evidence: `apps/api/src/nexovue_api/data/objectstore/store.py`
+and `apps/api/src/nexovue_api/backups.py` import `boto3`, which the shared walker
+(`nexovue_platform.import_walk.NETWORK_CLIENTS`) counts as a network client; both talk to
+the install's own S3-compatible store, never a tracker. As written, the test fails on
+today's code.
+- *Option A (built, recommended):* the allowlist names all three, each with its reason, and
+  any new client still fails the test. Amend AC32 to "a named list, each with its reason".
+- *Option B:* narrow the test to HTTP libraries and leave `boto3` out, keeping AC32's words.
+  It stops seeing a future `boto3` user that calls somewhere else.
+
+**2. T3.12's beat clause ("no sweep job with none live") and the hourly refresh.** Beat has
+no connection sweep to withhold until T4.5 builds `sweep_connections`, which the design also
+makes the scheduler of each connection's hourly repository refresh. Built in Step 3: beat's
+`connections_active`, which already follows `NEXOVUE_CONNECTIONS` and the live rows.
+- *Option A (recommended):* move AC118's beat clause, and the hourly refresh, to T4.5, where
+  the sweep exists; Step 3 refreshes on GitHub's install return, on Test and on request.
+- *Option B:* build a refresh-only `sweep_connections` now and extend it in T4.5: two steps
+  of work on one function, and a design detail (refresh inside `sync_connection`) decided
+  early.
+
+**3. The setup row "Session ended".** The design says: the sign-in screen, then "Sign in
+finished, but setup must start again." As built, the shell's sign-in returns the person to
+GitHub's return address, and the setup completes if it is the same person within the hour,
+so that sentence would be false.
+- *Option A (recommended):* keep it as built; delete the row from the design's table.
+- *Option B:* force a restart after any sign-in, discarding a valid return.
+
+**4. The rail's search words.** The design gives the Connections entry the keywords `github`,
+`jira`, `issues`, `tracker`; T0.1 says nothing public mentions Jira until Atlassian answers,
+and the console is published source. Built without `jira` (asserted by a test).
+- *Option A (recommended):* add `jira` with Step 7, if it goes ahead.
+- *Option B:* add it now.
+
 
 ## Founder answers, 2026-11-07
 
@@ -340,14 +551,14 @@ committed now with T2.9 unticked, waiting on F3, because F3's
 
 - **Founder, 2026-11-08: T0.1 sent.** The founder emailed Atlassian's developer support the T0.1 question; no reply yet. Jira (Step 7) waits for a written yes (foundation item 17; at most 4 weeks, then GitHub only). **GitHub ships now.** Steps 3 to 6 must keep the connection layer kind-agnostic (one `connections` table with `kind`, shared sync machinery, per-kind adapters, foundation section 6), so Jira is an added adapter, not a rework.
 - **Founder decision, 2026-11-08:** Steps 3 to 6 are built against a simulated GitHub; T3.0's manifest-flow trial and T5.2's real webhook are run by the founder after Phase 2 (foundation item 28). Step 7 (Jira) still waits on Atlassian's written answer.
-Nothing is blocked now. Implementation waits on approval of the specification, design and plan, and on F6 merging. T0.1 is approved (2026-11-02) and can be sent now. Step 7 waits for Atlassian's written answer, 4 weeks at most. T5.2 (a real webhook delivery, AC130) waits for the Oracle deployment, since no test server is rented.
+- T3.0 and T3.9's hand checks (AC73) wait for the founder's real-GitHub run after Phase 2; T5.2 (a real webhook delivery, AC130) for the Oracle deployment.
 
 ## Risks
 
 - **Nobody has asked a user.** Every need here is inferred. Whether status-only sync is enough is a guess. It should be in the founder's five to eight conversations.
 - **F22 is a reason to stay, not to arrive,** by the research's own reading. Steps 1 and 2 are the value. A tracker is what makes it stick.
 - **Jira's API details are second-hand** until T7.0.
-- **The manifest flow from a private address is untried.** T3.0 starts Step 3 by trying it.
+- **The manifest flow from a private address is untried.** Step 3 was built without it, against a simulated GitHub (foundation item 28); the founder runs T3.0 after Phase 2.
 - **Numbers are guesses:** 90 idle days, 72 untouched hours, a 7-day join window, 5-minute polling, a 5-minute sweep, 30-second refresh, 1 MiB body cap, 384 MB ceiling, note limits. Each says so where it appears.
 - **Status-only sync may read as thin** beside rivals who sync comments. Stated in the spec and research.
 - **A public repository reference can be closed by an outsider.** It changes nothing unless promoted, and promotion warns.

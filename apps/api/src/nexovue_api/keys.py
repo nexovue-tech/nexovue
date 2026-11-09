@@ -40,6 +40,12 @@ from nexovue_platform.checks.sealing import (
     keyring_from,
     sealed_key_id,
 )
+from nexovue_platform.connections import (
+    CONNECTION_CREDENTIAL_PURPOSE,
+    CONNECTION_MANIFEST_CODE_PURPOSE,
+    CONNECTION_WEBHOOK_SECRET_PURPOSE,
+    connection_secret_owner,
+)
 from sqlalchemy import TextClause, text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
@@ -58,10 +64,12 @@ EXIT_NOT_CONFIGURED: Final = 3
 
 @dataclass(frozen=True, slots=True)
 class Keys:
-    """The two keyrings, read from the environment the API reads them from."""
+    """The keyrings, read from the environment the API reads them from."""
 
     check: ConfiguredKeys
     credential: ConfiguredKeys
+    # F22: tracker connections' keys, held only by the API and `scheduler-connections`.
+    connection: ConfiguredKeys
 
     @classmethod
     def from_environment(cls) -> Keys:
@@ -73,6 +81,10 @@ class Keys:
             credential=ConfiguredKeys(
                 os.environ.get("CREDENTIAL_ENCRYPTION_KEY", ""),
                 os.environ.get("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS", ""),
+            ),
+            connection=ConfiguredKeys(
+                os.environ.get("CONNECTION_SECRET_KEY", ""),
+                os.environ.get("CONNECTION_SECRET_PREVIOUS_KEYS", ""),
             ),
         )
 
@@ -88,6 +100,21 @@ class SealedColumn:
     page: TextClause
     replace: TextClause
     owner: Callable[[Any], str]
+
+
+def _connection_column(column: str, purpose: str) -> SealedColumn:
+    """One of a connection's sealed columns (F22, AC35), bound to its connection."""
+    return SealedColumn(
+        name=f"connections.{column}",
+        purpose=purpose,
+        keys=lambda keys: keys.connection,
+        page=text(
+            f"SELECT id AS pk, org_id, {column} AS sealed FROM connections "
+            f"WHERE {column} IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(f"UPDATE connections SET {column} = :new WHERE id = :pk AND {column} = :old"),
+        owner=lambda row: connection_secret_owner(str(row.org_id), str(row.pk)),
+    )
 
 
 SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
@@ -143,7 +170,11 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
         ),
         owner=lambda row: str(row.pk),
     ),
+    _connection_column("sealed_credential", CONNECTION_CREDENTIAL_PURPOSE),
+    _connection_column("sealed_webhook_secret", CONNECTION_WEBHOOK_SECRET_PURPOSE),
+    _connection_column("sealed_manifest_code", CONNECTION_MANIFEST_CODE_PURPOSE),
 )
+
 
 # A UUID below every real one, to start paging from.
 _FIRST: Final = "00000000-0000-0000-0000-000000000000"

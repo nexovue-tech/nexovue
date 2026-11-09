@@ -47,3 +47,10 @@ scrape_configs:
       - names: [scheduler-deliveries]
         type: A
         port: 8081
+  # F22. Optional: a name that does not resolve is no target, and NexovueConnectionsMissing,
+  # not `up`, says whether its absence matters.
+  - job_name: scheduler-connections
+    dns_sd_configs:
+      - names: [scheduler-connections]
+        type: A
+        port: 8081

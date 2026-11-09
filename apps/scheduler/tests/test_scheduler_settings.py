@@ -26,7 +26,25 @@ KNOWN_VARIABLES = (
     "ERASURE_BATCH_SIZE",
     "CHECK_SECRET_KEY",
     "CHECK_SECRET_PREVIOUS_KEYS",
+    "SCHEDULER_ROLE",
+    "NEXOVUE_DEPLOYMENT",
+    "NEXOVUE_CONNECTIONS",
+    "CONNECTION_SECRET_KEY",
+    "CONNECTION_SECRET_PREVIOUS_KEYS",
 )
+
+# F22, AC33: exactly what `scheduler-connections` is given in the install Compose file.
+CONNECTIONS_ROLE_ENVIRONMENT = {
+    "ENV": "production",
+    "NEXOVUE_DEPLOYMENT": "self-hosted",
+    "LOG_LEVEL": "info",
+    "LOG_FORMAT": "json",
+    "SCHEDULER_ROLE": "connections",
+    "POSTGRES_DSN": "postgresql+asyncpg://nexovue:secret@postgres:5432/nexovue",
+    "APP_BASE_URL": "https://nexovue.example.com",
+    "CONNECTION_SECRET_KEY": "qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=",
+    "CONNECTION_SECRET_PREVIOUS_KEYS": "",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -60,8 +78,61 @@ def test_missing_required_variable_is_named(monkeypatch: pytest.MonkeyPatch, mis
 
 
 def test_no_secret_carries_a_default() -> None:
-    for name in ("postgres_dsn", "kafka_brokers"):
-        assert Settings.model_fields[name].is_required(), f"{name} must have no default"
+    assert Settings.model_fields["postgres_dsn"].is_required()
+    # The brokers follow the role (F22, F3): required for `full`, below; none for a narrow role.
+    assert Settings.model_fields["kafka_brokers"].default == []
+
+
+def test_the_connections_role_starts_on_exactly_its_own_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC33: no Kafka, no check key, no mail or object store, and still production."""
+    _apply(monkeypatch, CONNECTIONS_ROLE_ENVIRONMENT)
+
+    settings = get_settings()
+
+    assert settings.scheduler_role == "connections"
+    assert settings.env == "production"
+    assert settings.kafka_brokers == []
+    assert (
+        settings.connection_secret_keys.current
+        == CONNECTIONS_ROLE_ENVIRONMENT["CONNECTION_SECRET_KEY"]
+    )
+
+
+def test_the_connections_role_refuses_production_without_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, {**CONNECTIONS_ROLE_ENVIRONMENT, "CONNECTION_SECRET_KEY": ""})
+
+    with pytest.raises(SettingsError, match="CONNECTION_SECRET_KEY"):
+        get_settings()
+
+
+def test_the_full_role_still_needs_its_brokers_and_check_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, {**CONNECTIONS_ROLE_ENVIRONMENT, "SCHEDULER_ROLE": "full"})
+
+    with pytest.raises(SettingsError, match="KAFKA_BROKERS"):
+        get_settings()
+
+
+def test_a_misspelt_role_stops_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "SCHEDULER_ROLE": "connection"})
+
+    with pytest.raises(SettingsError, match="SCHEDULER_ROLE"):
+        get_settings()
+
+
+@pytest.mark.parametrize(("value", "on"), [("yes", True), ("no", False), ("", True)])
+def test_connections_follow_the_install_s_setting(
+    monkeypatch: pytest.MonkeyPatch, value: str, on: bool
+) -> None:
+    """AC118: the same `NEXOVUE_CONNECTIONS` the API reads; on unless set to no."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "NEXOVUE_CONNECTIONS": value})
+
+    assert get_settings().connections_enabled is on
 
 
 def test_alert_mail_reads_the_same_variables_the_api_does(

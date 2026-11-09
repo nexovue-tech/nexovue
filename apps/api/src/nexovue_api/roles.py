@@ -29,6 +29,13 @@ ROLES: Final[dict[str, list[str]]] = {
         *("python", "-m", "nexovue_scheduler", "worker"),
         *("--queues", "deliveries", "--concurrency", "4"),
     ],
+    # F22: every tracker call, on narrow settings (D80). Sync's queue is capped at 2 of
+    # the 3 slots, so a test and a sweep always have one (F5's D40, AC86).
+    "scheduler-connections": [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--queues", "connections,connections-interactive"),
+        *("--concurrency", "3", "--tasks", "connections"),
+    ],
     "scheduler-health": ["python", "-m", "nexovue_scheduler", "health"],
     "setup": ["python", "-m", "nexovue_api.setup"],
     "backup": ["python", "-m", "nexovue_api.backups"],

@@ -184,3 +184,154 @@ export function useIngestEndpoint() {
     queryFn: ({ signal }) => apiClient.get<IngestEndpoint>("system/ingest", { signal }),
   });
 }
+
+// ---------------------------------------------------------------- tracker connections (F22)
+
+/** Why connections do not exist on this install (spec, *Packaging and limits*). */
+export type UnavailableReason = "hosted" | "off";
+
+/** Which row of `design.md`'s GitHub setup table a connection in setup is on. */
+export type SetupStep =
+  | "on_github"
+  | "converting"
+  | "expired"
+  | "refused"
+  | "not_installed"
+  | "no_repository"
+  | "test_failed"
+  | "testing";
+
+export type ConnectionState =
+  | "setting_up"
+  | "working"
+  | "failing"
+  | "needs_attention"
+  | "disconnected";
+
+export interface ConnectionPlace {
+  id: string;
+  /** `owner/name`, its strict key: never a free-text name. */
+  key: string;
+  is_private: boolean;
+  is_reachable: boolean;
+}
+
+/** One live connection. Never a credential; a support view gets id, kind and state alone. */
+export interface ConnectionView {
+  id: string;
+  kind: string;
+  state: ConnectionState;
+  app_slug: string | null;
+  install_url: string | null;
+  setup_step: SetupStep | null;
+  setup_expires_at: string | null;
+  last_ok_at: string | null;
+  failing_since: string | null;
+  /** One of the API's failure words (`nexovue_platform.connections.CONNECTION_FAILURES`). */
+  last_failure: string | null;
+  last_failure_status: number | null;
+  repositories: ConnectionPlace[];
+}
+
+export interface ConnectionsOverview {
+  available: boolean;
+  unavailable_reason: UnavailableReason | null;
+  email_available: boolean;
+  connections: ConnectionView[];
+}
+
+interface GitHubSetupStarted {
+  connection_id: string;
+  /** One-time; GitHub hands it back on its redirect. */
+  state: string;
+  manifest: Record<string, unknown>;
+  post_url: string;
+}
+
+interface ConnectionTestAccepted {
+  request_id: string;
+}
+
+export interface ConnectionTestResult {
+  pending: boolean;
+  ok: boolean | null;
+  failure: string | null;
+  state: string | null;
+}
+
+export const connectionsQueryKey = ["connections"] as const;
+// The API waits this long for a test's result per request, as a send test does.
+const TEST_WAIT_SECONDS = 10;
+const TEST_ROUNDS = 3;
+
+export function useConnections(enabled = true) {
+  return useQuery({
+    queryKey: connectionsQueryKey,
+    queryFn: ({ signal }) => apiClient.get<ConnectionsOverview>("connections", { signal }),
+    enabled,
+  });
+}
+
+export function useStartGitHub() {
+  return useMutation({
+    mutationFn: (request: { reachable: boolean; github_organization: string | null }) =>
+      apiClient.post<GitHubSetupStarted>("connections/github/manifest", request),
+  });
+}
+
+export function completeGitHub(code: string, state: string) {
+  return apiClient.post<{ connection_id: string }>("connections/github/manifest/complete", {
+    code,
+    state,
+  });
+}
+
+export function refreshGitHub() {
+  return apiClient.post<null>("connections/github/refresh");
+}
+
+/** A test is a job in `scheduler-connections`; its result arrives here without leaving the page. */
+export function useConnectionTest() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (connectionId: string): Promise<ConnectionTestResult> => {
+      const { request_id } = await apiClient.post<ConnectionTestAccepted>("connection-tests", {
+        connection_id: connectionId,
+      });
+      return awaitTest(request_id);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: connectionsQueryKey }),
+  });
+}
+
+async function awaitTest(requestId: string): Promise<ConnectionTestResult> {
+  let result: ConnectionTestResult = { pending: true, ok: null, failure: null, state: null };
+  for (let round = 0; round < TEST_ROUNDS && result.pending; round += 1) {
+    result = await apiClient.get<ConnectionTestResult>(`connection-tests/${requestId}`, {
+      searchParams: { wait_seconds: TEST_WAIT_SECONDS },
+    });
+  }
+  return result;
+}
+
+export function useReplaceAppKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: { connectionId: string; privateKey: string }) => {
+      const { request_id } = await apiClient.post<ConnectionTestAccepted>(
+        `connections/${request.connectionId}/credential`,
+        { private_key: request.privateKey },
+      );
+      return awaitTest(request_id);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: connectionsQueryKey }),
+  });
+}
+
+export function useDisconnect() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (connectionId: string) => apiClient.delete<null>(`connections/${connectionId}`),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: connectionsQueryKey }),
+  });
+}

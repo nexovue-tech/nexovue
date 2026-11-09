@@ -53,6 +53,17 @@ def test_tier_for_path(path: str, expected: object) -> None:
     assert tier_for_path(path) is expected
 
 
+def test_a_connection_test_has_its_own_allowance() -> None:
+    """F22 T3.8: each test makes our infrastructure call a tracker, so it is Run now's kind
+    of request, with a send test's tight quota, and the result read shares it."""
+    from nexovue_api.ratelimit.policy import CONNECTION_TEST_TIER
+
+    for path in ("/connection-tests", "/connection-tests/a-request-id"):
+        assert tier_for_path(f"{API_PREFIX}{path}") is CONNECTION_TEST_TIER
+    assert CONNECTION_TEST_TIER.quota.limit <= 10
+    assert tier_for_path(f"{API_PREFIX}/connections") is DEFAULT_TIER
+
+
 A_TOKEN = f"{API_TOKEN_PREFIX}CIreadsCIreadsCIreadsCIreadsCIre"
 
 

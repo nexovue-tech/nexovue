@@ -1,7 +1,8 @@
 # Key rotation
 
-Replacing `CHECK_SECRET_KEY` (check and alert-channel secrets) or `CREDENTIAL_ENCRYPTION_KEY`
-(two-factor secrets) without losing what either sealed. Do it on a schedule, and at once if a key may
+Replacing `CHECK_SECRET_KEY` (check and alert-channel secrets), `CREDENTIAL_ENCRYPTION_KEY`
+(two-factor secrets) or `CONNECTION_SECRET_KEY` (tracker connections: a GitHub App's private key,
+its webhook secret, and a setup's one-hour manifest code) without losing what each sealed. Do it on a schedule, and at once if a key may
 have leaked.
 
 ## Current verified behavior
@@ -31,9 +32,16 @@ run the same commands inside the API container:
    - `CREDENTIAL_ENCRYPTION_KEY=<new>`
    - `CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS=<old>`
 
+   For the connection key, set it in the API and `scheduler-connections`, the only two that hold
+   it:
+   - `CONNECTION_SECRET_KEY=<new>`
+   - `CONNECTION_SECRET_PREVIOUS_KEYS=<old>`
+
    On the dev stack these are `DEV_CHECK_SECRET_KEY`, `DEV_CHECK_SECRET_PREVIOUS_KEYS`,
-   `DEV_CREDENTIAL_ENCRYPTION_KEY` and `DEV_CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`.
-3. **Restart** the API, `scheduler-beat`, `scheduler-light` and `scheduler-deliveries`. New values
+   `DEV_CREDENTIAL_ENCRYPTION_KEY`, `DEV_CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`,
+   `DEV_CONNECTION_SECRET_KEY` and `DEV_CONNECTION_SECRET_PREVIOUS_KEYS`.
+3. **Restart** the API, `scheduler-beat`, `scheduler-light`, `scheduler-deliveries` and, where it
+   runs, `scheduler-connections`. New values
    are now sealed with the new key, and old values still open.
 4. **`just keys-status`.** Every existing value shows as `previous`.
 5. **`just keys-reseal`.** Each value is re-sealed with the new key. The run says how many it moved
@@ -54,3 +62,5 @@ must sign in with a recovery code.
   recommendation (`production-readiness.md`).
 - No rotation schedule is set yet.
 - The rotation has not been executed against a deployed install, because none exists yet.
+- The connection key's re-seal is proved by `apps/api/tests/test_keys_live.py` against Postgres
+  (F22 T3.4, 2026-11-08), not by a rotation on a running stack.

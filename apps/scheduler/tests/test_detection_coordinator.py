@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
+from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
 
 from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
@@ -113,10 +114,12 @@ def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> N
         *releases.QUEUES,
     ]
     assert worker_queues("deliveries", region="mumbai") == ["deliveries"]
+    # F22: `scheduler-connections`' sync queue is capped too, in its own worker (F5's D40).
     assert QUEUE_CAPS == {
         DETECTION_QUEUE: DETECTION_CONCURRENCY,
         **slos.QUEUE_CAPS,
         **releases.QUEUE_CAPS,
+        CONNECTIONS_QUEUE: CONNECTIONS_QUEUE_CAP,
     }
     assert DETECTION_CONCURRENCY == 2
 

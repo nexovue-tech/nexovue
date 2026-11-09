@@ -194,6 +194,22 @@ const ApiKeysScreen = lazyRouteComponent(
   () => import("@/features/settings/ApiKeysScreen"),
   "ApiKeysScreen",
 );
+const ConnectionsScreen = lazyRouteComponent(
+  () => import("@/features/settings/ConnectionsScreen"),
+  "ConnectionsScreen",
+);
+const GitHubStartScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubStartScreen"),
+  "GitHubStartScreen",
+);
+const GitHubReturnScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubReturnScreen"),
+  "GitHubReturnScreen",
+);
+const GitHubInstalledScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubReturnScreen"),
+  "GitHubInstalledScreen",
+);
 const SupportAccessScreen = lazyRouteComponent(
   () => import("@/features/support/SupportAccessScreen"),
   "SupportAccessScreen",
@@ -579,6 +595,33 @@ const settingsChannelRoute = createRoute({
   component: ChannelDetailScreen,
 });
 
+/* F22. The start is loaded as a full page (a plain anchor), because the edge gives that one
+   address the policy that lets its form post to github.com (`Caddyfile`, AC73). GitHub returns
+   a person to `return` after creating the App and to `installed` after installing it. */
+const settingsConnectionsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections",
+  component: ConnectionsScreen,
+});
+
+const settingsGitHubStartRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/github/start",
+  component: () => <GitHubStartScreen />,
+});
+
+const settingsGitHubReturnRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/github/return",
+  component: GitHubReturnScreen,
+});
+
+const settingsGitHubInstalledRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/github/installed",
+  component: GitHubInstalledScreen,
+});
+
 const settingsProjectsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/projects",
@@ -777,6 +820,10 @@ const routeTree = rootRoute.addChildren([
     settingsSupportRoute,
     settingsChannelsRoute,
     settingsChannelRoute,
+    settingsConnectionsRoute,
+    settingsGitHubStartRoute,
+    settingsGitHubReturnRoute,
+    settingsGitHubInstalledRoute,
     settingsProjectsRoute,
     settingsBillingRoute,
     settingsUsageRoute,

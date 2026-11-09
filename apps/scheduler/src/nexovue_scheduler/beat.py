@@ -271,7 +271,11 @@ class Beat:
         self._measure_due_at = now + metrics.MEASURE_SECONDS
         try:
             async with self._engine.connect() as connection:
-                readings = await metrics.read_queues(connection, now=datetime.now(UTC))
+                readings = await metrics.read_queues(
+                    connection,
+                    now=datetime.now(UTC),
+                    connections_enabled=self._settings.connections_enabled,
+                )
         except Exception:
             # A missed reading leaves the last one standing; the next tick tries again.
             logger.warning("beat could not read the queues for its metrics")

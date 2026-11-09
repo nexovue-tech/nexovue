@@ -140,6 +140,21 @@
 		file_server
 	}
 
+	# F22 (AC73). Creating the organization's GitHub App is a form this one page posts to
+	# github.com (GitHub's manifest flow), which `form-action 'self'` refuses. So this route,
+	# loaded as a full page, widens `form-action` to GitHub alone; every other route keeps
+	# `'self'`. The policy is the console's above, word for word otherwise:
+	# `apps/api/tests/test_caddyfile_headers.py` fails if they drift. `>` replaces the header the
+	# console snippet set, as the response is written. Not run against a real Caddy here: the
+	# founder's browser check (T3.0, T3.9) proves the header reaches the page.
+	handle /settings/connections/github/start {
+		root * /srv/web
+		header Cache-Control "no-cache"
+		header >Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-l0ccwCCCCbd6qE6AXzKsNeUubznvX4TgnnF7fn9ilzs=' {$NEXOVUE_CHECKOUT_ORIGINS}; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://{$NEXOVUE_APP_HOST} {$NEXOVUE_CHECKOUT_ORIGINS}; frame-src 'self' {$NEXOVUE_CHECKOUT_ORIGINS}; object-src 'none'; base-uri 'self'; form-action 'self' https://github.com; frame-ancestors 'none'"
+		rewrite * /index.html
+		file_server
+	}
+
 	# Everything else is the page itself, whose path the console's router owns.
 	# `no-cache` makes a browser ask before reusing it: a remembered index.html
 	# names assets a deploy has removed, and the console renders blank.

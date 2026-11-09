@@ -58,6 +58,7 @@ SETTINGS: Final = {
     "WORKERS_MASKING_HASH_SECRET": "masking-secret",
     "CHECK_SECRET_KEY": "check-key",
     "CREDENTIAL_ENCRYPTION_KEY": "credential-key",
+    "CONNECTION_SECRET_KEY": "connection-key",
     "S3_BUCKET": "nexovue",
     "S3_ACCESS_KEY_ID": "install-access-key",
     "S3_SECRET_ACCESS_KEY": "install-secret-key",
@@ -107,8 +108,12 @@ def layout(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
+# Every optional service, so the general rules below hold for them too.
+EVERY_PROFILE: Final = ("monitoring", "connections")
+
+
 def test_only_the_edge_publishes_a_port(layout: str, tmp_path: Path) -> None:
-    services = _render(layout, tmp_path, profiles=("monitoring",))
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
 
     published = sorted(name for name, service in services.items() if service.get("ports"))
 
@@ -118,7 +123,7 @@ def test_only_the_edge_publishes_a_port(layout: str, tmp_path: Path) -> None:
 def test_every_long_running_service_restarts_and_has_a_healthcheck(
     layout: str, tmp_path: Path
 ) -> None:
-    services = _render(layout, tmp_path, profiles=("monitoring",))
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
 
     unchecked = sorted(
         name
@@ -136,7 +141,7 @@ def test_every_long_running_service_restarts_and_has_a_healthcheck(
 
 
 def test_images_are_ours_by_version_or_pinned(layout: str, tmp_path: Path) -> None:
-    services = _render(layout, tmp_path, profiles=("monitoring",))
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
 
     for name, service in services.items():
         image = service["image"]
@@ -379,3 +384,108 @@ def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
     assert set(releases.QUEUES) <= set(workers["scheduler-light"])
     assert _floor_of(dev["services"]["scheduler-light"]["command"].split()) == 4
     assert DETECTION_QUEUE not in workers["scheduler-deliveries"]
+
+
+# ------------------------------------------------------- F22: scheduler-connections
+
+CONNECTIONS_ROLE: Final = "scheduler-connections"
+# AC33: what the role holds, and nothing else. No Kafka, no check key, no mail, no object
+# store: it opens tracker keys and calls trackers, and a compromise of it reaches no more.
+CONNECTIONS_ROLE_VARIABLES: Final = frozenset(
+    {
+        "ENV",
+        "NEXOVUE_DEPLOYMENT",
+        "LOG_LEVEL",
+        "LOG_FORMAT",
+        "SCHEDULER_ROLE",
+        "POSTGRES_DSN",
+        "APP_BASE_URL",
+        "CONNECTION_SECRET_KEY",
+        "CONNECTION_SECRET_PREVIOUS_KEYS",
+    }
+)
+
+
+def test_the_connections_role_runs_only_where_its_profile_is_on(tmp_path: Path) -> None:
+    """AC118: `NEXOVUE_CONNECTIONS=no` leaves the profile off, and Compose starts no role."""
+    assert CONNECTIONS_ROLE not in _render("self-hosted", tmp_path)
+    assert CONNECTIONS_ROLE in _render("self-hosted", tmp_path, profiles=("connections",))
+
+
+@pytest.mark.parametrize("layout_name", ["self-hosted", "quickstart", "three-brokers"])
+def test_the_connections_role_holds_exactly_its_own_variables(
+    layout_name: str, tmp_path: Path
+) -> None:
+    """AC33: an exact list, so a merged `control-plane-env` (its check key, its mail and
+    object store keys) or anything added later fails here."""
+    services = _render(layout_name, tmp_path, profiles=("connections",))
+
+    held = set(services[CONNECTIONS_ROLE]["environment"])
+
+    assert held == CONNECTIONS_ROLE_VARIABLES, sorted(held ^ CONNECTIONS_ROLE_VARIABLES)
+    assert services[CONNECTIONS_ROLE]["environment"]["SCHEDULER_ROLE"] == "connections"
+    assert services[CONNECTIONS_ROLE]["command"] == ["scheduler-connections"]
+
+
+def test_only_the_api_and_the_connections_role_hold_the_connection_key(
+    layout: str, tmp_path: Path
+) -> None:
+    """AC33, FD10: the separation is which container holds the key."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if "CONNECTION_SECRET_KEY" in (service.get("environment") or {})
+    }
+
+    assert "api" in holders
+    assert holders <= {"api", CONNECTIONS_ROLE}, f"{layout}: {sorted(holders)}"
+
+
+def test_the_hosted_overlay_names_no_connections_role() -> None:
+    """Hosted has no tracker connections until founder decision 3 (step H)."""
+    hosted = yaml.safe_load((COMPOSE / "nexovue.hosted.yaml").read_text())["services"]
+
+    assert CONNECTIONS_ROLE not in hosted
+
+
+def test_an_install_without_the_connection_key_refuses_to_start(tmp_path: Path) -> None:
+    """`${…:?}`: an upgrade adds the key (`deploy/nexovue`), so a missing one is a fault."""
+    values = {k: v for k, v in SETTINGS.items() if k != "CONNECTION_SECRET_KEY"}
+
+    rendered = _compose_config("self-hosted", tmp_path, values)
+
+    assert rendered.returncode != 0
+    assert "set CONNECTION_SECRET_KEY" in rendered.stderr
+
+
+def test_the_development_stack_runs_the_connections_role_on_its_own_tasks() -> None:
+    dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
+    service = dev["services"][CONNECTIONS_ROLE]
+
+    argv = service["command"].split()
+    assert argv[argv.index("--queues") + 1] == "connections,connections-interactive"
+    assert argv[argv.index("--tasks") + 1] == "connections"
+    assert service["environment"]["SCHEDULER_ROLE"] == "connections"
+    assert "CHECK_SECRET_KEY" not in service["environment"]
+
+
+def test_a_restore_stops_every_role_that_writes_to_postgres(tmp_path: Path) -> None:
+    """T3.12: a role left running would write to the database being replaced. Held against
+    the rendered install with every profile on, so a new role must join the stop list."""
+    from install_kit import run_kit_function
+
+    services = _render("self-hosted", tmp_path, profiles=EVERY_PROFILE)
+    writers = {
+        name
+        for name, service in services.items()
+        if "POSTGRES_DSN" in (service.get("environment") or {}) and name not in ONE_SHOT
+    }
+    settings = tmp_path / "kit-settings.env"
+    settings.write_text("NEXOVUE_CONNECTIONS='yes'\n")
+
+    stopped = run_kit_function(tmp_path, "services_to_stop", str(settings)).stdout.split()
+
+    assert CONNECTIONS_ROLE in writers
+    assert writers <= set(stopped), sorted(writers - set(stopped))

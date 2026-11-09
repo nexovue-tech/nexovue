@@ -525,7 +525,7 @@ How a case ended, one phrase per `case_resolution`, in `finding-words.ts`:
 
 **Connections and security**
 
-- **AC32.** All issue and Jira calls, including a connection test, must run in `scheduler-connections`. A test on the code's structure must fail if any module of `nexovue_api` uses an HTTP client outside a named list, which holds `billing/razorpay.py` alone.
+- **AC32.** All issue and Jira calls, including a connection test, must run in `scheduler-connections`. A test on the code's structure must fail if any module of `nexovue_api` uses an HTTP client outside a named list, each entry with its reason. *(Founder, 2026-11-09: amended from "which holds `billing/razorpay.py` alone"; the list also names `data/objectstore/store.py` and `backups.py`, which use `boto3` for the install's own object store, never a tracker. Any new client still fails the test.)*
 - **AC33.** A test must read the install Compose file and fail if `scheduler-connections` holds any variable outside an exact allowed list, or merges `control-plane-env`, or if any role but the API and it holds `CONNECTION_SECRET_KEY`.
 - **AC34.** A test must fail if a worker on queues `connections` and `connections-interactive`, through the modules it actually loads (`TASK_SETS["connections"]`), imports any AI module, directly or indirectly, and if the role's command names any queue but those two. The running child's `sys.modules` must match the set, and hold no `clickhouse_connect`, `confluent_kafka` or `boto3`. The test's limit is stated: a provider reached by plain HTTP is not visible to it.
 - **AC35.** Every sealed column must be in `SEALED_COLUMNS`, a test must fail on any `sealed_*` column missing from it, and a test must prove `keys reseal` carries each to a new key.

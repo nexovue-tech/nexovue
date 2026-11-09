@@ -50,6 +50,8 @@ from nexovue_api.data.postgres.models import (
     CheckState,
     CheckStateChange,
     CheckVariable,
+    Connection,
+    ConnectionRepository,
     DeployEvent,
     DetectionBaseline,
     DetectionProjectRun,
@@ -166,6 +168,8 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "view_as_tickets",
     "jobs",
     "job_results",
+    "connections",
+    "connection_repositories",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -236,6 +240,9 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "view_as_tickets": 1,
     "jobs": 1,
     "job_results": 1,
+    # F22: the organization's GitHub connection, holding a sealed key, and what it reaches.
+    "connections": 1,
+    "connection_repositories": ROWS_PER_TABLE,
 }
 
 
@@ -479,6 +486,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
     for index in range(ROWS_PER_TABLE):
         await _write_alert_rows(db, tenant, index, now)
     await _write_detection_project_rows(db, tenant, now)
+    await _write_connection_rows(db, tenant)
     db.add_all(
         [
             *(
@@ -740,6 +748,38 @@ async def _write_detection_project_rows(db: AsyncSession, tenant: Tenant, now: d
                 kind="stopped",
                 severity="critical",
             ),
+        ]
+    )
+    await db.flush()
+
+
+async def _write_connection_rows(db: AsyncSession, tenant: Tenant) -> None:
+    """F22: a working GitHub connection started by the tenant's person, with a sealed
+    key (ciphertext stand-in) and the repositories it reaches."""
+    connection_id = uuid.uuid4()
+    db.add(
+        Connection(
+            id=connection_id,
+            org_id=tenant.org_id,
+            kind="github",
+            state="working",
+            sealed_credential=b"sealed-stand-in",
+            setup_user_id=tenant.user_id,
+            github_app_id=int(tenant.org_id.int % 10**9),
+            github_installation_id=1,
+        )
+    )
+    await db.flush()
+    db.add_all(
+        [
+            ConnectionRepository(
+                org_id=tenant.org_id,
+                connection_id=connection_id,
+                external_id=str(index),
+                key=f"acme/repository-{index}",
+                is_private=True,
+            )
+            for index in range(ROWS_PER_TABLE)
         ]
     )
     await db.flush()

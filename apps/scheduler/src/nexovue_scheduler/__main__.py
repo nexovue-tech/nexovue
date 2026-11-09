@@ -1,7 +1,7 @@
 """`python -m nexovue_scheduler beat` or `... worker`: the scheduler's two roles.
 
     beat                                   schedule from Postgres while leader
-    worker [--queues a,b] [--concurrency N] [--uncapped-floor N]
+    worker [--queues a,b] [--concurrency N] [--uncapped-floor N] [--tasks all|connections]
     health                                 exit 0 if this container's process is alive
 
 Either role answers /healthz, /readyz and /metrics on HEALTH_ADDR
@@ -15,6 +15,9 @@ and never a probe's. That worker is `scheduler-light`; each capped queue runs at
 most its cap at once, and `--uncapped-floor` keeps that many slots for the uncapped
 queues whatever the capped ones ask (`jobs/worker.py`). `--queues` replaces the
 list, so naming `light` alone drops the region's probes.
+
+`--tasks` names the modules a worker loads (`registry.TASK_SETS`): `all` by default, or
+`connections` for `scheduler-connections`, which holds tracker keys and nothing else.
 """
 
 from __future__ import annotations
@@ -34,7 +37,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from nexovue_scheduler import health, metrics, releases, slos
 from nexovue_scheduler.beat import Beat
 from nexovue_scheduler.detection import DETECTION_QUEUE
-from nexovue_scheduler.jobs.worker import Worker
+from nexovue_scheduler.jobs import registry
+from nexovue_scheduler.jobs.worker import Worker, use_task_set
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.settings import SERVICE_NAME, Settings, get_settings
 
@@ -62,6 +66,12 @@ def main(arguments: list[str] | None = None) -> None:
         default=0,
         help="slots the capped queues together leave to the uncapped ones (F3 A56)",
     )
+    worker.add_argument(
+        "--tasks",
+        choices=sorted(registry.TASK_SETS),
+        default="all",
+        help="which task modules this worker loads (F22 D80)",
+    )
     chosen = parser.parse_args(arguments)
 
     settings = get_settings()
@@ -80,7 +90,10 @@ def main(arguments: list[str] | None = None) -> None:
         asyncio.run(_beat(settings, pulse))
     else:
         queues = worker_queues(chosen.queues, region=settings.prober_region)
-        asyncio.run(_worker(settings, queues, chosen.concurrency, pulse, chosen.uncapped_floor))
+        modules = use_task_set(chosen.tasks)
+        asyncio.run(
+            _worker(settings, queues, chosen.concurrency, pulse, chosen.uncapped_floor, modules)
+        )
 
 
 def worker_queues(named: str, *, region: str) -> list[str]:
@@ -128,6 +141,7 @@ async def _worker(
     concurrency: int,
     pulse: health.Pulse,
     uncapped_floor: int,
+    task_modules: tuple[str, ...],
 ) -> None:
     engine = create_async_engine(
         str(settings.postgres_dsn), pool_size=2, max_overflow=2, pool_pre_ping=True
@@ -140,6 +154,7 @@ async def _worker(
             concurrency=concurrency,
             pulse=pulse,
             uncapped_floor=uncapped_floor,
+            task_modules=task_modules,
         )
         await worker.run(_stop_on_signal())
     finally:

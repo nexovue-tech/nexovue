@@ -28,6 +28,8 @@ FR1 = {
     # F19 D20: reliability targets — create, change, disable, delete, restore.
     Action.CONFIGURE_SLOS: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
+    # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
+    Action.MANAGE_CONNECTIONS: ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: ADMINISTRATORS,

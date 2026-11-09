@@ -201,6 +201,12 @@ CROSS_TENANT_STATEMENTS: Final = (
         "_DETECTION_PROJECTS",
         "an install-wide gauge: projects whose detection is behind",
     ),
+    _across(
+        "metrics",
+        "_CONNECTIONS_ACTIVE",
+        "an install-wide gauge, an EXISTS only: whether any tracker connection is live, so "
+        "a missing scheduler-connections pages (F22 AC123, design *Observability*)",
+    ),
     # Alerting (F21).
     _across("alerts.outbox", "_CLAIMABLE_CHANNELS", f"{_SWEEP}: the delivery claim"),
     _across("alerts.outbox", "_PRUNE_ATTEMPTS", f"{_SWEEP}: delivery attempts past keeping"),
@@ -496,6 +502,8 @@ def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
     } <= modules
     # F28 T1.13: the release sync's statements are held too.
     assert "nexovue_scheduler.releases.sync" in modules
+    # F22 T3.6: the connection jobs bind the job's own organization on every read (AC129).
+    assert "nexovue_scheduler.connections.tasks" in modules
 
 
 def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None:

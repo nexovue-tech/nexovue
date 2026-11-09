@@ -47,6 +47,9 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     # test found; neither hangs off a person or a project.
     "jobs",
     "job_results",
+    # F22. Tracker connections belong to the organization. Before `users`, whom a
+    # setup names; their sealed keys go with the row.
+    "connections",
     "users",
     "projects",
 )
@@ -94,6 +97,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "finding_events": "findings",
     "finding_notes": "findings",
     "finding_emails_owed": "findings",
+    # F22. What a connection reaches goes with the connection.
+    "connection_repositories": "connections",
     # F19. Targets and their change history go with the project; status and daily
     # counts with their target. The history and a purged target's months have no key
     # to the target, because they outlive its purge (FR31, D46).

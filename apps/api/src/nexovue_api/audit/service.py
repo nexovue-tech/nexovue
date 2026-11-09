@@ -145,6 +145,11 @@ CASE_ASSIGNED: Final = "case.assigned"
 CASE_RESOLVED: Final = "case.resolved"
 CASE_REOPENED: Final = "case.reopened"
 CASE_NOTE_DELETED: Final = "note.deleted"
+# F22. Connecting sends data to a third party, and a key replaced or a connection
+# removed changes who can write to a customer's tracker (design, *Audit*).
+CONNECTION_CREATED: Final = "connection.created"
+CONNECTION_CREDENTIAL_REPLACED: Final = "connection.credential_replaced"
+CONNECTION_DELETED: Final = "connection.deleted"
 FINDING_FALSE_ALARM: Final = "finding.false_alarm"
 FINDING_NEW_NORMAL: Final = "finding.new_normal"
 FINDING_ADOPTED: Final = detection.ADOPTED_AUDIT_ACTION
@@ -197,6 +202,7 @@ WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
 DEPLOY_TARGET: Final = "deploy"
 PROJECT_TARGET: Final = "project"
 FINDING_TARGET: Final = detection.FINDING_AUDIT_TARGET
+CONNECTION_TARGET: Final = "connection"
 
 # A refused sign-in against an address matching no account. The address is not
 # recorded: it belongs to somebody who is not our customer, so storing it would
@@ -907,6 +913,26 @@ def record_masking_rule_disabled(
         actor_user_id=actor_user_id,
         action=PROJECT_MASKING_RULE_DISABLED,
         target=masking_rule_target(project_id, rule),
+    )
+
+
+def record_connection_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    action: str,
+    connection_id: uuid.UUID,
+    kind: str,
+) -> None:
+    """A connection made, its key replaced, or removed (F22). Names the kind, never a key."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(CONNECTION_TARGET, connection_id),
+        detail={"kind": kind},
     )
 
 

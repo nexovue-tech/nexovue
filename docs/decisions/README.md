@@ -33,6 +33,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-027 — A reliability target's history is daily counts in Postgres, not another rollup](ADR-027-an-slos-history-is-daily-counts-in-postgres.md) — with the F19 design, 2026-11-02; filed 2026-11-07
 - [ADR-028 — Reliability target judging runs on `scheduler-light`, under the shared floor](ADR-028-slo-judging-runs-on-scheduler-light-under-the-shared-floor.md) — the founder's D66, 2026-11-02; filed 2026-11-07
 - [ADR-029 — A release is a stored record with periods, fed by two sources, with measured beating told](ADR-029-a-release-is-a-stored-record-with-periods.md) — with the F28 design, 2026-11-02; filed 2026-11-08
+- [ADR-030 — `scheduler-connections` makes every tracker call, on narrow settings](ADR-030-scheduler-connections-makes-every-tracker-call.md) — with the F22 design, 2026-11-02; filed 2026-11-08 with F22 Step 3
 
 ## Earlier decisions, 0001–0112
 

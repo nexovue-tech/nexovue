@@ -29,6 +29,8 @@ services:
     build: *nexovue-build
   scheduler-deliveries:
     build: *nexovue-build
+  scheduler-connections:
+    build: *nexovue-build
   setup-pipeline:
     build: *pipeline-build
   receiver:

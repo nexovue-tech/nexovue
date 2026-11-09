@@ -50,8 +50,9 @@ class RecordingSite:
     host: str
     port: int
     requests: list[RecordedRequest]
-    # Path to the reply it gets; unknown paths get the default.
+    # Path to the reply it gets; unknown paths get `default`.
     replies: dict[str, Reply | Callable[[RecordedRequest], Reply]]
+    default: Reply = field(default_factory=Reply)
 
     def url(self, path: str = "/") -> str:
         return f"http://{self.host}:{self.port}{path}"
@@ -90,7 +91,7 @@ def serve_recording_site() -> Iterator[RecordingSite]:
                 body=body,
             )
             requests.append(recorded)
-            configured = replies.get(self.path.split("?", 1)[0], Reply())
+            configured = replies.get(self.path.split("?", 1)[0], site.default)
             reply = configured(recorded) if callable(configured) else configured
             if reply.delay:
                 time.sleep(reply.delay)
@@ -124,14 +125,12 @@ def serve_recording_site() -> Iterator[RecordingSite]:
             pass
 
     server = Server(("0.0.0.0", 0), Handler)
+    site = RecordingSite(
+        host=private_address(), port=server.server_address[1], requests=requests, replies=replies
+    )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield RecordingSite(
-            host=private_address(),
-            port=server.server_address[1],
-            requests=requests,
-            replies=replies,
-        )
+        yield site
     finally:
         server.shutdown()
         server.server_close()

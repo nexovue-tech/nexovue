@@ -20,6 +20,7 @@ const WORK: Action[] = [
 const ADMINISTER: Action[] = [
   ...WORK,
   "manage_channels",
+  "manage_connections",
   "manage_check_secrets",
   "configure_projects",
   "configure_detection",

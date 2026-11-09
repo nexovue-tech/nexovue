@@ -128,3 +128,43 @@ def test_the_page_is_revalidated_and_only_hashed_assets_are_kept() -> None:
     assert 'header Cache-Control "no-cache"' in caddyfile
     assert 'header @present Cache-Control "public, max-age=31536000, immutable"' in caddyfile
     assert "@present file" in caddyfile
+
+
+# F22 T3.9, AC73. GitHub's manifest flow is a form the console posts to github.com, which
+# `form-action 'self'` refuses. One route, loaded as a full page, widens it to GitHub; every
+# other route keeps `'self'`. A real browser behind the real edge proves the post (by hand,
+# `status.md`); this proves the policy is written so.
+GITHUB_START_PATH = "/settings/connections/github/start"
+START_ROUTE = re.compile(
+    r"handle " + re.escape(GITHUB_START_PATH) + r" \{(?P<body>.*?)\n\t\}", re.DOTALL
+)
+OVERRIDING_CSP = re.compile(r'header >Content-Security-Policy "([^"]+)"')
+
+
+def _directives(policy: str) -> dict[str, str]:
+    return {
+        part.strip().split(" ", 1)[0]: part.strip() for part in policy.split(";") if part.strip()
+    }
+
+
+def test_every_console_route_but_the_github_start_posts_forms_to_itself_only() -> None:
+    assert _directive("form-action") == "form-action 'self'"
+    overrides = OVERRIDING_CSP.findall(_caddyfile())
+    route = START_ROUTE.search(_caddyfile())
+    assert route is not None, f"no route for {GITHUB_START_PATH}"
+    assert overrides == OVERRIDING_CSP.findall(route.group("body")), "an override outside it"
+    assert len(overrides) == 1
+
+
+def test_the_github_start_route_widens_form_action_to_github_and_nothing_else() -> None:
+    route = START_ROUTE.search(_caddyfile())
+    assert route is not None
+    [policy] = OVERRIDING_CSP.findall(route.group("body"))
+
+    started, console = _directives(policy), _directives(_csp())
+
+    assert started.pop("form-action") == "form-action 'self' https://github.com"
+    console.pop("form-action")
+    assert started == console
+    # Served as the page itself, so the browser applies this policy to the document.
+    assert "rewrite * /index.html" in route.group("body")

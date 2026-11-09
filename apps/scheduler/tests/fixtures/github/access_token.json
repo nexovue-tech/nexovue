@@ -1,0 +1,9 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as summarised by web search on 2026-11-08 (docs.github.com could not be fetched from the build session). UNVERIFIED against real GitHub until the founder's run after Phase 2 (F22 T3.0, T4.8, foundation item 28); T4.8 replaces these with sanitized real responses. Values are made up. Page: 'Create an installation access token for an app', POST /app/installations/{installation_id}/access_tokens, answering 201. Since 2026-04-27 GitHub rolls out a longer stateless token format; nothing here assumes a length.",
+  "token": "<replaced by the fake>",
+  "expires_at": "2026-11-08T13:00:00Z",
+  "permissions": {
+    "metadata": "read"
+  },
+  "repository_selection": "selected"
+}
