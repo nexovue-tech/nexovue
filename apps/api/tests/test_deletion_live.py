@@ -61,7 +61,9 @@ from nexovue_api.data.postgres.models import (
     DetectionState,
     ErrorGroupSeen,
     ErrorGroupWatermark,
+    EvidenceErrorGroupRead,
     Finding,
+    FindingExplanation,
     FindingIncident,
     FindingLink,
     Incident,
@@ -180,6 +182,9 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "dashboards",
     "dashboard_versions",
     "finding_links",
+    # F3: each finding's explanation, and the project's hour of error-group reads.
+    "finding_explanations",
+    "evidence_error_group_reads",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -260,6 +265,9 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "dashboard_versions": ROWS_PER_TABLE,
     # F22 Step 4: each finding's synced issue, on the connection and one of its places.
     "finding_links": ROWS_PER_TABLE,
+    # F3: one explanation per finding, and one error-group read per finding's minute.
+    "finding_explanations": ROWS_PER_TABLE,
+    "evidence_error_group_reads": ROWS_PER_TABLE,
 }
 
 
@@ -755,6 +763,22 @@ async def _write_detection_rows(
                 service_name=service,
                 muted_until=now + timedelta(days=1),
                 muted_by=tenant.user_id,
+            ),
+            FindingExplanation(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                finding_id=finding_id,
+                version=1,
+                fingerprint="0" * 64,
+                evidence={"items": []},
+                aliases={"names": {"service_1": service}, "facts": {}},
+                summary={},
+            ),
+            EvidenceErrorGroupRead(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                read_minute=now.replace(second=0, microsecond=0) + timedelta(minutes=index),
+                groups=[],
             ),
         ]
     )

@@ -306,6 +306,7 @@ and a read API has nobody to serve before that (D12).
   | Cases: take, assign, note, resolve, reopen, link an issue (F22 FR34) | ✓ | ✓ | ✓ | ✗ |
   | Reliability targets: create, change, disable, delete, restore (F19 D20) | ✓ | ✓ | ✓ | ✗ |
   | Dashboards: create, change, delete, restore, preview a draft (F20 BR7) | ✓ | ✓ | ✓ | ✗ |
+  | Finding explanation: read the facts again, ask for plainer wording (F3 A20; FR41) | ✓ | ✓ | ✓ | ✗ |
   | Dashboards: remove a dashboard or one version at once, past restore (F20 FR68, D47) | ✓ | ✓ | ✗ | ✗ |
   | Delete another person's case note (F22 BR16; an author may always delete their own, even as a viewer) | ✓ | ✓ | ✗ | ✗ |
   | Ingest keys, site keys, deploy webhook secrets, integrations | ✓ | ✓ | ✗ | ✗ |

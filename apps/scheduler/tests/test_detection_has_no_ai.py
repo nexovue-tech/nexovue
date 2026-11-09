@@ -15,9 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from nexovue_platform.import_walk import (
+    F3_AI_MODULES,
     NETWORK_CLIENTS,
     REPOSITORY_AI_MODULES,
     ai_imports_reachable_from,
+    denied,
     direct_imports_matching,
     imports_of,
     module_file,
@@ -25,6 +27,9 @@ from nexovue_platform.import_walk import (
 )
 
 DETECTION = "nexovue_scheduler.detection"
+# F3 (AC5, plan T1.8): the evidence job, which gathers facts for every finding, AI on or off.
+EVIDENCE = "nexovue_scheduler.evidence"
+EVIDENCE_CONTRACT = "nexovue_platform.evidence"
 # F19's roots (C4): the scheduler's jobs, the shared arithmetic, and the API's routes.
 SLO_ROOTS = ("nexovue_scheduler.slos", "nexovue_platform.slo", "nexovue_api.slos")
 
@@ -84,3 +89,33 @@ def test_relative_and_dynamic_imports_are_resolved(tmp_path: Path) -> None:
         "nexovue_scheduler.alerts.tasks",
         "openai",
     } <= found
+
+
+def test_no_evidence_module_imports_an_ai_module_even_through_others() -> None:
+    """F3 AC5: the evidence job and its contract reach no AI code, F3's own AI packages
+    included before they exist, so gather decides every wording state without them."""
+    modules = [*_modules(EVIDENCE), *_modules(EVIDENCE_CONTRACT)]
+    assert f"{EVIDENCE}.gather" in modules and f"{EVIDENCE_CONTRACT}.model_facts" in modules
+    reached = ai_imports_reachable_from(modules)
+    assert reached == [], "the evidence job reaches AI code:\n" + "\n".join(reached)
+
+
+def test_f3_s_ai_packages_are_denied_before_they_exist() -> None:
+    """F3 T1.8: `nexovue_platform.ai` and `nexovue_scheduler.insight` are on the list now,
+    so the first import of either, or of anything inside them, is caught by the walk."""
+    assert {"nexovue_platform.ai", "nexovue_scheduler.insight"} <= F3_AI_MODULES
+    for name in (
+        "nexovue_platform.ai",
+        "nexovue_platform.ai.validate",
+        "nexovue_scheduler.insight.word",
+    ):
+        assert denied(name), name
+    assert not denied("nexovue_platform.evidence")
+
+
+def test_no_evidence_module_imports_the_probes_http_client() -> None:
+    """F3 AC5: no evidence module may import `probes.http_check`, nor a network client."""
+    modules = _modules(EVIDENCE)
+    imported = {name for module in modules for name in imports_of(module, module_file(module))}  # type: ignore[arg-type]
+    assert not any(name.startswith("nexovue_scheduler.probes") for name in imported)
+    assert direct_imports_matching(modules, NETWORK_CLIENTS) == []

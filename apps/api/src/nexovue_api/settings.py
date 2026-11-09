@@ -25,6 +25,10 @@ from nexovue_platform.email.settings import (
     email_settings,
     refuse_console_mail_in_production,
 )
+from nexovue_platform.evidence import (
+    SHOW_HELD_CAUSES_VARIABLE,
+    refuse_held_causes_in_production,
+)
 from pydantic import (
     AnyUrl,
     Field,
@@ -249,6 +253,9 @@ class Settings(BaseSettings):
     # AC118): the setting `deploy/nexovue` uses to start `scheduler-connections`,
     # which the scheduler reads too. On unless set to `no`.
     connections_enabled: bool = Field(default=True, validation_alias="NEXOVUE_CONNECTIONS")
+    # F3 A60: show likely causes before the founder's bar is met, so Steps 1 and 2 can be
+    # judged on a development install. Production refuses to start with it (AC92).
+    show_held_causes: bool = Field(default=False, validation_alias=SHOW_HELD_CAUSES_VARIABLE)
 
     # The probe locations a check can run from. The hosted service lists its
     # regions; a self-hosted install has one. Each is a scheduler worker
@@ -387,6 +394,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _mail_is_real_in_production(self) -> Settings:
         refuse_console_mail_in_production(env=self.env, provider=self.email_provider)
+        return self
+
+    @model_validator(mode="after")
+    def _causes_held_in_production(self) -> Settings:
+        refuse_held_causes_in_production(env=self.env, show_held_causes=self.show_held_causes)
         return self
 
     @model_validator(mode="after")

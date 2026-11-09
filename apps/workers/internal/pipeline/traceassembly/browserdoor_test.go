@@ -6,6 +6,8 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/serviceedges"
 )
 
 // A site key is printed in its page, so anyone can send a SERVER span through
@@ -61,6 +63,34 @@ func TestABrowserDoorSpanCountsInNoRollupButIsStillKept(t *testing.T) {
 			if counts := !result.latestMinute.IsZero(); counts != wantCounted {
 				t.Errorf("latestMinute = %v, want a counter minute only when the span is counted",
 					result.latestMinute)
+			}
+		})
+	}
+}
+
+// The edge rollup takes a browser span, and its row says so: F3's rules read
+// the server door alone (A63), so the envelope's door must reach the edge.
+func TestABrowserDoorCallReachesTheEdgeRollupAsABrowserEdge(t *testing.T) {
+	cases := map[nexovuev1.Door]string{
+		nexovuev1.Door_DOOR_RUM:  serviceedges.DoorBrowser,
+		nexovuev1.Door_DOOR_OTLP: serviceedges.DoorServer,
+	}
+	for door, want := range cases {
+		t.Run(door.String(), func(t *testing.T) {
+			stages := stagesFor(t, 100)
+			message := marshalEnvelope(t, "1.27.0", spanOptions{
+				kind: tracepb.Span_SPAN_KIND_CLIENT,
+				door: door,
+			})
+
+			if _, err := stages.absorbMessage(invariantStart, message,
+				handling{count: true, store: true}); err != nil {
+				t.Fatalf("absorbMessage: %v", err)
+			}
+
+			edges := stages.edges.DrainAll()
+			if len(edges) != 1 || edges[0].Door != want {
+				t.Fatalf("expected one %q edge, got %+v", want, edges)
 			}
 		})
 	}

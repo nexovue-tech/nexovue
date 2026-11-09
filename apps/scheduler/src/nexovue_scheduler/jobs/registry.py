@@ -30,6 +30,7 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.slos.job",
     "nexovue_scheduler.releases.sync",
     "nexovue_scheduler.cases",
+    "nexovue_scheduler.evidence.gather",
 )
 
 # The modules each kind of worker loads (`--tasks`), F3's mechanism. A narrow role names

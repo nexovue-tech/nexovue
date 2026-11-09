@@ -51,6 +51,7 @@ from typing import Any, Final
 
 import asyncpg
 from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
+from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE
 from nexovue_platform.jobs import NOTIFY_CHANNEL
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -80,6 +81,8 @@ REAP_SECONDS: Final = 5.0
 # The most jobs a worker runs at once from each capped queue.
 QUEUE_CAPS: Final[Mapping[str, int]] = {
     DETECTION_QUEUE: DETECTION_CONCURRENCY,
+    # F3: gathering a finding's facts holds at most 2 slots, under the shared floor (NFR2).
+    EVIDENCE_QUEUE: EVIDENCE_CONCURRENCY,
     **slos.QUEUE_CAPS,
     **releases.QUEUE_CAPS,
     # F22: tracker sync holds at most 2 of `scheduler-connections`' 3 slots (AC86).

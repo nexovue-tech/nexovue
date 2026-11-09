@@ -37,6 +37,7 @@ from nexovue_platform.checks.sealing import (
     decode_key,
     generate_key,
 )
+from nexovue_platform.evidence import GATHER_EVIDENCE_TASK
 from nexovue_platform.masking import PLACEHOLDER
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -1104,3 +1105,79 @@ async def test_batches_in_opposite_orders_racing_a_sync_end_in_no_server_error()
     finally:
         await _drop(engine, made)
         await engine.dispose()
+
+
+# ------------------------------------------------- F3: a deploy reads a finding's facts again
+
+
+async def _finding(
+    db: AsyncSession, tenant: ProvisionedTenant, *, started_at: datetime, open_: bool = True
+) -> uuid.UUID:
+    finding_id: uuid.UUID = await db.scalar(
+        text(
+            """
+            INSERT INTO findings (org_id, project_id, scope, service_name, severity, state,
+                closed_reason, title, signals, started_at, closed_at)
+            VALUES (:org_id, :project_id, 'service', :service, 'warning',
+                CASE WHEN :open THEN 'open' ELSE 'closed' END,
+                CASE WHEN :open THEN NULL ELSE 'recovered' END,
+                'slower', '[]', :started_at,
+                CASE WHEN :open THEN NULL ELSE CAST(:started_at AS timestamptz) END)
+            RETURNING id
+            """
+        ),
+        {
+            "org_id": tenant.organization.id,
+            "project_id": tenant.project.id,
+            "service": SERVICE,
+            "open": open_,
+            "started_at": started_at,
+        },
+    )
+    return finding_id
+
+
+async def _gathers(db: AsyncSession, tenant: ProvisionedTenant) -> list[tuple[str, str]]:
+    rows = await db.execute(
+        text("SELECT kwargs FROM jobs WHERE org_id = :org_id AND task = :task"),
+        {"org_id": tenant.organization.id, "task": GATHER_EVIDENCE_TASK},
+    )
+    return sorted((row.kwargs["finding_id"], row.kwargs["reason"]) for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("minutes_after", "open_", "read"),
+    [(10, True, True), (40, True, False), (5, False, False), (-5, True, False)],
+)
+async def test_a_signed_deploy_reads_again_only_an_open_finding_it_came_before(
+    db: AsyncSession, minutes_after: int, open_: bool, read: bool
+) -> None:
+    """F3 AC79's deploy case: a `deploy` gather only for an open finding on that service
+    that began within 30 minutes after the deploy."""
+    tenant = await _new_tenant(db)
+    _, secret = await _mint(db, tenant)
+    deployed_at = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
+    finding_id = await _finding(
+        db, tenant, started_at=deployed_at + timedelta(minutes=minutes_after), open_=open_
+    )
+
+    await _send(db, tenant, secret, _body(_item(deployed_at=deployed_at.isoformat())))
+
+    assert await _gathers(db, tenant) == ([(str(finding_id), "deploy")] if read else [])
+
+
+async def test_a_captured_body_sent_again_reads_nothing_again(db: AsyncSession) -> None:
+    """F3 AC93's intake half: a replayed signed body stores nothing, so it asks for no read."""
+    tenant = await _new_tenant(db)
+    _, secret = await _mint(db, tenant)
+    deployed_at = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
+    await _finding(db, tenant, started_at=deployed_at + timedelta(minutes=10))
+    body = _body(_item(deployed_at=deployed_at.isoformat()))
+    await _send(db, tenant, secret, body)
+    await db.execute(
+        text("DELETE FROM jobs WHERE org_id = :org_id"), {"org_id": tenant.organization.id}
+    )
+
+    await _send(db, tenant, secret, body)
+
+    assert await _gathers(db, tenant) == []

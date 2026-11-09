@@ -30,6 +30,9 @@ class Action(StrEnum):
     # Dashboards (F20, BR7): create, change, delete, restore, and read a draft.
     # Any working role may change any dashboard, because a version remains to go back to.
     EDIT_DASHBOARDS = "edit_dashboards"
+    # A finding's explanation (F3, A20): read its facts again now, and later ask for
+    # plainer wording. Not alert operation: wording spends the customer's money.
+    REQUEST_EXPLANATION = "request_explanation"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
     # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
@@ -73,6 +76,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.UPLOAD_SOURCE_MAPS: _EVERYONE_WHO_WORKS,
     Action.CONFIGURE_SLOS: _EVERYONE_WHO_WORKS,
     Action.EDIT_DASHBOARDS: _EVERYONE_WHO_WORKS,
+    Action.REQUEST_EXPLANATION: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,

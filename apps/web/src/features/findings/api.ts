@@ -295,6 +295,8 @@ export interface FindingDetail extends Finding, CasePeople {
   services: string[];
   /** F28: the release before it, its service's coverage, and releases nearby. */
   release_context: ReleaseContext;
+  /** F3: until when the raw data of its window is kept; null when unknown. */
+  raw_kept_until?: string | null;
   /** A signed-in person's alone: an API token never reads these. */
   acknowledged_by?: string | null;
   acknowledged_by_name?: string | null;
@@ -795,5 +797,132 @@ export function useRemoveLink(findingId: string) {
         `findings/${encodeURIComponent(findingId)}/links/${encodeURIComponent(linkId)}`,
       ),
     onSuccess: (finding) => refreshAfterCaseChange(queryClient, findingId, finding),
+  });
+}
+
+// ---------------------------------------------------------- the explanation (F3 T1.11)
+
+/** One piece of a code-written sentence: text, a customer's name, or a time. Never markup. */
+export interface ExplanationSegment {
+  text?: string | null;
+  name?: string | null;
+  at?: string | null;
+}
+
+export type ExplanationKind =
+  | "deploy"
+  | "error_group"
+  | "dependency"
+  | "check"
+  | "incident"
+  | "other_finding"
+  | "traffic"
+  | "infrastructure"
+  | "absence";
+
+export type ExplanationBasis = "verified" | "telemetry" | "telemetry_text";
+
+/** One frozen fact, numbered, in FR44's order. */
+export interface ExplanationFact {
+  id: string;
+  number: number;
+  kind: ExplanationKind;
+  basis: ExplanationBasis | null;
+  sentence: ExplanationSegment[];
+  at: string | null;
+  /** Set when carried from an earlier read because this one failed. */
+  read_at: string | null;
+  /** F28's release facts, which the section's first row shows instead. */
+  role: "last_before" | "near" | null;
+  absence: string | null;
+  read: string | null;
+  is_cause: boolean;
+  supports_cause: boolean;
+}
+
+export interface ExplanationCause {
+  evidence_id: string;
+  rule: string;
+  strength: "likely" | "possible";
+  basis: ExplanationBasis;
+  same_minute: boolean;
+  header: ExplanationSegment[];
+  card: ExplanationSegment[];
+}
+
+export type WordingState =
+  | "off"
+  | "pending"
+  | "done"
+  | "failed"
+  | "over_limit"
+  | "abstained"
+  | "held";
+
+/** `GET /findings/{id}/explanation`. Postgres only, so the page polls it. */
+export interface FindingExplanation {
+  finding_id: string;
+  state: "reading" | "not_read" | "read";
+  version: number | null;
+  latest_version: number | null;
+  read_at: string | null;
+  reads_failed: number;
+  facts: ExplanationFact[];
+  likely_cause: ExplanationCause | null;
+  cause_held: boolean;
+  previous_cause: ExplanationSegment[] | null;
+  shared_cause_count: number;
+  wording_state: WordingState;
+  wording: null;
+  next_read_at: string | null;
+}
+
+export function explanationQueryKey(findingId: string) {
+  return ["findings", "explanation", findingId] as const;
+}
+
+/** Design, *Poll*: every 5 seconds for 15 minutes after opening, then every 60 while
+ * open. A closed finding's facts no longer move on their own. */
+export const EXPLANATION_FAST_MS = 5_000;
+export const EXPLANATION_SLOW_MS = 60_000;
+export const EXPLANATION_FAST_FOR_MS = 15 * 60_000;
+
+export function explanationRefetchMs(
+  finding: Pick<Finding, "state" | "started_at">,
+  now = Date.now(),
+): number | false {
+  if (finding.state !== "open") return false;
+  const age = now - Date.parse(finding.started_at);
+  return age < EXPLANATION_FAST_FOR_MS ? EXPLANATION_FAST_MS : EXPLANATION_SLOW_MS;
+}
+
+export function useExplanation(finding: Pick<Finding, "id" | "state" | "started_at">) {
+  return useQuery({
+    queryKey: explanationQueryKey(finding.id),
+    refetchInterval: () => explanationRefetchMs(finding),
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingExplanation>(`findings/${encodeURIComponent(finding.id)}/explanation`, {
+        signal,
+      }),
+  });
+}
+
+export interface ReadAgainAccepted {
+  queued: boolean;
+  next_read_at: string;
+}
+
+/** FR41: read the facts again. A 409 carries `next_read_at`, shown inline (AC80). */
+export function useReadAgain(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "read-again", findingId],
+    mutationFn: () =>
+      apiClient.post<ReadAgainAccepted>(
+        `findings/${encodeURIComponent(findingId)}/explanation/read-again`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: explanationQueryKey(findingId) });
+    },
   });
 }

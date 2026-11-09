@@ -5,8 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 
+import type { TestRole } from "@/shared/identity.test-util";
+
+import type { Handler } from "./render-harness.test-util";
 import {
   buttons,
+  explanation,
   finding,
   json,
   minutesAgo,
@@ -956,5 +960,226 @@ describe("a linked reliability target's burn (F19 AC85, T5.7)", () => {
     );
     expect(said).not.toContain("times faster");
     expect(said).not.toContain("failures");
+  });
+});
+
+describe("what lines up with this (F3 T1.11, T1.15)", () => {
+  const section = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>('[aria-labelledby="finding-explanation"]');
+  const headerText = (container: HTMLElement) =>
+    container.querySelector('[data-testid="explanation-header"]')?.textContent ?? "";
+
+  const deployFact = (overrides = {}) => ({
+    id: "deploy:d-1",
+    number: 1,
+    kind: "deploy" as const,
+    basis: "verified" as const,
+    sentence: [{ text: "Deploy of " }, { name: "checkout" }, { text: " v2.1." }],
+    at: minutesAgo(34),
+    read_at: null,
+    role: null,
+    absence: null,
+    read: null,
+    is_cause: false,
+    supports_cause: false,
+    ...overrides,
+  });
+
+  async function mountWith(found: Handler, role: TestRole = "owner") {
+    stubApi(finding(), { role, extra: { "GET /findings/f-1/explanation": found } });
+    const { container } = await mountFinding();
+    await heading(container);
+    return container;
+  }
+
+  it("leads the evidence column, with the header line under the title (FR14, AC86)", async () => {
+    const container = await mountWith(json(explanation()));
+
+    expect(headerText(container)).toBe("Not enough evidence to name a likely cause");
+    const order = [...container.querySelectorAll("h2")].map((h) => h.textContent);
+    expect(order.indexOf("What lines up with this")).toBeLessThan(order.indexOf("What moved"));
+    // F28's release row is the section's first row now (A45).
+    expect(section(container)?.querySelector('[aria-labelledby="finding-release"]')).not.toBeNull();
+  });
+
+  it("renders Look next while loading, after a failure and once read (FR42, AC66)", async () => {
+    for (const handler of [problem(500, "down"), json(explanation({ state: "reading" }))]) {
+      const container = await mountWith(handler);
+      const look = container.querySelector('[aria-labelledby="finding-look-next"]');
+      expect([...(look?.querySelectorAll("a") ?? [])].map((a) => a.textContent)).toEqual([
+        "Traces",
+        "Logs",
+        "Errors",
+        "Deploys",
+        "Infrastructure (whole project)",
+      ]);
+      expect(look?.querySelector("a")?.getAttribute("href")).toBe("/traces?service=checkout");
+      unmountAll();
+    }
+  });
+
+  it("shows InlineFailure only when nothing is held (AC88)", async () => {
+    const container = await mountWith(problem(500, "down"));
+
+    expect(headerText(container)).toBe("The explanation could not be loaded");
+    expect(section(container)?.textContent).toContain("The explanation could not be loaded");
+  });
+
+  it("lists facts in an ordered list with a hidden Basis label, and a held cause names nothing (FR50)", async () => {
+    const container = await mountWith(
+      json(explanation({ cause_held: true, facts: [deployFact()] })),
+    );
+
+    expect(headerText(container)).toBe("The facts that line up with this are below");
+    const item = section(container)?.querySelector("ol li");
+    expect(item?.textContent).toContain("Deploy of checkout v2.1.");
+    expect(item?.querySelector(".sr-only")?.textContent).toBe("Basis: ");
+    expect(item?.textContent).toContain("Signed deploy record");
+    expect(section(container)?.textContent).not.toContain("Likely");
+  });
+
+  it("names a released cause by its own line, with the signed deploy's timing note (AC7)", async () => {
+    const container = await mountWith(
+      json(
+        explanation({
+          facts: [deployFact({ is_cause: true })],
+          likely_cause: {
+            evidence_id: "deploy:d-1",
+            rule: "signed_deploy",
+            strength: "likely",
+            basis: "verified",
+            same_minute: false,
+            header: [{ text: "Likely: the deploy of " }, { name: "checkout" }, { text: " v2.1." }],
+            card: [],
+          },
+        }),
+      ),
+    );
+
+    expect(headerText(container)).toContain("Likely: the deploy of checkout v2.1.");
+    expect(section(container)?.textContent).toContain(
+      "The deploy is a signed record; the link to this finding is timing only.",
+    );
+  });
+
+  it("says a failed read plainly, never 'Not enough evidence', with no setup step (AC87)", async () => {
+    const failed = {
+      ...deployFact({ id: "absence:x", kind: "absence" as const, basis: null }),
+      sentence: [{ text: "Could not read recent errors this time." }],
+      absence: "could_not_read",
+      read: "errors",
+    };
+    const container = await mountWith(json(explanation({ reads_failed: 1, facts: [failed] })));
+
+    expect(headerText(container)).toBe(
+      "Could not finish reading the facts, so no likely cause yet",
+    );
+    expect(section(container)?.textContent).toContain("Could not read recent errors this time.");
+    expect(section(container)?.textContent).not.toContain("Send deploy notifications");
+  });
+
+  it("names the setup step when nothing was found and deploys are missing (FR45)", async () => {
+    const missing = {
+      ...deployFact({ id: "absence:d", kind: "absence" as const, basis: null }),
+      sentence: [{ text: "No deploy information for this service." }],
+      absence: "no_deploy_information",
+    };
+    const container = await mountWith(json(explanation({ facts: [missing] })));
+
+    const step = [...(section(container)?.querySelectorAll("a") ?? [])].find(
+      (a) => a.textContent === "Send deploy notifications",
+    );
+    expect(step?.getAttribute("href")).toBe("/docs/deploys");
+  });
+
+  it("shows five facts, then all with focus on the first newly shown (FR44, NFR4)", async () => {
+    const facts = Array.from({ length: 30 }, (_, index) =>
+      deployFact({ id: `deploy:${index}`, number: index + 1 }),
+    );
+    const container = await mountWith(json(explanation({ facts })));
+    expect(section(container)?.querySelectorAll("ol li").length).toBe(5);
+
+    await press(container, "Show all 30 facts");
+
+    const items = section(container)?.querySelectorAll("ol li") ?? [];
+    expect(items.length).toBe(30);
+    expect(document.activeElement).toBe(items[5]);
+  });
+
+  it("keeps a hostile name as text (AC19's code-written part)", async () => {
+    const hostile = deployFact({
+      sentence: [{ text: "Calls to " }, { name: "http://evil.example <img src=x>‮" }],
+    });
+    const container = await mountWith(json(explanation({ facts: [hostile] })));
+
+    expect(section(container)?.textContent).toContain("http://evil.example <img src=x>");
+    expect(section(container)?.querySelector('a[href^="http://evil"]')).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("offers Read the facts again to a member, not a viewer, and shows a refusal inline (AC23, AC80)", async () => {
+    const viewer = await mountWith(json(explanation()), "viewer");
+    expect(buttons(viewer)).not.toContain("Read the facts again");
+    unmountAll();
+
+    stubApi(finding(), {
+      role: "member",
+      extra: {
+        "GET /findings/f-1/explanation": json(explanation()),
+        "POST /findings/f-1/explanation/read-again": () =>
+          new Response(
+            JSON.stringify({
+              type: "about:blank",
+              title: "Conflict",
+              status: 409,
+              detail: "Too soon",
+              next_read_at: new Date(Date.now() + 40_000).toISOString(),
+            }),
+            { status: 409, headers: { "content-type": "application/problem+json" } },
+          ),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+    await press(container, "Read the facts again");
+    for (let round = 0; round < 5; round += 1) await settle();
+
+    expect(section(container)?.textContent).toMatch(/You can read again at/);
+    expect(container.textContent).not.toContain("Too soon");
+  });
+
+  it("keeps the last deploy in the release row and states no cause from it (AC91)", async () => {
+    stubApi(
+      finding({
+        release_context: {
+          before: {
+            release_id: "release-1",
+            period_id: "period-1",
+            service_name: "checkout",
+            version: "v2.1",
+            started_at: minutesAgo(160),
+            start_basis: "reported",
+            basis: "reported",
+            last_state: "finished",
+            is_return: false,
+            already_running: false,
+            called: null,
+          },
+          coverage: "deploys_only",
+          last_reported_at: minutesAgo(160),
+          first_heard_at: null,
+          nearby: [],
+          called_known: true,
+          affected: [],
+        },
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const release = section(container)?.querySelector('[aria-labelledby="finding-release"]');
+    expect(release?.textContent).toContain("v2.1 was reported 2 hours before this");
+    expect(release?.textContent).not.toContain("No deploy recorded");
+    expect(headerText(container)).toBe("Not enough evidence to name a likely cause");
   });
 });

@@ -64,7 +64,9 @@ func (r spanRow) countable(receivedAt time.Time, retentionDays uint16, partition
 // edgeSpan is this span as edge derivation sees it. The accumulator declares
 // its own input type rather than importing this one, so the two are free to
 // change apart; this is the one place they are mapped.
-func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16, partition int32) serviceedges.Span {
+func (r spanRow) edgeSpan(
+	receivedAt time.Time, retentionDays uint16, partition int32, fromBrowserDoor bool,
+) serviceedges.Span {
 	return serviceedges.Span{
 		Partition:     partition,
 		TenantID:      r.TenantID,
@@ -81,6 +83,9 @@ func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16, partition 
 		ReceivedAt:    receivedAt,
 		DurationMS:    r.DurationMS,
 		Errored:       r.errored(),
+		// The envelope's door, never the span's: F3's rules read server-door
+		// edges alone (A63).
+		FromBrowserDoor: fromBrowserDoor,
 	}
 }
 
@@ -246,7 +251,8 @@ type handling struct {
 // can send a SERVER span under any service name through it and forge a
 // service's traffic (docs/changes/browser-door). nexovue's own browser SDK sends
 // no SERVER or CONSUMER span, so no real request is lost (F19 spec D63). Edges
-// and storage still take the span, so the trace view keeps it.
+// and storage still take the span, so the trace view keeps it; each edge row
+// says which door it came through (F3 A63).
 func countsInRollups(door nexovuev1.Door) bool {
 	return door != nexovuev1.Door_DOOR_RUM
 }
@@ -288,7 +294,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 			// keeps about one healthy trace in ten, so an edge rate measured
 			// after it would be a tenth of the truth.
 			edgeMinute, _ := s.edges.Observe(now,
-				row.edgeSpan(receivedAt, derivedDays, run.partition))
+				row.edgeSpan(receivedAt, derivedDays, run.partition, !countedDoor))
 			result.latestEdgeMinute = later(result.latestEdgeMinute, edgeMinute)
 		}
 		// Offered to the buffer only when its spans are not already stored.

@@ -29,6 +29,8 @@ FR1 = {
     Action.CONFIGURE_SLOS: EVERYONE_WHO_WORKS,
     # F20 BR7: dashboards — create, change, delete, restore, and read a draft.
     Action.EDIT_DASHBOARDS: EVERYONE_WHO_WORKS,
+    # F3 A20: reading a finding's facts again; later, asking for plainer wording.
+    Action.REQUEST_EXPLANATION: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
     Action.MANAGE_CONNECTIONS: ADMINISTRATORS,

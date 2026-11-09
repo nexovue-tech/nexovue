@@ -329,6 +329,14 @@ async def _store(
         )
         events[item.delivery_id] = (deploy_id, release_id)
         new.add(item.delivery_id)
+        # F3: an open finding this deploy came before has its facts read again.
+        await queries.queue_gathers_after_deploy(
+            session,
+            org_id=org_id,
+            project_id=project_id,
+            service=item.service_name,
+            deployed_at=item.deployed_at,
+        )
         filed.append(
             releases.FiledReport(item.service_name, release_id, item.deployed_at, item.state)
         )

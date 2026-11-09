@@ -425,14 +425,14 @@ async def test_a_capped_queue_never_holds_more_than_its_slots(
 async def test_capped_queues_together_stay_above_the_floor_and_take_turns(
     engine: AsyncEngine, lane: str, tmp_path: Path
 ) -> None:
-    """F3 A56, F19 D66, AC68: on `scheduler-light` the capped queues (detection and F19's
-    three, at their real caps) ask for more seats than the floor leaves them. Together
-    they hold at most 8 - 4, every one of them gets its turn, and the uncapped lane, the
-    probes' and alert sweeps', keeps its 4."""
+    """F3 A56, AC47, F19 D66, AC68: on `scheduler-light` the capped queues (detection, F3's
+    evidence, F28's releases and F19's three, at their real caps) ask for more seats than
+    the floor leaves them. Together they hold at most 8 - 4, every one of them gets its
+    turn, and the uncapped lane, the probes' and alert sweeps', keeps its 4."""
     capped = {
         f"{lane}.{name}": cap
         for name, cap in worker.QUEUE_CAPS.items()
-        if name in {"detection", *slos.QUEUES}
+        if name in {"detection", "evidence", "releases", *slos.QUEUES}
     }
     assert sum(capped.values()) > 4, "the real caps no longer ask for more than the floor"
     probes = f"{lane}.probes"

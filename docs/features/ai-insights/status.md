@@ -2,15 +2,52 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**Step 1 is on `feature/phase-2` (2026-11-09).** Facts on the finding page, with no AI at all (plan T1.0 to T1.15), on worktree branch `wt/f3s1` from `feature/phase-2`. Two tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 1 awaits the founder's review of the diff, then commit. Step 2 next.
 
 
 ## Completed
+
+### Step 1, built 2026-11-09 (on `feature/phase-2`)
+
+**What a person sees.** Under a finding's title, one line says where to look first: a likely cause by rule, "The facts that line up with this are below" while causes are held (FR50), "Not enough evidence to name a likely cause" only when every read completed, or "Could not finish reading the facts, so no likely cause yet". The right column now leads with *What lines up with this*: F28's *Release before this* as its first row (T1.15, A45), "Look next" (traces, logs, errors, deploys, infrastructure; not yet window-aware, T2.3), the numbered facts with what each rests on, the setup step when nothing was found, and "Read the facts again" for members and up, once a minute. With no AI anywhere, every new finding gets a frozen explanation within a minute of the job running.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T1.0 | `door` (`server`, `browser`) and `server_peer_attr` on `service_edges_1m`, carried from the envelope and the caller's span. A row is `browser` when either span came through the browser door. `door` joins the sorting key at its end; `server_peer_attr` stays out, read with `max` (A84's shape, also in `design.md`) | `serviceedges/`, `traceassembly/stages.go`, `flatten.go`; ClickHouse `000040` |
+| T1.1 | `finding_explanations` (with `wording_generation` and `read_again_at`), `evidence_error_group_reads`; deletion lists; the hour's expiry | Migration `0066` (on `0065`, the coordinator's), `models.py`, `organizations/tables.py`, `evidence/retention.py`, `jobs/expiry.py` |
+| T1.2 | The evidence contract (queue, task names, `gather_evidence_request`, kinds, bases, rule names, `CAUSE_BAR_RECORDED` and `RELEASED_RULES`, `display_name`), `ModelFacts` and `Alias`, the alias book; `ai_available`; `SHOW_HELD_CAUSES`, refused in production by both settings | `nexovue_platform/evidence/`, `deployment.py`, both `settings.py` |
+| T1.3 | Edges (server door first, the bound inside the statement), traffic, new error groups (A62), hosts (FR52), under 10 s and 256 MiB | `evidence/store.py`; `evidence` in `PROJECT_BOUND_PACKAGES` |
+| T1.4 | Postgres reads: finding, other open findings, incidents, checks (name and state only), the intake (self-hosted, project findings); F28's `coverage`, `release_before`, `releases_near`, and `deploys_in_window`, `releases_seen_in_window` (see *Open decisions*, 1) | `evidence/reads.py`, `releases/facts.py` |
+| T1.5 | The rules (FR8 to FR12) and the sentences, pure | `evidence/rules.py`, `sentences.py` |
+| T1.6 | The task: a session lock per finding, each read on its own, a failed read an absence and one re-read in 60 s, the fingerprint (FR43), versions, `model_input` with aliases | `evidence/gather.py`, `inputs.py`, `jobs/registry.py` |
+| T1.7 | Gathers queued in the opening's own transaction (opened, settled at 300 s, changed, closed by every path including adoption) and from the deploy webhook per new item; `evidence` on `scheduler-light`, capped at 2 under F19's floor | `detection/project_job.py`, `deploys/service.py`, `deploys/queries.py`, `jobs/worker.py`, `__main__.py` |
+| T1.8 | The evidence job and its contract walked for AI imports; `nexovue_platform.ai` and `nexovue_scheduler.insight` denied before they exist; no probes client | `test_detection_has_no_ai.py`, `import_walk.py` |
+| T1.9 | Confirmed: the scheduler tenancy test walks `evidence/`. No new exemption: `intake_refusals` is already install-wide | `test_scheduler_postgres_tenancy_structure.py` (unchanged) |
+| T1.10 | `GET /findings/{id}/explanation` (`?version=`), `POST .../read-again` (409 with `next_read_at`), `raw_kept_until` on the finding, `likely_cause_sentence` on a person's feed rows, `Reader.is_person`, the held cause | `findings/explanations.py`, `explanation_queries.py`, `router.py`, `schemas.py`, `service.py`, `auth/dependencies.py` |
+| T1.11 | The section, the header line, polling (5 s for 15 minutes, then 60 s while open), Look next, read-again, the setup step, the shared-cause count, held facts on a failed refetch | `features/findings/explanation.ts`, `ExplanationSection.tsx`, `api.ts`, `FindingScreen.tsx` |
+| T1.12 | `just explain-demo --rule N`, dev only, saying plainly that detection did not judge the finding | `tools/detection-seed/explain_demo.py`, `justfile` |
+| T1.13 | Detection and its alerts compared across Step 1's five arms, and a failed `jobs` insert aborting the opening loudly | `test_detection_unmoved_live.py` |
+| T1.14 | `REQUEST_EXPLANATION` in all five copies, plus `test_auth_routes.py`'s list | `permissions.py`, `policy.py`, `test_policy.py`, `identity.ts`, `identity.test-util.ts`, `MembersScreen.test.ts`, `team-and-api-access/spec.md` |
+| T1.15 | F28's section folded in as the first row; its tests (AC40, AC43, FR33) re-run through it and pass | `FindingScreen.tsx` |
+
+ADR-039 (an explanation is a frozen evidence record, with code choosing the cause) is filed. The other three proposed ADRs wait for the evidence their own steps produce (the AI role, Step 3; the provider interface, Step 4); the floor is already ADR-028's.
+
+**Decisions taken while building** (technical, recorded here; none changes product behaviour):
+
+- **000040's down keeps `door`.** ClickHouse refuses to drop or rename a sorting-key column, and a migration here is one statement, so the down drops `server_peer_attr` only. The kept column is harmless to the code before it (its writer names its columns), and running 000040 again changes nothing but `server_peer_attr`. Proved by up, down, up on `f3s1-ch`.
+- **`evidence_error_group_reads` cascades from `projects`** (`REMOVED_BY_CASCADE`), not `DELETED_DIRECTLY` as the design listed: it has a project key with `ON DELETE CASCADE`, and the deletion test holds that.
+- **"Once a minute" is stored as `finding_explanations.read_again_at`.** The design named no store; the rate limiter cannot be read without spending, and the page must show when the next read is allowed. With no version yet, a click is deduplicated by `ENQUEUE_UNLESS_WAITING`.
+- **`WORDING_REASONS`** is the design's own outcome names (`died`, `expired`, `run_cap`, `too_long`, `bad_key`, `unavailable`, `limited`, `refused`, `invalid`), frozen in 0066; Step 5 widens it by a migration if it needs more.
+- **The error-group read is reused within its minute,** keyed by the window's start minute, so a later read never reuses a stale opening read.
+- **Host disk is per filesystem** (used over the sum of its states), not the node total the screen shows, so a device mounted twice is never summed twice.
+- **A deploy's base rate counts one rollout once:** a version's `started` and `finished` events inside one 30-minute lookback are one deploy. A week of records is known from F28's coverage a week back.
 
 - **2026-11-02.** [`research.md`](research.md) was already in place. Written from it, the foundation, the F6 documents and a fresh reading of the code:
   [`spec.md`](spec.md) (106 acceptance criteria), [`design.md`](design.md) (with four proposed ADRs), [`plan.md`](plan.md) (seven steps and a founder gate after Step 2).
@@ -26,12 +63,19 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Steps 1 to 2c start once F28's release functions (its Steps 1b to 3) are in; T0.1 first updates the catalog wording. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+The founder reviews Step 1's diff; then commit, and the coordinator re-chains migration 0066. Then Step 2 (links, the card, the follow-up alert). T0.1 and T0.2 are still unticked and not part of Step 1.
 
 
 ## Open decisions
 
-**None for the founder.** Both gates and the test server were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The go or stop is still read against its approved rule after T2.11, and the bar is met or not only after Step 2c's runs.
+**From Step 1, 2026-11-09:**
+
+1. **F28's `deploys_in_window` and `releases_seen_in_window` did not exist** (they are F28's T5.2, Step 5), yet T1.4 and A71 need them: rules 1, 3, 4 and the base rate read signed deploys, rule 5 seen versions. Built in F28's `releases/facts.py` by F28's published signatures (D29, *Signatures, for F3*), signed events in `OPENING_STATES` only, no sender text. **Recommendation:** accept them as F28's; F28's T5.2 keeps `release_comparison` and the AC45 allow-list test, and adds its own `test_release_facts_live.py` cases for these two. F28's owner should confirm.
+2. **FR11's two project rules name no strength.** Built as `possible` for both (a deploy to half the services; a shared dependency with its own finding). **Recommendation:** keep `possible` until the bed scores them; neither sends `explained`, which needs `likely`.
+3. **AC14's live arm, spans through the real receiver with a browser key,** needs the dev stack's receiver, Kafka and workers, which this build did not run. The worker's part is proved by unit and store tests. **Recommendation:** run it on the dev stack as part of Step 2's `just dev` session, and build it then.
+4. **T1.3's error-group read at a stated volume on the 16 GB install** ("a timeout there fails this task") cannot be measured here. **Recommendation:** measure on the Mac's dev stack with `tools/detection-seed` volume before Step 2 is reported, and on Oracle after deployment (foundation item 9).
+
+**Earlier: none for the founder.** Both gates and the test server were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The go or stop is still read against its approved rule after T2.11, and the bar is met or not only after Step 2c's runs.
 
 ## Own questions answered, 2026-11-02
 
@@ -354,7 +398,49 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Validation
 
-None run. No test, query or model. The code was read, and each review finding checked. Web facts read on 2026-11-02, through a summarizing tool: Docker Hub on `POSTGRES_USER`; PostgreSQL on `INSERT` and `LOCK` privileges; Coroot's AI overview, AI configuration and AI benchmark pages; OpenObserve's AI SRE page; Grafana's Assistant invoice page; Datadog's Watchdog page; HolmesGPT's evaluations page in its repository. Microsoft's Azure OpenAI v1 page, through a summarizing tool, and its older REST reference through a search summary only. A script confirmed every acceptance criterion in `spec.md`, AC1 to AC106, is cited by a task in `plan.md`, and was re-run after the second review.
+### Step 1, 2026-11-09
+
+Every behaviour change has a test seen failing first, or, where written with the code, proved by removing the behaviour (a saved copy restored afterwards). Live suites ran on this build's own containers (`f3s1-pg` on 25432, `f3s1-ch` on 28123), migrated with Alembic and the Go setup; 0066's `read_again_at` was added to the running database by hand after the renumbering.
+
+| Test | Result | Seen failing |
+|---|---|---|
+| Go `serviceedges`, `traceassembly` (5 new door and attribute tests, peer attribute, browser edge) | pass; `go vet` clean; golangci-lint 0 issues | build failure before the fields existed |
+| `writer_storeprobe_test.go` (door survives a forced merge) | pass on `f3s1-ch` | failed before 000040 (no column) |
+| `test_model_facts.py` (19) | pass | 11 failed with the type check removed |
+| `test_settings.py`, `test_scheduler_settings.py` (2 each, AC92's override) | pass | yes, before the setting |
+| `test_policy.py` | 94 pass | collection error before the action |
+| `test_authorization_coverage.py` | pass | yes, on the ungated route |
+| `test_deletion_live.py` (27) | pass | 2 failed with the tables left out |
+| `test_evidence_vocabulary.py` (3), `test_migration_rules.py` (37) | pass | yes, with a word added |
+| `test_evidence_rules.py` (52) | pass | base-rate cases failed first; 21 failed under five mutations |
+| `test_evidence_store_live.py` (9) | pass | 2 failed without the server-door preference and the hour's look-back |
+| `test_tenant_chokepoint_structure.py` (18) | pass | yes, with an unbound evidence statement |
+| `test_evidence_gather_live.py` (14) | pass | 4 failed without the fingerprint, the lock or the deleted-project stop |
+| `test_detection_memory_live.py`, the gather at its row bounds | pass, peak 2 MiB under 64 MiB | yes, with the limit lowered to 1 MiB |
+| `test_detection_coordinator.py`, `test_compose_contract.py` | 11 and 69 pass | 1 and 5 failed on the old worker |
+| `test_detection_project_job_live.py` (37, two new) | pass | yes, with the enqueue removed |
+| `test_deploys_live.py` (44, five new) | pass | yes, with the enqueue removed |
+| `test_jobs_live.py`'s floor case, now with `evidence` and `releases` | pass | not separately (the floor is F19's) |
+| `test_detection_has_no_ai.py` (9) | pass | yes, with AI and probes imports planted |
+| `test_scheduler_postgres_tenancy_structure.py` (14) | pass | yes, with an unbound statement planted |
+| `test_detection_unmoved_live.py` (2) | pass | yes, with a gather that touched `findings` |
+| `test_findings_explanation_live.py` (8) | pass | 3 failed with the hold, the minute or the token scope removed |
+| `test_findings_api_live.py` (36), `test_release_facts_live.py` | pass | — |
+| `explanation.test.ts` (23), `FindingScreen.test.ts` (11 new; F28's AC40 cases through the folded section) | pass, 593 across the touched web folders | 4 failed under four mutations |
+| `test_explain_demo.py` (10) | pass | yes, under a mutation |
+
+Also run: `uv run mypy .` (909 files, no issues), `ruff check .`, `ruff format --check .`, biome on the touched web folders, `pnpm -r --if-present run typecheck`, `verify-tokens.js`. The offline API suite: 5,042 pass; `test_setup_schema.py` fails here only because migration `0065` (the coordinator's) is not on this branch, and passes once 0066 is re-chained. The offline scheduler and platform suites: 5,332 pass; `test_connect_guard.py` needs internet DNS and was not run.
+
+### Not run
+
+- **The founder's judgement** ("does the first screen tell you where to look?", the abstention rate on the seeded cases): not yet run, founder checks after Phase 2.
+- `just explain-demo` against the dev stack, and the Playwright checks at 390 and 1920 pixels (AC17, AC70): no dev stack in this build.
+- AC14's receiver arm and T1.3's volume measurement (*Open decisions*, 3 and 4).
+- `just check` was not run, by instruction.
+
+### Earlier
+
+None run before Step 1. No test, query or model. The code was read, and each review finding checked. Web facts read on 2026-11-02, through a summarizing tool: Docker Hub on `POSTGRES_USER`; PostgreSQL on `INSERT` and `LOCK` privileges; Coroot's AI overview, AI configuration and AI benchmark pages; OpenObserve's AI SRE page; Grafana's Assistant invoice page; Datadog's Watchdog page; HolmesGPT's evaluations page in its repository. Microsoft's Azure OpenAI v1 page, through a summarizing tool, and its older REST reference through a search summary only. A script confirmed every acceptance criterion in `spec.md`, AC1 to AC106, is cited by a task in `plan.md`, and was re-run after the second review.
 
 ## Specification impact
 
@@ -380,7 +466,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-09
 
 ## Founder approval, 2026-11-02
 

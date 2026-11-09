@@ -110,6 +110,13 @@ detection-seed *args:
 detection-fault *args:
     uv run python tools/detection-seed/fault.py {{args}}
 
+# F3 plan T1.12: write what one explanation rule reads, open a finding directly (detection does
+# not judge it, and the tool says so) and queue its facts' read. Rules 1, 3 and 4 send a signed
+# deploy through the dev webhook, so they need `--secret`.
+# Show one of F3's rules on a dev finding within minutes
+explain-demo *args:
+    uv run python tools/detection-seed/explain_demo.py {{args}}
+
 # F6 plan T8.2 (AC29): 200 projects, 2,000 services. In order: tenants, load (keep it running),
 # seed, then watch while the scheduler runs. `profile` times project jobs; `remove --yes` closes
 # the tenants. Each command's options: `just detection-scale <command> --help`.

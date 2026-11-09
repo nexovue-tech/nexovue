@@ -79,6 +79,9 @@ type Peer struct {
 	// `service.name`, which makes it the closest thing to an answer we can get
 	// without one.
 	Service string
+	// ServiceAttr is which of those two attributes Service came from, one of
+	// the Attr* constants, so a link can filter on the spelling that matched.
+	ServiceAttr string
 	// Address is the host the caller dialled: `server.address`.
 	Address string
 	// System is the datastore or broker the caller says it reached —
@@ -121,6 +124,36 @@ func calleeOf(peer Peer) string {
 	}
 	return UninstrumentedService
 }
+
+// The attributes a told-only callee's name can come from, as written to
+// `server_peer_attr`. A closed list: the column holds an attribute's name, never
+// a value, so a link to the caller's traces knows which spelling to filter on
+// (F3 A76).
+const (
+	AttrServicePeerName = "service.peer.name"
+	AttrPeerService     = "peer.service"
+	AttrServerAddress   = "server.address"
+)
+
+// calleeAttr is the attribute calleeOf took its name from, or empty when the
+// name came from a technology, which no attribute filter can match reliably.
+func calleeAttr(peer Peer) string {
+	switch {
+	case peer.Service != "":
+		return peer.ServiceAttr
+	case peer.Address != "":
+		return AttrServerAddress
+	}
+	return ""
+}
+
+// The doors an edge row can come through, as written to `door`. A row is a
+// browser row when either of its spans arrived through the browser door, whose
+// site key is printed in the page, so anyone can forge one (F3 A63).
+const (
+	DoorServer  = "server"
+	DoorBrowser = "browser"
+)
 
 // reservedName marks a name as one we were told rather than one that reported
 // for itself. A real `service.name` cannot collide with it: the reserved names
@@ -182,6 +215,11 @@ type Span struct {
 	DurationMS float64
 	Errored    bool
 
+	// FromBrowserDoor is whether the record carrying this span came through the
+	// browser door. It is the envelope's, not the span's: a span cannot say
+	// which door it used.
+	FromBrowserDoor bool
+
 	// Partition is the Kafka partition this span's record arrived on. It is
 	// provenance rather than a dimension — no row carries it — but the pairing
 	// buffer and the minute buckets keep it so that a partition handed to
@@ -227,9 +265,15 @@ type Edge struct {
 	// a service that names itself needs no label, and what the *caller*
 	// believed it was talking to is not evidence about the callee.
 	ServerPeerKind string
-	Kind           string
-	CallCount      uint64
-	ErrorCount     uint64
+	// ServerPeerAttr is the attribute a told-only callee's name came from, one
+	// of the Attr* constants, and empty whenever ServerPeerKind would be.
+	ServerPeerAttr string
+	// Door is DoorBrowser when either span came through the browser door,
+	// otherwise DoorServer.
+	Door       string
+	Kind       string
+	CallCount  uint64
+	ErrorCount uint64
 	// LatencyMS are client-side durations, sorted ascending and capped. The
 	// store turns them into the row's quantile state.
 	LatencyMS []float64

@@ -94,6 +94,8 @@ PERSON_FEED_FIELDS: Final = {
     "case_ends_on",
     "case_ends_by",
     "project_name",
+    # F3 FR18: the console card's cause line; a token reads causes on the explanation route.
+    "likely_cause_sentence",
 }
 # AC27's test set, shared with the console's `ordering.test.ts`.
 FEED_ORDER_FIXTURE: Final = (

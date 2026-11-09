@@ -31,6 +31,7 @@ KNOWN_VARIABLES = (
     "NEXOVUE_CONNECTIONS",
     "CONNECTION_SECRET_KEY",
     "CONNECTION_SECRET_PREVIOUS_KEYS",
+    "SHOW_HELD_CAUSES",
 )
 
 # F22, AC33: exactly what `scheduler-connections` is given in the install Compose file.
@@ -265,3 +266,18 @@ def test_a_blank_provider_is_mail_left_unconfigured(monkeypatch: pytest.MonkeyPa
     _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "EMAIL_PROVIDER": ""})
 
     assert get_settings().email is None
+
+
+def test_held_causes_stay_held_unless_the_override_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 A60: the scheduler reads the same override the API does."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "SHOW_HELD_CAUSES": "true"})
+
+    assert get_settings().show_held_causes is True
+
+
+def test_production_refuses_to_show_held_causes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 AC92: the override in production stops the process, whatever the role."""
+    _apply(monkeypatch, {**CONNECTIONS_ROLE_ENVIRONMENT, "SHOW_HELD_CAUSES": "true"})
+
+    with pytest.raises(SettingsError, match="SHOW_HELD_CAUSES"):
+        get_settings()

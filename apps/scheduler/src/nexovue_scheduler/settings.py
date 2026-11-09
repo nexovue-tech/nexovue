@@ -19,6 +19,10 @@ from nexovue_platform.email.settings import (
     email_settings,
     refuse_console_mail_in_production,
 )
+from nexovue_platform.evidence import (
+    SHOW_HELD_CAUSES_VARIABLE,
+    refuse_held_causes_in_production,
+)
 from pydantic import Field, PostgresDsn, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
@@ -186,6 +190,9 @@ class Settings(BaseSettings):
     # Internal: no edge routes it. Every role uses the same port in its own
     # container.
     health_addr: str = ":8081"
+    # F3 A60: show likely causes before the founder's bar is met, so Steps 1 and 2 can be
+    # judged on a development install. Production refuses to start with it (AC92).
+    show_held_causes: bool = Field(default=False, validation_alias=SHOW_HELD_CAUSES_VARIABLE)
 
     @model_validator(mode="after")
     def _role_has_what_it_needs(self) -> Settings:
@@ -203,6 +210,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CONNECTION_SECRET_KEY is not set; production opens connection keys with it."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _causes_held_in_production(self) -> Settings:
+        refuse_held_causes_in_production(env=self.env, show_held_causes=self.show_held_causes)
         return self
 
     @field_validator("connections_enabled", mode="before")

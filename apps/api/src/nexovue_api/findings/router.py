@@ -21,10 +21,15 @@ from nexovue_platform.connections import strict_name
 from nexovue_platform.email import EmailError, EmailSender, Message
 
 from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
-from nexovue_api.auth.policy import MayConfigureDetection, MayOperateAlerts, MayOperateCases
+from nexovue_api.auth.policy import (
+    MayConfigureDetection,
+    MayOperateAlerts,
+    MayOperateCases,
+    MayRequestExplanation,
+)
 from nexovue_api.deps import AppSettings, DbSession, EmailAvailable, OptionalEmail
 from nexovue_api.errors.exceptions import InvalidRequestError
-from nexovue_api.findings import cases, links, service
+from nexovue_api.findings import cases, explanations, links, service
 from nexovue_api.findings.schemas import (
     CaseChanged,
     CaseChangeRequest,
@@ -35,6 +40,7 @@ from nexovue_api.findings.schemas import (
     FeedState,
     FindingChanged,
     FindingDetail,
+    FindingExplanation,
     FindingForMember,
     FindingListResponse,
     FindingStats,
@@ -42,6 +48,7 @@ from nexovue_api.findings.schemas import (
     LinkChanged,
     NoteRequest,
     NoteWritten,
+    ReadAgainAccepted,
     TimelineResponse,
 )
 from nexovue_api.projects.service import require_readable_project
@@ -58,6 +65,7 @@ async def list_findings(
     reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
+    settings: AppSettings,
     project_id: Annotated[
         uuid.UUID | None,
         Query(
@@ -90,6 +98,7 @@ async def list_findings(
             token_project_id=None if token_project is None else token_project.id,
             for_person=for_person,
             now=now,
+            show_held_causes=settings.show_held_causes,
         )
     if project_id is None:
         raise InvalidRequestError(service.NAME_A_PROJECT)
@@ -103,6 +112,7 @@ async def list_findings(
         muted=muted,
         for_person=for_person,
         now=now,
+        show_held_causes=settings.show_held_causes,
     )
 
 
@@ -142,6 +152,45 @@ async def get_finding(
         for_member=not reader.is_token,
         now=datetime.now(UTC),
         email_available=email_available,
+    )
+
+
+@router.get(
+    "/{finding_id}/explanation",
+    summary="The facts that line up with a finding, and its likely cause where one is released",
+)
+async def read_explanation(
+    reader: CurrentReader,
+    db: DbSession,
+    settings: AppSettings,
+    finding_id: uuid.UUID,
+    version: Annotated[
+        int | None, Query(ge=1, description="An earlier version; the latest by default")
+    ] = None,
+) -> FindingExplanation:
+    """F3: Postgres only, so a page can poll it. A token reads facts and never words."""
+    return await explanations.get_explanation(
+        db,
+        org_id=reader.org_id,
+        finding_id=finding_id,
+        project_scope=reader.project_scope,
+        number=version,
+        show_held_causes=settings.show_held_causes,
+        now=datetime.now(UTC),
+    )
+
+
+@router.post(
+    "/{finding_id}/explanation/read-again",
+    summary="Read the finding's facts again now; at most once a minute",
+)
+async def read_explanation_again(
+    identity: MayRequestExplanation, db: DbSession, finding_id: uuid.UUID
+) -> ReadAgainAccepted:
+    """FR41: works with AI on or off and costs no tokens. Too soon is 409 with
+    `next_read_at`, which the page shows beside the button."""
+    return await explanations.read_again(
+        db, org_id=identity.org_id, finding_id=finding_id, now=datetime.now(UTC)
     )
 
 

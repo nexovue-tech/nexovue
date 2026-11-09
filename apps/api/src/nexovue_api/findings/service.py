@@ -41,11 +41,12 @@ from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Finding as FindingRow
 from nexovue_api.data.postgres.models import Incident, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import cases, links, queries
+from nexovue_api.findings import cases, explanation_queries, explanations, links, queries
 from nexovue_api.findings.schemas import (
     CaseEndsBy,
     CaseFilter,
     EarlierCase,
+    ExplanationSegment,
     FeedState,
     Finding,
     FindingChanged,
@@ -78,6 +79,8 @@ from nexovue_api.releases import service as release_service
 logger = get_logger(__name__)
 
 NOT_FOUND: Final = "No such finding."
+# A finding's links open from this long before it (design, *Links*: a guess).
+RAW_WINDOW_LEAD: Final = timedelta(minutes=15)
 # Each says what changed, because the page reloads to show it (design, *action failed*).
 ALREADY_HANDLED: Final = "This finding has closed or was already acknowledged since you opened it."
 NOT_A_FALSE_ALARM: Final = (
@@ -148,6 +151,7 @@ async def list_findings(
     muted: bool,
     for_person: bool,
     now: datetime,
+    show_held_causes: bool = False,
 ) -> FindingListResponse:
     """The feed in F22 FR21's rank, at most `FEED_PAGE` findings.
 
@@ -171,7 +175,13 @@ async def list_findings(
     )
     return FindingListResponse(
         findings=await _feed_findings(
-            session, org_id=org_id, rows=rows, trends=trends, for_person=for_person, now=now
+            session,
+            org_id=org_id,
+            rows=rows,
+            trends=trends,
+            for_person=for_person,
+            now=now,
+            show_held_causes=show_held_causes,
         ),
         muted_count=await queries.muted_count(
             session, org_id=org_id, project_id=project_id, state=stored_state
@@ -189,6 +199,7 @@ async def list_cases(
     token_project_id: uuid.UUID | None,
     for_person: bool,
     now: datetime,
+    show_held_causes: bool = False,
 ) -> FindingListResponse:
     """A case filter (F22 FR22, design *The feed*): a separate read, bound to the
     organization, with no telemetry — no trend, no ClickHouse — so a failing
@@ -214,7 +225,13 @@ async def list_cases(
     rows = rows[: queries.FEED_PAGE]
     return FindingListResponse(
         findings=await _feed_findings(
-            session, org_id=org_id, rows=rows, trends={}, for_person=for_person, now=now
+            session,
+            org_id=org_id,
+            rows=rows,
+            trends={},
+            for_person=for_person,
+            now=now,
+            show_held_causes=show_held_causes,
         ),
         # A case filter includes muted findings, so it leaves none out.
         muted_count=0,
@@ -230,6 +247,7 @@ async def _feed_findings(
     trends: dict[uuid.UUID, list[float]],
     for_person: bool,
     now: datetime,
+    show_held_causes: bool = False,
 ) -> list[FindingFeedRow] | list[Finding]:
     """Feed rows as a person or a token reads them, with each case's open joined
     finding and, for a person, when an untouched case ends (FR23, FR49)."""
@@ -258,6 +276,10 @@ async def _feed_findings(
         org_id=org_id,
         root_ids=[f.id for f in findings if f.case_state == "investigating"],
     )
+    # F3 (FR18): each card's cause line from its latest version, held while FR50 holds.
+    causes = await explanation_queries.latest_causes(
+        session, org_id=org_id, finding_ids=[f.id for f in findings]
+    )
     feed_rows: list[FindingFeedRow] = []
     for row, finding in zip(rows, plain, strict=True):
         ends_on, ends_by = case_ending(
@@ -280,9 +302,18 @@ async def _feed_findings(
                 case_ends_on=ends_on,
                 case_ends_by=ends_by,
                 project_name=row.project_name,
+                likely_cause_sentence=_card_line(causes.get(row.finding.id), show_held_causes),
             )
         )
     return feed_rows
+
+
+def _card_line(cause: Any, show_held_causes: bool) -> list[ExplanationSegment] | None:
+    if cause is None:
+        return None
+    return explanations.card_line(
+        cause.likely_cause, cause.summary or {}, show_held_causes=show_held_causes
+    )
 
 
 async def get_finding(
@@ -537,8 +568,20 @@ async def _detail(
         ],
         services=list(row.services or []),
         release_context=await _release_context(session, repository, row),
+        raw_kept_until=await _raw_kept_until(session, row),
     )
     return detail, readings, open_joined
+
+
+async def _raw_kept_until(session: AsyncSession, row: FindingRow) -> datetime | None:
+    """F3 (design, *Links*): when the raw data of this finding's window ages out, so a
+    link past it can say so (FR17). The window starts before the finding."""
+    days = await explanation_queries.raw_retention_days(
+        session, org_id=row.org_id, project_id=row.project_id
+    )
+    if days is None:
+        return None
+    return row.started_at - RAW_WINDOW_LEAD + timedelta(days=days)
 
 
 async def _release_context(

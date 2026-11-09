@@ -34,8 +34,11 @@ import type {
   ReleaseFact,
   SignalSeries,
 } from "./api";
-import { useFinding, useFindingAction } from "./api";
+import { useExplanation, useFinding, useFindingAction } from "./api";
 import { CaseSection } from "./CaseSection";
+import { ExplanationHeaderLine, ExplanationSection } from "./ExplanationSection";
+import type { HeaderLine } from "./explanation";
+import { headerLine } from "./explanation";
 import { backLinkLabel, parseFeedSearch } from "./feed-filter";
 import type { DoneAction } from "./finding-page";
 import {
@@ -141,10 +144,14 @@ function FindingPage({
   onReload: () => void;
 }) {
   const announcement = useChangeAnnouncements(finding);
+  const explanation = useExplanation(finding);
   return (
     <div className="flex flex-col gap-8">
-      <Header finding={finding} zone={zone} />
-      <ReleaseSection finding={finding} zone={zone} />
+      <Header
+        finding={finding}
+        zone={zone}
+        line={headerLine(explanation.data, { failed: explanation.isError, finding })}
+      />
       {/* FR45, AC105: one always-present status region, at page level because the
           case controls return nothing for a viewer. It announces only changes of
           assignee, case state and signal state, never the actor's own act. */}
@@ -167,6 +174,16 @@ function FindingPage({
           </section>
         </div>
         <div id="finding-evidence" className="flex min-w-0 flex-col gap-8">
+          {/* F3 FR14: the explanation leads the right column; F28's release row is its
+              first row (A45). */}
+          <ExplanationSection
+            finding={finding}
+            explanation={explanation.data}
+            error={explanation.error}
+            onRetry={() => void explanation.refetch()}
+            releaseRow={<ReleaseSection finding={finding} zone={zone} />}
+            zone={zone}
+          />
           <Signals finding={finding} />
           <Readings finding={finding} zone={zone} />
           {finding.scope === "project" ? <Services finding={finding} /> : null}
@@ -238,7 +255,15 @@ function useChangeAnnouncements(finding: FindingDetail): {
   };
 }
 
-function Header({ finding }: { finding: FindingDetail; zone?: string }) {
+function Header({
+  finding,
+  zone,
+  line,
+}: {
+  finding: FindingDetail;
+  zone?: string;
+  line: HeaderLine;
+}) {
   return (
     <header className="flex flex-col gap-1">
       <p className="flex flex-wrap items-baseline gap-x-2 font-mono text-2xs uppercase tracking-caps">
@@ -249,6 +274,8 @@ function Header({ finding }: { finding: FindingDetail; zone?: string }) {
       <h1 className={`font-semibold font-serif text-ink text-xl tracking-tight ${PROSE}`}>
         {finding.title}
       </h1>
+      {/* F3 FR14: where to look first, in one code-written line; space always held. */}
+      <ExplanationHeaderLine line={line} zone={zone} />
       <p className="text-ink-dim text-sm">
         <Subject finding={finding} />
         {" · "}
@@ -707,8 +734,9 @@ function SignalChart({
 }
 
 /**
- * *Release before this* (F28 FR32, FR33, FR52; design, *Finding page*): what came before
- * this finding, worded as order. Every row naming an earlier release carries
+ * *Release before this* (F28 FR32, FR33, FR52; design, *Finding page*), now the first row
+ * of F3's *What lines up with this* (F3 FR14, A45): what came before this finding,
+ * worded as order. Every row naming an earlier release carries
  * `CAME_FIRST`; the link carries the finding, so the comparison's window reaches it.
  */
 function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: string }) {
@@ -718,9 +746,12 @@ function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: stri
     const listed = affectedReleases(context);
     return (
       <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
-        <h2 id="finding-release" className="font-medium font-serif text-base text-ink">
+        <h3
+          id="finding-release"
+          className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
+        >
           Releases before this
-        </h2>
+        </h3>
         {listed.rows.length === 0 ? (
           <p className="text-ink-dim text-sm">
             No release of these services in the 24 hours before this started, from what we can see.
@@ -740,9 +771,9 @@ function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: stri
   const others = elsewhere(context, finding.service_name ?? "");
   return (
     <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
-      <h2 id="finding-release" className="font-medium font-serif text-base text-ink">
+      <h3 id="finding-release" className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
         Release before this
-      </h2>
+      </h3>
       <p className={`break-words text-sm ${line.dim ? "text-ink-dim" : "text-ink"}`}>
         {line.text}
         {line.cameFirst ? ` ${CAME_FIRST}` : ""}

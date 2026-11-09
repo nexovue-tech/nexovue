@@ -17,6 +17,7 @@ const WORK: Action[] = [
   "upload_source_maps",
   "configure_slos",
   "edit_dashboards",
+  "request_explanation",
 ];
 const ADMINISTER: Action[] = [
   ...WORK,

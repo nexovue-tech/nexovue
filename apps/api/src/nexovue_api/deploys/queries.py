@@ -18,6 +18,8 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from nexovue_platform.evidence import DEPLOY, DEPLOY_READ_WINDOW, gather_evidence_request
+from nexovue_platform.jobs import ENQUEUE
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.data.postgres.models import (
     DeployEvent,
     DeployIntakeState,
+    Finding,
     Project,
     ProjectWebhookSecret,
     Release,
@@ -400,3 +403,34 @@ async def latest_deploy_per_service_before(
         .order_by(DeployEvent.service_name, DeployEvent.deployed_at.desc(), DeployEvent.id.desc())
     )
     return (await session.scalars(statement)).all()
+
+
+# F3 (design, enqueue table): an open service finding on a deployed service that began
+# within this window after the deploy is read again, so its facts include the deploy.
+async def queue_gathers_after_deploy(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service: str,
+    deployed_at: datetime,
+) -> int:
+    """Add a `deploy` gather for each open finding the deploy came before, in the
+    webhook's own transaction (F3 FR2, AC79)."""
+    finding_ids = await session.scalars(
+        select(Finding.id).where(
+            Finding.org_id == org_id,
+            Finding.project_id == project_id,
+            Finding.state == "open",
+            Finding.scope == "service",
+            Finding.service_name == service,
+            Finding.started_at >= deployed_at,
+            Finding.started_at <= deployed_at + DEPLOY_READ_WINDOW,
+        )
+    )
+    queued = 0
+    for finding_id in finding_ids:
+        request = gather_evidence_request(finding_id, org_id, DEPLOY)
+        await session.execute(text(ENQUEUE), request.parameters())
+        queued += 1
+    return queued

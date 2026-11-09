@@ -113,8 +113,9 @@ SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
 
 # F6, AC28: detection judges one project at a time, so its statements bind the
 # project as well as the tenant. F28 (T1.11): so does the release sync, whose reads
-# go through `alerts.telemetry`'s reader and so need no driver of their own.
-PROJECT_BOUND_PACKAGES: Final = ("detection", "releases")
+# go through `alerts.telemetry`'s reader and so need no driver of their own. F3 (T1.3):
+# so does the evidence job, through the same reader.
+PROJECT_BOUND_PACKAGES: Final = ("detection", "releases", "evidence")
 
 # ADR-023: the one module that may write telemetry. Every other module in either
 # service reads, or (the erasure) deletes.

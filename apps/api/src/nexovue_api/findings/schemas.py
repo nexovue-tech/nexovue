@@ -240,6 +240,9 @@ class FindingDetail(Finding):
     services: list[str]
     # F28: the release before it, its service's coverage and releases nearby.
     release_context: ReleaseContext
+    # F3: until when the raw traces and logs of its window are kept (design, *Links*);
+    # None when the project's retention cannot be read.
+    raw_kept_until: datetime | None = None
 
 
 class ProposedShift(BaseModel):
@@ -472,6 +475,8 @@ class FindingFeedRow(Finding):
     case_ends_by: CaseEndsBy | None
     # The row's project, for the case filters, which read every project.
     project_name: str
+    # F3 (FR18): the card's cause line as segments; None with no cause or while held.
+    likely_cause_sentence: list[ExplanationSegment] | None = None
 
 
 class FindingListResponse(BaseModel):
@@ -536,3 +541,99 @@ class LinkChanged(BaseModel):
 
     finding: FindingForMember
     link_id: uuid.UUID
+
+
+# ------------------------------------------------------------- F3: the explanation
+
+
+class ExplanationSegment(BaseModel):
+    """One piece of a code-written sentence: plain text, a customer's name, or a time the
+    console formats in the project's zone. Never markup, never a link (design, *Segments*)."""
+
+    text: str | None = None
+    name: str | None = None
+    at: datetime | None = None
+
+
+ExplanationKind = Literal[
+    "deploy",
+    "error_group",
+    "dependency",
+    "check",
+    "incident",
+    "other_finding",
+    "traffic",
+    "infrastructure",
+    "absence",
+]
+ExplanationBasis = Literal["verified", "telemetry", "telemetry_text"]
+
+
+class ExplanationFact(BaseModel):
+    """One frozen fact, numbered as the page shows it (FR4, FR44)."""
+
+    id: str
+    number: int
+    kind: ExplanationKind
+    basis: ExplanationBasis | None
+    sentence: list[ExplanationSegment]
+    # When the fact happened, where it has a moment of its own.
+    at: datetime | None
+    # Set when this fact was carried from an earlier read because this one failed.
+    read_at: datetime | None
+    # `last_before` and `near`: F28's release facts, shown in the section's first row.
+    role: Literal["last_before", "near"] | None
+    # An absence's reason, and the read a `could_not_read` names (FR6, FR45).
+    absence: str | None
+    read: str | None
+    # Whether this fact is the cause's or supports it (FR44's order is already applied).
+    is_cause: bool
+    supports_cause: bool
+
+
+class ExplanationCause(BaseModel):
+    """The likely place to look first, by rule (FR8). Only when released (FR50)."""
+
+    evidence_id: str
+    rule: str
+    strength: Literal["likely", "possible"]
+    basis: ExplanationBasis
+    same_minute: bool
+    header: list[ExplanationSegment]
+    card: list[ExplanationSegment]
+
+
+ExplanationState = Literal["reading", "not_read", "read"]
+WordingState = Literal["off", "pending", "done", "failed", "over_limit", "abstained", "held"]
+
+
+class FindingExplanation(BaseModel):
+    """`GET /findings/{id}/explanation` (design, *API*). Postgres only (A32)."""
+
+    finding_id: uuid.UUID
+    # `reading`: no version yet and a read is queued; `not_read`: none, and none queued.
+    state: ExplanationState
+    version: int | None
+    latest_version: int | None
+    read_at: datetime | None
+    reads_failed: int
+    facts: list[ExplanationFact]
+    # None with no cause, and while a stored cause is held (FR50, AC92).
+    likely_cause: ExplanationCause | None
+    cause_held: bool
+    # The previous version's cause line, when the cause changed since (FR3).
+    previous_cause: list[ExplanationSegment] | None
+    # How many open findings in the project name the same cause (FR47), computed by code.
+    shared_cause_count: int
+    # Wording (plan Step 5): a token never reads the words (BR10, A68).
+    wording_state: WordingState
+    wording: None = None
+    # When a person may next ask for the facts to be read again (FR41).
+    next_read_at: datetime | None
+
+
+class ReadAgainAccepted(BaseModel):
+    """`POST .../explanation/read-again`: queued, and when the next may be asked."""
+
+    queued: bool
+    next_read_at: datetime

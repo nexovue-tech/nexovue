@@ -58,6 +58,7 @@ from nexovue_platform.detection import (
     SHIFT_REASONS,
     SIGNALS,
 )
+from nexovue_platform.evidence import WORDING_REASONS, WORDING_STATES
 from nexovue_platform.releases import DEPLOY_STATES, OTHER_VERSION, START_BASES
 from sqlalchemy import (
     BigInteger,
@@ -1860,6 +1861,87 @@ class FindingIncident(Base):
     )
 
     __table_args__ = (Index("ix_finding_incidents_incident_id", "incident_id"),)
+
+
+class FindingExplanation(Base):
+    """One version of a finding's frozen evidence (F3, design *Data and migration impact*).
+
+    A gather writes a new version only when what is known changed (FR43): identities and
+    conclusions, never moved counts. `evidence` holds names and numbers and never a log
+    body or error text (A47); `model_input` holds only what a model may be sent, and
+    `aliases` the real names behind it, apart (A19). The wording columns stay `off`
+    until AI wording exists (plan Step 5).
+    """
+
+    __tablename__ = "finding_explanations"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    read_at: Mapped[CreatedAt]
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    reads_failed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    aliases: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    likely_cause: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    model_input: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    wording: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    wording_state: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'off'"))
+    wording_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    wording_changed_at: Mapped[OptionalTimestamp]
+    wording_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wording_from_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A person's last "Read the facts again" (FR41: once a minute per finding).
+    read_again_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_finding_explanations_org_id_id"),
+        UniqueConstraint("finding_id", "version", name="uq_finding_explanations_version"),
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_explanations_finding",
+        ),
+        CheckConstraint("version >= 1", name="version_counts_from_one"),
+        CheckConstraint("reads_failed >= 0", name="reads_failed_count_up"),
+        CheckConstraint(
+            f"wording_state IN ({_quoted(WORDING_STATES)})", name="wording_state_is_known"
+        ),
+        CheckConstraint(
+            f"wording_reason IS NULL OR wording_reason IN ({_quoted(WORDING_REASONS)})",
+            name="wording_reason_is_known",
+        ),
+        CheckConstraint("wording_generation >= 0", name="wording_generation_counts_up"),
+    )
+
+
+class EvidenceErrorGroupRead(Base):
+    """The hour's "error groups not seen in the hour before", per project and minute (F3
+    A62): read once in a wide outage, and holding no message text (A47)."""
+
+    __tablename__ = "evidence_error_group_reads"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    read_minute: Mapped[datetime] = mapped_column(TimestampTz, primary_key=True)
+    groups: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (Index("ix_evidence_error_group_reads_created_at", "created_at"),)
 
 
 class FindingEvent(Base):

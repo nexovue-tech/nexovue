@@ -17,6 +17,7 @@ from typing import Any, Final
 
 import pytest
 from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
+from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE
 
 from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
@@ -110,6 +111,8 @@ def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> N
         "light",
         "light.mumbai",
         DETECTION_QUEUE,
+        # F3: a finding's facts are gathered beside detection, under the same floor.
+        EVIDENCE_QUEUE,
         *slos.QUEUES,
         *releases.QUEUES,
     ]
@@ -117,10 +120,12 @@ def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> N
     # F22: `scheduler-connections`' sync queue is capped too, in its own worker (F5's D40).
     assert QUEUE_CAPS == {
         DETECTION_QUEUE: DETECTION_CONCURRENCY,
+        EVIDENCE_QUEUE: EVIDENCE_CONCURRENCY,
         **slos.QUEUE_CAPS,
         **releases.QUEUE_CAPS,
         CONNECTIONS_QUEUE: CONNECTIONS_QUEUE_CAP,
     }
+    assert EVIDENCE_CONCURRENCY == 2
     assert DETECTION_CONCURRENCY == 2
 
 

@@ -59,6 +59,7 @@ from nexovue_platform.cases import (
     resolve_case_parameters,
 )
 from nexovue_platform.detection import TOO_MANY_SERVICES_KEY, WINDOW_REQUESTS_KEY
+from nexovue_platform.evidence import GATHER_EVIDENCE_TASK
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -1528,3 +1529,73 @@ async def test_a_person_resolving_while_the_job_closes_and_opens_cannot_deadlock
     finally:
         await person_engine.dispose()
         await job_engine.dispose()
+
+
+async def _evidence_jobs(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple[str, str, float]]:
+    """F3's queued gathers for the tenant: (finding, reason, seconds of delay)."""
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                "SELECT kwargs, extract(epoch FROM run_after - created_at) AS delay FROM jobs "
+                "WHERE org_id = :org_id AND task = :task ORDER BY created_at, run_after"
+            ),
+            {"org_id": tenant.org_id, "task": GATHER_EVIDENCE_TASK},
+        )
+        return [(row.kwargs["finding_id"], row.kwargs["reason"], float(row.delay)) for row in rows]
+
+
+async def test_an_opening_adds_its_two_reads_and_a_close_its_last_in_its_transaction(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """F3 AC2, AC79: opening adds `opened` now and `settled` in 5 minutes, and closing adds
+    `closed`, each in the transaction that changed the finding (A1)."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+
+    await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    jobs = await _evidence_jobs(engine, project)
+    assert [(f, reason) for f, reason, _ in jobs] == [
+        (str(finding.id), "opened"),
+        (str(finding.id), "settled"),
+        (str(finding.id), "closed"),
+    ]
+    delays = {reason: delay for _, reason, delay in jobs}
+    assert delays["opened"] < 5 and 295 < delays["settled"] < 305
+
+
+async def test_an_opening_that_fails_to_commit_leaves_no_job_behind(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 AC2: a commit that fails after the opening leaves neither finding nor job."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+    probe = await _judge_through(engine, store, project, minutes)
+    opening = next(m for m, o in zip(minutes, probe, strict=True) if o.opened)
+    async with engine.begin() as connection:
+        for table in ("findings", "detection_state", "jobs"):
+            await connection.execute(
+                text(f"DELETE FROM {table} WHERE org_id = :org_id"), {"org_id": project.org_id}
+            )
+    await _judge_through(engine, store, project, [m for m in minutes if m < opening])
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM jobs WHERE org_id = :org_id"), {"org_id": project.org_id}
+        )
+
+    async def killed(*_: object, **__: object) -> None:
+        raise RuntimeError("killed between the opening and the commit")
+
+    monkeypatch.setattr(project_job, "_advance", killed)
+    with pytest.raises(RuntimeError, match="killed"):
+        await judge_project(engine, store, project.project_id, settled=opening, now=opening)
+
+    assert await _findings(engine, project) == []
+    assert await _evidence_jobs(engine, project) == []

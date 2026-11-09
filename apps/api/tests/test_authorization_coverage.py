@@ -184,6 +184,8 @@ POLICY_OF: Final = {
     "nexovue_api/findings/router.py:create_issue": "MayOperateCases",
     "nexovue_api/findings/router.py:retry_issue": "MayOperateCases",
     "nexovue_api/findings/router.py:remove_issue": "MayOperateCases",
+    # F3 A20, FR41: reading a finding's facts again; members and up, never a token.
+    "nexovue_api/findings/router.py:read_explanation_again": "MayRequestExplanation",
     # F19: reliability targets, every working role's (D20, foundation section 5).
     "nexovue_api/slos/router.py:create_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:change_slo": "MayConfigureSlos",

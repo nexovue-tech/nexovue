@@ -66,6 +66,8 @@ THE_SURFACE: Final = {
     "nexovue_api/findings/router.py:get_finding": "GET /findings/{finding_id}",
     # F22 FR20: a token reads kinds and times alone; the route itself narrows.
     "nexovue_api/findings/router.py:read_timeline": "GET /findings/{finding_id}/timeline",
+    # F3 (A15, A68): a token reads a finding's facts, never any model words.
+    "nexovue_api/findings/router.py:read_explanation": "GET /findings/{finding_id}/explanation",
     "nexovue_api/detection/router.py:detection_status": (
         "GET /projects/{project_id}/detection/status"
     ),

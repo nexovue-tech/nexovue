@@ -15,7 +15,7 @@ import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
 
-import type { FindingDetail } from "./api";
+import type { FindingDetail, FindingExplanation } from "./api";
 import { FindingScreen } from "./FindingScreen";
 import { FindingsScreen } from "./FindingsScreen";
 
@@ -122,7 +122,7 @@ export interface ApiCall {
   search: string;
   body: unknown;
 }
-type Handler = (call: ApiCall) => Response | Promise<Response>;
+export type Handler = (call: ApiCall) => Response | Promise<Response>;
 
 export const json =
   (body: unknown, status = 200): Handler =>
@@ -137,6 +137,27 @@ export const problem =
       headers: { "content-type": "application/problem+json" },
     });
 
+/** F3: an explanation as the API returns it, read once, with nothing found. */
+export function explanation(overrides: Partial<FindingExplanation> = {}): FindingExplanation {
+  return {
+    finding_id: "f-1",
+    state: "read",
+    version: 1,
+    latest_version: 1,
+    read_at: minutesAgo(5),
+    reads_failed: 0,
+    facts: [],
+    likely_cause: null,
+    cause_held: false,
+    previous_cause: null,
+    shared_cause_count: 0,
+    wording_state: "off",
+    wording: null,
+    next_read_at: null,
+    ...overrides,
+  };
+}
+
 /** The page's reads for `found`, as `role`, with any action stubs added. */
 export function stubApi(
   found: FindingDetail | Handler,
@@ -147,6 +168,8 @@ export function stubApi(
     "GET /auth/me": json(identityFor(role)),
     "GET /findings/f-1": typeof found === "function" ? found : json(found),
     "GET /findings/f-1/timeline": json({ events: [], next_before: null }),
+    // F3: the page polls the explanation; a test that cares stubs its own.
+    "GET /findings/f-1/explanation": json(explanation()),
     [`GET /projects/${PROJECT_ID}/detection`]: json({ sensitivity: "normal", timezone: "UTC" }),
     "GET /releases/markers": json({ markers: [], truncated: false, cap: 500 }),
     ...extra,

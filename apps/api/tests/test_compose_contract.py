@@ -15,6 +15,7 @@ from typing import Any, Final
 
 import pytest
 import yaml
+from nexovue_platform.evidence import EVIDENCE_QUEUE
 
 import nexovue_api
 from nexovue_api.roles import command_for
@@ -308,6 +309,9 @@ def test_scheduler_light_judges_detection_beside_its_probes(layout: str, tmp_pat
     assert f"light.{region}" in queues["scheduler-light"], "the location's probes were dropped"
     others = [name for name, taken in queues.items() if DETECTION_QUEUE in taken]
     assert others == ["scheduler-light"], f"{layout}: {others} take detection jobs"
+    # F3 AC47: the evidence job gathers on `scheduler-light` alone, beside detection.
+    gatherers = [name for name, taken in queues.items() if EVIDENCE_QUEUE in taken]
+    assert gatherers == ["scheduler-light"], f"{layout}: {gatherers} take evidence jobs"
 
 
 def _floor_of(argv: list[str]) -> int:

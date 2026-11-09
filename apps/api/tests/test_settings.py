@@ -39,6 +39,7 @@ KNOWN_VARIABLES = (
     "CONNECTION_SECRET_KEY",
     "CONNECTION_SECRET_PREVIOUS_KEYS",
     "NEXOVUE_CONNECTIONS",
+    "SHOW_HELD_CAUSES",
 )
 
 
@@ -240,3 +241,21 @@ def test_there_is_one_read_time_limit_and_it_is_the_one_every_read_sends() -> No
     """Group 9, C4: CLICKHOUSE_QUERY_TIMEOUT_SECONDS (15 s) was overridden by the 30 s
     every tenant read sends, so the setting promised a bound nothing enforced."""
     assert "clickhouse_query_timeout_seconds" not in Settings.model_fields
+
+
+def test_held_causes_stay_held_unless_the_override_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 A60: a development install may show held causes so the founder can judge them."""
+    _apply(monkeypatch, COMPLETE_ENVIRONMENT)
+    assert get_settings().show_held_causes is False
+
+    get_settings.cache_clear()
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "SHOW_HELD_CAUSES": "true"})
+    assert get_settings().show_held_causes is True
+
+
+def test_production_refuses_to_show_held_causes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 AC92: setting the non-production override in production stops the process."""
+    _apply(monkeypatch, _deployed(SHOW_HELD_CAUSES="true"))
+
+    with pytest.raises(SettingsError, match="SHOW_HELD_CAUSES"):
+        get_settings()

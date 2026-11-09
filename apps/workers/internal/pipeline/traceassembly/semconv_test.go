@@ -297,13 +297,17 @@ func TestPeerAttributesAreReadInBothGenerations(t *testing.T) {
 		},
 		"legacy peer service spelling": {
 			attributes: []*commonpb.KeyValue{attribute("peer.service", stringValue("AuthTokenCache"))},
-			want:       serviceedges.Peer{Service: "AuthTokenCache"},
+			want: serviceedges.Peer{
+				Service: "AuthTokenCache", ServiceAttr: serviceedges.AttrPeerService,
+			},
 		},
 		"current peer service spelling": {
 			attributes: []*commonpb.KeyValue{
 				attribute("service.peer.name", stringValue("AuthTokenCache")),
 			},
-			want: serviceedges.Peer{Service: "AuthTokenCache"},
+			want: serviceedges.Peer{
+				Service: "AuthTokenCache", ServiceAttr: serviceedges.AttrServicePeerName,
+			},
 		},
 		"a broker is a system, not a transport": {
 			attributes: []*commonpb.KeyValue{

@@ -30,6 +30,7 @@ import urllib.request
 from typing import Final
 
 from nexovue_platform.checks.task import SHARED_QUEUE, probe_queue
+from nexovue_platform.evidence import EVIDENCE_QUEUE
 from nexovue_platform.telemetry.logging import configure_logging, get_logger
 from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -57,7 +58,7 @@ def main(arguments: list[str] | None = None) -> None:
     worker.add_argument(
         "--queues",
         default="",
-        help="comma-separated; default light, light.<region> and detection",
+        help="comma-separated; default light, light.<region>, detection, evidence and the rest",
     )
     worker.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     worker.add_argument(
@@ -102,6 +103,7 @@ def worker_queues(named: str, *, region: str) -> list[str]:
         SHARED_QUEUE,
         probe_queue(region),
         DETECTION_QUEUE,
+        EVIDENCE_QUEUE,
         *slos.QUEUES,
         *releases.QUEUES,
     ]

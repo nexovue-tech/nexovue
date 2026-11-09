@@ -80,6 +80,15 @@ from nexovue_platform.detection import (
     normal_band,
     shift_ratio,
 )
+from nexovue_platform.evidence import (
+    CHANGED,
+    CLOSED,
+    OPENED,
+    SETTLE_DELAY_SECONDS,
+    SETTLED,
+    ReadReason,
+    gather_evidence_request,
+)
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -147,6 +156,7 @@ from nexovue_scheduler.detection.store import (
     reading_version,
     store_for_process,
 )
+from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import enqueue, with_engine
 
@@ -938,6 +948,7 @@ async def _keep_project_finding(
             )
         ).one()
         finding_id = opened.id
+        await _read_facts(connection, key, finding_id, *OPENING_READS)
         outcome.opened += 1
         outcome.notified += await notify.finding_opened(
             connection,
@@ -972,6 +983,7 @@ async def _keep_project_finding(
             },
         )
         outcome.closed += 1
+        await _read_facts(connection, key, row.id, CLOSED)
         outcome.notified += await notify.finding_closed(
             connection, row.id, org_id=key["org_id"], severity="critical", at=now
         )
@@ -1146,6 +1158,7 @@ async def _keep_finding(
             finding_id, root_finding_id = await _open(
                 connection, key, service, finding, zone, now=now
             )
+            await _read_facts(connection, key, finding_id, *OPENING_READS)
             since = finding.started_at
             outcome.opened += 1
             outcome.notified += await notify.finding_opened(
@@ -1182,6 +1195,7 @@ async def _keep_finding(
                 },
             )
             outcome.closed += 1
+            await _read_facts(connection, key, finding_id, CLOSED)
             outcome.notified += await notify.finding_closed(
                 connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
             )
@@ -1422,6 +1436,7 @@ async def _adopt(
         },
     )
     outcome.closed += 1
+    await _read_facts(connection, key, finding_id, CLOSED)
     outcome.notified += await notify.finding_adopted(
         connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
     )
@@ -1443,6 +1458,8 @@ async def _notify_change(
 ) -> int:
     """What a minute did to an open finding, said once each (FR28, D29)."""
     written = 0
+    if change.raised or change.joined:
+        await _read_facts(connection, key, finding_id, CHANGED)
     if change.raised:
         written += await notify.finding_escalated(
             connection, finding_id, org_id=key["org_id"], at=now
@@ -1467,6 +1484,22 @@ async def _notify_change(
             at=now,
         )
     return written
+
+
+# F3 (FR1, A1): an opening's two reads, now and once deploy records have had 5 minutes.
+OPENING_READS: Final = (OPENED, SETTLED)
+
+
+async def _read_facts(
+    connection: AsyncConnection, key: Mapping[str, Any], finding_id: uuid.UUID, *reasons: ReadReason
+) -> None:
+    """Add the evidence job in this transaction (F3 FR1, A1): an opening that commits has
+    its job, and one that fails leaves neither. Detection imports only the job's name."""
+    for reason in reasons:
+        delay = SETTLE_DELAY_SECONDS if reason == SETTLED else 0
+        await queue.enqueue(
+            connection, gather_evidence_request(finding_id, key["org_id"], reason, countdown=delay)
+        )
 
 
 async def _link_incidents(

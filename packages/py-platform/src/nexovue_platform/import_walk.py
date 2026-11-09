@@ -83,7 +83,10 @@ AI_PACKAGES: Final = frozenset(
         "lightgbm",
     }
 )
-DENIED: Final = REPOSITORY_AI_MODULES | AI_PACKAGES
+# F3's own AI packages (foundation section 8), denied before they exist so the first
+# import of either from detection or the evidence job fails a test (F3 T1.8, AC5).
+F3_AI_MODULES: Final = frozenset({"nexovue_platform.ai", "nexovue_scheduler.insight"})
+DENIED: Final = REPOSITORY_AI_MODULES | AI_PACKAGES | F3_AI_MODULES
 DYNAMIC_IMPORTERS: Final = frozenset({"import_module", "__import__"})
 
 
