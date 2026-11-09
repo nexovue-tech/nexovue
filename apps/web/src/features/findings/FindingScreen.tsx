@@ -5,24 +5,32 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, isConflict } from "@/shared/api-client";
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
+import { ChartReleases } from "@/shared/components/ChartReleases";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import type { SeriesToken } from "@/shared/components/TrendChart";
 import { TrendChart } from "@/shared/components/TrendChart";
+import type { DeployMarker } from "@/shared/deploy-markers";
+import { releaseMarkers } from "@/shared/deploy-markers";
 import type { Quieting } from "@/shared/detection/api";
 import { useDetectionSettings, useQuietService } from "@/shared/detection/api";
 import { QUIET_CHOICES, quietDone, quietEffect } from "@/shared/detection/quiet";
+import { UNKNOWN } from "@/shared/format/number";
+import { formatGap } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
+import { useReleaseMarkers } from "@/shared/releases/api";
 import { setSelectedProjectId, useSelection } from "@/shared/selection";
+import { setupDocUrl } from "@/shared/setup-docs";
 
 import type {
   CaseLink,
   FindingDetail,
   FindingSignal,
   FindingSignalKind,
+  ReleaseFact,
   SignalSeries,
 } from "./api";
 import { useFinding, useFindingAction } from "./api";
@@ -30,15 +38,20 @@ import { CaseSection } from "./CaseSection";
 import { backLinkLabel, parseFeedSearch } from "./feed-filter";
 import type { DoneAction } from "./finding-page";
 import {
+  affectedReleases,
   availableActions,
   bandSentence,
+  CAME_FIRST,
+  comparisonSearch,
   describeSignal,
+  elsewhere,
   evidenceSentence,
   formatSignalValue,
   newNormalSentence,
   notYetSentence,
   ownEndpoint,
   PLOT_LINES,
+  releaseBefore,
   SIGNAL_NAMES,
   signalPlot,
   successSentence,
@@ -129,6 +142,7 @@ function FindingPage({
   return (
     <div className="flex flex-col gap-8">
       <Header finding={finding} zone={zone} />
+      <ReleaseSection finding={finding} zone={zone} />
       {/* FR45, AC105: one always-present status region, at page level because the
           case controls return nothing for a viewer. It announces only changes of
           assignee, case state and signal state, never the actor's own act. */}
@@ -592,6 +606,22 @@ function Evidence({ entry }: { entry: FindingSignal }) {
  * can be unusual, one inside it cannot.
  */
 function Readings({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+  const window = useMemo(() => chartWindow(finding.series), [finding.series]);
+  const marks = useReleaseMarkers(
+    window === null ? undefined : finding.project_id,
+    window ?? { from: finding.started_at, to: finding.started_at },
+    finding.service_name ?? undefined,
+  );
+  const markers = useMemo(
+    () =>
+      window === null
+        ? []
+        : releaseMarkers(marks.data?.markers ?? [], {
+            serviceName: finding.service_name ?? undefined,
+            ...window,
+          }),
+    [marks.data, window, finding.service_name],
+  );
   if (finding.scope === "project") return null;
   return (
     <section aria-labelledby="finding-readings" className="flex flex-col gap-3">
@@ -605,19 +635,49 @@ function Readings({ finding, zone }: { finding: FindingDetail; zone?: string }) 
           for this finding. The values above were stored with it.
         </p>
       ) : (
-        finding.series.map((series) => (
-          <SignalChart key={series.signal} series={series} zone={zone} />
-        ))
+        <>
+          {finding.series.map((series) => (
+            <SignalChart key={series.signal} series={series} zone={zone} markers={markers} />
+          ))}
+          {/* Open by default here: the marks are the question this page is asked. */}
+          <ChartReleases
+            read={{
+              markers,
+              isError: marks.isError,
+              onRetry: () => void marks.refetch(),
+              truncated: marks.data?.truncated ?? false,
+              cap: marks.data?.cap ?? 0,
+            }}
+            zone={zone}
+            open
+          />
+        </>
       )}
     </section>
   );
+}
+
+/** The span the charts draw: their first reading to their last, or none. */
+function chartWindow(series: readonly SignalSeries[]): { from: string; to: string } | null {
+  const times = series.flatMap((each) => each.points.map((point) => point.at)).sort();
+  const [first] = times;
+  const last = times.at(-1);
+  return first === undefined || last === undefined ? null : { from: first, to: last };
 }
 
 /** Below this many readings each is drawn as a dot too: a lone minute has no line. */
 const DOTS_BELOW = 30;
 
 /** One signal's readings, its normal, and the band between the normal and its edge. */
-function SignalChart({ series, zone }: { series: SignalSeries; zone?: string }) {
+function SignalChart({
+  series,
+  zone,
+  markers,
+}: {
+  series: SignalSeries;
+  zone?: string;
+  markers: readonly DeployMarker[];
+}) {
   // Built once per series, so a re-render of the page does not hand the chart new rows.
   const plot = useMemo(() => signalPlot(series), [series]);
   const formatValue = useMemo(
@@ -634,12 +694,120 @@ function SignalChart({ series, zone }: { series: SignalSeries; zone?: string }) 
         seriesToken={SERIES_TOKEN[series.signal]}
         data={plot.data}
         band={plot.band}
+        markers={markers}
         formatValue={formatValue}
         description={`${SIGNAL_NAMES[series.signal]}: each judged minute against its normal band, shaded from the normal to its edge, ${series.points.length} minutes.`}
         showPoints={series.points.length < DOTS_BELOW}
         zone={zone}
       />
     </figure>
+  );
+}
+
+/**
+ * *Release before this* (F28 FR32, FR33, FR52; design, *Finding page*): what came before
+ * this finding, worded as order. Every row naming an earlier release carries
+ * `CAME_FIRST`; the link carries the finding, so the comparison's window reaches it.
+ */
+function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+  const canSetUp = useCan("manage_credentials");
+  const context = finding.release_context;
+  if (finding.scope === "project") {
+    const listed = affectedReleases(context);
+    return (
+      <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
+        <h2 id="finding-release" className="font-medium font-serif text-base text-ink">
+          Releases before this
+        </h2>
+        {listed.rows.length === 0 ? (
+          <p className="text-ink-dim text-sm">
+            No release of these services in the 24 hours before this started, from what we can see.
+          </p>
+        ) : (
+          <>
+            <ReleaseRows rows={listed.rows} finding={finding} />
+            {listed.more ? <p className="text-ink-dim text-sm">{listed.more}</p> : null}
+            <p className="text-ink-dim text-sm">{CAME_FIRST}</p>
+          </>
+        )}
+      </section>
+    );
+  }
+  const line = releaseBefore(finding, { zone });
+  const before = context.before;
+  const others = elsewhere(context, finding.service_name ?? "");
+  return (
+    <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
+      <h2 id="finding-release" className="font-medium font-serif text-base text-ink">
+        Release before this
+      </h2>
+      <p className={`break-words text-sm ${line.dim ? "text-ink-dim" : "text-ink"}`}>
+        {line.text}
+        {line.cameFirst ? ` ${CAME_FIRST}` : ""}
+      </p>
+      {before !== null && line.cameFirst ? (
+        <Link
+          to="/releases/$releaseId"
+          params={{ releaseId: before.release_id }}
+          search={comparisonSearch(before, finding)}
+          className={LINK}
+        >
+          {line.compare ? "Compare the versions" : "Open this release"}
+        </Link>
+      ) : null}
+      {context.coverage === "none" && context.first_heard_at === null ? (
+        <p className="text-ink-dim text-sm">
+          {canSetUp ? (
+            <Link to="/settings/projects" hash="deploys" className={LINK}>
+              Set up deploy reporting
+            </Link>
+          ) : (
+            "An owner or admin can set this up in project settings."
+          )}{" "}
+          <a href={setupDocUrl("deploys")} className={LINK}>
+            How releases are found
+          </a>
+        </p>
+      ) : null}
+      {others.rows.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+            Elsewhere in this project
+          </h3>
+          {others.lead ? <p className="text-ink-dim text-sm">{others.lead}</p> : null}
+          <ReleaseRows rows={others.rows} finding={finding} />
+          {context.called_known ? null : (
+            <p className="text-ink-dim text-sm">
+              Which of these this service calls could not be read.
+            </p>
+          )}
+          <p className="text-ink-dim text-sm">{CAME_FIRST}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** Releases as rows: version, service, how long before, and "this service calls it". */
+function ReleaseRows({ rows, finding }: { rows: readonly ReleaseFact[]; finding: FindingDetail }) {
+  return (
+    <ul className="flex flex-col gap-1 text-sm">
+      {rows.map((row) => (
+        <li key={row.period_id} className="break-words">
+          <Link
+            to="/releases/$releaseId"
+            params={{ releaseId: row.release_id }}
+            search={comparisonSearch(row, finding)}
+            className="font-mono text-ink hover:underline"
+          >
+            {row.version}
+          </Link>{" "}
+          of {row.service_name}, {formatGap(row.started_at, finding.started_at) ?? UNKNOWN} before
+          this
+          {row.called ? " (this service calls it)" : ""}.
+        </li>
+      ))}
+    </ul>
   );
 }
 

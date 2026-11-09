@@ -137,6 +137,13 @@ UNTRUSTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
         "finding[].signals[].endpoint",
         "finding[].services",
         "finding[].incidents[].rule_name",
+        # F28: release names come from telemetry or a deploy sender (FR32, AC43).
+        "finding[].release_context.before.service_name",
+        "finding[].release_context.before.version",
+        "finding[].release_context.nearby[].service_name",
+        "finding[].release_context.nearby[].version",
+        "finding[].release_context.affected[].service_name",
+        "finding[].release_context.affected[].version",
     ),
     "get_trace": (
         "trace[].spans[].service_name",

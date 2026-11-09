@@ -2,10 +2,11 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./trend-chart.css";
 
-import { useEffect, useMemo, useRef } from "react";
-import type { DeployMarker } from "@/shared/deploy-markers";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { DeployMarker, MarkerCluster } from "@/shared/deploy-markers";
+import { clusterMarkers } from "@/shared/deploy-markers";
 import { useTheme } from "@/shared/theme/use-theme";
-
+import { ReleaseStrip } from "./ChartReleases";
 import type { ChartBand } from "./chart-band";
 import { bandStretches } from "./chart-band";
 
@@ -93,7 +94,10 @@ export interface TrendChartProps {
   label: string | readonly string[];
   seriesToken: SeriesToken | "critical";
   data: PlotRows;
-  /** Vertical rules across the plot — the deploys inside this window (IA3). */
+  /**
+   * Release marks inside this window (IA3, F28): one neutral dash each on the canvas,
+   * and a tag above the plot carrying the words, the hover and the pinned box.
+   */
   markers?: readonly DeployMarker[];
   /** Shaded stretches under the series — the findings open inside this window (F6). */
   spans?: readonly ChartSpan[];
@@ -147,6 +151,8 @@ function TrendCanvas({
   const latest = useRef({ labels, data, formatValue, markers, spans, band, onSelectRange });
   // uPlot's options cannot change in place, so becoming draggable rebuilds the chart.
   const selectable = onSelectRange !== undefined;
+  // Where each mark's tag sits, read from the chart after every draw.
+  const [strip, setStrip] = useState<StripLayout>(NO_STRIP);
 
   // Everything is read through the ref rather than closed over, so a deploy or a
   // finding arriving after the chart was built is drawn by a redraw instead of
@@ -178,6 +184,7 @@ function TrendCanvas({
         selectable ? (from, to) => latest.current.onSelectRange?.(from, to) : undefined,
         showPoints,
         zone,
+        (drawn) => setStrip((before) => sameStrip(before, drawn) ?? drawn),
       ),
       latest.current.data,
       host,
@@ -211,9 +218,36 @@ function TrendCanvas({
         <span data-probe="line" className={SERIES_TEXT_CLASS[seriesToken]} />
       </div>
 
+      {markers.length > 0 ? (
+        <ReleaseStrip clusters={strip.clusters} plotLeft={strip.plotLeft} zone={zone} />
+      ) : null}
       <div ref={hostRef} role="img" aria-label={description} className="w-full" />
     </div>
   );
+}
+
+interface StripLayout {
+  plotLeft: number;
+  clusters: MarkerCluster[];
+}
+
+const NO_STRIP: StripLayout = { plotLeft: 0, clusters: [] };
+
+/** The layout before, when a draw placed every tag where it already was: no re-render. */
+function sameStrip(before: StripLayout, drawn: StripLayout): StripLayout | undefined {
+  const key = (layout: StripLayout) =>
+    `${layout.plotLeft}|${layout.clusters
+      .map((cluster) => `${cluster.left}:${cluster.markers.map((m) => m.key).join(",")}`)
+      .join(";")}`;
+  return key(before) === key(drawn) ? before : undefined;
+}
+
+/** Each mark's tag, in the plot's CSS pixels, from the chart as it was just drawn. */
+function stripOf(chart: uPlot, markers: readonly DeployMarker[]): StripLayout {
+  return {
+    plotLeft: chart.bbox.left / uPlot.pxRatio,
+    clusters: clusterMarkers(markers, (seconds) => chart.valToPos(seconds, "x")),
+  };
 }
 
 function readPalette(probe: HTMLElement): ChartPalette {
@@ -241,11 +275,13 @@ function colourOf(element: HTMLElement): string {
 }
 
 /**
- * One dashed vertical rule per deploy, across the plotting area only.
+ * One dashed vertical rule per release mark, across the plotting area only: the same
+ * neutral dash in the axis colour for every one, since a release is context, and the
+ * words live in the strip above (FR37).
  *
  * uPlot's own `valToPos` places it, so the rule and the series agree about
  * where a moment is by construction rather than by a second calculation that
- * could drift from it. `deployMarkers` has already dropped anything outside
+ * could drift from it. `releaseMarkers` has already dropped anything outside
  * the window, so nothing here is clamped to an edge.
  */
 function drawDeploys(chart: uPlot, markers: readonly DeployMarker[], palette: ChartPalette): void {
@@ -353,6 +389,7 @@ function chartOptions(
   onSelectRange?: (fromSeconds: number, toSeconds: number) => void,
   showPoints = false,
   zone?: string,
+  onDrawn?: (strip: StripLayout) => void,
 ): uPlot.Options {
   return {
     width,
@@ -368,6 +405,7 @@ function chartOptions(
         },
       ],
       setSelect: onSelectRange ? [(chart) => selectRange(chart, onSelectRange)] : [],
+      draw: onDrawn ? [(chart) => onDrawn(stripOf(chart, markers()))] : [],
     },
     height: CHART_HEIGHT,
     // One series is named by the heading above the chart, so a legend repeats

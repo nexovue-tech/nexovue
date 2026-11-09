@@ -240,12 +240,48 @@ export interface CaseLink {
 }
 
 /** One finding as its page reads it (FR31). */
+/** One release period as the finding page states it (F28 FR32, FR52). No sender text. */
+export interface ReleaseFact {
+  release_id: string;
+  period_id: string;
+  service_name: string;
+  version: string;
+  started_at: string;
+  start_basis: "seen" | "reported";
+  basis: "reported" | "seen" | "both";
+  last_state: "started" | "finished" | "failed" | "rolled_back" | null;
+  is_return: boolean;
+  already_running: boolean;
+  /** Whether the finding's service calls this one; null when unknown or its own. */
+  called: boolean | null;
+}
+
+export type DeployCoverage = "deploys_and_versions" | "deploys_only" | "versions_only" | "none";
+
+/** What came before a finding (F28 FR32, FR33, FR52). Order, never cause. */
+export interface ReleaseContext {
+  /** A service finding's last period starting at or before it, at any age. */
+  before: ReleaseFact | null;
+  /** As of the finding's start; null for a project finding. */
+  coverage: DeployCoverage | null;
+  last_reported_at: string | null;
+  /** Only when nothing was heard by the finding's start, and something was after. */
+  first_heard_at: string | null;
+  /** The project's releases in the 2 hours before, this service's first. */
+  nearby: ReleaseFact[];
+  called_known: boolean;
+  /** A project finding: each affected service's latest release in the 24 hours before. */
+  affected: ReleaseFact[];
+}
+
 export interface FindingDetail extends Finding, CasePeople {
   /** Empty once the readings have expired, and always for a project finding (AC40). */
   series: SignalSeries[];
   incidents: LinkedIncident[];
   /** A project finding's services; empty for a service's. */
   services: string[];
+  /** F28: the release before it, its service's coverage, and releases nearby. */
+  release_context: ReleaseContext;
   /** A signed-in person's alone: an API token never reads these. */
   acknowledged_by?: string | null;
   acknowledged_by_name?: string | null;

@@ -194,31 +194,3 @@ export function useVitalsSummary(
       }),
   });
 }
-
-/* ------------------------------------------------------ deploys, for IA3 */
-
-export interface DeployEventSummary {
-  version: string;
-  service_name: string;
-  deployed_at: string;
-}
-
-interface DeployEventListResponse {
-  deploys: DeployEventSummary[];
-}
-
-export const overviewDeploysQueryKey = (projectId: string) =>
-  ["overview-deploys", projectId] as const;
-
-export function useProjectDeploys(projectId: string | undefined) {
-  return useQuery({
-    queryKey: overviewDeploysQueryKey(projectId ?? ""),
-    enabled: projectId !== undefined,
-    queryFn: ({ signal }) =>
-      apiClient.get<DeployEventListResponse>("deploys", {
-        searchParams: { project_id: projectId },
-        signal,
-      }),
-    select: (response) => response.deploys,
-  });
-}

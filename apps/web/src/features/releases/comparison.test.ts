@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { Block, Comparison, Reason, Side } from "./api";
-import { measureLines, openingSentence, readingTone } from "./comparison";
+import {
+  findingWindowSentence,
+  measureLines,
+  openingSentence,
+  readingTone,
+  windowForFinding,
+  windowWords,
+} from "./comparison";
 
 /** AC66: every method and reason asserts its exact opening sentence (design, *Opening sentence*). */
 
@@ -222,5 +229,35 @@ describe("each measure's line", () => {
     for (const reading of ["lower", "about_same", "not_clearly_different", null] as const) {
       expect(readingTone(reading)).toBe("text-ink-dim");
     }
+  });
+});
+
+describe("a comparison opened from a finding (FR22, AC64)", () => {
+  const PERIOD = "2026-11-09T09:00:00Z";
+  const later = (hours: number) => new Date(Date.parse(PERIOD) + hours * 3_600_000).toISOString();
+
+  it("takes the smallest window reaching the finding, and says so", () => {
+    const five = windowForFinding(PERIOD, later(5));
+    expect(five.hours).toBe(6);
+    expect(findingWindowSentence(five, "14:00 UTC")).toBe(
+      "Compared over 6 hours, to include the finding that started at 14:00 UTC.",
+    );
+    expect(windowForFinding(PERIOD, later(0.5)).hours).toBe(1);
+  });
+
+  it("says a comparison ending before the finding says nothing about it", () => {
+    const thirty = windowForFinding(PERIOD, later(30));
+    expect(thirty).toEqual({ hours: 24, reaches: false });
+    expect(findingWindowSentence(thirty, "15:00 UTC")).toBe(
+      "This comparison ends before that finding started, so it says nothing about it.",
+    );
+  });
+
+  it("without a finding, each window reads its own", () => {
+    expect([1, 6, 24].map((hours) => windowWords(hours as 1 | 6 | 24))).toEqual([
+      "Compared over 1 hour from the start.",
+      "Compared over 6 hours from the start.",
+      "Compared over 24 hours from the start.",
+    ]);
   });
 });

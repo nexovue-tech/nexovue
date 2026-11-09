@@ -214,7 +214,7 @@ def _known_release(version: str, first: datetime, last: datetime) -> KnownReleas
         version=version,
         first_seen_at=first,
         last_seen_at=last,
-        first_reported_at=None,
+        first_went_out_at=None,
     )
 
 
@@ -273,7 +273,7 @@ def test_a_reported_period_takes_its_first_counted_minute_as_start() -> None:
     """FR42, AC57: before any traffic the start is the reported time; once counted, the
     counted minute."""
     reported = KnownPeriod(PERIOD_ID, SERVICE, "v2", T0, None, platform.REPORTED)
-    release = KnownRelease(SERVICE, "v2", None, None, first_reported_at=T0)
+    release = KnownRelease(SERVICE, "v2", None, None, first_went_out_at=T0)
     changes = _walk(
         _traffic("v2", T0 + 2 * MINUTE, 20),
         to=T0 + 30 * MINUTE,

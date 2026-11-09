@@ -16,7 +16,7 @@ import base64
 import binascii
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -37,12 +37,16 @@ from nexovue_api.releases.schemas import (
     Basis,
     BlockView,
     ComparisonView,
+    CoverageList,
     LatestRelease,
+    Marker,
+    MarkerList,
     PeriodView,
     ReadingView,
     ReleaseList,
     ReleaseRow,
     ReleaseView,
+    ServiceCoverage,
     SideView,
     TrafficView,
 )
@@ -305,7 +309,7 @@ async def compare(
             previous_version=period.previous_version,
             already_running=period.already_running,
             previous_started_at=previous_started,
-            reported_at=release.first_reported_at,
+            reported_at=method.reported_moment(period.started_at, period.start_basis),
         ),
         [_minute(row) for row in rows],
         to=to,
@@ -388,6 +392,182 @@ def _block(block: method.Block) -> BlockView:
     )
 
 
+# ------------------------------------------------------------------ markers
+
+# Marks one window can carry (FR35; a guess). Past it, the newest are kept and the
+# screen says so.
+MARKER_CAP: Final = 500
+
+
+async def markers_in_window(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    service: str | None,
+) -> MarkerList:
+    """The marks for a window (design, *Release markers on charts*; D30): each reported
+    deploy, and each counted period's start. Postgres only, so charts keep their marks
+    through a ClickHouse outage. F20's dashboards call this too, so one install draws
+    one set of marks. The caller has proved the project readable."""
+    keys: dict[str, Any] = {
+        "org_id": org_id,
+        "project_id": project_id,
+        "start": start,
+        "end": end,
+        "service": service,
+        "limit": MARKER_CAP + 1,
+    }
+    reported = [
+        Marker(
+            release_id=row.release_id,
+            period_id=None,
+            deploy_id=row.id,
+            service_name=row.service_name,
+            version=row.version,
+            at=row.deployed_at,
+            basis="reported",
+            state=row.state,
+        )
+        for row in await queries.reported_marks(session, **keys)
+    ]
+    seen = [
+        Marker(
+            release_id=row.release_id,
+            period_id=row.id,
+            deploy_id=None,
+            service_name=row.service_name,
+            version=row.version,
+            at=row.started_at,
+            basis="seen",
+            state=None,
+        )
+        for row in await queries.seen_marks(session, **keys)
+    ]
+    newest = sorted([*reported, *seen], key=lambda mark: mark.at, reverse=True)
+    return MarkerList(
+        markers=newest[:MARKER_CAP], truncated=len(newest) > MARKER_CAP, cap=MARKER_CAP
+    )
+
+
+async def list_markers(
+    session: AsyncSession,
+    *,
+    reader: Reader,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    service: str | None,
+) -> MarkerList:
+    project = await require_readable_project(session, reader=reader, project_id=project_id)
+    return await markers_in_window(
+        session, org_id=reader.org_id, project_id=project.id, start=start, end=end, service=service
+    )
+
+
+# ----------------------------------------------------------------- coverage
+
+
+async def coverage_at(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    services: Sequence[str] | None,
+    at: datetime,
+) -> dict[str, method.Coverage]:
+    """Each service's coverage as of `at` (FR38), by the shared rule the scheduler uses.
+    With `services` None, every service that sent telemetry or has a release."""
+    heard = await queries.heard_by_service(
+        session, org_id=org_id, project_id=project_id, services=services
+    )
+    last = await queries.last_reports_before(
+        session, org_id=org_id, project_id=project_id, services=services, at=at
+    )
+    names = (
+        set(services)
+        if services is not None
+        else {
+            *heard,
+            *await queries.services_sending(session, org_id=org_id, project_id=project_id),
+        }
+    )
+    return {
+        name: method.coverage_of(
+            *heard.get(name, (None, None)), at=at, last_reported_at=last.get(name)
+        )
+        for name in sorted(names)
+    }
+
+
+# Strongest first: a group on two services is as well covered as its better-heard one.
+_COVERAGE_STRENGTH: Final = (
+    method.DEPLOYS_AND_VERSIONS,
+    method.DEPLOYS_ONLY,
+    method.VERSIONS_ONLY,
+    method.COVERAGE_NONE,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageBook:
+    """Each service's earliest report and earliest counted version, read once per
+    request and asked once per row (FR38), as `DeployHistory` is for the deploy before.
+    Only the value: a row's last report is its preceding deploy."""
+
+    heard: Mapping[str, tuple[datetime | None, datetime | None]]
+
+    def value_of(self, services: Sequence[str], *, at: datetime) -> str:
+        values = [
+            method.coverage_of(
+                *self.heard.get(service, (None, None)), at=at, last_reported_at=None
+            ).value
+            for service in services
+        ]
+        return min(values, key=_COVERAGE_STRENGTH.index, default=method.COVERAGE_NONE)
+
+
+async def coverage_book(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> CoverageBook:
+    """The caller has proved the project readable."""
+    return CoverageBook(
+        await queries.heard_by_service(session, org_id=org_id, project_id=project_id, services=None)
+    )
+
+
+async def list_coverage(
+    session: AsyncSession,
+    *,
+    reader: Reader,
+    project_id: uuid.UUID,
+    service: str | None,
+    at: datetime,
+) -> CoverageList:
+    project = await require_readable_project(session, reader=reader, project_id=project_id)
+    found = await coverage_at(
+        session,
+        org_id=reader.org_id,
+        project_id=project.id,
+        services=None if service is None else [service],
+        at=at,
+    )
+    return CoverageList(
+        at=at,
+        services=[
+            ServiceCoverage(
+                service_name=name,
+                coverage=coverage.value,
+                last_reported_at=coverage.last_reported_at,
+                first_heard_at=coverage.first_heard_at,
+            )
+            for name, coverage in found.items()
+        ],
+    )
+
+
 # ---------------------------------------------------------- filing what is reported
 #
 # F28 design 3, *From the webhook*, and D37's removal. One rule for a period's start
@@ -399,8 +579,6 @@ def _block(block: method.Block) -> BlockView:
 # Only a deploy that went out counts (founder, 2026-11-09): a `failed` or `rolled_back`
 # report is filed and its state shown, but it opens no period, ends none and brings no
 # version back, since it did not replace what was running.
-
-OPENS_A_PERIOD: Final = frozenset({"started", "finished"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,7 +623,7 @@ async def place_periods(
     a deploy that did not go out calls for none."""
     by_service: dict[str, list[FiledReport]] = defaultdict(list)
     for report in filed:
-        if report.state in OPENS_A_PERIOD:
+        if report.state in method.OPENING_STATES:
             by_service[report.service_name].append(report)
     for service_name in sorted(by_service):
         await queries.lock_service_periods(

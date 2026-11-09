@@ -7,10 +7,11 @@ by the sweep beat runs every 15 seconds for anything the fast path missed
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Final
 
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.alerts import messages, outbox
 from nexovue_scheduler.alerts.dispatch import Outbound, Outgoing, send
+from nexovue_scheduler.releases import facts
 
 logger = get_logger(__name__)
 
@@ -30,6 +32,10 @@ CHANNELS_PER_CLAIM: Final = 1
 # Stop claiming after this long, well inside the task's time limit, so a worker
 # never holds leases it will not live to use.
 BUDGET_SECONDS: Final = 20.0
+
+# F28 FR44's read, including the wait for a connection (D51; a guess). Against the
+# claim's 60-second lease, and at most one per claim, since a claim holds one channel.
+RELEASE_READ_SECONDS: Final = 0.5
 
 
 @dataclass(slots=True)
@@ -57,7 +63,8 @@ async def deliver_due(
         report.dropped += claimed.dropped
         if not claimed.channels:
             break
-        for batch in claimed.batches:
+        for claimed_batch in claimed.batches:
+            batch = await with_release_line(engine, claimed_batch)
             result = await _send(engine, outbound, batch, now=now())
             async with engine.begin() as connection:
                 recorded = await outbox.record(connection, batch, result, now=now())
@@ -71,6 +78,52 @@ async def deliver_due(
                 http_status=result.http_status,
             )
     return report
+
+
+async def with_release_line(engine: AsyncEngine, batch: outbox.Batch) -> outbox.Batch:
+    """The batch with FR44's facts in its one opened service finding's subject (D51).
+
+    Read after the claim committed, on a connection of its own, so a statement that
+    fails or hangs cannot touch the claim's transaction. A grouped message names each
+    notice in a line, and a project finding names no service, so neither carries it.
+    On any failure the line is left out and the alert goes as it is. Never stored, so
+    findings and outbox rows are the same with or without releases (AC42)."""
+    if len(batch.notices) != 1:
+        return batch
+    notice = batch.notices[0]
+    subject = notice.subject
+    if (
+        notice.kind != "opened"
+        or subject.kind != "finding"
+        or not subject.key.startswith(outbox.SERVICE_KEY_PREFIX)
+    ):
+        return batch
+    org_id, project_id = batch.channel.org_id, notice.project_id
+    service = subject.key.removeprefix(outbox.SERVICE_KEY_PREFIX)
+    at = subject.opened_at
+    try:
+        async with asyncio.timeout(RELEASE_READ_SECONDS), engine.connect() as connection:
+            before = await facts.release_before(
+                connection, org_id=org_id, project_id=project_id, service=service, at=at
+            )
+            coverage = await facts.coverage(
+                connection, org_id=org_id, project_id=project_id, service=service, at=at
+            )
+    except Exception as unread:  # any failure leaves the line out; the alert goes on
+        logger.warning(
+            "release line left out",
+            batch_id=str(batch.id),
+            reason=type(unread).__name__,
+        )
+        return batch
+    released = {
+        "version": None if before is None else before.version,
+        "started_at": None if before is None else before.started_at.isoformat(),
+        "already_running": before is not None and before.already_running,
+        "coverage": coverage.value,
+    }
+    told = replace(subject, detail={**subject.detail, messages.RELEASE_FACTS: released})
+    return replace(batch, notices=(replace(notice, subject=told),))
 
 
 async def _send(

@@ -10,7 +10,7 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
-import { formatCount, UNKNOWN } from "@/shared/format/number";
+import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
@@ -18,6 +18,7 @@ import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
 import {
   DEPLOY_IS_NOT_A_CAUSE,
+  deployCell,
   describeErrors,
   describePrecedingDeploy,
   describeServices,
@@ -326,7 +327,6 @@ function GroupRow({
   ceiling: number;
 }) {
   const startedHere = isNewInWindow(group);
-  const deploy = group.preceding_deploy;
   const afterDeploy = describePrecedingDeploy(group);
 
   return (
@@ -361,7 +361,7 @@ function GroupRow({
           className={`${DEPLOY_COLUMN} truncate font-mono text-2xs text-ink-dim`}
           title={afterDeploy === undefined ? undefined : `${afterDeploy}. ${DEPLOY_IS_NOT_A_CAUSE}`}
         >
-          {deploy === null ? UNKNOWN : `after ${deploy.version}`}
+          {deployCell(group)}
         </span>
 
         <span className={`${SERVICES_COLUMN} truncate font-mono text-2xs text-ink-dim`}>

@@ -44,7 +44,14 @@ from nexovue_api.auth.dependencies import (
     get_tenant_repository,
 )
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import Project, Release, ReleasePeriod, User
+from nexovue_api.data.postgres.models import (
+    DeployEvent,
+    Project,
+    Release,
+    ReleasePeriod,
+    ServiceLastSeen,
+    User,
+)
 from nexovue_api.deps import get_app_settings, get_db_session
 from nexovue_api.settings import API_PREFIX, Settings
 
@@ -552,6 +559,50 @@ async def test_healthy_during_the_overlap_and_failing_after_leads_with_after(
     assert after["failure_share"]["reading"] == "higher"
 
 
+async def test_a_service_with_no_version_compares_by_time_from_its_period_s_start(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """Design 4, step 6, with the founder's answer of 2026-11-09: a deploy reported failed
+    an hour before one reported finished is compared around the finished one, where its
+    period starts, not from the failed report."""
+    failed_at, finished_at = T0 - HOUR, T0
+    write_versions(administrator, acme, minutes("", T0 - 3 * HOUR, 3 * 60 + 40, 100))
+    release = Release(
+        org_id=acme.org_id,
+        project_id=acme.project_id,
+        service_name=SERVICE,
+        version="v2",
+        first_reported_at=failed_at,
+        last_reported_at=finished_at,
+        report_count=2,
+        last_state="finished",
+    )
+    db.add(release)
+    await db.flush()
+    period = ReleasePeriod(
+        org_id=acme.org_id,
+        release_id=release.id,
+        project_id=acme.project_id,
+        service_name=SERVICE,
+        started_at=finished_at,
+        start_basis="reported",
+        previous_version="v1",
+    )
+    db.add(period)
+    await db.flush()
+    await _settle(db, T0 + 39 * MINUTE)
+
+    found = await _comparison(db, acme, reader_client, Seeded(release.id, period.id))
+
+    (block,) = found["blocks"]
+    assert block["method"] == "time_before_after"
+    assert block["from"].startswith(finished_at.strftime("%Y-%m-%dT%H:%M"))
+    assert block["minutes_compared"] == 40
+
+
 async def test_a_slow_first_three_minutes_read_about_the_same_on_p95(
     db: AsyncSession,  # noqa: F811
     acme: Team,
@@ -702,3 +753,202 @@ def _write_service(
                          buckets Array(UInt32)', {",".join(values[start : start + 400])})
             """
         )
+
+
+# ------------------------------------------------------------- markers, AC38
+
+
+async def _deploys(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    at: Iterable[datetime],
+    *,
+    service: str = SERVICE,
+    version: str = "v1",
+    state: str = "finished",
+) -> None:
+    db.add_all(
+        DeployEvent(
+            org_id=team.org_id,
+            project_id=team.project_id,
+            version=version,
+            service_name=service,
+            deployed_at=moment,
+            source="ci",
+            delivery_id=f"{service}-{version}-{state}-{moment.isoformat()}",
+            event_metadata={},
+            state=state,
+        )
+        for moment in at
+    )
+    await db.flush()
+
+
+async def test_a_window_last_week_shows_that_week_s_marks(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC38: 60 deploys over 60 days; a window a week ago reads its own, not the latest."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    await _deploys(db, acme, [now - timedelta(days=day) for day in range(60)])
+    week_ago = now - timedelta(days=7)
+
+    answer = await _get(
+        db,
+        acme,
+        f"/releases/markers?project_id={acme.project_id}"
+        f"&from={_iso(week_ago - HOUR)}&to={_iso(week_ago + HOUR)}",
+    )
+
+    assert answer.status_code == 200, answer.text
+    found = answer.json()
+    assert [mark["at"][:19] for mark in found["markers"]] == [week_ago.isoformat()[:19]]
+    assert found["truncated"] is False
+
+
+async def test_marks_carry_state_basis_and_no_sender_text(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC38, AC45, FR37: a deploy of each state, a counted start, a reported period's
+    start drawn once (as its deploy), an already-running period not drawn; filtered by
+    service; exactly the allowed fields."""
+    await _deploys(db, acme, [T0], version="v2", state="failed")
+    await _deploys(db, acme, [T0 + MINUTE], version="v2", state="rolled_back")
+    await _deploys(db, acme, [T0 + MINUTE], service="payments", version="p1")
+    await _release(db, acme, "v3", T0 + 2 * MINUTE, previous="v2")
+    await _release(db, acme, "v0", T0 - MINUTE, already_running=True)
+
+    answer = await _get(
+        db,
+        acme,
+        f"/releases/markers?project_id={acme.project_id}&service={SERVICE}"
+        f"&from={_iso(T0 - HOUR)}&to={_iso(T0 + HOUR)}",
+    )
+
+    marks = answer.json()["markers"]
+    assert [(m["version"], m["basis"], m["state"]) for m in marks] == [
+        ("v3", "seen", None),
+        ("v2", "reported", "rolled_back"),
+        ("v2", "reported", "failed"),
+    ]
+    assert {key for mark in marks for key in mark} == {
+        "release_id",
+        "period_id",
+        "deploy_id",
+        "service_name",
+        "version",
+        "at",
+        "basis",
+        "state",
+    }
+
+
+async def test_past_500_marks_the_newest_are_kept_and_the_answer_says_so(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC38, FR35: the cap sentence's fact."""
+    await _deploys(db, acme, [T0 + timedelta(seconds=n) for n in range(501)])
+
+    answer = await _get(
+        db,
+        acme,
+        f"/releases/markers?project_id={acme.project_id}&from={_iso(T0)}&to={_iso(T0 + HOUR)}",
+    )
+
+    found = answer.json()
+    assert (len(found["markers"]), found["truncated"], found["cap"]) == (500, True, 500)
+    assert found["markers"][0]["at"][:19] == (T0 + timedelta(seconds=500)).isoformat()[:19]
+
+
+async def test_another_tenant_s_project_has_no_marks_or_coverage_for_us(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    """AC26's rule on the two new routes."""
+    await _deploys(db, globex, [T0])
+    for path in ("markers", "coverage"):
+        answer = await _get(db, acme, f"/releases/{path}?project_id={globex.project_id}")
+        assert answer.status_code == 404, path
+
+
+# ------------------------------------------------------------ coverage, AC73
+
+
+async def test_each_service_reads_its_coverage_as_of_a_moment(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC73, FR38: all four values; a service never heard from comes from
+    `service_last_seen`; a report 31 days old still counts, with its date; a moment
+    before the first report reads "first heard"."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    month_ago = now - timedelta(days=31)
+    await _deploys(db, acme, [month_ago], service="billing", version="b1", state="failed")
+    await _deploys(db, acme, [now - HOUR], service="checkout", version="v2")
+    db.add_all(
+        [
+            Release(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                service_name="billing",
+                version="b1",
+                first_reported_at=month_ago,
+                last_reported_at=month_ago,
+                report_count=1,
+                last_state="failed",
+            ),
+            Release(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                service_name="checkout",
+                version="v2",
+                first_seen_at=now - 2 * HOUR,
+                first_reported_at=now - HOUR,
+                last_reported_at=now - HOUR,
+                report_count=1,
+                last_state="finished",
+            ),
+            Release(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                service_name="search",
+                version="s1",
+                first_seen_at=now - 3 * HOUR,
+            ),
+            ServiceLastSeen(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                service_name="mailer",
+                last_seen_at=now,
+            ),
+        ]
+    )
+    await db.flush()
+
+    answer = await _get(db, acme, f"/releases/coverage?project_id={acme.project_id}")
+    by_service = {row["service_name"]: row for row in answer.json()["services"]}
+    assert {name: row["coverage"] for name, row in by_service.items()} == {
+        "billing": "deploys_only",
+        "checkout": "deploys_and_versions",
+        "mailer": "none",
+        "search": "versions_only",
+    }
+    assert by_service["billing"]["last_reported_at"][:19] == month_ago.isoformat()[:19]
+
+    before = await _get(
+        db,
+        acme,
+        f"/releases/coverage?project_id={acme.project_id}&service=checkout"
+        f"&at={_iso(now - 5 * HOUR)}",
+    )
+    (checkout,) = before.json()["services"]
+    assert checkout["coverage"] == "none"
+    assert checkout["first_heard_at"][:19] == (now - 2 * HOUR).isoformat()[:19]
+    assert checkout["last_reported_at"] is None
+
+
+def _iso(moment: datetime) -> str:
+    return moment.isoformat().replace("+00:00", "Z")

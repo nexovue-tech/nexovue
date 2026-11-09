@@ -30,6 +30,7 @@ from nexovue_platform.detection import (
     shift_ratio,
     signal_reading,
 )
+from nexovue_platform.telemetry.logging import get_logger
 from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +58,8 @@ from nexovue_api.findings.schemas import (
     LinkedIncident,
     NewNormalPreview,
     ProposedShift,
+    ReleaseContext,
+    ReleaseFact,
     ServiceFindingStats,
     SignalName,
     SignalPoint,
@@ -67,6 +70,10 @@ from nexovue_api.findings.schemas import (
     TimelineEventForMember,
     TimelineResponse,
 )
+from nexovue_api.releases import queries as release_queries
+from nexovue_api.releases import service as release_service
+
+logger = get_logger(__name__)
 
 NOT_FOUND: Final = "No such finding."
 # Each says what changed, because the page reloads to show it (design, *action failed*).
@@ -86,6 +93,13 @@ TOO_FEW_READINGS: Final = (
 
 # The page's chart starts this long before a finding opened, so its rise is seen.
 PAGE_LEAD: Final = timedelta(hours=1)
+
+# F28: how far before a finding other releases are listed (FR52), and how far back a
+# project finding reads each affected service's latest release (FR32). Guesses, as the
+# spec says; the list is bounded, newest first.
+RELEASES_NEARBY: Final = timedelta(hours=2)
+RELEASES_AFFECTED: Final = timedelta(hours=24)
+RELEASES_NEARBY_LIMIT: Final = 50
 
 # FR26's window: a week, the budget's own unit, unless the caller asks for another.
 DEFAULT_STATS_DAYS: Final = 7
@@ -519,8 +533,102 @@ async def _detail(
             for incident in incidents
         ],
         services=list(row.services or []),
+        release_context=await _release_context(session, repository, row),
     )
     return detail, readings, open_joined
+
+
+async def _release_context(
+    session: AsyncSession, repository: TenantScopedRepository, row: FindingRow
+) -> ReleaseContext:
+    """What came before this finding (F28 FR32, FR33, FR52): order only, never cause.
+    Postgres alone, but for which services this one calls, which may fail on its own."""
+    at = row.started_at
+    keys: dict[str, Any] = {"org_id": row.org_id, "project_id": row.project_id}
+    if row.service_name is None:
+        affected = await release_queries.latest_period_per_service(
+            session, **keys, services=list(row.services or []), start=at - RELEASES_AFFECTED, end=at
+        )
+        return ReleaseContext(
+            before=None,
+            coverage=None,
+            last_reported_at=None,
+            first_heard_at=None,
+            nearby=[],
+            called_known=False,
+            affected=sorted(
+                (_release_fact(found) for found in affected),
+                key=lambda fact: fact.started_at,
+                reverse=True,
+            ),
+        )
+    service = row.service_name
+    before = await release_queries.period_before(session, **keys, service_name=service, at=at)
+    coverage = (await release_service.coverage_at(session, **keys, services=[service], at=at))[
+        service
+    ]
+    nearby = await release_queries.periods_between(
+        session,
+        **keys,
+        start=at - RELEASES_NEARBY,
+        end=at,
+        services=None,
+        limit=RELEASES_NEARBY_LIMIT,
+    )
+    called = await _called_services(repository, row, service) if nearby else set()
+    facts = [
+        _release_fact(
+            found,
+            called=None
+            if called is None or found.service_name == service
+            else found.service_name in called,
+        )
+        for found in nearby
+    ]
+    return ReleaseContext(
+        before=None if before is None else _release_fact(before),
+        coverage=coverage.value,
+        last_reported_at=coverage.last_reported_at,
+        first_heard_at=coverage.first_heard_at,
+        # The finding's own service first, each part newest first (FR52).
+        nearby=sorted(facts, key=lambda fact: fact.service_name != service),
+        called_known=called is not None,
+        affected=[],
+    )
+
+
+async def _called_services(
+    repository: TenantScopedRepository, row: FindingRow, service: str
+) -> set[str] | None:
+    """The services this one called in the two hours before, or None when the read fails:
+    the releases still list, unmarked (design, *Finding page*)."""
+    try:
+        return await release_queries.called_services(
+            repository,
+            project_id=row.project_id,
+            service_name=service,
+            start=row.started_at - RELEASES_NEARBY,
+            end=row.started_at,
+        )
+    except Exception:  # any failed read leaves the list standing, unmarked
+        logger.warning("finding_release_callees_unread", finding_id=str(row.id))
+        return None
+
+
+def _release_fact(found: Any, *, called: bool | None = None) -> ReleaseFact:
+    return ReleaseFact(
+        release_id=found.release_id,
+        period_id=found.period_id,
+        service_name=found.service_name,
+        version=found.version,
+        started_at=found.started_at,
+        start_basis=found.start_basis,
+        basis=release_service.basis_of(found.first_seen_at, found.first_reported_at),
+        last_state=found.last_state,
+        is_return=found.is_return,
+        already_running=found.already_running,
+        called=called,
+    )
 
 
 async def _member_view(

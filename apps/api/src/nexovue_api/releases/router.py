@@ -18,7 +18,13 @@ from fastapi import APIRouter, Query
 from nexovue_api.auth.dependencies import CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.releases import service
-from nexovue_api.releases.schemas import ComparisonView, ReleaseList, ReleaseView
+from nexovue_api.releases.schemas import (
+    ComparisonView,
+    CoverageList,
+    MarkerList,
+    ReleaseList,
+    ReleaseView,
+)
 from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/releases", tags=["releases"])
@@ -50,6 +56,38 @@ async def list_releases(
         cursor=cursor,
         limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),
         now=datetime.now(UTC),
+    )
+
+
+@router.get("/markers", summary="Release marks for a chart's window, newest first")
+async def list_markers(
+    reader: CurrentReader,
+    db: DbSession,
+    project_id: ProjectId,
+    from_time: Annotated[datetime | None, Query(alias="from")] = None,
+    to_time: Annotated[datetime | None, Query(alias="to")] = None,
+    service_name: Annotated[str | None, Query(alias="service")] = None,
+) -> MarkerList:
+    start, end = resolve_window(from_time, to_time)
+    return await service.list_markers(
+        db, reader=reader, project_id=project_id, start=start, end=end, service=service_name
+    )
+
+
+@router.get("/coverage", summary="What deploy information each service gives, as of a moment")
+async def list_coverage(
+    reader: CurrentReader,
+    db: DbSession,
+    project_id: ProjectId,
+    service_name: Annotated[str | None, Query(alias="service")] = None,
+    at: Annotated[datetime | None, Query(description="Now if unset")] = None,
+) -> CoverageList:
+    return await service.list_coverage(
+        db,
+        reader=reader,
+        project_id=project_id,
+        service=service_name,
+        at=at or datetime.now(UTC),
     )
 
 

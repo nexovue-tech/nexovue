@@ -127,6 +127,17 @@ REPORTED: Final = "reported"
 START_BASES: Final = (SEEN, REPORTED)
 # What a sender says of a deploy (spec, *States*); a release keeps the last one.
 DEPLOY_STATES: Final = ("started", "finished", "failed", "rolled_back")
+# The states of a deploy that went out (founder, 2026-11-09): only these open a period,
+# end one, bring a version back, or count as a report that came before traffic. A
+# `failed` or `rolled_back` deploy did not replace what was running.
+OPENING_STATES: Final = frozenset({"started", "finished"})
+
+# A service's coverage, as of a moment (spec, *A service's coverage*; FR38).
+DEPLOYS_AND_VERSIONS: Final = "deploys_and_versions"
+DEPLOYS_ONLY: Final = "deploys_only"
+VERSIONS_ONLY: Final = "versions_only"
+COVERAGE_NONE: Final = "none"
+COVERAGES: Final = (DEPLOYS_AND_VERSIONS, DEPLOYS_ONLY, VERSIONS_ONLY, COVERAGE_NONE)
 
 # ----------------------------------------------------------------- the check
 
@@ -250,7 +261,8 @@ class PeriodToCompare:
     already_running: bool
     # When the previous version's own latest period started, for its warm-up.
     previous_started_at: datetime | None
-    # The sender's first reported time, if any: the time method's moment.
+    # When a sender reported this period began, if it did: the time method's moment.
+    # `reported_moment` gives it.
     reported_at: datetime | None
 
 
@@ -288,6 +300,51 @@ class Comparison:
     traffic: tuple[Side, Side] | None = None
     # A version never seen: what the service sends instead, busiest first.
     other_versions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Coverage:
+    """What we hear about one service's deploys, as of a moment."""
+
+    value: str
+    # The last report at or before the moment; its age always shows with the value.
+    last_reported_at: datetime | None
+    # Set only when nothing was heard by the moment and something was afterwards:
+    # "We first heard about deploys on this service on {date}, after this started."
+    first_heard_at: datetime | None
+
+
+def coverage_of(
+    first_reported_at: datetime | None,
+    first_seen_at: datetime | None,
+    *,
+    at: datetime,
+    last_reported_at: datetime | None,
+) -> Coverage:
+    """A service's coverage as of `at`, from its earliest report and earliest counted
+    version (any state counts: a failed report is still deploy information). There is
+    no age limit inside the record's retention, so a stopped CI shows as a stale last
+    report, never as a silent change of value (AC73)."""
+    reported = first_reported_at is not None and first_reported_at <= at
+    counted = first_seen_at is not None and first_seen_at <= at
+    if reported and counted:
+        value = DEPLOYS_AND_VERSIONS
+    elif reported:
+        value = DEPLOYS_ONLY
+    elif counted:
+        value = VERSIONS_ONLY
+    else:
+        value = COVERAGE_NONE
+    heard = [moment for moment in (first_reported_at, first_seen_at) if moment is not None]
+    first_heard = min(heard) if heard and value == COVERAGE_NONE else None
+    return Coverage(value, last_reported_at, first_heard)
+
+
+def reported_moment(started_at: datetime, start_basis: str) -> datetime | None:
+    """The time method's moment (design 4, step 6): the reported start of the period
+    being compared. Not the release's first report: that may be a deploy that failed, or
+    an earlier period's, and neither began what is compared (founder, 2026-11-09)."""
+    return started_at if start_basis == REPORTED else None
 
 
 def comparison_end(

@@ -77,6 +77,15 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
     ],
     incidents: [],
     services: [],
+    release_context: {
+      before: null,
+      coverage: "none",
+      last_reported_at: null,
+      first_heard_at: null,
+      nearby: [],
+      called_known: true,
+      affected: [],
+    },
     case_state: null,
     case_resolution: null,
     case_opened_at: null,
@@ -139,6 +148,7 @@ export function stubApi(
     "GET /findings/f-1": typeof found === "function" ? found : json(found),
     "GET /findings/f-1/timeline": json({ events: [], next_before: null }),
     [`GET /projects/${PROJECT_ID}/detection`]: json({ sensitivity: "normal", timezone: "UTC" }),
+    "GET /releases/markers": json({ markers: [], truncated: false, cap: 500 }),
     ...extra,
   };
   vi.stubGlobal(

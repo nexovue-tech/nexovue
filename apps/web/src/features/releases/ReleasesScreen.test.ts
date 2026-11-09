@@ -211,4 +211,27 @@ describe("a release's page", () => {
     expect(readable(container)).toContain("Previous version");
     expect(readable(container)).toContain("v2.0");
   });
+
+  it("opened from a finding 5 hours on, compares over 6 hours and links back (FR22, AC64)", async () => {
+    const periodStart = release.periods[0]?.started_at ?? "";
+    const findingAt = new Date(Date.parse(periodStart) + 5 * 3_600_000).toISOString();
+    const calls = stubApi({
+      "GET /releases/release-1": json(release),
+      "GET /releases/release-1/comparison": json({ title: "Unavailable", status: 503 }, 503),
+    });
+    const { container } = await mountAt(
+      `/releases/release-1?period=period-1&finding=f-9&finding_at=${encodeURIComponent(findingAt)}`,
+    );
+    await waitFor(
+      () =>
+        readable(container).includes("Compared over 6 hours, to include the finding that started"),
+      "the window's sentence",
+    );
+    const asked = calls.find((url) => url.pathname.endsWith("/comparison"));
+    expect(asked?.searchParams.get("window")).toBe("6");
+    const back = [...container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Back to the finding",
+    );
+    expect(back?.getAttribute("href")).toBe("/findings/f-9");
+  });
 });

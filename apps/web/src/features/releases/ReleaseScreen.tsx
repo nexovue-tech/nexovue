@@ -13,13 +13,17 @@ import type { Block, Period, Release, WindowHours } from "./api";
 import { useComparison, useRelease, WINDOW_HOURS } from "./api";
 import {
   BELOW_THE_NUMBERS,
+  findingWindowSentence,
   measureLines,
   NO_SAMPLING,
   openingSentence,
   readingTone,
   WARM_UP_RULE,
+  windowForFinding,
+  windowWords,
 } from "./comparison";
 import { activityWords, basisWords, stateWords } from "./release-words";
+import type { ReleaseSearch } from "./search";
 import { parseReleaseSearch } from "./search";
 
 const BLOCK_TITLES: Record<Block["kind"], string> = {
@@ -57,7 +61,7 @@ export function ReleaseScreen() {
           onRetry={() => release.refetch()}
         />
       ) : (
-        <ReleasePage release={release.data} periodId={search.period} zone={zone} />
+        <ReleasePage release={release.data} search={search} zone={zone} />
       )}
     </div>
   );
@@ -65,16 +69,25 @@ export function ReleaseScreen() {
 
 function ReleasePage({
   release,
-  periodId,
+  search,
   zone,
 }: {
   release: Release;
-  periodId: string | undefined;
+  search: ReleaseSearch;
   zone: string | undefined;
 }) {
-  const period = release.periods.find((each) => each.id === periodId) ?? release.periods[0];
+  const period = release.periods.find((each) => each.id === search.period) ?? release.periods[0];
   return (
     <>
+      {search.finding !== undefined ? (
+        <Link
+          to="/findings/$findingId"
+          params={{ findingId: search.finding }}
+          className="text-ink-dim text-sm hover:text-ink"
+        >
+          Back to the finding
+        </Link>
+      ) : null}
       <header className="flex flex-col gap-1">
         <h1 className="break-words font-semibold font-serif text-ink text-xl tracking-tight">
           {release.service_name}{" "}
@@ -83,7 +96,14 @@ function ReleasePage({
           </span>
         </h1>
       </header>
-      {period ? <ComparisonSection release={release} period={period} zone={zone} /> : null}
+      {period ? (
+        <ComparisonSection
+          release={release}
+          period={period}
+          findingAt={search.finding_at}
+          zone={zone}
+        />
+      ) : null}
       <Facts release={release} period={period} zone={zone} />
     </>
   );
@@ -92,15 +112,29 @@ function ReleasePage({
 function ComparisonSection({
   release,
   period,
+  findingAt,
   zone,
 }: {
   release: Release;
   period: Period;
+  /** The start of the finding the page was opened from (FR22). */
+  findingAt: string | undefined;
   zone: string | undefined;
 }) {
-  const [windowHours, setWindowHours] = useState<WindowHours>(WINDOW_HOURS[0]);
+  // Opened from a finding that started after this period, the window reaches it.
+  const fromFinding =
+    findingAt !== undefined && Date.parse(findingAt) >= Date.parse(period.started_at)
+      ? windowForFinding(period.started_at, findingAt)
+      : undefined;
+  const [windowHours, setWindowHours] = useState<WindowHours>(
+    fromFinding?.hours ?? WINDOW_HOURS[0],
+  );
   const comparison = useComparison(release.id, period.id, windowHours);
   const now = Date.now();
+  const windowSentence =
+    fromFinding !== undefined && findingAt !== undefined && windowHours === fromFinding.hours
+      ? findingWindowSentence(fromFinding, formatZonedTime(findingAt, { zone, now }))
+      : windowWords(windowHours);
 
   return (
     <section aria-label="Comparison" className="flex flex-col gap-3">
@@ -125,6 +159,7 @@ function ComparisonSection({
           ) : null}
         </>
       ) : null}
+      <p className="max-w-prose text-ink-dim text-sm">{windowSentence}</p>
       <Tabs
         label="Window"
         items={WINDOW_TABS}

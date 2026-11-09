@@ -112,7 +112,8 @@ class KnownRelease:
     version: str
     first_seen_at: datetime | None
     last_seen_at: datetime | None
-    first_reported_at: datetime | None
+    # The earliest report of a deploy that went out (`started` or `finished`).
+    first_went_out_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,7 +252,7 @@ class _Service:
     name: str
     read_from: datetime
     first_seen: dict[str, datetime | None]
-    first_reported: dict[str, datetime | None]
+    first_went_out: dict[str, datetime | None]
     last_request: dict[str, datetime]
     open: dict[str, _Open]
     ended: dict[str, datetime]
@@ -386,8 +387,8 @@ class _Service:
         return max(earlier)[1] if earlier else None
 
     def _first_on_service(self, version: str, started_at: datetime) -> bool:
-        reported = self.first_reported.get(version)
-        if reported is not None and reported <= started_at:
+        went_out = self.first_went_out.get(version)
+        if went_out is not None and went_out <= started_at:
             return False
         return not any(
             seen is not None and seen < started_at
@@ -445,7 +446,7 @@ def _service(
         name=name,
         read_from=window.read_from,
         first_seen={release.version: release.first_seen_at for release in own},
-        first_reported={release.version: release.first_reported_at for release in own},
+        first_went_out={release.version: release.first_went_out_at for release in own},
         last_request={
             release.version: release.last_seen_at for release in own if release.last_seen_at
         },
@@ -554,11 +555,17 @@ _SYNCED_THROUGH: Final = text(
     WHERE org_id = :org_id AND project_id = :project_id
     """
 )
+# `first_went_out_at` is the earliest report of a deploy that went out: a failed or
+# rolled-back one does not say the version began serving (founder, 2026-11-09).
 _KNOWN_RELEASES: Final = text(
     """
-    SELECT service_name, version, first_seen_at, last_seen_at, first_reported_at
-    FROM releases
-    WHERE org_id = :org_id AND project_id = :project_id AND service_name = ANY(:services)
+    SELECT known.service_name, known.version, known.first_seen_at, known.last_seen_at,
+           (SELECT min(deploys.deployed_at) FROM deploy_events AS deploys
+            WHERE deploys.org_id = known.org_id AND deploys.release_id = known.id
+              AND deploys.state = ANY(:opening_states)) AS first_went_out_at
+    FROM releases AS known
+    WHERE known.org_id = :org_id AND known.project_id = :project_id
+      AND known.service_name = ANY(:services)
     """
 )
 # Each release's latest period: whether it is in service, and since when.
@@ -753,14 +760,18 @@ async def _known(
 ) -> tuple[list[KnownRelease], list[KnownPeriod]]:
     if not services:
         return [], []
-    scoped = {**keys, "services": list(services)}
+    scoped = {
+        **keys,
+        "services": list(services),
+        "opening_states": sorted(releases.OPENING_STATES),
+    }
     known_releases = [
         KnownRelease(
             service_name=row.service_name,
             version=row.version,
             first_seen_at=row.first_seen_at,
             last_seen_at=row.last_seen_at,
-            first_reported_at=row.first_reported_at,
+            first_went_out_at=row.first_went_out_at,
         )
         for row in await connection.execute(_KNOWN_RELEASES, scoped)
     ]

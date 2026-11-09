@@ -173,6 +173,44 @@ class LinkedIncident(BaseModel):
     resolved_at: datetime | None
 
 
+class ReleaseFact(BaseModel):
+    """One release period as the finding page states it (F28 FR32, FR52): order, never
+    cause. No sender text."""
+
+    release_id: uuid.UUID
+    period_id: uuid.UUID
+    service_name: str
+    version: str
+    started_at: datetime
+    start_basis: Literal["seen", "reported"]
+    # Told by CI, counted in traffic, or both: "Reported by your CI, seen in traffic."
+    basis: Literal["reported", "seen", "both"]
+    last_state: Literal["started", "finished", "failed", "rolled_back"] | None
+    is_return: bool
+    already_running: bool
+    # Whether the finding's service calls this one, from `service_edges_1m`; None when
+    # unknown (a project finding, the same service, or a failed read).
+    called: bool | None = None
+
+
+class ReleaseContext(BaseModel):
+    """What came before a finding (F28 FR32, FR33, FR52; design, *Finding page*)."""
+
+    # A service finding's last period starting at or before it, at any age.
+    before: ReleaseFact | None
+    # The service's coverage as of the finding's start; None for a project finding.
+    coverage: Literal["deploys_and_versions", "deploys_only", "versions_only", "none"] | None
+    last_reported_at: datetime | None
+    first_heard_at: datetime | None
+    # Every release in the project in the 2 hours before, this service's first.
+    nearby: list[ReleaseFact]
+    # Whether `called` could be read; when not, the list stands unmarked.
+    called_known: bool
+    # A project finding: each affected service's latest release in the 24 hours
+    # before, newest first. Empty for a service finding.
+    affected: list[ReleaseFact]
+
+
 class FindingDetail(Finding):
     """One finding as its page reads it (FR31)."""
 
@@ -182,6 +220,8 @@ class FindingDetail(Finding):
     incidents: list[LinkedIncident]
     # A project finding's services (FR15); empty for a service finding.
     services: list[str]
+    # F28: the release before it, its service's coverage and releases nearby.
+    release_context: ReleaseContext
 
 
 class ProposedShift(BaseModel):

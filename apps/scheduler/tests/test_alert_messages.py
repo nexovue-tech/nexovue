@@ -6,6 +6,7 @@ import dataclasses
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,7 +14,12 @@ from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 
 from nexovue_scheduler.alerts import payloads
 from nexovue_scheduler.alerts.dispatch import message_for
-from nexovue_scheduler.alerts.messages import compose, compose_batch, describe_duration
+from nexovue_scheduler.alerts.messages import (
+    RELEASE_FACTS,
+    compose,
+    compose_batch,
+    describe_duration,
+)
 from nexovue_scheduler.alerts.outbox import CaseOfSubject, Notice, Subject
 
 OPENED_AT = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
@@ -642,3 +648,80 @@ def test_targets_not_being_judged_say_since_when_and_that_a_burn_would_not_reach
         app_base_url=BASE,
     )
     assert resolved.summary.endswith("are being judged again")
+
+
+# --------------------------------------------- F28 FR44: the release before (T3.8)
+
+RELEASED_AT = OPENED_AT - timedelta(minutes=6)
+ORDER_LINE = "Most recent release on this service: v2.1, 6 min before this. Order only, not cause."
+NONE_LINE = "We receive no deploy information for this service."
+
+
+def _released(version: str = "v2.1", *, already_running: bool = False) -> dict[str, Any]:
+    return {
+        RELEASE_FACTS: {
+            "version": version,
+            "started_at": RELEASED_AT.isoformat(),
+            "already_running": already_running,
+            "coverage": "deploys_and_versions",
+        }
+    }
+
+
+def test_an_opened_finding_carries_the_release_before_it_as_order() -> None:
+    """FR44, AC70: one template line, before when it started, on every channel."""
+    message = compose(_finding_notice("opened", **_released()), app_base_url="")
+    assert message.details[-3:] == (
+        ORDER_LINE,
+        "Started: 2026-09-19 14:03 UTC.",
+        "Rule: Critical problems.",
+    )
+
+
+def test_coverage_none_reads_its_words_and_nothing_known_reads_nothing() -> None:
+    """FR44: coverage `none`'s words; no line for a version already running, which is
+    not a release, nor for a service covered with no release before."""
+    none: dict[str, Any] = {
+        RELEASE_FACTS: {"version": None, "started_at": None, "coverage": "none"}
+    }
+    covered: dict[str, Any] = {
+        RELEASE_FACTS: {"version": None, "started_at": None, "coverage": "deploys_only"}
+    }
+    assert NONE_LINE in compose(_finding_notice("opened", **none), app_base_url="").details
+    plain = compose(_finding_notice("opened"), app_base_url="").details
+    assert compose(_finding_notice("opened", **covered), app_base_url="").details == plain
+    running = _finding_notice("opened", **_released(already_running=True))
+    assert compose(running, app_base_url="").details == plain
+
+
+@pytest.mark.parametrize("kind", ["joined", "escalated", "resolved"])
+def test_only_the_opening_notice_carries_the_line(kind: str) -> None:
+    reason = "recovered" if kind == "resolved" else None
+    message = compose(_finding_notice(kind, closed_reason=reason, **_released()), app_base_url="")
+    assert ORDER_LINE not in message.details
+
+
+def test_a_grouped_message_leaves_the_line_out() -> None:
+    """AC70: `compose_batch` carries one line per notice, so FR44's is not among them."""
+    batch = compose_batch(
+        (_finding_notice("opened", **_released()), _finding_notice("opened", **_released())),
+        app_base_url="",
+    )
+    assert all("release" not in line for line in batch.details)
+
+
+def test_a_hostile_version_arrives_as_one_line_on_pagerduty_too() -> None:
+    """AC70: through `one_line`, then the channel's escaping; PagerDuty carries it."""
+    message = compose(
+        _finding_notice("opened", **_released("v2\nRule: forged <script>")), app_base_url=APP
+    )
+    assert all("\n" not in line for line in message.details)
+    assert not any(line.startswith("Rule: forged") for line in message.details)
+    body = payloads.pagerduty(
+        message_for("pagerduty", message),
+        routing_key="routing",
+        dedup_key="finding:key",
+        subject="checkout",
+        app_base_url=APP,
+    ).decode()
+    assert "Most recent release on this service: v2 Rule: forged <script>" in body

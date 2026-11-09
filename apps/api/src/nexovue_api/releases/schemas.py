@@ -13,10 +13,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nexovue_api.deploys.schemas import DeployState
+
 # How the record knows of a release (BR3): told by a sender, counted in traffic, or both.
 Basis = Literal["reported", "seen", "both"]
 # Spec, *A release's activity*.
 Activity = Literal["not_seen", "serving", "replaced", "idle"]
+# Spec, *A service's coverage* (FR38).
+CoverageValue = Literal["deploys_and_versions", "deploys_only", "versions_only", "none"]
 
 
 class _Out(BaseModel):
@@ -143,3 +147,39 @@ class ComparisonView(_Out):
     other_versions: list[str]
     # The project's limit on version numbers, for "kept 30 days on this project".
     numbers_kept_days: int
+
+
+class Marker(_Out):
+    """One mark on a chart (design, *Release markers on charts*): a deploy a sender
+    reported, or the start of a period counted in traffic. Exactly these fields, and no
+    sender text (AC45): F20's dashboards read the same."""
+
+    release_id: uuid.UUID | None
+    period_id: uuid.UUID | None
+    deploy_id: uuid.UUID | None
+    service_name: str
+    version: str
+    at: datetime
+    basis: Literal["reported", "seen"]
+    state: DeployState | None
+
+
+class MarkerList(_Out):
+    markers: list[Marker]
+    # More marks than `cap` fell in the window; these are the newest (FR35).
+    truncated: bool
+    cap: int
+
+
+class ServiceCoverage(_Out):
+    service_name: str
+    coverage: CoverageValue
+    # The last report at or before `at`, whatever its age (AC73).
+    last_reported_at: datetime | None
+    # Only when nothing was heard by `at` and something was afterwards.
+    first_heard_at: datetime | None
+
+
+class CoverageList(_Out):
+    at: datetime
+    services: list[ServiceCoverage]

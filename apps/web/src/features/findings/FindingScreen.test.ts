@@ -769,3 +769,123 @@ describe("the linked alerts say a case is not an alert (F22 FR53, AC121)", () =>
     expect(readable(section as Element)).toContain(CASE_IS_NOT_AN_ALERT);
   });
 });
+
+describe("the release before this finding (F28 AC40, AC43)", () => {
+  const release = (overrides = {}) => ({
+    release_id: "release-1",
+    period_id: "period-1",
+    service_name: "checkout",
+    version: "v2.1",
+    started_at: minutesAgo(36),
+    start_basis: "seen" as const,
+    basis: "both" as const,
+    last_state: "finished" as const,
+    is_return: false,
+    already_running: false,
+    called: null,
+    ...overrides,
+  });
+
+  const covered = (overrides = {}) => ({
+    before: release(),
+    coverage: "deploys_and_versions" as const,
+    last_reported_at: minutesAgo(36),
+    first_heard_at: null,
+    nearby: [],
+    called_known: true,
+    affected: [],
+    ...overrides,
+  });
+
+  it("names it under the header as order, with a comparison that carries the finding", async () => {
+    stubApi(finding({ release_context: covered() }));
+    const { container } = await mountFinding();
+    await heading(container);
+    const section = container.querySelector('[aria-labelledby="finding-release"]');
+
+    expect(section?.textContent).toContain(
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic. It came first. That is not evidence that it caused this.",
+    );
+    const compare = [...(section?.querySelectorAll("a") ?? [])].find(
+      (link) => link.textContent === "Compare the versions",
+    );
+    expect(compare?.getAttribute("href")).toMatch(
+      /^\/releases\/release-1\?period=period-1&finding=f-1&finding_at=/,
+    );
+  });
+
+  it("says coverage none, and offers setup only to those who can set it up (FR33)", async () => {
+    const none = covered({ before: null, coverage: "none", last_reported_at: null });
+    stubApi(finding({ release_context: none }), { role: "owner" });
+    const { container: owner } = await mountFinding();
+    await heading(owner);
+    const ownerSection = owner.querySelector('[aria-labelledby="finding-release"]');
+    expect(ownerSection?.textContent).toContain(
+      "We receive no deploy information for this service.",
+    );
+    expect(ownerSection?.textContent).not.toContain("It came first");
+    expect(ownerSection?.querySelector('a[href="/settings/projects#deploys"]')).not.toBeNull();
+    unmountAll();
+
+    stubApi(finding({ release_context: none }), { role: "viewer" });
+    const { container: viewer } = await mountFinding();
+    await heading(viewer);
+    const viewerSection = viewer.querySelector('[aria-labelledby="finding-release"]');
+    expect(viewerSection?.textContent).toContain(
+      "An owner or admin can set this up in project settings.",
+    );
+    expect(viewerSection?.querySelector('a[href="/settings/projects#deploys"]')).toBeNull();
+    expect(viewerSection?.querySelector('a[href="/docs/deploys"]')).not.toBeNull();
+  });
+
+  it("renders a hostile version and service as plain text in the section (AC43)", async () => {
+    const hostile = "<script>alert(1)</script>";
+    stubApi(
+      finding({
+        release_context: covered({
+          before: release({ version: hostile }),
+          nearby: [release({ service_name: "[click](https://evil.example)", version: hostile })],
+        }),
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+    const section = container.querySelector('[aria-labelledby="finding-release"]');
+
+    expect(section?.textContent).toContain(hostile);
+    expect(section?.textContent).toContain("[click](https://evil.example)");
+    expect(container.querySelector("script")).toBeNull();
+    expect(section?.querySelector('a[href^="https://evil"]')).toBeNull();
+  });
+
+  it("marks the charts and lists the window's releases, open by default (AC40)", async () => {
+    const at = minutesAgo(30);
+    stubApi(finding({ release_context: covered() }), {
+      extra: {
+        "GET /releases/markers": json({
+          markers: [
+            {
+              release_id: "release-1",
+              period_id: null,
+              deploy_id: "deploy-1",
+              service_name: "checkout",
+              version: "v2.1",
+              at,
+              basis: "reported",
+              state: "failed",
+            },
+          ],
+          truncated: false,
+          cap: 500,
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+    const list = await waitFor(() => container.querySelector("details"), "the releases list");
+
+    expect(list.open).toBe(true);
+    expect(list.textContent).toContain("Releases in this window (1)");
+    expect(list.textContent).toContain("CI reported it failed");
+  });
+});

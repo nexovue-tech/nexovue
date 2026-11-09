@@ -252,7 +252,21 @@ describe("useFindingAction", () => {
   it("reads again what a closed finding changes: the feed, the status, the counts and the service's markers", async () => {
     const [found] = RESPONSE.findings;
     if (!found) throw new Error("the fixture has a finding");
-    const changed: FindingDetail = { ...found, series: [], incidents: [], services: [] };
+    const changed: FindingDetail = {
+      ...found,
+      series: [],
+      incidents: [],
+      services: [],
+      release_context: {
+        before: null,
+        coverage: null,
+        last_reported_at: null,
+        first_heard_at: null,
+        nearby: [],
+        called_known: false,
+        affected: [],
+      },
+    };
     stubFetch(
       () =>
         new Response(JSON.stringify({ finding: changed, resolved_to: [] }), {

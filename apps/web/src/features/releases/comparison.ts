@@ -11,7 +11,8 @@ import { formatCount, formatPercent } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { shortVersion } from "@/shared/format/version";
 
-import type { Block, Comparison, Reading, Side } from "./api";
+import type { Block, Comparison, Reading, Side, WindowHours } from "./api";
+import { WINDOW_HOURS } from "./api";
 
 const MINUTES_PER_HOUR = 60;
 const MS_PER_MINUTE = 60_000;
@@ -212,4 +213,37 @@ export function measureLines(block: Block): MeasureLine[] {
       sides: [`${name(mine)} ${perMinute(mine)}`, `${name(theirs)} ${perMinute(theirs)}`],
     },
   ];
+}
+
+/* ------------------------------------------ opened from a finding (FR22, AC64) */
+
+const MS_PER_HOUR = 3_600_000;
+
+export interface FindingWindow {
+  hours: WindowHours;
+  /** Whether the window reaches the finding's start; the largest when none does. */
+  reaches: boolean;
+}
+
+/**
+ * The smallest offered window from the period's start that reaches a finding's start.
+ * A release 5 hours before compares over 6, so it does not read "about the same" over a
+ * healthy first hour while the service fails later.
+ */
+export function windowForFinding(periodStart: string, findingStart: string): FindingWindow {
+  const gap = Date.parse(findingStart) - Date.parse(periodStart);
+  const reaching = WINDOW_HOURS.find((hours) => hours * MS_PER_HOUR >= gap);
+  return reaching === undefined
+    ? { hours: WINDOW_HOURS[WINDOW_HOURS.length - 1] as WindowHours, reaches: false }
+    : { hours: reaching, reaches: true };
+}
+
+export function findingWindowSentence(choice: FindingWindow, findingStartWords: string): string {
+  return choice.reaches
+    ? `Compared over ${choice.hours} ${plural(choice.hours, "hour")}, to include the finding that started at ${findingStartWords}.`
+    : "This comparison ends before that finding started, so it says nothing about it.";
+}
+
+export function windowWords(hours: WindowHours): string {
+  return `Compared over ${hours} ${plural(hours, "hour")} from the start.`;
 }

@@ -2,17 +2,127 @@
 
 ## Lifecycle status
 
-**In development. Step 2 is on `feature/phase-2` (2026-11-08).** The founder approved the specification, design and
-plan on 2026-11-02. Step 1a (the version rollup and its cost measurement) and Step 1b (releases from traffic and the
-comparison by version) are on `feature/phase-2`. Step 2 (a person can set it up) is built in the worktree, not
-committed; T2.10's timed new person is not yet run (founder tests after Phase 2). Step 3 is next.
+**In development. Step 3 is on `feature/phase-2` (2026-11-09).** The founder approved the specification, design and
+plan on 2026-11-02. Steps 1a, 1b and 2 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder tests
+after Phase 2). Step 3 (markers that can be read, on every chart, including the finding) is built in the worktree, not
+committed, with the carried-over fix to `first_reported_at`'s two readers. Step 4 is next.
 
 
 ## Current task
 
-**Step 2 is on `feature/phase-2`** (*Step 2, built 2026-11-08*, below): migration **`0057`**
-(re-chained at commit), **ADR-033**. Step 1b is on `feature/phase-2` (*Step 1b*, below), and Step 1a's cost gate
-passed on demo data ([report](../../research/release-rollup-cost-2026-11-07.md)).
+**Step 3 is on `feature/phase-2`** (*Step 3, built 2026-11-09*, below). No migration and no ADR: nothing in it is
+expensive to reverse. Step 2 is on `feature/phase-2` (migration `0057`, ADR-033).
+
+## Step 3, built 2026-11-09
+
+Markers that can be read, on every chart, including the finding (plan T3.0 to T3.9). What exists now, read from the
+code:
+
+- **Two reads** (T3.1): `GET /releases/markers` (`project_id`, `from`, `to`, optional `service`; the newest 500 with
+  `truncated` and `cap`) behind `releases.service.markers_in_window`, the function F20 calls (D30). Postgres only. A
+  mark is each reported deploy (with its state, same-version redeploys and failed ones included) and each counted
+  period's start, except an already-running one; a reported period's start is its deploy's, so it is not drawn twice.
+  Fields exactly `release_id`, `period_id`, `deploy_id`, `service_name`, `version`, `at`, `basis`, `state` (AC45).
+  `GET /releases/coverage` (`at` defaults to now; optional `service`): each service that sent telemetry
+  (`service_last_seen`) or has a release, with its value, last report at or before `at`, and `first_heard_at`. Both
+  call `require_readable_project`, are on the read surface and in `setup/api.md`.
+- **One coverage rule** (T3.1): `nexovue_platform.releases.coverage_of(first_reported, first_seen, *, at,
+  last_reported_at)`, used by the API (`releases.service.coverage_at`, `CoverageBook`) and the scheduler
+  (`releases/facts.coverage`). Any report counts, a failed one included: it is still deploy information.
+- **Charts** (T3.2 to T3.4): `shared/deploy-markers.ts` (`releaseMarkers`, `markerTag`, `clusterMarkers`, the
+  group's line and the cap sentence); `TrendChart` keeps one neutral dash per mark and adds `ReleaseStrip`, HTML tags
+  above the plot placed by `valToPos` after each draw ("failed", "rolled back", "seen", "3 releases" within 8 px, a
+  short mark otherwise); hover or focus shows `ReleaseHoverBox` in a portal, a click pins it with its links, Escape or
+  the close control closes it; drag still selects. `ChartReleases` under each chart group: the always-visible line, the
+  cap sentence, "Releases could not be loaded for this chart" with a retry, and the text list (closed by default, open
+  on the finding page). Overview, the service page and the finding's charts read the window on screen through
+  `shared/releases/api.ts`; the old `GET /deploys` hooks are deleted.
+- **The finding** (T3.5, T3.6): `FindingDetail.release_context` (`before` at any age, the service's coverage as of
+  the start with the last report and `first_heard_at`, `nearby` in the 2 hours before with this service first and
+  `called` from `service_edges_1m`, `called_known`, and a project finding's `affected`, the latest per service in 24
+  hours). The edges read failing leaves the list unmarked. *Release before this* under the header follows the wording
+  table, with "It came first. That is not evidence that it caused this." exactly on the rows naming an earlier release,
+  the setup link for `manage_credentials` and the sentence for others, the docs link for all; the link carries
+  `finding` and `finding_at`, and the release page then compares over the smallest window reaching the finding and
+  says so, or says it ends before it (FR22, AC64), with "Back to the finding". MCP `get_finding` labels the six new
+  name fields untrusted (`assistant/tools.py`).
+- **Errors** (T3.7): `ErrorGroupSummary.deploy_coverage`, from the group's services as of `first_seen` (the
+  better-heard service wins); the cell reads `after v2.1`, "none before", "none reported" or "not told", the unknown
+  mark only when unread; the panel always states the deploy line and the coverage words.
+- **FR44** (T3.8): `nexovue_scheduler.releases.facts` (`coverage`, `release_before`, `releases_near`, `PeriodFact`,
+  D56). `alerts/delivery.with_release_line` reads them after the claim commits, on its own connection, under
+  `asyncio.timeout(0.5)` including the wait for a connection, only for a batch of one `opened` service finding; on any
+  failure it logs "release line left out" and sends without it. `messages.RELEASE_FACTS` carries plain values, and
+  `_compose_finding` renders "Most recent release on this service: v2.1, 6 min before this. Order only, not cause." or
+  "We receive no deploy information for this service." in `details`, so every channel, PagerDuty included, carries it.
+  `messages.py` imports nothing from `releases` (`test_detection_isolation.py` unchanged and passing).
+- **Neutrality** (T3.9): `test_detection_release_neutrality_live.py`.
+- **The seed** (T3.0): `tools/detection-seed/seed.py` writes `service_versions_1m` split from each service minute
+  (rollouts of 10 minutes from a counted version), and the releases, periods, reported deploys and sync position.
+
+**The carried-over fix (Step 2's low finding 1; founder answer of 2026-11-09).** `first_reported_at` stays the
+release's reported fact (any state; the record's `seen_or_reported` check and the page's facts rest on it). Its two
+readers changed: the sync's "already running" now asks for the earliest report of a deploy that went out
+(`_KNOWN_RELEASES` reads `min(deployed_at)` over `started` and `finished` deploys, `KnownRelease.first_went_out_at`),
+so a version reported only as failed before its first counted minute is still already running; and the comparison's
+time method takes its moment from the compared period's reported start (`releases.reported_moment`), not the
+release's first report, so "failed at 10:00, finished at 11:00" compares from 11:00. The second also fixes a return's
+period, which was compared from the release's first report. The states that go out are one constant,
+`nexovue_platform.releases.OPENING_STATES`, used by the API and the sync (the third low finding's two copies are now
+one, beside `DEPLOY_STATES`).
+
+**Readings made while building** (none blocking; each open to overrule):
+
+- **The design's `PeriodFact` gains `already_running`.** FR44's line must not call a version already running when
+  counting began "the most recent release". It is a boolean fact, no text; F3's T1.4 sees it.
+- **FR44's failure is a log line, not a metric.** Delivery runs in a job's child process, whose metrics no scrape
+  sees (Step 1b's reading for the sync).
+- **The service page's chart axis now reads in the project's zone**, as its hover box and its detection strip do; it
+  was the browser's. The finding page already did.
+- **Error groups read every release's first times for the project on each list and detail request** (one grouped
+  statement over at most 50,000 rows), since the services are known only after the ClickHouse read. Not measured.
+- **The hover box opens under its tag in viewport pixels**; a pinned box does not follow the page when it scrolls.
+  Design QA should judge it.
+- **`fault.py` still writes `service_stats_1m` only**, so its minutes have no version rows: the comparison will read
+  them as incomplete once T4.1 builds that check. The seed's period ends approximate the sync's rule (the next rollout's
+  end), which is enough for demo data.
+
+**Tests, each seen failing first** (outputs in the session's scratch space):
+
+- Carried-over fix: `test_release_sync_live.py` (+3): the `failed` and `rolled_back` cases failed (`already_running`
+  false), then passed; the `finished` case guards the other side. `test_releases_live.py`: the no-version comparison
+  failed (`too_little_traffic`, its "before" side outside what is read), then passed. `test_platform_releases.py` (+9,
+  coverage and `reported_moment`): collection failed on the missing names, then passed.
+- `test_read_surface_structure.py` failed on the two new routes, then passed with `setup/api.md`. `test_mcp_injection.py`
+  failed on the six unlabelled `get_finding` fields, then passed.
+- `test_errorgroups.py` (+7), `test_alert_messages.py` (+7), `test_seed.py` (+5), `deploy-markers.test.ts` (11),
+  `finding-page.test.ts` (+14), `comparison.test.ts` (+3), `error-groups.test.ts` (+3): each failed on the missing
+  functions, then passed.
+- Written after the code, then checked by removal (each failed with the line taken out, passed with it back):
+  `test_releases_live.py` markers and coverage (+5: the already-running filter, the time bound on the last report,
+  the cap, `service_last_seen`); `test_findings_api_live.py` (+5: this-service-first, the callee mark, latest per
+  service, the `<= at` bound); `test_release_facts_live.py` (10: the delivery call, the timeout and the catch);
+  `test_detection_release_neutrality_live.py` (1: a rollup row added with the release made it fail);
+  `OverviewView.test.ts` (5), `ChartReleases.test.ts` (5: the pin, Escape), `ReleaseHoverBox.test.ts` (2: markup
+  instead of text), `FindingScreen.test.ts` (+4: the section, `open`, the permission), `ReleasesScreen.test.ts` (+1:
+  the finding's window), `ErrorsView.test.ts` (+1: the cell).
+
+**Counts.** Offline (`NEXOVUE_SKIP_LIVE_TESTS=1`), `apps/api`, `apps/scheduler`, `packages/py-platform`,
+`packages/contracts`, `tools/detection-seed`, `tools/release-demo`: 10,105 passed, 107 skipped, and the one MCP
+failure above, fixed (`test_mcp_injection.py` and `test_mcp_tools.py` then 106 passed). Live, on this session's own
+Postgres and ClickHouse (ports 25432 and 28123, since removed): `test_releases_live.py`, `test_findings_api_live.py`,
+`test_deploys_live.py`, `test_errorgroups_live.py`, `test_deletion_live.py`, `test_release_sync_live.py`,
+`test_release_facts_live.py`, `test_detection_release_neutrality_live.py`, `test_alert_delivery_live.py`,
+`test_alert_senders_live.py`, `test_alert_outbox_live.py`, `test_detection_project_job_live.py`,
+`test_detection_notify_live.py`: 240 passed. Web, the whole suite: 1,798 passed (151 files). `uv run mypy .` (870
+files), `ruff check .`, `ruff format --check .`, `pnpm -r --if-present run typecheck`, `biome check` on the touched web
+folders and `verify-tokens.js`: clean. The seed run against the same stores: 76,594 service rows and 77,019 version
+rows over two weeks and four services, no minute differing; 67 releases.
+
+**Not run:** `just check` (the coordinator's); Design QA at 375px and in a browser (the strip, the hover box, the
+finding section; one instant reading the same on the finding and release pages, AC75): not yet run, founder checks
+after Phase 2; the full dev stack (the judgeable "trigger a seeded finding and read the line in its notice" needs the
+receiver, worker and scheduler running); Go (no Go file changed); `test_erasure_live.py` (no table added).
 
 ## Step 2, built 2026-11-08
 
@@ -308,12 +418,26 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
-Coordinator: review and commit Step 2 (re-chain migration `0057` after 0055 and 0056; ADR-033). Then Step 3, markers
-that can be read. T2.10's timed new person is the founder's, after Phase 2. `docs/architecture/database.md` gains the
-new tables in T5.7, as planned.
+Coordinator: review and commit Step 3 (no migration, no ADR). Then Step 4, the whole release page. T2.10's timed new
+person and Step 3's Design QA are the founder's, after Phase 2. `docs/architecture/database.md` gains the new tables
+in T5.7, as planned.
 
 
 ## Open decisions
+
+**From Step 3, none blocking; each built as recommended, open to overrule.**
+
+- **A versions-only service's errors cell reads "none reported".** The design names `after v2.1`, "none before" and
+  "not told". "None before" would be false there: the deploy before a group is read from signed deploys only (until
+  T5.1), so a version seen in traffic before the group would not be named. Options: keep "none reported" (recommended:
+  true, short, and the panel says "Your CI reports no deploys"); or read seen releases as the deploy before too, which
+  is T5.1's `DeployHistory` move and a wider change.
+- **A release reported only as failed or rolled back is never "the release before this".** It has no period (founder,
+  2026-11-09), and FR32 names the period before. It still shows on the finding's charts as a "failed" mark and in the
+  list under them. Options: keep (recommended: it did not replace what was running); or name the latest report of any
+  state in the section as well.
+- **A project finding with no release in its services' 24 hours reads "No release of these services in the 24 hours
+  before this started, from what we can see."** The wording table has no row for it. Overrule with other words.
 
 **One reading from Step 1b, not blocking.** **The per-run cap of 200 new releases never splits a minute.**
 `synced_through` is kept by the minute, so a strict cap would stop the sync for good on any minute holding more than
@@ -764,7 +888,9 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-09: Step 2 committed to `feature/phase-2`; the founder's answer on failed and rolled-back reports built into it.
+2026-11-09: Step 3 committed to `feature/phase-2`, with the carried-over fix to `first_reported_at`'s two readers.
+Earlier the same day: Step 2 committed to `feature/phase-2`; the founder's answer on failed and rolled-back reports
+built into it.
 
 ## Founder answer, 2026-11-09
 
@@ -781,7 +907,8 @@ brings no version back (design, *From the webhook*, step 6; tests under *Step 2,
 
 Left as they are, found in the self-review, none blocking (each open to overrule):
 
-- **`first_reported_at` still counts a failed report.** It is the release's reported fact, so it stays, but two
+- **Fixed in Step 3 (2026-11-09)**, see *Step 3, built 2026-11-09*: **`first_reported_at` still counts a failed
+  report.** It is the release's reported fact, so it stays, but two
   readers lean on it: the sync's `already_running` (`_first_on_service`: a version reported, even as failed, before
   its first counted minute is not "already running"), and the comparison's time-based fallback on a service with no
   version in traffic (`choose_method`'s `reported_at`: a version reported failed at 10:00, then finished at 11:00,
@@ -791,7 +918,8 @@ Left as they are, found in the self-review, none blocking (each open to overrule
 - **A `started` report then a `failed` one for the same version** keeps the period `started` opened: the answer
   says which reports open periods, not that a later failure closes one.
 - **`OPENS_A_PERIOD` names the states as plain strings** beside `deploys/schemas.DeployState`; a new state added
-  there would open no period until listed here.
+  there would open no period until listed here. *Step 3:* now `nexovue_platform.releases.OPENING_STATES`, beside
+  `DEPLOY_STATES`, used by the API and the sync.
 
 ## Founder approval, 2026-11-02
 

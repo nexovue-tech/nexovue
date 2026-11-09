@@ -294,6 +294,32 @@ _PROJECT_NOTICE_WORDS: Final = {
 }
 
 
+# F28 FR44: the release before an opened finding, put in its subject's `detail` by
+# delivery after the claim (D51) and never stored. Plain values: this module may not
+# reach `nexovue_scheduler.releases` (AC42).
+RELEASE_FACTS: Final = "release_before"
+_NO_DEPLOY_INFORMATION: Final = "none"
+
+
+def _release_line(detail: dict[str, Any], opened_at: datetime) -> str | None:
+    """ "Most recent release on this service: v2.1, 6 min before this. Order only, not
+    cause", or coverage `none`'s words; nothing for a version already running when
+    counting began, which is not a release, or when nothing is known before."""
+    facts = detail.get(RELEASE_FACTS)
+    if not isinstance(facts, dict):
+        return None
+    version, started = facts.get("version"), facts.get("started_at")
+    if isinstance(version, str) and isinstance(started, str) and not facts.get("already_running"):
+        gap = describe_duration(datetime.fromisoformat(started), opened_at)
+        return (
+            f"Most recent release on this service: {one_line(version)}, {gap} before this. "
+            "Order only, not cause."
+        )
+    if facts.get("coverage") == _NO_DEPLOY_INFORMATION:
+        return "We receive no deploy information for this service."
+    return None
+
+
 def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """A finding's words (FR17): its title, which already names the project's zone, and
     one line for each signal. Service and endpoint names are telemetry text: each is
@@ -334,6 +360,9 @@ def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
         lines = [f"{title}."]
     if notice.kind not in ("resolved", "adopted", "flapping"):
         lines.extend(_signal_lines(detail.get("signals") or []))
+    released = _release_line(detail, subject.opened_at) if notice.kind == "opened" else None
+    if released is not None:
+        lines.append(released)
     lines.append(f"Started: {_moment(subject.opened_at)}.")
     if subject.closed_at is not None:
         lines.append(f"Lasted: {describe_duration(subject.opened_at, subject.closed_at)}.")

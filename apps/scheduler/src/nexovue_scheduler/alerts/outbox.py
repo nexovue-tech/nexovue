@@ -391,6 +391,8 @@ class Channel:
 
 
 SubjectKind = Literal["incident", "finding", "project"]
+# A service finding's subject key is this and the service's name, as it was sent.
+SERVICE_KEY_PREFIX: Final = "service:"
 
 # A subject's name can come from telemetry, which anyone with a public browser key can
 # send. Long enough for any real name; short enough that one cannot bury the message.
@@ -703,7 +705,9 @@ def _subject(row: Any) -> Subject:
         return Subject(
             kind="finding",
             id=row.finding_id,
-            key=f"service:{row.service_name}" if row.service_name is not None else "project",
+            key=f"{SERVICE_KEY_PREFIX}{row.service_name}"
+            if row.service_name is not None
+            else "project",
             label=row.service_name if row.service_name is not None else row.project_name,
             opened_at=row.started_at,
             closed_at=row.closed_at,

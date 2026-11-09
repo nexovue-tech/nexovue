@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { bandStretches } from "@/shared/components/chart-band";
 
-import type { FindingSignal, SignalSeries } from "./api";
+import type { FindingSignal, ReleaseContext, ReleaseFact, SignalSeries } from "./api";
 import {
+  affectedReleases,
   bandSentence,
+  comparisonSearch,
   describeSignal,
+  elsewhere,
   evidenceSentence,
   ownEndpoint,
   PLOT_LINES,
+  releaseBefore,
   signalPlot,
 } from "./finding-page";
 import { finding } from "./render-harness.test-util";
@@ -542,5 +546,166 @@ describe("a case says how long it is kept (FR24, FR27, AC112)", () => {
       "2 later findings are still kept.",
     );
     expect(keptSentence(investigating({ joined_kept_count: 0 }), ZONE, NOW)).toBeNull();
+  });
+});
+
+/* ------------------------------------------------- F28: the release before this */
+
+const STARTED = "2026-11-09T14:02:00Z";
+const minutesBefore = (minutes: number) =>
+  new Date(Date.parse(STARTED) - minutes * 60_000).toISOString();
+
+const fact = (overrides: Partial<ReleaseFact> = {}): ReleaseFact => ({
+  release_id: "release-1",
+  period_id: "period-1",
+  service_name: "checkout",
+  version: "v2.1",
+  started_at: minutesBefore(6),
+  start_basis: "seen",
+  basis: "both",
+  last_state: "finished",
+  is_return: false,
+  already_running: false,
+  called: null,
+  ...overrides,
+});
+
+const context = (overrides: Partial<ReleaseContext> = {}): ReleaseContext => ({
+  before: fact(),
+  coverage: "deploys_and_versions",
+  last_reported_at: minutesBefore(6),
+  first_heard_at: null,
+  nearby: [],
+  called_known: true,
+  affected: [],
+  ...overrides,
+});
+
+const about = (release_context: ReleaseContext, overrides = {}) =>
+  releaseBefore(finding({ started_at: STARTED, release_context, ...overrides }), { zone: "UTC" });
+
+describe("the release before a finding (AC40, every row of the wording table)", () => {
+  it.each([
+    [
+      "under 24 hours",
+      context(),
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic.",
+    ],
+    [
+      "CI said failed",
+      context({ before: fact({ last_state: "failed" }) }),
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic. CI reported it failed.",
+    ],
+    [
+      "CI said rolled back",
+      context({ before: fact({ last_state: "rolled_back" }) }),
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic. CI reported it rolled back.",
+    ],
+    [
+      "came back",
+      context({ before: fact({ version: "v2.0", is_return: true }) }),
+      "v2.0 came back 6 minutes before this.",
+    ],
+    [
+      "reported, never seen",
+      context({ before: fact({ basis: "reported", start_basis: "reported" }) }),
+      "v2.1 was reported 6 minutes before this, and we have not seen it in traffic.",
+    ],
+    [
+      "41 days earlier",
+      context({ before: fact({ started_at: minutesBefore(41 * 24 * 60) }) }),
+      "The last known release was 41 days earlier.",
+    ],
+  ])("%s names it, as order", (_, given, words) => {
+    const said = about(given);
+    expect(said.text).toBe(words);
+    expect(said.cameFirst).toBe(true);
+  });
+
+  it("reads an older release dimmer, with no comparison prompt", () => {
+    const old = about(context({ before: fact({ started_at: minutesBefore(41 * 24 * 60) }) }));
+    const recent = about(context());
+    expect([old.dim, old.compare]).toEqual([true, false]);
+    expect([recent.dim, recent.compare]).toEqual([false, true]);
+  });
+
+  it.each([
+    [
+      "already running",
+      context({
+        before: fact({
+          version: "v1.4",
+          already_running: true,
+          started_at: "2026-10-01T09:00:00Z",
+        }),
+      }),
+      "v1.4 was running when we started counting on 1 Oct 2026. No release since.",
+    ],
+    [
+      "nothing before, deploys and versions",
+      context({ before: null, last_reported_at: minutesBefore(12 * 24 * 60) }),
+      "No release of this service before this started, from what we can see. Last report: 12 days before this.",
+    ],
+    [
+      "coverage none",
+      context({ before: null, coverage: "none", last_reported_at: null }),
+      "We receive no deploy information for this service.",
+    ],
+    [
+      "first heard after",
+      context({
+        before: null,
+        coverage: "none",
+        last_reported_at: null,
+        first_heard_at: "2026-11-10T09:00:00Z",
+      }),
+      "We first heard about deploys on this service on 10 Nov 2026, after this started.",
+    ],
+  ])("%s names no earlier release, so it carries no caution", (_, given, words) => {
+    const said = about(given);
+    expect(said.text).toBe(words);
+    expect(said.cameFirst).toBe(false);
+  });
+
+  it("lists a project finding's services, newest first, up to 5 and then how many more", () => {
+    const affected = ["a", "b", "c", "d", "e", "f", "g", "h"].map((service, index) =>
+      fact({ service_name: service, version: `v${index}`, started_at: minutesBefore(10 + index) }),
+    );
+    const listed = affectedReleases(context({ before: null, coverage: null, affected }));
+    expect(listed.rows.map((row) => row.service_name)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(listed.more).toBe("and 3 more");
+    expect(listed.cameFirst).toBe(true);
+    expect(affectedReleases(context({ affected: [] })).cameFirst).toBe(false);
+  });
+
+  it("names releases elsewhere, marks what this service calls, and counts them when none is its own", () => {
+    const nearby = [
+      fact({
+        service_name: "payments",
+        version: "p7",
+        started_at: minutesBefore(20),
+        called: true,
+      }),
+      fact({ service_name: "search", version: "s3", started_at: minutesBefore(10), called: false }),
+    ];
+    const said = elsewhere(context({ before: null, nearby }), "checkout");
+    expect(said.lead).toBe(
+      "No release on this service. 2 elsewhere in this project in the last 2 hours.",
+    );
+    expect(said.rows.map((row) => [row.service_name, row.called])).toEqual([
+      ["payments", true],
+      ["search", false],
+    ]);
+    const own = elsewhere(context({ nearby: [fact(), ...nearby] }), "checkout");
+    expect(own.lead).toBeNull();
+    expect(own.rows).toHaveLength(2);
+  });
+
+  it("opens the comparison carrying the finding, so its window reaches the finding (FR22)", () => {
+    expect(comparisonSearch(fact(), finding({ id: "f-9", started_at: STARTED }))).toEqual({
+      period: "period-1",
+      finding: "f-9",
+      finding_at: STARTED,
+    });
   });
 });

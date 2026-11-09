@@ -37,7 +37,15 @@ from nexovue_api.auth.dependencies import (
     get_tenant_repository,
 )
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import DetectionState, FindingEvent, Project, User
+from nexovue_api.data.postgres.models import (
+    DeployEvent,
+    DetectionState,
+    FindingEvent,
+    Project,
+    Release,
+    ReleasePeriod,
+    User,
+)
 from nexovue_api.data.postgres.models import Finding as FindingRow
 from nexovue_api.deps import get_app_settings, get_db_session
 from nexovue_api.settings import API_PREFIX, Settings
@@ -1102,3 +1110,189 @@ async def test_a_resolved_case_says_when_it_is_deleted_and_how_many_joined_are_k
     assert _instant(page["deletes_on"]) == resolved_at + timedelta(days=30)
     assert page["joined_kept_count"] == 3
     assert (await _page(db, clickhouse, acme, still_open))["deletes_on"] is None
+
+
+# ------------------------------------------------- F28: what came before, AC40
+
+
+async def _period(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    version: str,
+    started_at: datetime,
+    *,
+    service: str = "checkout",
+    seen: bool = True,
+    reported: bool = False,
+    state: str | None = None,
+    already_running: bool = False,
+) -> ReleasePeriod:
+    release = Release(
+        org_id=tenant.organization.id,
+        project_id=tenant.project.id,
+        service_name=service,
+        version=version,
+        first_seen_at=started_at if seen else None,
+        last_seen_at=started_at if seen else None,
+        first_reported_at=started_at if reported else None,
+        last_reported_at=started_at if reported else None,
+        report_count=1 if reported else 0,
+        last_state=state or ("finished" if reported else None),
+    )
+    db.add(release)
+    await db.flush()
+    if reported:
+        db.add(
+            DeployEvent(
+                org_id=tenant.organization.id,
+                project_id=tenant.project.id,
+                version=version,
+                service_name=service,
+                deployed_at=started_at,
+                source="ci",
+                delivery_id=f"{service}-{version}-{uuid.uuid4()}",
+                event_metadata={},
+                state=state or "finished",
+                release_id=release.id,
+            )
+        )
+    period = ReleasePeriod(
+        org_id=tenant.organization.id,
+        release_id=release.id,
+        project_id=tenant.project.id,
+        service_name=service,
+        started_at=started_at,
+        start_basis="seen" if seen else "reported",
+        already_running=already_running,
+    )
+    db.add(period)
+    await db.flush()
+    return period
+
+
+async def _calls(
+    clickhouse: AsyncClient, tenant: ProvisionedTenant, client: str, server: str, at: datetime
+) -> None:
+    delete_after_run("service_edges_1m", str(tenant.organization.id))
+    await clickhouse.command(
+        "INSERT INTO service_edges_1m (tenant_id, project_id, client_service, server_service, "
+        "edge_kind, minute, call_count, error_count, latency_quantiles) "
+        "SELECT {tenant:String}, {project:String}, {client:String}, {server:String}, "
+        "'CLIENT_SERVER', {minute:DateTime}, 10, 0, quantilesState(0.5, 0.95, 0.99)(1.0)",
+        parameters={
+            "tenant": str(tenant.organization.id),
+            "project": str(tenant.project.id),
+            "client": client,
+            "server": server,
+            "minute": at.replace(second=0, microsecond=0),
+        },
+    )
+
+
+async def _context(
+    db: AsyncSession, clickhouse: AsyncClient, tenant: ProvisionedTenant, finding: FindingRow
+) -> dict[str, Any]:
+    answer = await _get(db, clickhouse, _callers(tenant).token, f"/findings/{finding.id}")
+    assert answer.status_code == 200, answer.text
+    return dict(answer.json()["release_context"])
+
+
+async def test_a_release_6_minutes_before_reads_with_its_basis_and_coverage(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant
+) -> None:
+    """AC40, AC73: reported by CI and seen in traffic; coverage as of the finding."""
+    finding = await _finding(db, acme, started_minutes_ago=30)
+    started = finding.started_at - timedelta(minutes=6)
+    period = await _period(db, acme, "v2.1", started, reported=True)
+
+    context = await _context(db, clickhouse, acme, finding)
+
+    before = context["before"]
+    assert (before["version"], before["basis"], before["period_id"]) == (
+        "v2.1",
+        "both",
+        str(period.id),
+    )
+    assert context["coverage"] == "deploys_and_versions"
+    assert context["last_reported_at"] is not None
+    assert context["affected"] == []
+
+
+async def test_releases_elsewhere_are_listed_this_service_first_and_its_callees_marked(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant
+) -> None:
+    """AC71, FR52: payments shipped before a checkout finding, and checkout calls it."""
+    finding = await _finding(db, acme, started_minutes_ago=30)
+    at = finding.started_at
+    await _period(db, acme, "p7", at - timedelta(minutes=20), service="payments")
+    await _period(db, acme, "s3", at - timedelta(minutes=10), service="search")
+    await _period(db, acme, "v2", at - timedelta(minutes=90))
+    await _period(db, acme, "old", at - timedelta(hours=3), service="mailer")
+    await _calls(clickhouse, acme, "checkout", "payments", at - timedelta(minutes=15))
+
+    context = await _context(db, clickhouse, acme, finding)
+
+    assert context["called_known"] is True
+    assert [(r["service_name"], r["called"]) for r in context["nearby"]] == [
+        ("checkout", None),
+        ("search", False),
+        ("payments", True),
+    ]
+
+
+async def test_coverage_none_and_first_heard_after_read_apart(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant
+) -> None:
+    """AC40, AC73: no release at all reads none; one first counted after the finding
+    started reads "first heard", with no release before."""
+    quiet = await _finding(db, acme, service_name="mailer", started_minutes_ago=30)
+    late = await _finding(db, acme, started_minutes_ago=300)
+    await _period(db, acme, "v1", datetime.now(UTC) - timedelta(minutes=60))
+
+    nothing = await _context(db, clickhouse, acme, quiet)
+    heard_late = await _context(db, clickhouse, acme, late)
+
+    assert (nothing["coverage"], nothing["before"], nothing["first_heard_at"]) == (
+        "none",
+        None,
+        None,
+    )
+    assert (heard_late["coverage"], heard_late["before"]) == ("none", None)
+    assert heard_late["first_heard_at"] is not None
+
+
+async def test_an_old_release_and_one_already_running_are_still_the_release_before(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant
+) -> None:
+    """FR32, AC40: at any age, 41 days earlier; an already-running version is stated."""
+    finding = await _finding(db, acme, started_minutes_ago=30)
+    await _period(db, acme, "v1.4", finding.started_at - timedelta(days=60), already_running=True)
+    await _period(db, acme, "v1.5", finding.started_at - timedelta(days=41))
+
+    before = (await _context(db, clickhouse, acme, finding))["before"]
+
+    assert before["version"] == "v1.5"
+    assert before["started_at"][:10] == (finding.started_at - timedelta(days=41)).date().isoformat()
+
+
+async def test_a_project_finding_lists_each_affected_service_s_latest_release(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant
+) -> None:
+    """FR32: within 24 hours, newest first, one per service, only affected services."""
+    finding = await _finding(
+        db, acme, service_name=None, started_minutes_ago=30, services=["checkout", "payments"]
+    )
+    at = finding.started_at
+    await _period(db, acme, "v1", at - timedelta(hours=5))
+    await _period(db, acme, "v2", at - timedelta(hours=2))
+    await _period(db, acme, "p1", at - timedelta(hours=1), service="payments")
+    await _period(db, acme, "x1", at - timedelta(minutes=5), service="search")
+    await _period(db, acme, "p0", at - timedelta(hours=30), service="payments")
+
+    context = await _context(db, clickhouse, acme, finding)
+
+    assert [(r["service_name"], r["version"]) for r in context["affected"]] == [
+        ("payments", "p1"),
+        ("checkout", "v2"),
+    ]
+    assert (context["before"], context["coverage"], context["nearby"]) == (None, None, [])

@@ -4,7 +4,7 @@ import { formatDuration } from "@/shared/format/duration";
 import { formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 
-import { formatRelativeTime } from "@/shared/format/time";
+import { formatGap, formatRelativeTime } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 
 import type {
@@ -17,6 +17,8 @@ import type {
   FindingSignal,
   FindingSignalKind,
   NewNormalPreview,
+  ReleaseContext,
+  ReleaseFact,
   SignalSeries,
   TimelineEvent,
 } from "./api";
@@ -499,4 +501,159 @@ export function eventSentence(event: TimelineEvent): string {
     default:
       return issueEventSentence(event) ?? event.kind.replaceAll("_", " ");
   }
+}
+
+/* ------------------------------------------- F28: the release before this (FR32) */
+
+/** Beside every row that names a release that came before (FR32): order, not cause. */
+export const CAME_FIRST = "It came first. That is not evidence that it caused this.";
+/** Within this, a release is stated plainly with a comparison to open; older, dimmer. */
+const STATED_PLAINLY_WITHIN_MS = 24 * 60 * 60 * MS_PER_SECOND;
+/** A project finding lists this many services' releases, then how many more. */
+const AFFECTED_SHOWN = 5;
+const NEARBY_HOURS = 2;
+
+const BASIS_WORDS: Record<ReleaseFact["basis"], string> = {
+  both: "Reported by your CI, seen in traffic.",
+  seen: "Seen in traffic.",
+  reported: "Reported by your CI.",
+};
+
+const STATE_WORDS: Partial<Record<NonNullable<ReleaseFact["last_state"]>, string>> = {
+  failed: "CI reported it failed.",
+  rolled_back: "CI reported it rolled back.",
+};
+
+/** One sentence of the *Release before this* section, by the design's wording table. */
+export interface ReleaseLine {
+  text: string;
+  /** An older release reads dimmer. */
+  dim: boolean;
+  /** Whether "It came first…" goes beside it: only when it names an earlier release. */
+  cameFirst: boolean;
+  /** Whether to offer the comparison: only under 24 hours. */
+  compare: boolean;
+}
+
+/** "10 Nov 2026" on the project's calendar. */
+function dayIn(iso: string, zone: string | undefined): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return UNKNOWN;
+  const options: Intl.DateTimeFormatOptions = { day: "numeric", month: "short", year: "numeric" };
+  try {
+    return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: zone }).format(at);
+  } catch {
+    return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" }).format(at);
+  }
+}
+
+const said = (text: string, cameFirst: boolean, extra: Partial<ReleaseLine> = {}): ReleaseLine => ({
+  text,
+  dim: false,
+  cameFirst,
+  compare: false,
+  ...extra,
+});
+
+/**
+ * What came before a service finding (design, *Finding page*): the release before it at
+ * any age, or why none can be named. Only a row naming an earlier release carries
+ * `CAME_FIRST`; nothing before, already running, coverage none and first heard after
+ * do not, since no release came first or none is known to have.
+ */
+export function releaseBefore(
+  finding: Pick<FindingDetail, "started_at" | "release_context">,
+  { zone }: { zone?: string } = {},
+): ReleaseLine {
+  const context = finding.release_context;
+  const release = context.before;
+  if (context.first_heard_at !== null) {
+    return said(
+      `We first heard about deploys on this service on ${dayIn(context.first_heard_at, zone)}, after this started.`,
+      false,
+    );
+  }
+  if (context.coverage === "none") {
+    return said("We receive no deploy information for this service.", false);
+  }
+  if (release === null) {
+    const age =
+      context.last_reported_at === null
+        ? undefined
+        : formatGap(context.last_reported_at, finding.started_at);
+    const last = age === undefined ? "" : ` Last report: ${age} before this.`;
+    return said(
+      `No release of this service before this started, from what we can see.${last}`,
+      false,
+    );
+  }
+  if (release.already_running) {
+    return said(
+      `${release.version} was running when we started counting on ${dayIn(release.started_at, zone)}. No release since.`,
+      false,
+    );
+  }
+  const gap = formatGap(release.started_at, finding.started_at) ?? UNKNOWN;
+  const elapsed = Date.parse(finding.started_at) - Date.parse(release.started_at);
+  if (elapsed >= STATED_PLAINLY_WITHIN_MS) {
+    return said(`The last known release was ${gap} earlier.`, true, { dim: true });
+  }
+  if (release.is_return) {
+    return said(`${release.version} came back ${gap} before this.`, true, { compare: true });
+  }
+  if (release.basis === "reported") {
+    return said(
+      `${release.version} was reported ${gap} before this, and we have not seen it in traffic.`,
+      true,
+      { compare: true },
+    );
+  }
+  const state = release.last_state === null ? undefined : STATE_WORDS[release.last_state];
+  return said(
+    [
+      `${release.version} of ${release.service_name} started ${gap} before this.`,
+      BASIS_WORDS[release.basis],
+      state,
+    ]
+      .filter((part) => part !== undefined)
+      .join(" "),
+    true,
+    { compare: true },
+  );
+}
+
+/** A project finding's list: each affected service's latest release, up to five. */
+export function affectedReleases(context: ReleaseContext): {
+  rows: ReleaseFact[];
+  more: string | null;
+  cameFirst: boolean;
+} {
+  const rows = context.affected.slice(0, AFFECTED_SHOWN);
+  const hidden = context.affected.length - rows.length;
+  return { rows, more: hidden > 0 ? `and ${hidden} more` : null, cameFirst: rows.length > 0 };
+}
+
+/**
+ * Releases elsewhere in the project in the 2 hours before (FR52), each marked when this
+ * service calls it. With none on this service, a sentence counts the others.
+ */
+export function elsewhere(
+  context: ReleaseContext,
+  service: string,
+): { lead: string | null; rows: ReleaseFact[] } {
+  const rows = context.nearby.filter((fact) => fact.service_name !== service);
+  const ownNearby = context.nearby.some((fact) => fact.service_name === service);
+  const lead =
+    !ownNearby && rows.length > 0
+      ? `No release on this service. ${rows.length} elsewhere in this project in the last ${NEARBY_HOURS} hours.`
+      : null;
+  return { lead, rows };
+}
+
+/** The release page's search, carrying the finding so its window reaches it (FR22). */
+export function comparisonSearch(
+  fact: ReleaseFact,
+  finding: Pick<FindingDetail, "id" | "started_at">,
+): { period: string; finding: string; finding_at: string } {
+  return { period: fact.period_id, finding: finding.id, finding_at: finding.started_at };
 }

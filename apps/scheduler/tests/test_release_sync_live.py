@@ -27,6 +27,7 @@ from alert_fixtures import AlertTenant, drop_tenant, make_tenant
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from live import require_stack
+from nexovue_platform import releases as platform_releases
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -252,6 +253,98 @@ async def test_a_rolling_deploy_becomes_two_releases_and_the_old_period_ends(
     assert v1.ended_at == T0 + 50 * MINUTE
     assert (v2.started_at, v2.ended_at, v2.previous_version) == (T0 + 40 * MINUTE, None, "v1")
     assert v2.start_basis == "seen" and not v2.already_running
+
+
+async def _reported_before_traffic(
+    engine: AsyncEngine, tenant: AlertTenant, version: str, at: datetime, state: str
+) -> None:
+    """A release a report filed before any traffic, with that one deploy. Only a `started`
+    or `finished` report opens a period (founder, 2026-11-09), so a failed one leaves none."""
+    keys = {
+        "org_id": tenant.org_id,
+        "project_id": tenant.project_id,
+        "service": SERVICE,
+        "version": version,
+        "at": at,
+        "state": state,
+    }
+    async with engine.begin() as connection:
+        release_id = await connection.scalar(
+            text(
+                """
+                INSERT INTO releases (org_id, project_id, service_name, version,
+                                      first_reported_at, last_reported_at, report_count,
+                                      last_state, last_activity_at)
+                VALUES (:org_id, :project_id, :service, :version, :at, :at, 1, :state, :at)
+                RETURNING id
+                """
+            ),
+            keys,
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO deploy_events (org_id, project_id, version, service_name,
+                                           deployed_at, source, delivery_id, metadata, state,
+                                           release_id)
+                VALUES (:org_id, :project_id, :version, :service, :at, 'ci', :delivery,
+                        '{}', :state, :release_id)
+                """
+            ),
+            {**keys, "release_id": release_id, "delivery": f"delivery-{version}-{state}"},
+        )
+        if state in platform_releases.OPENING_STATES:
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO release_periods (org_id, release_id, project_id, service_name,
+                                                 started_at, start_basis, already_running,
+                                                 is_return)
+                    VALUES (:org_id, :release_id, :project_id, :service, :at, 'reported',
+                            false, false)
+                    """
+                ),
+                {**keys, "release_id": release_id},
+            )
+
+
+@pytest.mark.parametrize("state", ["failed", "rolled_back"])
+async def test_a_failed_report_before_the_first_count_leaves_it_already_running(
+    engine: AsyncEngine,
+    acme: AlertTenant,
+    administrator: Client,
+    release_store: ReleaseStore,
+    settled: Any,
+    state: str,
+) -> None:
+    """FR43 with the founder's answer of 2026-11-09: a deploy reported as failed did not
+    replace what was running, so the first version counted is still already running."""
+    await _reported_before_traffic(engine, acme, "v1", T0 - 30 * MINUTE, state)
+    write_versions(administrator, acme, traffic("v1", T0, 20))
+    await settled(T0 + 19 * MINUTE)
+
+    await sync.observe_project(engine, release_store, acme.project_id)
+
+    (v1,) = await _periods(engine, acme, "v1")
+    assert (v1.started_at, v1.already_running) == (T0, True)
+
+
+async def test_a_finished_report_before_the_first_count_is_not_already_running(
+    engine: AsyncEngine,
+    acme: AlertTenant,
+    administrator: Client,
+    release_store: ReleaseStore,
+    settled: Any,
+) -> None:
+    """FR42, FR43: the reported period takes the counted minute as its start."""
+    await _reported_before_traffic(engine, acme, "v1", T0 - 30 * MINUTE, "finished")
+    write_versions(administrator, acme, traffic("v1", T0, 20))
+    await settled(T0 + 19 * MINUTE)
+
+    await sync.observe_project(engine, release_store, acme.project_id)
+
+    (v1,) = await _periods(engine, acme, "v1")
+    assert (v1.started_at, v1.start_basis, v1.already_running) == (T0, "seen", False)
 
 
 async def test_v2_0_v2_1_v2_0_is_one_release_with_two_periods_across_runs(

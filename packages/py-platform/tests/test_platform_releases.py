@@ -378,3 +378,57 @@ def test_a_row_postgres_cannot_hold_is_not_storable() -> None:
     assert not storable("checkout", "v" * (releases.NAME_MAX_LENGTH + 1))
     assert not storable("checkout", "")
     assert not storable("checkout", releases.OTHER_VERSION)
+
+
+# --------------------------------------------------------------- coverage, AC73
+
+FINDING: Final = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
+DAY: Final = timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    ("reported", "seen", "value"),
+    [
+        (FINDING - 3 * DAY, FINDING - 2 * DAY, releases.DEPLOYS_AND_VERSIONS),
+        (FINDING - 3 * DAY, None, releases.DEPLOYS_ONLY),
+        (None, FINDING - 2 * DAY, releases.VERSIONS_ONLY),
+        (None, None, releases.COVERAGE_NONE),
+    ],
+)
+def test_coverage_takes_each_of_its_four_values(
+    reported: datetime | None, seen: datetime | None, value: str
+) -> None:
+    """AC73, spec *A service's coverage*."""
+    found = releases.coverage_of(reported, seen, at=FINDING, last_reported_at=reported)
+    assert found.value == value
+    assert found.first_heard_at is None
+
+
+@pytest.mark.parametrize("days", [29, 31])
+def test_a_report_29_or_31_days_old_gives_the_same_value_and_its_age(days: int) -> None:
+    """AC73: no silent 30-day flip; the last report's date always shows with it."""
+    last = FINDING - days * DAY
+    found = releases.coverage_of(last, None, at=FINDING, last_reported_at=last)
+    assert (found.value, found.last_reported_at) == (releases.DEPLOYS_ONLY, last)
+
+
+def test_reports_and_versions_first_heard_after_the_moment_say_so() -> None:
+    """AC73: a finding older than the first report reads "first heard", not none."""
+    later = FINDING + 2 * DAY
+    found = releases.coverage_of(later, FINDING + DAY, at=FINDING, last_reported_at=None)
+    assert (found.value, found.first_heard_at) == (releases.COVERAGE_NONE, FINDING + DAY)
+
+
+def test_a_version_counted_after_the_moment_does_not_count_yet() -> None:
+    """Coverage is as of a moment: a report before it, a version only after it."""
+    found = releases.coverage_of(
+        FINDING - DAY, FINDING + DAY, at=FINDING, last_reported_at=FINDING - DAY
+    )
+    assert (found.value, found.first_heard_at) == (releases.DEPLOYS_ONLY, None)
+
+
+def test_the_time_method_s_moment_is_a_reported_period_s_start() -> None:
+    """Design 4, step 6, with the founder's answer of 2026-11-09: never a release's first
+    report, which may be a failed deploy or an earlier period's."""
+    assert releases.reported_moment(FINDING, releases.REPORTED) == FINDING
+    assert releases.reported_moment(FINDING, releases.SEEN) is None

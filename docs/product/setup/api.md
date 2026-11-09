@@ -83,6 +83,8 @@ and reach only the documented read API.**
 | `GET /deploys` | Recent deploys, newest first. Sending them is a signed step in your pipeline, not a token: see [deploys.md](deploys.md) |
 | `GET /releases` | A project's releases with a period in the time window, newest first: each version of each service, when its period started, whether it was seen in traffic, reported by your CI, or both, and whether it is serving, replaced or idle. Filter by `service` and `version`; page with `cursor` |
 | `GET /releases/{release_id}` | One release: when it was first and last seen and reported, and each period it served, with the version it replaced and whether it came back |
+| `GET /releases/markers` | The releases to mark on a chart of the window, newest first, up to 500 (`truncated` says when more fell in it): each deploy your CI reported, with its state, and each version first seen in traffic. Filter by `service` |
+| `GET /releases/coverage` | For each service, what we hear about its deploys as of `at` (now if left out): deploys and versions, deploys only, versions only, or none, with when its last report was |
 | `GET /releases/{release_id}/comparison` | One period of a release against the version it replaced, over 1, 6 or 24 hours from its start (`window`), up to the last minute every part of the pipeline has counted: side by side during the rollout, before and after once it finished, each with its counts and a plain reading, or the reason it cannot compare. It compares numbers; it does not say why they moved |
 | `GET /llm/calls` | Every model call reported in a window, grouped by service, span and model |
 

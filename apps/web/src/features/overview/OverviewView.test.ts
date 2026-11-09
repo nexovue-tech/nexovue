@@ -11,6 +11,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { DeployMarker } from "@/shared/deploy-markers";
 import { buildOverviewPlots } from "@/shared/overview-plots";
 import type { OverviewViewProps } from "./OverviewScreen";
 import { OverviewView } from "./OverviewScreen";
@@ -60,7 +61,13 @@ const BASE: OverviewViewProps = {
   windowLabel: "the last hour",
   totals: TOTALS,
   plots: buildOverviewPlots(POINTS),
-  markers: [],
+  releases: {
+    markers: [],
+    isError: false,
+    onRetry: () => {},
+    truncated: false,
+    cap: 500,
+  },
   worstServices: [
     {
       service_name: "checkout-api",
@@ -91,9 +98,14 @@ async function render(overrides: Partial<OverviewViewProps> = {}): Promise<HTMLE
   const rootRoute = createRootRoute({
     component: () => createElement(OverviewView, { ...BASE, ...overrides }),
   });
-  const children = ["/services", "/services/$name", "/infrastructure", "/synthetics", "/rum"].map(
-    (path) => createRoute({ getParentRoute: () => rootRoute, path, component: () => null }),
-  );
+  const children = [
+    "/services",
+    "/services/$name",
+    "/infrastructure",
+    "/synthetics",
+    "/rum",
+    "/releases/$releaseId",
+  ].map((path) => createRoute({ getParentRoute: () => rootRoute, path, component: () => null }));
   const router = createRouter({
     routeTree: rootRoute.addChildren(children),
     history: createMemoryHistory({ initialEntries: ["/"] }),
@@ -196,18 +208,64 @@ describe("the surface strip", () => {
   });
 });
 
-describe("the deploy rules", () => {
-  it("says once that the rules are deploys, for all three panels", async () => {
+const RELEASES: OverviewViewProps["releases"] = {
+  markers: [],
+  isError: false,
+  onRetry: () => {},
+  truncated: false,
+  cap: 500,
+};
+
+const markerAt = (iso: string, overrides: Partial<DeployMarker> = {}): DeployMarker => ({
+  at: Date.parse(iso) / 1000,
+  version: "v9",
+  service: "checkout-api",
+  source: "reported",
+  state: "finished",
+  releaseId: "release-9",
+  key: iso,
+  ...overrides,
+});
+
+describe("the release marks (F28 AC38, AC39)", () => {
+  it("says once, for all three panels, what the dashes are and how many", async () => {
     // One sentence rather than a legend per panel: the rule is at the same
     // instant on each, and saying it three times would imply three readings.
-    const text = await readable({
-      markers: [{ at: Date.parse("2026-09-13T10:00:30Z") / 1000, version: "v9" }],
+    const container = await render({
+      releases: { ...RELEASES, markers: [markerAt("2026-09-13T10:00:30Z")] },
     });
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
 
-    expect(text).toContain("1 deploy in this window");
+    expect(text.match(/Dashed lines mark the 1 release in this window/g)).toHaveLength(1);
+    expect(container.querySelectorAll("details")).toHaveLength(1);
+    expect(text).toContain("Releases in this window (1)");
   });
 
-  it("says nothing about deploys when there were none", async () => {
-    expect(await readable()).not.toContain("deploy");
+  it("lists each mark as text with its service, so a keyboard reaches it", async () => {
+    const container = await render({
+      releases: {
+        ...RELEASES,
+        markers: [markerAt("2026-09-13T10:00:30Z", { state: "failed", service: "payments" })],
+      },
+    });
+    const list = container.querySelector("details");
+
+    expect(list?.textContent).toContain("v9 of payments");
+    expect(list?.textContent).toContain("CI reported it failed");
+    expect(list?.querySelector('a[href="/releases/release-9"]')).not.toBeNull();
+  });
+
+  it("says when only the newest 500 are shown", async () => {
+    const text = await readable({ releases: { ...RELEASES, truncated: true } });
+    expect(text).toContain("Showing the newest 500 of this window.");
+  });
+
+  it("says when the marks could not be read, never leaving the charts unmarked", async () => {
+    const text = await readable({ releases: { ...RELEASES, isError: true } });
+    expect(text).toContain("Releases could not be loaded for this chart.");
+  });
+
+  it("says plainly when the window holds no release", async () => {
+    expect(await readable()).toContain("No release in this window.");
   });
 });

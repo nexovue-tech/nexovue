@@ -708,3 +708,271 @@ async def delete_service_periods(
             ReleasePeriod.service_name == service_name,
         )
     )
+
+
+# -------------------------------------------------------- markers, FR35, D30
+
+
+async def reported_marks(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    service: str | None,
+    limit: int,
+) -> Sequence[Any]:
+    """Every deploy a sender reported in [start, end], newest first; same-version
+    redeploys and failed ones included. No sender text."""
+    statement = select(
+        DeployEvent.id,
+        DeployEvent.release_id,
+        DeployEvent.service_name,
+        DeployEvent.version,
+        DeployEvent.deployed_at,
+        DeployEvent.state,
+    ).where(
+        DeployEvent.org_id == org_id,
+        DeployEvent.project_id == project_id,
+        DeployEvent.deployed_at >= start,
+        DeployEvent.deployed_at <= end,
+    )
+    if service is not None:
+        statement = statement.where(DeployEvent.service_name == service)
+    statement = statement.order_by(DeployEvent.deployed_at.desc(), DeployEvent.id.desc())
+    return (await session.execute(statement.limit(limit))).all()
+
+
+async def seen_marks(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    service: str | None,
+    limit: int,
+) -> Sequence[Any]:
+    """Every period counted in traffic that started in [start, end], newest first. A
+    reported period's start is its deploy's, already marked; one already running when
+    counting began is not a release (FR43)."""
+    statement = (
+        select(
+            ReleasePeriod.id,
+            ReleasePeriod.release_id,
+            ReleasePeriod.service_name,
+            Release.version,
+            ReleasePeriod.started_at,
+        )
+        .join(
+            Release,
+            and_(Release.org_id == ReleasePeriod.org_id, Release.id == ReleasePeriod.release_id),
+        )
+        .where(
+            ReleasePeriod.org_id == org_id,
+            ReleasePeriod.project_id == project_id,
+            Release.org_id == org_id,
+            ReleasePeriod.started_at >= start,
+            ReleasePeriod.started_at <= end,
+            ReleasePeriod.start_basis == releases_platform.SEEN,
+            ReleasePeriod.already_running.is_(False),
+        )
+    )
+    if service is not None:
+        statement = statement.where(ReleasePeriod.service_name == service)
+    statement = statement.order_by(ReleasePeriod.started_at.desc(), ReleasePeriod.id.desc())
+    return (await session.execute(statement.limit(limit))).all()
+
+
+# ------------------------------------------------------------ coverage, FR38
+
+
+async def heard_by_service(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    services: Sequence[str] | None,
+) -> dict[str, tuple[datetime | None, datetime | None]]:
+    """Each service's earliest report and earliest counted version, from the record."""
+    statement = (
+        select(
+            Release.service_name,
+            func.min(Release.first_reported_at),
+            func.min(Release.first_seen_at),
+        )
+        .where(Release.org_id == org_id, Release.project_id == project_id)
+        .group_by(Release.service_name)
+    )
+    if services is not None:
+        statement = statement.where(Release.service_name.in_(list(services)))
+    return {row[0]: (row[1], row[2]) for row in (await session.execute(statement)).all()}
+
+
+async def last_reports_before(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    services: Sequence[str] | None,
+    at: datetime,
+) -> dict[str, datetime]:
+    """Each service's last report at or before a moment, by the time it claims."""
+    statement = (
+        select(DeployEvent.service_name, func.max(DeployEvent.deployed_at))
+        .where(
+            DeployEvent.org_id == org_id,
+            DeployEvent.project_id == project_id,
+            DeployEvent.deployed_at <= at,
+        )
+        .group_by(DeployEvent.service_name)
+    )
+    if services is not None:
+        statement = statement.where(DeployEvent.service_name.in_(list(services)))
+    return {row[0]: row[1] for row in (await session.execute(statement)).all()}
+
+
+async def services_sending(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> list[str]:
+    """Every service that has sent telemetry, so one we hear no deploys for is listed."""
+    found = await session.scalars(
+        select(ServiceLastSeen.service_name).where(
+            ServiceLastSeen.org_id == org_id, ServiceLastSeen.project_id == project_id
+        )
+    )
+    return list(found)
+
+
+# ------------------------------------------- what came before a finding, FR32, FR52
+
+# The services one service called in a window, from the edges rollup (FR52): marking a
+# release elsewhere "this service calls it". Presence only.
+CALLED_SERVICES_SQL: Final = """
+SELECT DISTINCT server_service
+FROM service_edges_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND client_service = {service_name:String}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+"""
+
+
+async def called_services(
+    repository: TenantScopedRepository,
+    *,
+    project_id: uuid.UUID,
+    service_name: str,
+    start: datetime,
+    end: datetime,
+) -> set[str]:
+    rows = await repository.query(
+        CALLED_SERVICES_SQL,
+        {
+            "project_id": str(project_id),
+            "service_name": service_name,
+            "from_minute": start,
+            "to_minute": end,
+        },
+    )
+    return {str(row["server_service"]) for row in rows}
+
+
+def _period_facts(org_id: uuid.UUID, project_id: uuid.UUID) -> Select[Any]:
+    """A period with what the finding page states of its release."""
+    return (
+        select(
+            ReleasePeriod.id.label("period_id"),
+            ReleasePeriod.release_id,
+            ReleasePeriod.service_name,
+            ReleasePeriod.started_at,
+            ReleasePeriod.start_basis,
+            ReleasePeriod.is_return,
+            ReleasePeriod.already_running,
+            Release.version,
+            Release.first_seen_at,
+            Release.first_reported_at,
+            Release.last_state,
+        )
+        .join(
+            Release,
+            and_(Release.org_id == ReleasePeriod.org_id, Release.id == ReleasePeriod.release_id),
+        )
+        .where(
+            ReleasePeriod.org_id == org_id,
+            Release.org_id == org_id,
+            ReleasePeriod.project_id == project_id,
+        )
+    )
+
+
+async def period_before(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    at: datetime,
+) -> Any | None:
+    """The service's last period starting at or before `at`, at any age (FR32). A
+    period starting in the finding's own minute came before it (AC41)."""
+    return (
+        await session.execute(
+            _period_facts(org_id, project_id)
+            .where(ReleasePeriod.service_name == service_name, ReleasePeriod.started_at <= at)
+            .order_by(ReleasePeriod.started_at.desc(), ReleasePeriod.id.desc())
+            .limit(1)
+        )
+    ).first()
+
+
+async def periods_between(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    services: Sequence[str] | None,
+    limit: int,
+) -> Sequence[Any]:
+    """Releases that started in [start, end], newest first. A version already running
+    when counting began is not a release (FR43)."""
+    statement = _period_facts(org_id, project_id).where(
+        ReleasePeriod.started_at >= start,
+        ReleasePeriod.started_at <= end,
+        ReleasePeriod.already_running.is_(False),
+    )
+    if services is not None:
+        statement = statement.where(ReleasePeriod.service_name.in_(list(services)))
+    statement = statement.order_by(ReleasePeriod.started_at.desc(), ReleasePeriod.id.desc())
+    return (await session.execute(statement.limit(limit))).all()
+
+
+async def latest_period_per_service(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    services: Sequence[str],
+    start: datetime,
+    end: datetime,
+) -> Sequence[Any]:
+    """Each named service's latest release starting in [start, end] (FR32's project
+    finding). One row per service at most, so the read is bounded by the services."""
+    statement = (
+        _period_facts(org_id, project_id)
+        .where(
+            ReleasePeriod.service_name.in_(list(services)),
+            ReleasePeriod.started_at >= start,
+            ReleasePeriod.started_at <= end,
+            ReleasePeriod.already_running.is_(False),
+        )
+        .distinct(ReleasePeriod.service_name)
+        .order_by(
+            ReleasePeriod.service_name, ReleasePeriod.started_at.desc(), ReleasePeriod.id.desc()
+        )
+    )
+    return (await session.execute(statement)).all()

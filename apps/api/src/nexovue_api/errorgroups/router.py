@@ -8,9 +8,10 @@ runs through is bound to the session's tenant, never to anything in the URL.
 `service_name` is a caller value too, but it only narrows a read the tenant is
 already entitled to, so it is bound as a parameter rather than checked.
 
-The deploy history is read here rather than inside the error-group service for
-the same reason `require_project` is called here: one is a control-plane read
-and the other is a telemetry read, and the route is where the two meet.
+The deploy history and the services' deploy coverage (F28) are read here rather
+than inside the error-group service for the same reason `require_project` is
+called here: one is a control-plane read and the other is a telemetry read, and
+the route is where the two meet.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from nexovue_api.errorgroups.schemas import (
     GroupTrendResponse,
 )
 from nexovue_api.projects.service import require_project, require_readable_project
+from nexovue_api.releases import service as releases
 from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/error-groups", tags=["error-groups"])
@@ -71,6 +73,7 @@ async def list_error_groups(
             from_time=window_start,
             to_time=window_end,
         ),
+        coverage=await releases.coverage_book(db, org_id=reader.org_id, project_id=project.id),
     )
 
 
@@ -120,4 +123,5 @@ async def get_error_group(
             from_time=window_start,
             to_time=window_end,
         ),
+        coverage=await releases.coverage_book(db, org_id=reader.org_id, project_id=project.id),
     )
