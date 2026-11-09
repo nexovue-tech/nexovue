@@ -354,6 +354,66 @@ async def test_ac8_a_support_view_reads_the_panels_and_moves_no_last_opened(
     assert dashboard.last_viewed_at is not None
 
 
+# --------------------------------------------------------- T3.1, AC135
+
+
+async def test_ac135_a_draft_reads_what_the_saved_dashboard_reads_and_a_viewer_has_none(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """`POST /preview` shares the saved read's service: equal panels over one fixed
+    window, and only for someone who may edit (FR10)."""
+    start = _hour_ago()
+    await _seed(acme, "checkout", start, minutes=40, per_minute=50)
+    panels = (
+        _panel("p_rate", "project_trend", signal="rate"),
+        _panel("p_checkout", "service_trend", service="checkout", signal="latency"),
+    )
+    dashboard = await _dashboard(db, acme, *panels)
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="checkout",
+            last_seen_at=start,
+        )
+    )
+    await db.flush()
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=30)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+    draft = window | {"definition": _definition(*panels)}
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        saved = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+        previewed = await client.post(f"{API_PREFIX}/dashboard-panels/preview", json=draft)
+        one = await client.post(
+            f"{API_PREFIX}/dashboard-panels/preview", json=draft | {"panels": ["p_checkout"]}
+        )
+        refused = await client.post(
+            f"{API_PREFIX}/dashboard-panels/preview",
+            json=draft | {"definition": {**_definition(*panels), "panels": [{"kind": "query"}]}},
+        )
+    async with _app_client(db, acme, acme.viewer, reader) as client:
+        viewer = await client.post(f"{API_PREFIX}/dashboard-panels/preview", json=draft)
+
+    assert previewed.status_code == 200, previewed.text
+    assert {panel["state"] for panel in saved["panels"].values()} == {"ok"}
+    for panel_id in ("p_rate", "p_checkout"):
+        assert previewed.json()["panels"][panel_id]["series"] == saved["panels"][panel_id]["series"]
+    assert list(one.json()["panels"]) == ["p_checkout"]
+    assert refused.status_code == 422
+    assert viewer.status_code == 403
+
+
 # ------------------------------------------------------------------ AC84
 
 

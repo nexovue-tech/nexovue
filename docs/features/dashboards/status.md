@@ -2,16 +2,26 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is on `feature/phase-2`, 2026-11-02** (commit 44795cb). **Plan Step 2 — one saved dashboard, read through a charged batch — is built, 2026-11-08** (branch `wt/f20`, uncommitted; the coordinator reviews and commits). Steps 3 to 11 are not started.
+**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is on `feature/phase-2`, 2026-11-02** (commit 44795cb). **Plan Step 2 — one saved dashboard, read through a charged batch — is on `feature/phase-2`** (migration 0056, ADR-031, ADR-032). **Plan Step 3 — the builder — is on `feature/phase-2`** (2026-11-09). Steps 4 to 11 are not started.
 
 
 ## Current task
 
-Step 2 is on `feature/phase-2` (2026-11-08; migration 0056, ADR-031, ADR-032). Its one open decision, the migration's downgrade, was answered by the founder on 2026-11-09: it refuses. Step 3 next.
+**Step 3 is on `feature/phase-2` (2026-11-09).** T3.1 to T3.8 are built; T3.3 is left unticked only for the phone hand check, which is the founder's after Phase 2. No migration and no new ADR. Three open decisions below, none blocking the commit.
 
 
 ## Completed
 
+- **2026-11-09. Plan Step 3 built (T3.1 to T3.8).** What changed, read from the diff:
+  - **T3.1.** `POST /api/v1/dashboard-panels/preview` (`dashboardpanels/router.py`), gated by `MayEditDashboards`, so a viewer and a support view are refused (AC8) and an API token reaches it no more than any dashboard route. Its body (`PreviewBody` in `dashboardpanels/schemas.py`) is the read's address plus the draft, `extra="forbid"`, and the draft is a strict `Definition`, so FR7's refusal applies to a draft as to a save. `dashboardpanels/service.py` now has one path for both reads: `read_panels` reads the saved row and stamps "last opened"; `preview_panels` runs `compile_for_save` first, reads no saved row and stamps nothing; both share `_scan_and_assemble` (the scans, the charge, the deadline from arrival) and the log line, which now carries `draft`. A draft is read back through `parse_stored`, as a saved definition is, so the two cannot differ. Registered in `POLICY_OF`, the routing test, the real-token test and AC8's structural case.
+  - **`GET /dashboards/{id}` gains `last_viewed_at`** (`dashboards/schemas.py`, `service._response`), for delete's "last opened 2 hours ago" (FR25). Stored already; no migration.
+  - **T3.2.** New `features/dashboards/draft.ts`: the pure reducer (add, replace, move, resize, height, duplicate, remove, undo, set, settings, reset), `isDirty` comparing key-sorted JSON with what is stored, `worstCaseReads` (the save's worst case, as `compile.py` counts it), `announce` (the live region's sentence for each change), and the caps `MAX_PANELS`, `MAX_SCANS_PER_READ` and `MAX_LINKS`, held equal to `definition.py` and `policy.py` by a test reading their source.
+  - **T3.3.** New `SideSheet.tsx` (a native `<dialog>`, `lg:w-[clamp(28rem,40vw,60rem)]`, full screen below `lg`, Escape through the platform's `cancel`, focus back to its opener) and `PanelPicker.tsx` (the kinds grouped by question; services from `GET /services` in a native select, each label through `visibleEscapes` and each value raw; a "Type a name" field showing what it reads as; a warning when a chosen name holds hidden characters; Apply reading that one panel through `/preview`, never per keystroke; a note drawn from its own text with no read; the six states). `shared/api-client.ts` gains `isInvalid` (a 422), because only that module may read a status.
+  - **T3.4, T3.5, T3.8.** New `DashboardEditScreen.tsx` with `DashboardEditScreen` and `NewDashboardScreen`, both inside `Permitted`; new `PanelToolbar.tsx` (the WAI-ARIA toolbar: one tab stop, arrows, Home and End, each action named for its panel, `aria-disabled` at the ends so focus stays, Up and Down with one menu per panel below `lg`, 44 px below `md`); new `LinksEditor.tsx` (`EditableRows`, the host each address opens shown beside it); new `grid-spans.ts`, now used by both the read view and the builder so the builder shows the real layout (FR49). The builder reads the stored draft once on opening and then only on Apply; focus follows `EditableRows`' rule; one polite live region says every change; `useUnsavedChanges` warns only while something differs from what is stored; a 409 keeps the draft on screen with the API's words, "Reload it" and "Save as a copy"; a 422's fields are listed in one summary; title, picker and cap checks are said before anything is sent. Routes `/dashboards/new` (`?template=`) and `/dashboards/$dashboardId/edit` in `router.tsx`, `console-routes.json` and the manifest test's list of screens reached by following something. The builder joins `unsaved-changes-coverage.test.ts`'s guarded forms.
+  - **T3.6.** New `DashboardActions.tsx`, mounted by the builder: delete through `ConfirmPanel`, "*Checkout on-call*, 12 panels, last opened 2 hr. ago. It can be restored for 30 days.", with "Export it first" (the document alone, no ids, owner or version, FR42) and FR62's export sentence; focus returns to the button when kept.
+  - **The read view and list.** `DashboardScreen.tsx` offers "Edit" to an editor only (AC7, AC105) and has the page's one live region, "Dashboard loaded, N of M panels read" (AC143); the stale strip is no longer a second live region. `DashboardListScreen.tsx` offers each starting point and "New dashboard" as links into the builder (FR39, AC38). **`TitleDialog.tsx` is deleted:** it was the templates-only fallback's save dialog (plan, *The fallback's own tasks*), and the founder chose the full builder (foundation item 27); TF.1's path would need it back.
+  - **T3.7.** The drag trial, below (*Drag trial*). Nothing from it ships.
+  - **Not built here, by the plan:** versions, duplicate and restore (Step 7); the other templates and import (Step 9); drag (Step 10); the project-clock declaration to the top bar (T6.7).
 - **2026-11-08. Plan Step 2 built (T2.1 to T2.19)**, under the founder's decision of 2026-11-08 (foundation item 27): the buyer round no longer gates it, and the full builder's path is built. What changed, read from the diff:
   - **T2.1.** `EDIT_DASHBOARDS` (owner, admin, member) and `PURGE_DASHBOARDS` (owner, admin) in `auth/permissions.py`, `MayEditDashboards` and `MayPurgeDashboards` in `auth/policy.py`, and the copies: `test_policy.py`, `test_auth_routes.py`, the console's `shared/identity.ts`, `identity.test-util.ts`, `MembersScreen.test.ts`, and FR1's table in `team-and-api-access/spec.md`.
   - **T2.2.** `Dashboard` and `DashboardVersion` in `data/postgres/models.py`; migration **0056** (`0056_dashboards.py`, revising 0055, F22's connections). `dashboards` is deleted directly with the organization, before `users`, and `dashboard_versions` cascades from it (`organizations/tables.py`, `organizations/queries.delete_dashboards`). Partial unique index on `(org_id, lower(title))` for live rows, `(org_id, last_viewed_at)`, GIN on `service_names`, `UNIQUE (org_id, id)` so versions key on both. The downgrade refuses ("roll forward only"), by `database.md`, which conflicts with the design: see *Open decisions*.
@@ -56,14 +66,23 @@ Step 2 is on `feature/phase-2` (2026-11-08; migration 0056, ADR-031, ADR-032). I
 
 ## Next action
 
-The coordinator reviews Step 2's diff, renumbers migration 0056 (and re-chains its `down_revision`) and the two ADRs if they collide, runs `just check`, and commits. Then the founder's judging step for Step 2 in a browser (below, *Validation*), and the open decision on the migration's downgrade. Then Step 3, the builder. The third proposed ADR is filed with T5.6b.
+**Step 3 (2026-11-09):** the coordinator reviews the diff, runs `just check` and commits. Then the founder's judging step for Step 3 in a browser (*Validation*, *Step 3*), the three open decisions below, and Step 4. The phone hand check of the picker (AC74) is the founder's after Phase 2.
+
+Still owed from Step 2: the founder's judging step for Step 2 in a browser (*Validation*, *Step 2*). The third proposed ADR is filed with T5.6b.
 
 
 ## Open decisions
 
+**2. Does T3.7's trial count as passed, so Step 10 keeps drag? (2026-11-09, Step 3.)** The plan's stop rule drops Step 10's first task if drag "cannot reorder mixed widths reliably". Measured (below): the order a drop leaves was right in 80 of 80 pointer drags, but the sortable library's own preview, which slides the other panels as you drag, overlapped panels in 21 of 40 drags with mixed widths. With the other panels held still until the drop, 0 of 40 overlapped and the order was still right in 80 of 80. dnd-kit's keyboard sensor moves by screen position, not by one place (a panel moved right from first landed fifth), so it must not be used: the toolbar stays the keyboard's way. **Recommendation: pass, on three conditions for T10.1:** other panels hold still and the drop target is marked, no keyboard sensor, and a guard against the page scrolling sideways when a dragged panel runs past the edge (seen in 8 of 40 drags, not fixed in the trial). Options: (a) pass on those conditions; (b) fail, and drop T10.1, keeping the buttons. A product judgement, so the founder's.
+
+**3. Which clock a new dashboard's builder draws on (2026-11-09, Step 3, T3.3).** FR46 puts every time on a dashboard on the project's clock. A saved dashboard's builder reads it from the panel context (`/dashboards/{id}/context`); a new dashboard has no id, and the project list (`GET /projects`) carries no time zone. So a new dashboard's previews draw on the browser's clock, as every other screen does today. **Recommendation:** add `timezone` to the project list's summary (one stored column, Postgres only), with T6.7, which declares the project's clock to the top bar anyway. Options: (a) that; (b) have `/preview` answer with the project's zone; (c) accept the browser's clock in the builder until a dashboard is saved.
+
+**4. The builder reads the stored draft once on opening (2026-11-09, Step 3, T3.4).** The design draws "(live panel)" in the builder's grid and says Apply reads one panel "once per Apply and never per keystroke"; it does not say whether opening the builder reads. Built: one `/preview` of the stored definition on opening (one charged batch, the same as opening the dashboard, and free within 30 s of a view through the kept answers), then nothing until Apply. A move or resize reads nothing, and a panel changed without Apply says so. **Recommendation: keep.** The alternative, no read on opening, shows every panel as words until each is applied.
+
+
 **Answered by the founder, 2026-11-09: refuse, as built; the design's and plan's lines corrected.** **1. Does migration 0056's downgrade drop the two tables, or refuse? (2026-11-08, Step 2, T2.2.)** The approved design says "Downgrade drops both" (`design.md`, *Data and migration impact*) and the plan's rollback says "the migration drops two tables" (`plan.md`, *Rollout and rollback*). `docs/engineering/database.md` says "A downgrade that would drop records that exist nowhere else raises 'roll forward only' rather than dropping them", and the three newest migrations follow it (`0051`, `0052`, `0053`; `apps/api/tests/test_migration_rules.py:35`). Dashboards and their versions are what people built and exist nowhere else. **Built as the standard says** (`apps/api/migrations/versions/0056_dashboards.py`, `downgrade()` raises; `0056` added to `ROLL_FORWARD_ONLY`), because a standard owns what is correct and the change back is three lines. Options: (a) keep roll-forward-only and correct the design and plan's rollback lines; (b) let the downgrade drop both, since nexovue is pre-deployment and no dashboard exists yet, and remove `0056` from `ROLL_FORWARD_ONLY`. **Recommendation: (a)**, because the rule exists for the first customer's day, and the rollback the plan needs is a revert of the code, which leaves two unused tables harmless. Not a product decision; the coordinator or the founder decides.
 
-**None other for the founder.** Decisions 1 and 4 were approved on 2026-11-02, as recommended (*Founder answers, 2026-11-02*, below); 3 is D61. The builder rule is applied to the buyer round's answers. The authors' other decisions (D1 to D61, `spec.md`) stand unless the founder overrules them.
+**None other for the founder.** The spec's founder decisions 1 and 4 were approved on 2026-11-02, as recommended (*Founder answers, 2026-11-02*, below); 3 is D61. The builder rule is applied to the buyer round's answers. The authors' other decisions (D1 to D61, `spec.md`) stand unless the founder overrules them.
 
 ## Own questions answered, 2026-11-02
 
@@ -91,7 +110,7 @@ A skeptical review (architect, developer, UX, sales, marketing, customer, securi
 ## Blocked
 
 - **Founder decision, 2026-11-08:** Step 2 onward no longer waits on the buyer round (foundation item 27); the full builder is built, not templates only.
-- **Step 2 is built** and waits only on the coordinator's review and commit.
+- **Step 3 is built** and waits only on the coordinator's review and commit (2026-11-09).
 - **Step 5 onward** waits on F28.
 
 ## Reviews
@@ -345,6 +364,14 @@ Fourteen further findings. All fourteen were checked against the code or the doc
 
 ## Risks
 
+- **Step 3 residuals (2026-11-09):**
+  - **Not run:** both new Playwright specs (`dashboards-picker.spec.ts`, `dashboards-keyboard.spec.ts`): no dev stack was reachable. The founder's judging step for Step 3. **The picker on phone Safari and Chrome (AC74, the plan's "try the control before relying on it"): not yet run, founder checks after Phase 2** (foundation items 27, 28), with device and date recorded here. A screen reader pass on the builder is T11.7.
+  - **The worst case is counted twice**, by `compile.py` at save and by `draft.ts` for the count on screen. A test holds the caps equal, not the counting; Step 5's kinds must change both, and the API stays the judge (its refusal is shown in the summary).
+  - **`large` still draws at the chart's one height** in the builder, as on the view, until T4.4.
+  - **A new dashboard's previews use the browser's clock** (open decision 3).
+  - **"Reload it" after a conflict drops the draft,** and says so on screen; "Save as a copy" keeps it under "<title> (copy)", which the API refuses if that title is taken, and the summary says so.
+  - **The builder's context read refreshes on the dashboard's interval** (Postgres only), as the view's does; it is only used for the project's name and clock.
+
 - **Step 2 residuals (2026-11-08):**
   - **The founder's judging step has not happened in a browser** (click *Start from Overview*, save it, see three charts matching Overview's, read the log line, stop ClickHouse and see the panels and the one line). No full stack was brought up on this shared machine.
   - **AC21 was run over the rows the meter and the rollup write, not through ingest** (`test_dashboard_panels_live.py`): the receiver, Kafka and the workers were not started. The rule is proved; that the meter writes `service_last_seen` for every service is still "read, not run" (spec, *Dependencies*).
@@ -359,12 +386,39 @@ Fourteen further findings. All fourteen were checked against the code or the doc
 - **Every cap is a guess** until the plan's T5.7: 30 panels, 40 scans, 4 at once, 5 and 2 per process, 3 and 1 per organization, a 60-second default, a 30-second floor, a 20-second deadline, a 15-second statement limit, 7-day raw windows, the shared read's rows, and the API account's limits.
 - **No AI building, no public links, no query language.** Rivals have all three, and a buyer may notice.
 - **Wall displays need a signed-in person,** and a session lasts seven days (`settings.py:213`).
-- **Unproven:** 30 charts with a shared cursor; drag with panels of mixed widths under React 19; a tap on a phone; a native select with escaped labels on phone Safari; `service_last_seen` holding a row for every service, which is read and not run.
+- **Unproven:** 30 charts with a shared cursor; drag in the real builder (the trial on a throwaway copy passed on conditions, 2026-11-09, *Drag trial*); a tap on a phone; a native select with escaped labels on phone Safari; `service_last_seen` holding a row for every service, which is read and not run.
 - **A suspected metric bug** in `HISTOGRAM_SQL` and `HEATMAP_SQL`, from reading only. The plan's T8.1 tests it. If it is real, it needs its own record.
 - **Sales wording** must stay in the future tense, and competitor facts must be re-read before any public claim (T11.5).
 - **Personal data in notes and attribute labels.** Masking does not reach what a person types, and it reaches only credential-shaped telemetry. Purge is the path.
 
 ## Validation
+
+### Step 3, run 2026-11-09
+
+On this machine, with my own stores: Postgres `f20s3-pg` (pgvector 0.8.6, Postgres 18, port 55432, migrated to 0056) and ClickHouse `f20s3-ch` (26.3.20.7, port 58123, the 39 migrations), on network `f20s3-net`; all three removed at the end. Counts read from the output.
+
+- **Seen failing first, then passing:** T3.1's offline cases (`test_dashboard_panels.py` could not import `DraftRequest`), `test_authorization_coverage.py` and `test_dashboards_routing.py` (1 failure each, naming `preview_panels`); `last_viewed_at` (`test_dashboards_live.py`, `KeyError`); `draft.test.ts`, `PanelPicker.test.ts`, `DashboardActions.test.ts` and `DashboardEditScreen.test.ts` (each failed to import its module; `PanelPicker.tsx` and `SideSheet.tsx` were moved aside for that run); the view's live region (1 failure with the region taken out); the list's links into the builder (1 failure against the old dialog); a preview refused as invalid (1 failure with `isInvalid` answering false); the builder's layout at `lg` (1 failure: `lg:col-span-4` where the view draws 6). **Two defects caught this way and fixed:** the preview's cache key named the Apply count and panel but not the draft, so a second sheet editing the same panel was served the first sheet's answer (a new case in `PanelPicker.test.ts`, seen failing); and the builder drew `xl` spans at `lg`. One test was wrong and corrected: a draft read right after a saved one cost nothing, which BR6 intends, so the equal-charge case uses two processes and a separate case holds the sharing.
+  - **The three live preview cases** (`test_dashboard_panels_live.py`'s preview-equals-saved, the viewer's 403 in `test_dashboards_live.py`, the real-token route in `test_dashboards_real_tokens_live.py`) were first run after the route existed, so they were proved afterwards, on the same stores re-created, against a copy of `dashboardpanels/router.py` kept in scratch: **with the route removed**, all failed (4 failures: the equality case `404 == 200`, the viewer `404 == 403`, both token kinds `404 == 403`); **with the gate weakened to `CurrentIdentity`**, the two 403 cases failed (`200 == 403` each; the token case cannot, since `CurrentIdentity` already refuses tokens, so the removal run proves it); **restored from the copy** (byte-equal, by `cmp`), all passed (4 passed).
+  - **Mutation checks on the builder's tests,** each reverted: every toolbar button a tab stop (1 failure), `disabled` in place of `aria-disabled` at the ends (2 failures), the unsaved-changes guard never firing (1 failure).
+- **API, F20 and the suites it rests on, one run, live included:** 24 files: **679 passed, 1 skipped** (the conventions suite's "no wildcard to shadow"). **API offline, whole (`--ignore-glob='*_live.py'`, `-n 6`):** 4,646 passed, 1 skipped, 18 errors, all in the two suites that need the full dev stack and fail loudly without it (`test_filters_reach_past_the_cap.py`, `test_slo_system.py`), as in Step 2.
+- **Scheduler:** `test_alert_links.py`, `test_alert_messages.py`, `test_detection_has_no_ai.py`: **44 passed** (the route list gained two routes).
+- **Console:** `vitest run`, whole suite: **152 files, 1,788 tests, all passed** (new: `draft.test.ts` 14, `PanelPicker.test.ts` 14, `DashboardActions.test.ts` 5, `DashboardEditScreen.test.ts` 25; the view's test 21). `pnpm -r --if-present run typecheck`: `tools/e2e`, `packages/browser-sdk`, `apps/web` all `Done`. `biome check` on `features/dashboards`, `app`, `shared` and the two specs: no errors (4 warnings, all in untouched e2e files). `node packages/ui/scripts/verify-tokens.js`: "no default or raw colours outside tokens.css"; no string literal starting `from-`, `to-` or `via-` in the new files.
+- **Python gates, from the worktree root:** `uv run mypy .`: no issues in 849 source files. `uv run ruff check .`: all checks passed. `uv run ruff format --check .`: 1,214 files already formatted.
+- **Not run:** `just check` (the coordinator runs it); both Playwright specs (no dev stack); the phone hand check (founder, after Phase 2); the founder's judging step: create a dashboard by keyboard alone, add a panel with a real service, move it, widen it, preview, save, reload, and as a viewer see no edit and a refused `/edit` link.
+
+### Drag trial (T3.7), run 2026-11-09
+
+On a throwaway copy in the session's scratch folder, not in the repository, and nothing from it ships. `@dnd-kit/core` 6.3.1, `@dnd-kit/sortable` 10.0.0 and `@dnd-kit/utilities` 3.2.2 (all MIT; peers `react >=16.8.0`, read from npm on 2026-11-09), React and React DOM 19.3.1 in `StrictMode`, Vite 8.3.5: a 12-column grid of 14 panels of widths 4, 4, 4, 3, 3, 6, 8, 4, 12, 6, 3, 3, 4 and 8, sorted with `rectSortingStrategy`, `closestCenter`, a pointer sensor with a 5 px activation distance, and `CSS.Translate` (no scaling). Driven by `playwright-core` 1.64.1 in the machine's Google Chrome, headless, at 1300 x 1000, with seeded random drags from one panel's centre to another's in 25 steps. About an hour, well inside the day.
+
+| Measure | Library's sliding preview | Other panels held still until the drop |
+|---|---|---|
+| Final order equals the intended move, pointer | 80 of 80 | 80 of 80 |
+| Drags where two other panels overlapped on screen mid-drag | 21 of 40 | 0 of 40 |
+| Console errors or React warnings | none (one 404 for a favicon) | none |
+
+- **Keyboard sensor:** Space, one arrow, Space moved by screen position, not one place: ArrowRight took the first panel to fifth, ArrowLeft took the sixth to second, and two of eight presses moved nothing. It cannot replace the toolbar, and the toolbar stays (WCAG 2.2, 2.5.7; FR22).
+- **Seen but not fixed in the trial:** in 8 of 40 held-still drags the page scrolled sideways while a wide panel was dragged past the grid's edge.
+- **Result:** pass on conditions, which the founder confirms (*Open decisions*, 2). Not tried: touch (drag is not offered on touch, design), and a real dashboard's charts inside the panels.
 
 ### Step 2, run 2026-11-08
 
@@ -427,7 +481,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-08 (Step 2 built: T2.1 to T2.19; one open decision on the migration's downgrade)
+2026-11-09 (Step 3 committed: T3.1 to T3.8; three open decisions, none blocking)
 
 ## Founder approval, 2026-11-02
 

@@ -46,6 +46,8 @@ class DashboardResponse(BaseModel):
     version: int
     owner: str | None
     updated_by: str | None
+    # For delete's own sentence, "last opened 2 hours ago" (FR25).
+    last_viewed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

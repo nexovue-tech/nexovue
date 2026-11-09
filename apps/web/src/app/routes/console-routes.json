@@ -9,6 +9,8 @@
   "/alerts/rules/new",
   "/dashboards",
   "/dashboards/$dashboardId",
+  "/dashboards/$dashboardId/edit",
+  "/dashboards/new",
   "/docs",
   "/docs/$",
   "/errors",

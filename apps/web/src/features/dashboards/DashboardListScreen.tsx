@@ -1,8 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useState } from "react";
 
-import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
@@ -10,25 +8,40 @@ import { formatRelativeTime } from "@/shared/format/time";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 import { useCan } from "@/shared/identity";
 
-import type { DashboardSummary, DashboardTemplate } from "./api";
+import type { DashboardSummary } from "./api";
 import { useDashboards, useDashboardTemplates } from "./api";
-import { TitleDialog } from "./TitleDialog";
 
 /**
- * The organization's dashboards (F20, Step 2): one action, *Start from Overview*, which
- * opens a draft to name and save. Sorting, the filter, "not opened for 30 days" and
- * Recently deleted arrive with plan Step 7. A viewer is offered nothing that would fail
- * (AC7).
+ * The organization's dashboards (F20): each starting point, then a blank dashboard, open
+ * the builder as an unsaved draft (FR39, AC38). Sorting, the filter, "not opened for 30
+ * days" and Recently deleted arrive with plan Step 7, and the other templates with Step 9.
+ * A viewer is offered nothing that would fail (AC7).
  */
+const ACTION_CLASS =
+  "inline-flex min-h-11 items-center rounded-sm border border-line px-3 py-1.5 text-ink text-sm hover:bg-hover md:min-h-0";
+
 export function DashboardListScreen() {
   const dashboards = useDashboards();
   const templates = useDashboardTemplates();
   const canEdit = useCan("edit_dashboards");
-  const [draft, setDraft] = useState<DashboardTemplate | undefined>();
-  const start = templates.data?.[0];
 
-  const startAction =
-    canEdit && start ? <Button onClick={() => setDraft(start)}>{start.name}</Button> : undefined;
+  const startAction = canEdit ? (
+    <div className="flex flex-wrap gap-2">
+      {(templates.data ?? []).map((template) => (
+        <Link
+          key={template.id}
+          to="/dashboards/new"
+          search={{ template: template.id }}
+          className={ACTION_CLASS}
+        >
+          {template.name}
+        </Link>
+      ))}
+      <Link to="/dashboards/new" search={{}} className={ACTION_CLASS}>
+        New dashboard
+      </Link>
+    </div>
+  ) : undefined;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -36,9 +49,6 @@ export function DashboardListScreen() {
         <h1 className="font-semibold text-ink text-lg">Dashboards</h1>
         {dashboards.data && dashboards.data.length > 0 ? startAction : null}
       </header>
-      {draft ? (
-        <TitleDialog document={draft.document} onCancel={() => setDraft(undefined)} />
-      ) : null}
       <Body
         pending={dashboards.isPending}
         error={dashboards.isError ? dashboards.error : undefined}
@@ -74,7 +84,7 @@ function Body({
     return canEdit ? (
       <EmptyState
         title="No dashboards yet"
-        detail="Start from Overview: its three charts, as a dashboard to name and keep."
+        detail="Start from Overview: its three charts, as a draft to change, name and keep."
         action={startAction}
       />
     ) : (

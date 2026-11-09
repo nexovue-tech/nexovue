@@ -56,6 +56,7 @@ export class ApiError extends Error {
 
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
+const HTTP_UNPROCESSABLE = 422;
 const HTTP_TOO_MANY_REQUESTS = 429;
 
 /**
@@ -77,6 +78,14 @@ export function isNotFound(error: unknown): boolean {
  */
 export function isConflict(error: unknown): boolean {
   return error instanceof ApiError && error.status === HTTP_CONFLICT;
+}
+
+/**
+ * True when the API refused what was sent as not valid: its problem names each field and
+ * why, which a screen shows in its own summary (F20's draft preview, T3.3).
+ */
+export function isInvalid(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_UNPROCESSABLE;
 }
 
 /**

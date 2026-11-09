@@ -13,13 +13,12 @@ import { useSelection } from "@/shared/selection";
 
 import type { Dashboard, DashboardContext, PanelReadResponse, StoredPanel } from "./api";
 import { refreshIntervalOf, useDashboard, useDashboardContext, useDashboardPanels } from "./api";
+import { gridSpans } from "./grid-spans";
 import type { KeptReadings } from "./kept-readings";
 import { allFailing, keptLine, nextExpiry, nextKept } from "./kept-readings";
-import type { GridSize } from "./layout-rows";
-import { layoutRows } from "./layout-rows";
 import { NotePanel } from "./NotePanel";
 import { CorrelationId, PanelFrame, PanelWords, StaleStrip } from "./PanelFrame";
-import { panelTitle, signalOf, stateWords, TIME_KINDS, transient, unread } from "./panel-words";
+import { panelTitle, signalOf, stateWords, transient, unread } from "./panel-words";
 import { TimePanel } from "./TimePanel";
 
 /**
@@ -31,40 +30,6 @@ import { TimePanel } from "./TimePanel";
  * once, above the grid (FR48). A panel that could not be read never draws as a flat line
  * (BR5): it keeps an earlier line for one interval under a filled strip, then words alone.
  */
-
-const GRID_SIZES: readonly GridSize[] = ["lg", "xl"];
-// Literal classes, so Tailwind generates each one.
-const SPAN_CLASS: Record<GridSize, Record<number, string>> = {
-  base: { 12: "col-span-12" },
-  lg: {
-    1: "lg:col-span-1",
-    2: "lg:col-span-2",
-    3: "lg:col-span-3",
-    4: "lg:col-span-4",
-    5: "lg:col-span-5",
-    6: "lg:col-span-6",
-    7: "lg:col-span-7",
-    8: "lg:col-span-8",
-    9: "lg:col-span-9",
-    10: "lg:col-span-10",
-    11: "lg:col-span-11",
-    12: "lg:col-span-12",
-  },
-  xl: {
-    1: "xl:col-span-1",
-    2: "xl:col-span-2",
-    3: "xl:col-span-3",
-    4: "xl:col-span-4",
-    5: "xl:col-span-5",
-    6: "xl:col-span-6",
-    7: "xl:col-span-7",
-    8: "xl:col-span-8",
-    9: "xl:col-span-9",
-    10: "xl:col-span-10",
-    11: "xl:col-span-11",
-    12: "xl:col-span-12",
-  },
-};
 
 export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
   const { projectId, window: choice } = useSelection();
@@ -176,14 +141,17 @@ function DashboardView(props: ViewProps) {
         return result !== undefined && unread(result);
       })
     : [];
-  const spans = useMemo(() => spansOf(dashboard.definition.panels), [dashboard.definition.panels]);
+  const spans = useMemo(
+    () => gridSpans(dashboard.definition.panels),
+    [dashboard.definition.panels],
+  );
   const detection = context
     ? detectionHeadlineFor(context.detection, { zone: context.project.timezone })
     : undefined;
 
   return (
     <div className="flex flex-col gap-3 p-4">
-      <Header dashboard={dashboard} context={context} />
+      <Header dashboard={dashboard} context={context} canEdit={canEdit} />
       <PageLine {...props} zone={zone} scanCount={scanPanels.length} />
       {detection ? (
         <p className={detection.wrong ? "text-critical-text text-sm" : "text-ink-dim text-sm"}>
@@ -199,6 +167,10 @@ function DashboardView(props: ViewProps) {
           {unreadIds.length} of {dashboard.definition.panels.length} panels could not be read
         </button>
       ) : null}
+      {/* The page's one live region, said on change only, never per refresh (AC143). */}
+      <p data-live-region role="status" aria-live="polite" className="sr-only">
+        {answer ? loadedWords(answer, scanPanels.length) : ""}
+      </p>
       <div className="grid grid-cols-12 gap-3">
         {dashboard.definition.panels.map((panel) => (
           <PanelCell
@@ -221,34 +193,37 @@ function DashboardView(props: ViewProps) {
   );
 }
 
-function spansOf(panels: readonly StoredPanel[]): Record<string, string> {
-  const shaped = panels.map((panel) => ({
-    id: panel.id,
-    width: panel.width,
-    shape: TIME_KINDS.has(panel.kind) ? ("time" as const) : ("text" as const),
-  }));
-  const classes: Record<string, string[]> = {};
-  for (const size of GRID_SIZES) {
-    for (const row of layoutRows(shaped, size)) {
-      for (const cell of row) {
-        classes[cell.id] = [...(classes[cell.id] ?? []), SPAN_CLASS[size][cell.span]];
-      }
-    }
-  }
-  return Object.fromEntries(Object.entries(classes).map(([id, names]) => [id, names.join(" ")]));
+/** "Dashboard loaded, 28 of 30 panels read": a read is any panel with an answer of its own. */
+function loadedWords(answer: PanelReadResponse, scanCount: number): string {
+  const read = Object.values(answer.panels).filter((result) => !unread(result)).length;
+  return `Dashboard loaded, ${read} of ${scanCount} panels read`;
 }
 
 function Header({
   dashboard,
   context,
+  canEdit,
 }: {
   dashboard: Dashboard;
   context: DashboardContext | undefined;
+  canEdit: boolean;
 }) {
   return (
     <header className="flex flex-col gap-1">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="font-semibold text-ink text-lg">{visibleEscapes(dashboard.title)}</h1>
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h1 className="font-semibold text-ink text-lg">{visibleEscapes(dashboard.title)}</h1>
+          {/* A viewer is offered no edit that would fail (AC7, AC105). */}
+          {canEdit ? (
+            <Link
+              to="/dashboards/$dashboardId/edit"
+              params={{ dashboardId: dashboard.id }}
+              className="inline-flex min-h-11 items-center text-brand text-sm underline md:min-h-0"
+            >
+              Edit
+            </Link>
+          ) : null}
+        </div>
         {context ? (
           // The project comes from the data, never from a title (BR13).
           <p className="text-ink-dim text-sm">

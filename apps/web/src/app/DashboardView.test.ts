@@ -93,6 +93,7 @@ function dashboard(panels: StoredPanel[] = [RATE, CHECKOUT, NOTE]): Dashboard {
     version: 1,
     owner: "Asha",
     updated_by: "Asha",
+    last_viewed_at: null,
     created_at: at(600),
     updated_at: at(600),
   };
@@ -439,6 +440,18 @@ describe("the dashboard view", () => {
     expect(document.activeElement?.id).toBe("panel-p_checkout");
   });
 
+  it("says once, in the page's one live region, how many panels were read (AC143)", async () => {
+    stubApi(
+      viewOf(json(batch({ p_rate: ok(), p_checkout: { state: "failed", kind: "service_trend" } }))),
+    );
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(() => drawn(section(container, "p_rate")), "the healthy panel");
+
+    const regions = container.querySelectorAll('[aria-live], [role="status"], [role="log"]');
+    expect(regions).toHaveLength(1);
+    expect(text(regions[0])).toBe("Dashboard loaded, 1 of 2 panels read");
+  });
+
   it("hides the count when every panel read", async () => {
     stubApi(viewOf(json(batch({ p_rate: ok(), p_checkout: ok("p95_ms", "service_trend") }))));
     const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
@@ -538,30 +551,24 @@ describe("the dashboard list", () => {
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("lets an editor start from Overview, name it and save it, and opens the saved dashboard", async () => {
+  it("offers an editor the starting point and a blank one, each opening the builder as a draft (FR39)", async () => {
     const calls = stubApi({
       "GET /dashboards": json({ dashboards: [] }),
       "GET /dashboards/templates": json(templates),
-      "POST /dashboards": json(dashboard([RATE]), 201),
-      ...viewOf(json(batch({ p_rate: ok() }))),
     });
     const { container } = await mountAt("/dashboards");
     await waitFor(() => text(container).includes("Start from Overview"), "the action");
 
-    act(() =>
-      [...container.querySelectorAll("button")]
-        .find((b) => text(b) === "Start from Overview")
-        ?.click(),
-    );
+    const links = [...container.querySelectorAll("a")].map((link) => [
+      text(link),
+      link.getAttribute("href"),
+    ]);
+    expect(links).toEqual([
+      ["Start from Overview", "/dashboards/new?template=start_from_overview"],
+      ["New dashboard", "/dashboards/new"],
+    ]);
+    // Opening a starting point writes nothing (AC38); the builder's test saves one.
     expect(calls.some((call) => call.method === "POST")).toBe(false);
-    const save = [...container.querySelectorAll("button")].find((b) => text(b) === "Save");
-    await act(async () => save?.click());
-
-    await waitFor(
-      () => calls.some((call) => call.path === "/dashboard-panels/read"),
-      "the saved dashboard",
-    );
-    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
   });
 
   it("names a former member as such, and a never-opened dashboard as never opened (FR38)", async () => {

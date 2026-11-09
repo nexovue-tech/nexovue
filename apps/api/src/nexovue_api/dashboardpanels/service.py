@@ -1,4 +1,4 @@
-"""Every panel of a saved dashboard in one request (F20, design section 5).
+"""Every panel of a dashboard in one request, saved or a draft (F20, design section 5).
 
 The sequence, and why each step is where it is:
 
@@ -14,6 +14,9 @@ The sequence, and why each step is where it is:
    led), under one deadline counted from the request's arrival (D25). An abandoned
    request starts nothing more.
 6. **Assemble** one state per panel. A failure never takes the page (FR14).
+
+**A draft** (`POST /preview`, T3.1) takes the same path from step 4, and the same
+charge: it is validated as a save is (FR7), names no saved row, and stamps nothing.
 """
 
 from __future__ import annotations
@@ -66,9 +69,11 @@ from nexovue_api.dashboards.compile import (
     CompiledPanel,
     ScanKey,
     compile_definition,
+    compile_for_save,
     resolve,
 )
 from nexovue_api.dashboards.definition import (
+    Definition,
     NotePanel,
     ProjectTrendPanel,
     ServiceTrendPanel,
@@ -78,6 +83,7 @@ from nexovue_api.dashboards.definition import (
 )
 from nexovue_api.dashboards.ranges import RangeId, window_for
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.data.postgres.models import Project
 from nexovue_api.ratelimit.policy import MAX_SCANS_PER_READ, PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.services.schemas import OverviewPoint, TrendPoint
 
@@ -122,6 +128,40 @@ class BatchRequest:
     panel_ids: frozenset[str] | None
 
 
+@dataclass(frozen=True, slots=True)
+class DraftRequest:
+    """A draft's read: what a saved read names, with the definition in place of a row."""
+
+    project_id: uuid.UUID
+    range_id: RangeId | None
+    from_time: datetime | None
+    to_time: datetime | None
+    service: str | None
+    panel_ids: frozenset[str] | None
+    definition: Definition
+
+
+@dataclass(frozen=True, slots=True)
+class _Scanning:
+    """What the scans need, once Postgres has been read and let go."""
+
+    identity: Identity
+    project: Project
+    repository: TenantScopedRepository
+    reads: PanelReads
+    charge: Charge
+    window: tuple[datetime, datetime]
+    deadline: float
+    disconnected: Disconnected
+
+
+def _deadline(reads: PanelReads, arrived_at: float | None) -> float:
+    """Counted from the request's arrival, so every earlier wait shortens the scans (D25)."""
+    return (arrived_at if arrived_at is not None else reads.shared.now()) + (
+        PANEL_READ_DEADLINE_SECONDS
+    )
+
+
 async def read_panels(
     db: AsyncSession,
     *,
@@ -136,9 +176,7 @@ async def read_panels(
     now: datetime,
 ) -> PanelReadResponse:
     started = time.monotonic()
-    deadline = (arrived_at if arrived_at is not None else reads.shared.now()) + (
-        PANEL_READ_DEADLINE_SECONDS
-    )
+    deadline = _deadline(reads, arrived_at)
 
     # 1. Postgres, all of it, before any scan.
     dashboard = await dashboards.readable_dashboard(
@@ -147,24 +185,107 @@ async def read_panels(
     project = await dashboards.readable_project(
         db, org_id=identity.org_id, project_id=asked.project_id
     )
-    window_start, window_end = window_for(asked.range_id, asked.from_time, asked.to_time, now=now)
-    stored = parse_stored(dashboard.definition)
-    plan = _plan(stored, asked)
-    last_seen = await dashboard_queries.last_seen_of(
+    window = window_for(asked.range_id, asked.from_time, asked.to_time, now=now)
+    plan = _plan(parse_stored(dashboard.definition), service=asked.service, panels=asked.panel_ids)
+    last_seen = await _last_seen(db, identity=identity, project=project, plan=plan)
+    # 2 and 3: stamp, then let go of the connection before ClickHouse is asked anything.
+    dashboards.stamp_opened(dashboard, identity=identity, now=now)
+    await db.commit()
+
+    panels, outcomes = await _scan_and_assemble(
+        _Scanning(
+            identity=identity,
+            project=project,
+            repository=repository,
+            reads=reads,
+            charge=charge,
+            window=window,
+            deadline=deadline,
+            disconnected=disconnected,
+        ),
+        plan,
+        last_seen,
+    )
+    _log(dashboard.id, plan, outcomes, panels, started, correlation_id)
+    return PanelReadResponse(
+        correlation_id=correlation_id, window_start=window[0], window_end=window[1], panels=panels
+    )
+
+
+async def preview_panels(
+    db: AsyncSession,
+    *,
+    identity: Identity,
+    repository: TenantScopedRepository,
+    reads: PanelReads,
+    charge: Charge,
+    asked: DraftRequest,
+    arrived_at: float | None,
+    disconnected: Disconnected,
+    correlation_id: str | None,
+    now: datetime,
+) -> PanelReadResponse:
+    """A draft's panels, read and charged as a saved dashboard's are (FR10, AC135).
+
+    Refused as a save would refuse it, before anything is read (FR7). It reads no saved
+    row, so it moves no "last opened".
+    """
+    started = time.monotonic()
+    deadline = _deadline(reads, arrived_at)
+    compile_for_save(asked.definition)
+
+    project = await dashboards.readable_project(
+        db, org_id=identity.org_id, project_id=asked.project_id
+    )
+    window = window_for(asked.range_id, asked.from_time, asked.to_time, now=now)
+    # Read back as a stored definition is, so a draft and its saved form cannot differ.
+    stored = parse_stored(asked.definition.model_dump(mode="json"))
+    plan = _plan(stored, service=asked.service, panels=asked.panel_ids)
+    last_seen = await _last_seen(db, identity=identity, project=project, plan=plan)
+    await db.commit()
+
+    panels, outcomes = await _scan_and_assemble(
+        _Scanning(
+            identity=identity,
+            project=project,
+            repository=repository,
+            reads=reads,
+            charge=charge,
+            window=window,
+            deadline=deadline,
+            disconnected=disconnected,
+        ),
+        plan,
+        last_seen,
+    )
+    _log(None, plan, outcomes, panels, started, correlation_id)
+    return PanelReadResponse(
+        correlation_id=correlation_id, window_start=window[0], window_end=window[1], panels=panels
+    )
+
+
+async def _last_seen(
+    db: AsyncSession, *, identity: Identity, project: Project, plan: _Plan
+) -> dict[str, datetime]:
+    return await dashboard_queries.last_seen_of(
         db,
         org_id=identity.org_id,
         project_id=project.id,
         services=sorted({key.service for key in plan.scans if key.service is not None}),
     )
-    # 2 and 3: stamp, then let go of the connection before ClickHouse is asked anything.
-    dashboards.stamp_opened(dashboard, identity=identity, now=now)
-    await db.commit()
 
-    # 5. Scan, in layout order.
+
+async def _scan_and_assemble(
+    scanning: _Scanning, plan: _Plan, last_seen: dict[str, datetime]
+) -> tuple[dict[str, PanelResult], dict[ScanKey, Outcome]]:
+    """Steps 5 and 6: scan in layout order, then one state per panel."""
+    window_start, window_end = scanning.window
+    reads, deadline = scanning.reads, scanning.deadline
+
     def key_of(scan: ScanKey) -> ReadKey:
         return ReadKey(
-            org_id=str(identity.org_id),
-            project_id=str(project.id),
+            org_id=str(scanning.identity.org_id),
+            project_id=str(scanning.project.id),
             scan=scan,
             window_start=window_start,
             window_end=window_end,
@@ -178,15 +299,15 @@ async def read_panels(
         except TimeoutError:
             return TimedOutRead()
         try:
-            if await disconnected():
+            if await scanning.disconnected():
                 # Nobody will read the answer: start nothing more.
                 return TimedOutRead()
             reader = READERS[key.reader]
 
             async def run() -> Answer:
                 return await reader(
-                    repository.bounded_by(SHARED_READ_STATEMENT_SECONDS),
-                    str(project.id),
+                    scanning.repository.bounded_by(SHARED_READ_STATEMENT_SECONDS),
+                    str(scanning.project.id),
                     key,
                     window_start,
                     window_end,
@@ -196,7 +317,7 @@ async def read_panels(
                 key_of(key),
                 run=run,
                 raw=key.reader in RAW_READERS,
-                charge=charge,
+                charge=scanning.charge,
                 deadline=deadline,
             )
         finally:
@@ -205,20 +326,12 @@ async def read_panels(
     outcomes = dict(
         zip(plan.scans, await asyncio.gather(*(scan(key) for key in plan.scans)), strict=True)
     )
-
-    # 6. Assemble.
     panels: dict[str, PanelResult] = {}
     for panel, compiled, resolved in plan.panels:
         result = _result(panel, compiled, resolved, plan, outcomes, last_seen)
         if result is not None:
             panels[panel.id] = result
-    _log(dashboard.id, plan, outcomes, panels, started, correlation_id)
-    return PanelReadResponse(
-        correlation_id=correlation_id,
-        window_start=window_start,
-        window_end=window_end,
-        panels=panels,
-    )
+    return panels, outcomes
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,13 +342,13 @@ class _Plan:
     over_limit: frozenset[ScanKey]
 
 
-def _plan(stored: StoredDefinition, asked: BatchRequest) -> _Plan:
+def _plan(stored: StoredDefinition, *, service: str | None, panels: frozenset[str] | None) -> _Plan:
     compiled = compile_definition(stored)
-    picked = asked.service if stored.service_picker else None
+    picked = service if stored.service_picker else None
     chosen = [
         (panel, compiled_panel, resolve(compiled_panel.scan, picked=picked))
         for panel, compiled_panel in zip(stored.panels, compiled.panels, strict=True)
-        if asked.panel_ids is None or panel.id in asked.panel_ids
+        if panels is None or panel.id in panels
     ]
     keys = tuple(dict.fromkeys(key for _, _, key in chosen if key is not None))
     return _Plan(
@@ -302,14 +415,15 @@ def _series(points: Sequence[OverviewPoint | TrendPoint], signal: str) -> list[S
 
 
 def _log(
-    dashboard_id: uuid.UUID,
+    dashboard_id: uuid.UUID | None,
     plan: _Plan,
     outcomes: dict[ScanKey, Outcome],
     panels: dict[str, PanelResult],
     started: float,
     correlation_id: str | None,
 ) -> None:
-    """One line per batch, naming no title and no service (design, *Observability*)."""
+    """One line per batch, naming no title and no service (design, *Observability*). A
+    draft has no dashboard id."""
     sources = Counter(
         outcome.source for outcome in outcomes.values() if isinstance(outcome, Served)
     )
@@ -317,7 +431,8 @@ def _log(
     scanned = sum(1 for _, _, key in plan.panels if key is not None)
     logger.info(
         "dashboard batch read",
-        dashboard_id=str(dashboard_id),
+        dashboard_id=None if dashboard_id is None else str(dashboard_id),
+        draft=dashboard_id is None,
         panels=len(plan.panels),
         scans_run=sources["read"],
         merged=scanned - len(plan.scans) - len(plan.over_limit),

@@ -82,13 +82,13 @@ export function CorrelationId({ value }: { value: string }) {
   );
 }
 
-/** The filled strip over a line kept from an earlier read (FR31): dimming alone is not used. */
+/**
+ * The filled strip over a line kept from an earlier read (FR31): dimming alone is not used.
+ * Not a live region: the page has one, and a strip per panel would talk over it (AC143).
+ */
 export function StaleStrip({ since }: { since: string }) {
   return (
-    <p
-      role="status"
-      className="mb-2 rounded-xs border border-warning-border bg-warning-subtle px-2 py-1 text-sm text-warning-text"
-    >
+    <p className="mb-2 rounded-xs border border-warning-border bg-warning-subtle px-2 py-1 text-sm text-warning-text">
       Could not read since {since}. Line below is old.
     </p>
   );

@@ -1,10 +1,12 @@
-"""`/dashboard-panels`: a saved dashboard's panels, read in one charged batch (F20).
+"""`/dashboard-panels`: a dashboard's panels, saved or a draft, in one charged batch (F20).
 
 On the telemetry tier by its own prefix (`TELEMETRY_PATHS`), and kept out of
 `dashboards/router.py` because the coverage test judges a router file as a whole
 (design section 2, D41). It names `TenantRepository`, so with no ClickHouse client yet
 it answers 503 before the handler runs; the page's Postgres half, `/dashboards/{id}/
 context`, still answers (D24). `CurrentIdentity`: an API token reads no dashboard (D9).
+A draft's read is `MayEditDashboards`, since only an editor has a draft, and a support
+view is refused it as every write is (AC8).
 """
 
 from __future__ import annotations
@@ -17,9 +19,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.requests import HTTPConnection
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.policy import MayEditDashboards
 from nexovue_api.dashboardpanels import service
-from nexovue_api.dashboardpanels.schemas import PanelReadResponse
-from nexovue_api.dashboardpanels.service import BatchRequest, PanelReads
+from nexovue_api.dashboardpanels.schemas import PanelReadResponse, PreviewBody
+from nexovue_api.dashboardpanels.service import BatchRequest, DraftRequest, PanelReads
 from nexovue_api.dashboards.definition import MAX_PANELS, NAME_MAX_LENGTH
 from nexovue_api.dashboards.ranges import RangeId
 from nexovue_api.deps import DbSession
@@ -85,6 +88,37 @@ async def read_panels(
             to_time=to_time,
             service=service_name,
             panel_ids=_panel_ids(panels),
+        ),
+        arrived_at=arrival_of(request.scope),
+        disconnected=request.is_disconnected,
+        correlation_id=request.scope.get("state", {}).get("correlation_id"),
+        now=datetime.now(UTC),
+    )
+
+
+@router.post("/preview", summary="A draft's panels, read and charged as a saved read is")
+async def preview_panels(
+    request: Request,
+    identity: MayEditDashboards,
+    db: DbSession,
+    repository: TenantRepository,
+    reads: PanelReadsDep,
+    body: PreviewBody,
+) -> PanelReadResponse:
+    return await service.preview_panels(
+        db,
+        identity=identity,
+        repository=repository,
+        reads=reads,
+        charge=scan_charge_for(request.scope, getattr(request.app.state, "rate_limiter", None)),
+        asked=DraftRequest(
+            project_id=body.project_id,
+            range_id=body.range_id,
+            from_time=body.from_time,
+            to_time=body.to_time,
+            service=body.service,
+            panel_ids=None if body.panels is None else frozenset(body.panels),
+            definition=body.definition,
         ),
         arrived_at=arrival_of(request.scope),
         disconnected=request.is_disconnected,

@@ -111,6 +111,14 @@ const DashboardScreen = lazyRouteComponent(
   () => import("@/features/dashboards/DashboardScreen"),
   "DashboardScreen",
 );
+const DashboardEditScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardEditScreen"),
+  "DashboardEditScreen",
+);
+const NewDashboardScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardEditScreen"),
+  "NewDashboardScreen",
+);
 const AuditScreen = lazyRouteComponent(() => import("@/features/audit/AuditScreen"), "AuditScreen");
 const AcceptInviteScreen = lazyRouteComponent(
   () => import("@/features/auth/AcceptInviteScreen"),
@@ -504,7 +512,7 @@ const editSloRoute = createRoute({
   component: EditSloScreen,
 });
 
-// F20: dashboards. The builder's `/dashboards/new` and `.../edit` arrive with plan Step 3.
+// F20: dashboards. `new` is static, so it is never read as a dashboard id.
 const dashboardsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/dashboards",
@@ -520,6 +528,31 @@ const dashboardRoute = createRoute({
 function DashboardRoute() {
   const { dashboardId } = dashboardRoute.useParams();
   return <DashboardScreen dashboardId={dashboardId} />;
+}
+
+// The builder: a draft from a starting point (`?template=`), or a blank one.
+const newDashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/new",
+  component: NewDashboardRoute,
+  validateSearch: (search: Record<string, unknown>): { template?: string } =>
+    typeof search.template === "string" ? { template: search.template } : {},
+});
+
+function NewDashboardRoute() {
+  const { template } = newDashboardRoute.useSearch();
+  return <NewDashboardScreen templateId={template} />;
+}
+
+const editDashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/$dashboardId/edit",
+  component: EditDashboardRoute,
+});
+
+function EditDashboardRoute() {
+  const { dashboardId } = editDashboardRoute.useParams();
+  return <DashboardEditScreen dashboardId={dashboardId} />;
 }
 
 const profilesRoute = createRoute({
@@ -819,7 +852,9 @@ const routeTree = rootRoute.addChildren([
     sloRoute,
     editSloRoute,
     dashboardsRoute,
+    newDashboardRoute,
     dashboardRoute,
+    editDashboardRoute,
     servicesRoute,
     serviceRoute,
     serviceMapRoute,

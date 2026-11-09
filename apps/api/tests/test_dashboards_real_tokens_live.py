@@ -99,6 +99,11 @@ def _routes(dashboard_id: uuid.UUID, project_id: uuid.UUID) -> list[tuple[str, s
             f"/dashboard-panels/read?dashboard_id={dashboard_id}&project_id={project_id}&range=1h",
             None,
         ),
+        (
+            "POST",
+            "/dashboard-panels/preview",
+            {"project_id": str(project_id), "range": "1h", "definition": document["definition"]},
+        ),
     ]
 
 

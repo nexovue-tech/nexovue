@@ -94,8 +94,10 @@ describe("the sidebar", () => {
       "/slos/$sloId/edit",
       // F28: reached from the releases list's rows.
       "/releases/$releaseId",
-      // F20: reached from the dashboard list.
+      // F20: reached from the dashboard list, and the builder from the list and a dashboard.
       "/dashboards/$dashboardId",
+      "/dashboards/new",
+      "/dashboards/$dashboardId/edit",
       "/settings/channels/$channelId",
       // F22: reached from the Connections screen and from GitHub's own redirects.
       "/settings/connections/github/start",

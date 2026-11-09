@@ -430,6 +430,7 @@ async def _response(db: AsyncSession, dashboard: Dashboard) -> DashboardResponse
         updated_by=await queries.person_name(
             db, org_id=dashboard.org_id, user_id=dashboard.updated_by
         ),
+        last_viewed_at=dashboard.last_viewed_at,
         created_at=dashboard.created_at,
         updated_at=dashboard.updated_at,
     )

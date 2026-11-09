@@ -10,10 +10,14 @@ arrive with those kinds.
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from nexovue_api.dashboards.definition import MAX_PANELS, Definition, PanelId, ServiceName
+from nexovue_api.dashboards.ranges import RangeId
 from nexovue_api.wire import IsoTimestamp
 
 
@@ -110,3 +114,18 @@ class PanelReadResponse(BaseModel):
     window_start: IsoTimestamp
     window_end: IsoTimestamp
     panels: dict[str, PanelResult]
+
+
+class PreviewBody(BaseModel):
+    """A draft's read (FR10, FR24): what a saved read names in its address, and the draft
+    itself, checked as a save is (FR7). `panels` names the one panel an Apply reads."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    project_id: uuid.UUID
+    range_id: RangeId | None = Field(default=None, alias="range")
+    from_time: datetime | None = Field(default=None, alias="from")
+    to_time: datetime | None = Field(default=None, alias="to")
+    service: ServiceName | None = None
+    panels: Annotated[list[PanelId], Field(min_length=1, max_length=MAX_PANELS)] | None = None
+    definition: Definition

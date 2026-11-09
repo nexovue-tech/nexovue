@@ -188,6 +188,8 @@ POLICY_OF: Final = {
     "nexovue_api/dashboards/router.py:delete_dashboard": "MayEditDashboards",
     "nexovue_api/slos/router.py:create_slo_exclusion": "MayConfigureSlos",
     "nexovue_api/slos/router.py:remove_slo_exclusion": "MayConfigureSlos",
+    # A draft's read: gated as a write, because only an editor has a draft (FR10).
+    "nexovue_api/dashboardpanels/router.py:preview_panels": "MayEditDashboards",
     "nexovue_api/detection/router.py:snooze_service": "MayOperateAlerts",
     # F6 (FR23, D11): what decides whether detection is heard at all, and what it
     # judges by, is an admin's.

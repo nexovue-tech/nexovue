@@ -191,10 +191,16 @@ async def test_ac7_a_viewer_reads_and_is_refused_every_write(
 
     assert (await _call(db, acme, acme.viewer, "GET", path)).status_code == 200
     assert (await _call(db, acme, acme.viewer, "GET", "/dashboards")).status_code == 200
+    preview = {
+        "project_id": str(acme.project_id),
+        "range": "1h",
+        "definition": _document()["definition"],
+    }
     for method, target, payload in (
         ("POST", "/dashboards", _document(title="v")),
         ("PUT", path, body),
         ("DELETE", path, None),
+        ("POST", "/dashboard-panels/preview", preview),
     ):
         refused = await _call(db, acme, acme.viewer, method, target, payload)
         assert refused.status_code == 403, (method, refused.text)
@@ -223,12 +229,15 @@ def test_ac8_every_dashboard_write_passes_the_support_views_method_gate() -> Non
     from fastapi.dependencies.utils import get_typed_signature
 
     from nexovue_api.auth.dependencies import get_current_identity
+    from nexovue_api.dashboardpanels import router as panels_router
     from nexovue_api.dashboards import router as dashboards_router
 
     for handler in (
         dashboards_router.create_dashboard,
         dashboards_router.replace_dashboard,
         dashboards_router.delete_dashboard,
+        # A draft's read is refused too, though it changes nothing (AC8).
+        panels_router.preview_panels,
     ):
         identity = get_typed_signature(handler).parameters["identity"]
         [gate] = [item for item in identity.annotation.__metadata__ if hasattr(item, "dependency")]
@@ -237,6 +246,29 @@ def test_ac8_every_dashboard_write_passes_the_support_views_method_gate() -> Non
             for parameter in get_typed_signature(gate.dependency).parameters.values()
         ]
         assert person is get_current_identity, handler.__name__
+
+
+# ---------------------------------------------------------------- FR25, AC136
+
+
+async def test_one_dashboard_says_when_it_was_last_opened_for_the_delete_sentence(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """Delete states "last opened 2 hours ago" from the dashboard itself (FR25, AC136)."""
+    saved = await _create(db, acme)
+    path = f"/dashboards/{saved['id']}"
+    assert saved["last_viewed_at"] is None
+
+    opened = datetime.now(UTC) - timedelta(hours=2)
+    await db.execute(
+        update(Dashboard)
+        .where(Dashboard.id == uuid.UUID(saved["id"]))
+        .values(last_viewed_at=opened)
+    )
+    read = (await _call(db, acme, acme.member, "GET", path)).json()
+
+    assert datetime.fromisoformat(read["last_viewed_at"]) == opened
 
 
 # ----------------------------------------------------------------- AC6, AC75

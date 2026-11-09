@@ -27,11 +27,13 @@ import pytest
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.sessions import Impersonation
 from nexovue_api.dashboardpanels import service
-from nexovue_api.dashboardpanels.service import BatchRequest, PanelReads
+from nexovue_api.dashboardpanels.service import BatchRequest, DraftRequest, PanelReads
 from nexovue_api.dashboards import queries as dashboard_queries
 from nexovue_api.dashboards import ranges
 from nexovue_api.dashboards import service as dashboards
+from nexovue_api.dashboards.definition import Definition
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.ratelimit.charge import Refused
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.services import queries as service_queries
@@ -218,6 +220,43 @@ class _Batch:
             disconnected=gone,
             correlation_id="corr-1",
             now=now,
+        )
+        return answer.model_dump(mode="json")
+
+    async def preview(
+        self,
+        repository: _Repository,
+        definition: dict[str, Any],
+        *,
+        charge: _Charge | None = None,
+        panel_ids: frozenset[str] | None = None,
+        service_name: str | None = None,
+    ) -> dict[str, Any]:
+        """A draft, read through `POST /preview`'s service: no saved row is named."""
+        repository.session = self.session
+
+        async def present() -> bool:
+            return False
+
+        answer = await service.preview_panels(
+            cast(Any, self.session),
+            identity=_identity(),
+            repository=cast(TenantScopedRepository, repository),
+            reads=self.reads,
+            charge=charge or _Charge(),
+            asked=DraftRequest(
+                project_id=PROJECT,
+                range_id="1h",
+                from_time=None,
+                to_time=None,
+                service=service_name,
+                panel_ids=panel_ids,
+                definition=Definition.model_validate(definition),
+            ),
+            arrived_at=None,
+            disconnected=present,
+            correlation_id="corr-2",
+            now=NOW,
         )
         return answer.model_dump(mode="json")
 
@@ -627,3 +666,142 @@ async def test_the_batch_logs_one_line_with_its_counts_and_no_names(
     }
     assert isinstance(line["total_ms"], int)
     assert "checkout" not in str(line) and "payment" not in str(line)
+
+
+# ------------------------------------------------------- T3.1, AC135: a draft
+
+
+def _three_scans() -> dict[str, Any]:
+    return _definition(
+        _panel("p_project", "project_trend", signal="rate"),
+        _panel("p_checkout", service="checkout", signal="rate"),
+        _panel("p_checkout_errors", service="checkout", signal="errors"),
+        _panel("p_payment", service="payment", signal="latency"),
+    )
+
+
+async def test_ac135_a_draft_charges_as_the_same_saved_read_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three distinct scans: the request's place pays for one, and each later one spends
+    a place, whether the definition is saved or a draft (BR6)."""
+    saved_charge, draft_charge = _Charge(), _Charge()
+    saved, draft = _Repository(), _Repository()
+
+    read = await _Batch(monkeypatch, _three_scans()).read(saved, charge=saved_charge)
+    # A process of its own, so no answer is kept from the saved read.
+    previewed = await _Batch(monkeypatch, _three_scans()).preview(
+        draft, _three_scans(), charge=draft_charge
+    )
+
+    assert draft_charge.claims == saved_charge.claims == 3
+    assert len(draft.statements) == len(saved.statements) == 3
+
+    def drawn(answer: dict[str, Any]) -> dict[str, Any]:
+        return {
+            panel_id: {key: value for key, value in panel.items() if key != "read_at"}
+            for panel_id, panel in answer["panels"].items()
+        }
+
+    assert drawn(previewed) == drawn(read)
+
+
+async def test_a_draft_shares_the_answers_kept_from_a_saved_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One process: the draft's scans were just read for the saved dashboard, so they
+    cost the store nothing, and the reader nothing (BR6)."""
+    batch = _Batch(monkeypatch, _three_scans())
+    repository, charge = _Repository(), _Charge()
+
+    await batch.read(repository)
+    await batch.preview(repository, _three_scans(), charge=charge)
+
+    assert len(repository.statements) == 3
+    assert charge.claims == 0
+
+
+async def test_ac135_apply_reads_only_the_panel_it_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition())
+    repository, charge = _Repository(), _Charge()
+
+    answer = await batch.preview(
+        repository, _three_scans(), charge=charge, panel_ids=frozenset({"p_payment"})
+    )
+
+    assert list(answer["panels"]) == ["p_payment"]
+    assert answer["panels"]["p_payment"]["state"] == "ok"
+    assert [parameters["service_name"] for _, parameters in repository.statements] == ["payment"]
+    assert charge.claims == 1
+
+
+async def test_a_preview_names_no_saved_dashboard_and_stamps_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition())
+
+    async def no_dashboard(*_: Any, **__: Any) -> Any:
+        raise AssertionError("a draft reads no saved dashboard")
+
+    monkeypatch.setattr(dashboards, "readable_dashboard", no_dashboard)
+    repository = _Repository()
+
+    answer = await batch.preview(repository, _three_scans())
+
+    assert batch.dashboard.last_viewed_at is None
+    # The connection is still let go before ClickHouse is asked anything.
+    assert repository.committed_first == [True, True, True]
+    assert answer["correlation_id"] == "corr-2"
+
+
+async def test_fr7_a_draft_past_the_scan_cap_is_refused_before_any_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same check a save makes, with no path around it (FR7): here with the cap
+    lowered to 2, since Step 3's kinds cost at most one scan a panel."""
+    from nexovue_api.dashboards import compile as compile_module
+
+    monkeypatch.setattr(compile_module, "MAX_SCANS_PER_READ", 2)
+    batch = _Batch(monkeypatch, _definition())
+    repository, charge = _Repository(), _Charge()
+
+    with pytest.raises(InvalidRequestError) as refused:
+        await batch.preview(repository, _three_scans(), charge=charge)
+
+    assert refused.value.extensions["scans"] == 3
+    assert repository.statements == []
+    assert charge.claims == 0
+
+
+async def test_a_previewed_picker_reads_the_service_named_with_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition())
+    draft = _definition(_panel("p_picked", service={"picker": True}, signal="rate"), picker=True)
+    repository = _Repository()
+
+    unset = await batch.preview(repository, draft)
+    picked = await batch.preview(repository, draft, service_name="checkout")
+
+    assert unset["panels"]["p_picked"]["state"] == "needs_service"
+    assert picked["panels"]["p_picked"]["state"] == "ok"
+    assert [parameters["service_name"] for _, parameters in repository.statements] == ["checkout"]
+
+
+async def test_a_preview_logs_its_line_as_a_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    batch = _Batch(monkeypatch, _definition())
+    lines: list[dict[str, Any]] = []
+
+    class Recording:
+        def info(self, event: str, **fields: Any) -> None:
+            lines.append({"event": event, **fields})
+
+    monkeypatch.setattr(service, "logger", Recording())
+    await batch.preview(_Repository(), _three_scans())
+
+    [line] = [line for line in lines if line["event"] == "dashboard batch read"]
+    assert line["dashboard_id"] is None
+    assert line["draft"] is True
+    assert line["scans_run"] == 3

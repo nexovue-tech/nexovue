@@ -3,12 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import type { DetectionStatus } from "@/shared/detection/headline";
 import type { WindowChoice } from "@/shared/selection";
-import { windowCacheKey } from "@/shared/selection";
+import { resolveChoice, windowCacheKey } from "@/shared/selection";
 
 /**
  * Dashboards (F20): `/dashboards`, Postgres only, and `/dashboard-panels/read`, the batch
- * that reads a saved dashboard's panels in one charged request. Shapes are the API's
- * `dashboards/schemas.py` and `dashboardpanels/schemas.py`.
+ * that reads a saved dashboard's panels in one charged request, with `/preview` for a
+ * draft's. Shapes are the API's `dashboards/schemas.py` and `dashboardpanels/schemas.py`.
  *
  * The page reads two things on each refresh: the panels, and the panel context, which is
  * Postgres alone and so still answers when ClickHouse does not (D24).
@@ -81,6 +81,8 @@ export interface Dashboard {
   version: number;
   owner: string | null;
   updated_by: string | null;
+  /** For delete's own sentence, "last opened 2 hours ago" (FR25). */
+  last_viewed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -188,6 +190,115 @@ export function useCreateDashboard() {
     mutationKey: ["dashboards", "create"],
     mutationFn: (document: DashboardDocument) => apiClient.post<Dashboard>("dashboards", document),
     onSuccess: () => client.invalidateQueries({ queryKey: dashboardsKey }),
+  });
+}
+
+/** A save over a dashboard, naming the version it was read at: 409 if someone saved since (FR19). */
+export function useReplaceDashboard(dashboardId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ["dashboards", "replace"],
+    mutationFn: (body: DashboardDocument & { version: number }) =>
+      apiClient.put<Dashboard>(`dashboards/${dashboardId}`, body),
+    onSuccess: (saved) => {
+      client.setQueryData([...dashboardsKey, dashboardId], saved);
+      return client.invalidateQueries({ queryKey: dashboardsKey, exact: true });
+    },
+  });
+}
+
+/** Hidden for 30 days, restorable from the list (FR25, FR51). */
+export function useDeleteDashboard(dashboardId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ["dashboards", "delete"],
+    mutationFn: () => apiClient.delete<void>(`dashboards/${dashboardId}`),
+    onSuccess: () => {
+      client.removeQueries({ queryKey: [...dashboardsKey, dashboardId] });
+      return client.invalidateQueries({ queryKey: dashboardsKey, exact: true });
+    },
+  });
+}
+
+/** A service as the services list names it: the raw name, bound and stored as it is. */
+export interface ServiceChoice {
+  service_name: string;
+}
+
+/** The most services the picker lists: the services route's own ceiling. */
+const SERVICE_CHOICES_LIMIT = 500;
+
+/**
+ * The displayed project's services in the window, for the panel picker's real values
+ * (FR23). Read from the Services screen's own endpoint: features do not import one another.
+ */
+export function useServiceChoices(projectId: string | undefined, choice: WindowChoice) {
+  return useQuery({
+    queryKey: ["dashboard-service-choices", projectId, windowCacheKey(choice)] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) => {
+      const window = resolveChoice(choice);
+      return apiClient.get<{ services: ServiceChoice[] }>("services", {
+        searchParams: {
+          project_id: projectId,
+          from: window.from,
+          to: window.to,
+          limit: SERVICE_CHOICES_LIMIT,
+        },
+        signal,
+      });
+    },
+    select: (response) => response.services.map((service) => service.service_name),
+  });
+}
+
+/** One Apply: the draft as it stands, and which panel it reads. */
+export interface PreviewAsk {
+  definition: Definition;
+  panelIds: string[] | undefined;
+  /** Counts each Apply, so pressing it twice reads twice and typing reads never (AC135). */
+  applied: number;
+}
+
+/**
+ * A draft's panels through `POST /dashboard-panels/preview`, charged as a read (FR24).
+ * A query, not a mutation, so a refusal and an outage are said in the page's own words
+ * with no toast, as the saved read's are (`meta`, AC145). It reads only when asked.
+ */
+export function usePanelPreview(
+  ask: PreviewAsk | undefined,
+  projectId: string | undefined,
+  choice: WindowChoice,
+  service: string | undefined,
+) {
+  return useQuery({
+    // The draft itself is in the key: two sheets each count their Applies from one, and
+    // must never be served each other's answer.
+    queryKey: [
+      "dashboard-preview",
+      projectId,
+      windowCacheKey(choice),
+      service,
+      ask?.applied,
+      ask?.panelIds,
+      ask ? JSON.stringify(ask.definition) : undefined,
+    ] as const,
+    enabled: ask !== undefined && projectId !== undefined,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    meta: { ownWords: ["unavailable", "rate-limited"] },
+    queryFn: ({ signal }) =>
+      apiClient.post<PanelReadResponse>(
+        "dashboard-panels/preview",
+        {
+          project_id: projectId,
+          ...windowParams(choice),
+          service,
+          panels: ask?.panelIds,
+          definition: ask?.definition,
+        },
+        { timeoutMs: PANEL_READ_CLIENT_TIMEOUT_MS, signal },
+      ),
   });
 }
 

@@ -21,6 +21,7 @@ from nexovue_api.settings import API_PREFIX, Settings
 
 PATHS: Final = [
     ("GET", "/dashboard-panels/read", "read_panels"),
+    ("POST", "/dashboard-panels/preview", "preview_panels"),
     ("GET", "/dashboards/templates", "list_templates"),
     ("GET", "/dashboards", "list_dashboards"),
     ("POST", "/dashboards", "create_dashboard"),

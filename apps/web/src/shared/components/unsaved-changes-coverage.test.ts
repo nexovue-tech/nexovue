@@ -46,6 +46,8 @@ const GUARDED = [
   "features/alerts/RuleEditor.tsx",
   "features/alerts/ChannelForm.tsx",
   "features/alerts/ChannelDetailScreen.tsx",
+  // F20: a dashboard's draft, which nothing writes until Save.
+  "features/dashboards/DashboardEditScreen.tsx",
 ];
 
 /** Submitted immediately, with no draft behind them. */
