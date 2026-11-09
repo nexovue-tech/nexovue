@@ -41,7 +41,7 @@ What each feature needs before it can start, read from the documents (foundation
 | F28 Steps 1a to 3 | F6 |
 | F28 Step 4 onward | The browser-door change |
 | F3 Steps 1 to 2c (facts, no AI) | F28's release functions (F28 Step 1b to 3) |
-| F3 Steps 3 to 7 (AI container, provider, wording) | F3 Step 2b go decision |
+| F3 Steps 3 to 7 (AI container, provider, wording) | F3 Steps 1 and 2. Not the Step 2b go decision, which the founder reads after Phase 2 (foundation item 30, 2026-11-09) |
 | F22 Steps 1 and 2 (cases on findings) | F6 |
 | F22 Steps 3 to 6 (GitHub connection) | F22 Step 2. Built against a simulated GitHub; the founder tests real GitHub after Phase 2 (foundation item 28) |
 | F22 Step 7 (Jira) | Atlassian's written yes |

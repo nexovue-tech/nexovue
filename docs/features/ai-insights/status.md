@@ -56,7 +56,7 @@ Held up: A82, A83, A84, the six pointers to approved foundation items, the test 
 
 ## Blocked
 
-Nothing is blocked now. Implementation cannot start until the three gates pass, F6 has merged, and F28's readers exist. Steps 3 to 6 also need the founder's written go. **Step 2c's runs, T2.17's report and T2.18's check wait for Oracle after Phase 2 is deployed** (foundation item 9); until then no likely cause is stated.
+Nothing is blocked now. Implementation cannot start until the three gates pass, F6 has merged, and F28's readers exist. Steps 3 to 6 no longer wait for the founder's written go: **Founder decision, 2026-11-09 (foundation item 30):** Step 2b's stop-or-go is read after Phase 2, and Steps 3 to 7 are built now. **Step 2c's runs, T2.17's report and T2.18's check wait for Oracle after Phase 2 is deployed** (foundation item 9); until then no likely cause is stated.
 
 ## Reviews
 

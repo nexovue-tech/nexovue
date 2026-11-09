@@ -156,7 +156,7 @@ Correlation; evidence record; provider interface; validator; limits; AI settings
 
 ### Step 2b: The stop-or-go, a founder gate
 
-**Steps 3 to 6 run only on the founder's written go.** This is the cheap question before the costly work (A49). No money is spent: model calls use free tiers or a local model, on synthetic data only (foundation item 4, changed 2026-11-02).
+**Founder, 2026-11-09 (foundation item 30): no longer a build gate.** Steps 3 to 7 are built now; T2.10, T2.11 and the written go or stop are run by the founder after Phase 2, and a stop turns the customer-facing AI wording off before release. *Originally:* Steps 3 to 6 run only on the founder's written go. This is the cheap question before the costly work (A49). No money is spent: model calls use free tiers or a local model, on synthetic data only (foundation item 4, changed 2026-11-02).
 
 - [ ] **T2.10** Five to eight target users on the facts-only page, watched: what do they do first, and do they trust it? Written up in `status.md`. Founder's time, no code.
 - [ ] **T2.11** `tools/ai-eval/spike/` *new*, thrown away afterwards and not shipped: a script sending `model_input` from seeded findings to one provider, about 20 calls. Model and template sentences shown blind to 5 people. **The rule was approved on 2026-11-02 (A61; foundation item 13), before any call.** Seeded data only, on a free tier (for example Gemini's) under the founder's own account. A free tier may keep and read what is sent, so nothing else goes. Written up in `status.md`.
