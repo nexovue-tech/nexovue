@@ -249,8 +249,14 @@ def judge_target(
     return TargetBurn(
         target=target,
         minute=alerting.Minute(
-            target_id=target.id,
-            label=target.label,
+            subject=alerting.burn_subject(
+                target.id,
+                label=target.label,
+                kind=target.kind,
+                service_name=target.service_name,
+                endpoint_name=target.endpoint_name,
+                check_id=target.check_id,
+            ),
             minute=settled,
             judgment=judgment,
             detail=detail,

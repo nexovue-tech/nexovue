@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
+from nexovue_platform.alerts.model import SLO_RULE_CONDITION
 from nexovue_platform.cases import (
     CASE_IDLE_LIMIT,
     CASE_IDLE_WARNING_AHEAD,
@@ -38,7 +39,7 @@ from nexovue_api.audit import service as audit
 from nexovue_api.auth.permissions import Action, may
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Finding as FindingRow
-from nexovue_api.data.postgres.models import User
+from nexovue_api.data.postgres.models import Incident, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import cases, links, queries
 from nexovue_api.findings.schemas import (
@@ -55,6 +56,7 @@ from nexovue_api.findings.schemas import (
     FindingSignal,
     FindingState,
     FindingStats,
+    LinkedBurn,
     LinkedIncident,
     NewNormalPreview,
     ProposedShift,
@@ -529,6 +531,7 @@ async def _detail(
                 condition_kind=incident.condition_kind,
                 opened_at=incident.opened_at,
                 resolved_at=incident.resolved_at,
+                burn=_linked_burn(incident),
             )
             for incident in incidents
         ],
@@ -628,6 +631,22 @@ def _release_fact(found: Any, *, called: bool | None = None) -> ReleaseFact:
         is_return=found.is_return,
         already_running=found.already_running,
         called=called,
+    )
+
+
+def _linked_burn(incident: Incident) -> LinkedBurn | None:
+    """A burn's label and current figures, read from what the job wrote on it."""
+    if incident.condition_kind != SLO_RULE_CONDITION.kind:
+        return None
+    detail = incident.detail or {}
+    return LinkedBurn(
+        slo_id=detail.get("slo_id"),
+        label=incident.subject_label,
+        kind=detail.get("kind"),
+        rate=detail.get("rate"),
+        hours_left=detail.get("hours_left"),
+        allowed=detail.get("allowed"),
+        left=detail.get("left"),
     )
 
 

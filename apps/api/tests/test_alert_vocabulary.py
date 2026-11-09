@@ -81,6 +81,8 @@ def _values(quoted: str) -> tuple[str, ...]:
         ("_EMAIL_OWED_KINDS", cases.CASE_EMAIL_KINDS),
         # F19: what a burn is about, frozen by its Step 4 migration.
         ("_ABOUT_SIGNALS", slo.ABOUT_SIGNALS),
+        # F19 Step 5: why a notification was withheld, frozen by its migration.
+        ("_WITHHELD_REASONS", model.WITHHELD_REASONS),
     ],
 )
 def test_the_latest_migration_allows_exactly_the_vocabulary(

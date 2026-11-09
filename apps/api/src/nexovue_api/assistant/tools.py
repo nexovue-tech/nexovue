@@ -144,6 +144,8 @@ UNTRUSTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
         "finding[].release_context.nearby[].version",
         "finding[].release_context.affected[].service_name",
         "finding[].release_context.affected[].version",
+        # F19: nexovue's label for a linked burn, composed from service and endpoint names.
+        "finding[].incidents[].burn.label",
     ),
     "get_trace": (
         "trace[].spans[].service_name",

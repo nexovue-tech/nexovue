@@ -31,6 +31,13 @@ is fixed at its subject's first claim there and kept, and the alert is resolved
 only by the last of them to end: PagerDuty drops events for a resolved alert and
 opens a new one on the next trigger, so an early resolve would page again.
 
+**A burn does not repeat news** (F19 FR20 to FR26, ADR-038). On a channel people read,
+a news row of a subject is `dropped`, with why, when a reliability target's burn is
+involved and another subject, the same news, still open, told the channel within the
+hour at the same or a higher severity. A burn's messages wait out its service's snooze.
+When that reason ends and the subject is still open, one message goes after all. With
+no burn involved, nothing here changes what is sent.
+
 **These statements read across organizations on purpose.** Delivery serves every
 tenant from one queue; each row carries its own `org_id`, and every write back
 names it.
@@ -46,7 +53,13 @@ from datetime import datetime, timedelta
 from typing import Any, Final, Literal
 
 from nexovue_platform.alerts.channels import READ_BY_PEOPLE
-from nexovue_platform.alerts.model import ENDING_KINDS
+from nexovue_platform.alerts.model import (
+    ENDING_KINDS,
+    NEWS_KINDS,
+    SEVERITY_RANK,
+    WITHHELD_SAME_NEWS,
+    WITHHELD_SERVICE_SNOOZED,
+)
 from nexovue_platform.alerts.quiet_hours import parse_quiet_hours, quiet_until
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -70,6 +83,18 @@ ALERT_STILL_OPEN_REASON: Final = (
 
 # The channel whose alerts one problem shares (D35). A webhook keys on each subject.
 PAGERDUTY: Final = "pagerduty"
+
+# F19 FR22: a channel told the same news within this long withholds a new row (a guess,
+# in the spec's register). It stops new rows being withheld; it releases nothing.
+SAME_NEWS_WINDOW: Final = timedelta(minutes=60)
+# A burn withholds only while a tier could judge it this recently, so a frozen burn
+# silences nothing (D56): its position's `evaluated_at` is the last minute one could.
+BURN_FRESH_FOR: Final = timedelta(minutes=15)
+SAME_NEWS_REASON: Final = "not sent: this channel was told about this within the hour"
+NOTHING_TOLD_REASON: Final = (
+    "not sent: this channel was never told about it, because the same news reached it first"
+)
+SNOOZED_REASON: Final = "not sent: the service is snoozed"
 
 # A finding's notices are routed by rules of this kind; a project's are detection's own.
 ANOMALY_FINDING: Final = "anomaly_finding"
@@ -195,6 +220,88 @@ _OWN_KEY: Final = """
 """
 
 
+_NEWS: Final = ", ".join(f"'{kind}'" for kind in sorted(NEWS_KINDS))
+
+
+def _rank(severity: str) -> str:
+    """A severity column as `SEVERITY_RANK`'s number, so SQL can say "at least"."""
+    cases = " ".join(f"WHEN '{name}' THEN {rank}" for name, rank in SEVERITY_RANK.items())
+    return f"(CASE {severity} {cases} ELSE 0 END)"
+
+
+def _reached(row: str) -> str:
+    """The row got to its channel or is on its way: a row waiting on a retry has a
+    future `deliver_after` and still counts (FR22, AC57)."""
+    return (
+        f"({row}.state IN ('delivered', 'delivering') "
+        f"OR ({row}.state = 'pending' AND {row}.attempts > 0))"
+    )
+
+
+def _same_news(xi: str, xf: str, yi: str, yf: str) -> str:
+    """FR21's table: subject X (incident `xi` or finding `xf`, one of them null) and
+    subject Y are the same news, in either order, with a burn (`about_signal` set) as
+    one of them. Same organization and project are the caller's join."""
+
+    def burn_and_finding(burn: str, finding: str) -> str:
+        return f"""(
+            {burn}.about_signal IS NOT NULL AND {finding}.id IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM finding_incidents AS link
+                WHERE link.org_id = {burn}.org_id AND link.incident_id = {burn}.id
+                  AND link.finding_id = {finding}.id)
+            AND {finding}.signals @> jsonb_build_array(jsonb_build_object('signal',
+                CASE {burn}.about_signal WHEN 'latency' THEN 'slower' ELSE 'failing' END))
+        )"""
+
+    def burn_and_threshold(burn: str, other: str) -> str:
+        return f"""(
+            {burn}.about_signal IS NOT NULL AND {other}.subject_key = {burn}.about_key
+            AND {other}.condition_kind = CASE {burn}.about_signal
+                WHEN 'latency' THEN 'service_latency_p95' ELSE 'service_error_rate' END
+        )"""
+
+    return f"""(
+        {burn_and_finding(xi, yf)} OR {burn_and_finding(yi, xf)}
+        OR {burn_and_threshold(xi, yi)} OR {burn_and_threshold(yi, xi)}
+        -- Two burns: one target under two rules, or one service and type unless each
+        -- names a different endpoint.
+        OR ({xi}.about_signal IS NOT NULL AND {yi}.about_signal IS NOT NULL
+            AND {xi}.id <> {yi}.id
+            AND ({xi}.subject_key = {yi}.subject_key
+                 OR ({xi}.about_key = {yi}.about_key AND {xi}.about_signal = {yi}.about_signal
+                     AND NOT ({xi}.about_endpoint IS NOT NULL
+                              AND {yi}.about_endpoint IS NOT NULL
+                              AND {xi}.about_endpoint <> {yi}.about_endpoint))))
+        -- A check burn beside its check's incident: only the burn is ever withheld.
+        OR ({xi}.about_check_id IS NOT NULL AND {yi}.condition_kind = 'check_state'
+            AND {yi}.subject_key = 'check:' || CAST({xi}.about_check_id AS text))
+    )"""
+
+
+def _open_and_judged(yi: str, yf: str) -> str:
+    """Y is still open, and a burn as Y was judged by a tier within `BURN_FRESH_FOR`."""
+    return f"""(
+        (({yi}.id IS NOT NULL AND {yi}.resolved_at IS NULL) OR {yf}.state = 'open')
+        AND ({yi}.about_signal IS NULL OR EXISTS (
+            SELECT 1 FROM alert_evaluations AS judged
+            WHERE judged.org_id = {yi}.org_id AND judged.rule_id = {yi}.rule_id
+              AND judged.subject_key = {yi}.subject_key
+              AND judged.evaluated_at > :fresh_since))
+    )"""
+
+
+def _snoozed(burn: str) -> str:
+    """The service a burn watches is snoozed now (FR26). Detection's own setting, read
+    here on purpose: the snooze belongs to the service, not to a rule."""
+    return f"""EXISTS (
+        SELECT 1 FROM service_detection_settings AS service
+        WHERE service.org_id = {burn}.org_id AND service.project_id = {burn}.project_id
+          AND {burn}.about_key = 'service:' || service.service_name
+          AND service.snoozed_until > :now
+    )"""
+
+
 def _open_for_another(key: str) -> str:
     """Whether the alert `key` names on this row's channel still carries a subject
     other than this row's that has not ended."""
@@ -217,10 +324,18 @@ def _open_for_another(key: str) -> str:
 
 
 _ENDING: Final = ", ".join(f"'{kind}'" for kind in sorted(ENDING_KINDS))
+# A burn's news shares an alert sent at the same or a higher severity, so a critical
+# burn after a warning alert pages rather than becoming a note (F19 FR24a, AC27).
+_HOST_SEVERE_ENOUGH: Final = f"{_rank('host.severity')} >= {_rank('notifications.severity')}"
+# Threshold incidents a burn's alert can carry, and be carried by (F19 FR24a).
+_SHARES_WITH_BURNS: Final = "'service_error_rate', 'service_latency_p95'"
 # Fixed once per subject and channel: the key its earlier rows went under; else, for
 # news rather than an ending, the alert of a linked subject that is still open
-# there (either order, D35); else its own. Linked through a finding, two incidents
-# share the first one's alert too, because the finding's rows carry that key.
+# there (either order, D35); else, for a reliability target's burn, the alert of an
+# open subject about the same service or check (F19 FR24a); else its own. Linked
+# through a finding, two incidents share the first one's alert too, because the
+# finding's rows carry that key. `service_silent` and `check_state` openings never
+# join a burn's alert.
 _PIN_KEY: Final = text(
     f"""
     UPDATE notifications SET dedup_key = coalesce(
@@ -249,6 +364,40 @@ _PIN_KEY: Final = text(
                    OR link.incident_id = notifications.incident_id)
               AND host.dedup_key IS NOT NULL
               AND {_open_for_another("host.dedup_key")}
+              AND ({_HOST_SEVERE_ENOUGH} OR NOT EXISTS (
+                  SELECT 1 FROM incidents AS burn
+                  WHERE burn.org_id = notifications.org_id AND burn.about_signal IS NOT NULL
+                    AND burn.id IN (notifications.incident_id, host.incident_id)))
+            ORDER BY host.created_at, host.id
+            LIMIT 1
+        ),
+        (
+            SELECT host.dedup_key
+            FROM incidents AS mine
+            JOIN notifications AS host
+                ON host.org_id = mine.org_id AND host.channel_id = notifications.channel_id
+               AND host.incident_id IS NOT NULL AND host.incident_id <> mine.id
+            JOIN incidents AS other
+                ON other.id = host.incident_id AND other.org_id = host.org_id
+               AND other.project_id = mine.project_id
+            WHERE notifications.kind NOT IN ({_ENDING})
+              AND mine.org_id = notifications.org_id AND mine.id = notifications.incident_id
+              AND host.dedup_key IS NOT NULL
+              AND {_HOST_SEVERE_ENOUGH}
+              AND {_open_for_another("host.dedup_key")}
+              AND (
+                  -- The row is a burn's: another burn about the same thing, a threshold
+                  -- incident on its service, or its check's incident.
+                  (mine.about_signal IS NOT NULL
+                   AND ((other.about_signal IS NOT NULL AND other.about_key = mine.about_key)
+                        OR (other.condition_kind IN ({_SHARES_WITH_BURNS})
+                            AND other.subject_key = mine.about_key)
+                        OR (other.condition_kind = 'check_state'
+                            AND other.subject_key = 'check:' || CAST(mine.about_check_id AS text))))
+                  -- The row is a threshold incident's: a burn about its service.
+                  OR (mine.condition_kind IN ({_SHARES_WITH_BURNS})
+                      AND other.about_signal IS NOT NULL AND other.about_key = mine.subject_key)
+              )
             ORDER BY host.created_at, host.id
             LIMIT 1
         ),
@@ -269,6 +418,201 @@ _WITHHOLD_ENDING: Final = text(
     RETURNING id
     """
 )
+
+# ------------------------------------------------- what a burn may withhold (F19)
+#
+# At a claim of a channel people read or PagerDuty, in this order: release, snooze,
+# withhold (design, *What a burn may withhold*). Webhooks are untouched by all three.
+
+# Whether any of it can apply to what is due here: a due row in a project holding an
+# open burn, a burn's own row, or a row whose subject has a row withheld on this
+# channel. A channel with no target pays for this lookup alone.
+_BURN_INVOLVED: Final = text(
+    f"""
+    SELECT EXISTS (
+        SELECT 1 FROM notifications
+        WHERE notifications.org_id = :org_id AND notifications.channel_id = :channel_id
+          AND notifications.batch_id IS NULL AND ({_DUE})
+          AND (EXISTS (
+                  SELECT 1 FROM incidents AS burn
+                  WHERE burn.org_id = notifications.org_id
+                    AND burn.project_id = notifications.project_id
+                    AND burn.about_signal IS NOT NULL
+                    AND (burn.resolved_at IS NULL OR burn.id = notifications.incident_id))
+               OR EXISTS (
+                  SELECT 1 FROM notifications AS held
+                  WHERE held.org_id = notifications.org_id
+                    AND held.channel_id = notifications.channel_id
+                    AND held.withheld_why IS NOT NULL
+                    AND (held.incident_id = notifications.incident_id
+                         OR held.finding_id = notifications.finding_id)))
+    )
+    """
+)
+# FR26: a burn's due row, on a channel people read, or a news row on PagerDuty (a page
+# wakes a person; an ending closes what was opened), waits out its service's snooze.
+_DROP_SNOOZED: Final = text(
+    f"""
+    UPDATE notifications
+    SET state = 'dropped', outcome_reason = :reason, lease_until = NULL,
+        withheld_why = '{WITHHELD_SERVICE_SNOOZED}'
+    FROM incidents AS burn
+    WHERE notifications.org_id = :org_id AND notifications.channel_id = :channel_id
+      AND notifications.batch_id IS NULL AND ({_DUE})
+      AND (CAST(:people AS boolean) OR notifications.kind IN ({_NEWS}))
+      AND burn.org_id = notifications.org_id AND burn.id = notifications.incident_id
+      AND burn.about_signal IS NOT NULL AND {_snoozed("burn")}
+    RETURNING notifications.id
+    """
+)
+# FR22: a due news row X, not in a batch, whose same news Y is open (a burn as Y judged
+# within 15 minutes) and either reached this channel within the hour at the same or a
+# higher severity, or is due beside it now and wins the tie: a finding or threshold
+# row over a burn's, and between two burns the older row.
+_WITHHOLD_SECOND: Final = text(
+    f"""
+    WITH found AS (
+        SELECT DISTINCT ON (x.id) x.id, y.incident_id AS by_incident, y.finding_id AS by_finding
+        FROM notifications AS x
+        LEFT JOIN incidents AS xi ON xi.id = x.incident_id AND xi.org_id = x.org_id
+        LEFT JOIN findings AS xf ON xf.id = x.finding_id AND xf.org_id = x.org_id
+        JOIN notifications AS y
+            ON y.org_id = x.org_id AND y.channel_id = x.channel_id
+           AND y.project_id = x.project_id AND y.kind IN ({_NEWS})
+           AND (y.incident_id IS DISTINCT FROM x.incident_id
+                OR y.finding_id IS DISTINCT FROM x.finding_id)
+        LEFT JOIN incidents AS yi ON yi.id = y.incident_id AND yi.org_id = y.org_id
+        LEFT JOIN findings AS yf ON yf.id = y.finding_id AND yf.org_id = y.org_id
+        WHERE x.org_id = :org_id AND x.channel_id = :channel_id AND x.batch_id IS NULL
+          AND x.kind IN ({_NEWS})
+          AND ((x.state = 'pending' AND x.deliver_after <= :now)
+               OR (x.state = 'delivering' AND x.lease_until < :now))
+          AND (xi.about_signal IS NOT NULL OR yi.about_signal IS NOT NULL)
+          AND {_rank("y.severity")} >= {_rank("x.severity")}
+          AND {_open_and_judged("yi", "yf")}
+          AND {_same_news("xi", "xf", "yi", "yf")}
+          AND (({_reached("y")} AND coalesce(y.delivered_at, :now) > :told_since)
+               OR (y.state = 'pending' AND y.attempts = 0 AND y.batch_id IS NULL
+                   AND y.deliver_after <= :now
+                   AND (yi.about_signal IS NULL
+                        OR (xi.about_signal IS NOT NULL
+                            AND (y.created_at, y.id) < (x.created_at, x.id)))))
+        ORDER BY x.id, y.created_at, y.id
+    )
+    UPDATE notifications
+    SET state = 'dropped', outcome_reason = :reason, lease_until = NULL,
+        withheld_why = '{WITHHELD_SAME_NEWS}',
+        withheld_by_incident_id = found.by_incident, withheld_by_finding_id = found.by_finding
+    FROM found
+    WHERE notifications.org_id = :org_id AND notifications.id = found.id
+    RETURNING notifications.id
+    """
+)
+# FR24: an ending is owed only where a news row of its subject reached the channel. A
+# subject with nothing withheld here is untouched, which keeps F6's behaviour.
+_WITHHOLD_UNTOLD_ENDING: Final = text(
+    f"""
+    UPDATE notifications
+    SET state = 'dropped', outcome_reason = :reason, lease_until = NULL
+    WHERE org_id = :org_id AND channel_id = :channel_id AND batch_id IS NULL AND ({_DUE})
+      AND kind IN ({_ENDING})
+      AND EXISTS (
+          SELECT 1 FROM notifications AS held
+          WHERE held.org_id = notifications.org_id
+            AND held.channel_id = notifications.channel_id
+            AND held.incident_id IS NOT DISTINCT FROM notifications.incident_id
+            AND held.finding_id IS NOT DISTINCT FROM notifications.finding_id
+            AND held.withheld_why IS NOT NULL)
+      AND NOT EXISTS (
+          SELECT 1 FROM notifications AS news
+          WHERE news.org_id = notifications.org_id
+            AND news.channel_id = notifications.channel_id
+            AND news.incident_id IS NOT DISTINCT FROM notifications.incident_id
+            AND news.finding_id IS NOT DISTINCT FROM notifications.finding_id
+            AND news.kind IN ({_NEWS}) AND {_reached("news")})
+    RETURNING id
+    """
+)
+# FR23: each subject with rows withheld on this channel and not yet released, and
+# whether anything still holds any of them back: for `same_news`, Y open, judged and
+# told here at any age; for `service_snoozed`, the snooze.
+_RELEASABLE: Final = text(
+    f"""
+    SELECT held.project_id, held.incident_id, held.finding_id,
+           array_agg(held.id) AS ids,
+           bool_or(CASE held.withheld_why
+               WHEN '{WITHHELD_SAME_NEWS}' THEN EXISTS (
+                   SELECT 1 FROM notifications AS y
+                   LEFT JOIN incidents AS yi ON yi.id = y.incident_id AND yi.org_id = y.org_id
+                   LEFT JOIN findings AS yf ON yf.id = y.finding_id AND yf.org_id = y.org_id
+                   WHERE y.org_id = held.org_id AND y.channel_id = held.channel_id
+                     AND y.project_id = held.project_id AND y.kind IN ({_NEWS})
+                     AND (y.incident_id IS DISTINCT FROM held.incident_id
+                          OR y.finding_id IS DISTINCT FROM held.finding_id)
+                     AND {_reached("y")}
+                     AND {_open_and_judged("yi", "yf")}
+                     AND {_same_news("xi", "xf", "yi", "yf")})
+               ELSE xi.id IS NOT NULL AND {_snoozed("xi")}
+           END) AS still_held,
+           max(held.kind) FILTER (WHERE held.kind IN ({_ENDING})) AS held_ending,
+           ((xi.id IS NOT NULL AND xi.resolved_at IS NULL) OR xf.state = 'open') AS still_open,
+           coalesce(xi.severity, xf.severity) AS severity,
+           EXISTS (
+               SELECT 1 FROM notifications AS news
+               WHERE news.org_id = held.org_id AND news.channel_id = held.channel_id
+                 AND news.incident_id IS NOT DISTINCT FROM held.incident_id
+                 AND news.finding_id IS NOT DISTINCT FROM held.finding_id
+                 AND news.kind IN ({_NEWS}) AND {_reached("news")}) AS told
+    FROM notifications AS held
+    LEFT JOIN incidents AS xi ON xi.id = held.incident_id AND xi.org_id = held.org_id
+    LEFT JOIN findings AS xf ON xf.id = held.finding_id AND xf.org_id = held.org_id
+    WHERE held.org_id = :org_id AND held.channel_id = :channel_id
+      AND held.withheld_why IS NOT NULL AND held.released_at IS NULL
+    GROUP BY held.org_id, held.channel_id, held.project_id, held.incident_id,
+             held.finding_id, xi.id, xf.id
+    """
+)
+# One row per subject and channel, `sequence` one above the highest of its kind there,
+# so it never conflicts with what was withheld.
+_WRITE_RELEASE: Final = text(
+    """
+    INSERT INTO notifications
+        (org_id, project_id, incident_id, finding_id, channel_id, kind, sequence, severity,
+         deliver_after, created_at)
+    SELECT CAST(:org_id AS uuid), CAST(:project_id AS uuid), CAST(:incident_id AS uuid),
+           CAST(:finding_id AS uuid), CAST(:channel_id AS uuid), CAST(:kind AS text),
+           coalesce(max(sequence) + 1, 0), CAST(:severity AS text),
+           CAST(:now AS timestamptz), CAST(:now AS timestamptz)
+    FROM notifications
+    WHERE org_id = :org_id AND channel_id = :channel_id AND kind = CAST(:kind AS text)
+      AND incident_id IS NOT DISTINCT FROM CAST(:incident_id AS uuid)
+      AND finding_id IS NOT DISTINCT FROM CAST(:finding_id AS uuid)
+    """
+)
+_STAMP_RELEASED: Final = text(
+    """
+    UPDATE notifications SET released_at = :now
+    WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[]))
+    """
+)
+# The channels the delivery sweep releases on: those holding rows not yet released,
+# each locked as a claim locks it, so a sweep and a claim never release one twice.
+_CHANNELS_HOLDING: Final = text(
+    """
+    SELECT id, org_id FROM notification_channels
+    WHERE EXISTS (
+            SELECT 1 FROM notifications
+            WHERE notifications.org_id = notification_channels.org_id
+              AND notifications.channel_id = notification_channels.id
+              AND notifications.withheld_why IS NOT NULL
+              AND notifications.released_at IS NULL)
+      AND (muted_until IS NULL OR muted_until <= :now)
+    ORDER BY id
+    LIMIT :limit
+    FOR UPDATE SKIP LOCKED
+    """
+)
+
 _TAKEN: Final = text(
     f"""
     SELECT notifications.id, notifications.project_id, notifications.incident_id,
@@ -529,8 +873,17 @@ async def claim(
             claimed.dropped += dropped.rowcount
             continue
 
+        involved = False
+        if row.kind in READ_BY_PEOPLE or row.kind == PAGERDUTY:
+            # Before shaping, so a release goes in one message with Y's ending (AC52).
+            await release(connection, org_id=row.org_id, channel_id=row.id, now=now)
+            involved = bool((await connection.execute(_BURN_INVOLVED, keys)).scalar_one())
+            if involved:
+                claimed.dropped += await _drop_snoozed(connection, row, now=now)
         if row.kind in READ_BY_PEOPLE:
             await _shape(connection, row, now=now)
+            if involved:
+                claimed.dropped += await _withhold_second(connection, row, now=now)
 
         oldest = (await connection.execute(_OLDEST_DUE, keys)).first()
         if oldest is None:
@@ -575,6 +928,92 @@ async def claim(
             )
         )
     return claimed
+
+
+async def _drop_snoozed(connection: AsyncConnection, row: Any, *, now: datetime) -> int:
+    """F19 FR26: hold a snoozed service's burn rows. Returns the rows dropped."""
+    keys = {"org_id": row.org_id, "channel_id": row.id, "now": now}
+    snoozed = await connection.execute(
+        _DROP_SNOOZED,
+        keys | {"reason": SNOOZED_REASON, "people": row.kind in READ_BY_PEOPLE},
+    )
+    return len(snoozed.fetchall())
+
+
+async def _withhold_second(connection: AsyncConnection, row: Any, *, now: datetime) -> int:
+    """FR22 and FR24 on a channel people read: a second message of the same news is
+    recorded and not sent, and so is an ending of a subject this channel never heard
+    of. Returns the rows dropped."""
+    keys = {"org_id": row.org_id, "channel_id": row.id, "now": now}
+    news = await connection.execute(
+        _WITHHOLD_SECOND,
+        keys
+        | {
+            "reason": SAME_NEWS_REASON,
+            "told_since": now - SAME_NEWS_WINDOW,
+            "fresh_since": now - BURN_FRESH_FOR,
+        },
+    )
+    endings = await connection.execute(
+        _WITHHOLD_UNTOLD_ENDING, keys | {"reason": NOTHING_TOLD_REASON}
+    )
+    return len(news.fetchall()) + len(endings.fetchall())
+
+
+async def release(
+    connection: AsyncConnection, *, org_id: uuid.UUID, channel_id: uuid.UUID, now: datetime
+) -> int:
+    """F19 FR23: for each subject held back on this channel and held back by nothing any
+    more, one message after all, at its current severity: `opened` while it is still
+    open and no news of it reached the channel, or a snoozed ending to a channel its
+    news did reach. Every such row is then marked released, written or not, so it is
+    released once. The caller holds the channel's lock. Returns the rows written."""
+    keys = {"org_id": org_id, "channel_id": channel_id, "now": now}
+    held = await connection.execute(_RELEASABLE, keys | {"fresh_since": now - BURN_FRESH_FOR})
+    written = 0
+    for subject in held.fetchall():
+        if subject.still_held:
+            continue
+        owed = _owed_on_release(subject)
+        if owed is not None:
+            kind, severity = owed
+            await connection.execute(
+                _WRITE_RELEASE,
+                keys
+                | {
+                    "project_id": subject.project_id,
+                    "incident_id": subject.incident_id,
+                    "finding_id": subject.finding_id,
+                    "kind": kind,
+                    "severity": severity,
+                },
+            )
+            written += 1
+        await connection.execute(_STAMP_RELEASED, keys | {"ids": subject.ids})
+    return written
+
+
+def _owed_on_release(subject: Any) -> tuple[str, str] | None:
+    """What a channel is owed when nothing holds a subject back any more: its kind and
+    severity, or None when it heard the news already or the subject ended unheard."""
+    if subject.still_open:
+        return None if subject.told else ("opened", subject.severity)
+    if subject.held_ending is not None and subject.told:
+        return subject.held_ending, subject.severity
+    return None
+
+
+async def release_everywhere(
+    connection: AsyncConnection, *, now: datetime, limit: int = 100
+) -> int:
+    """The delivery sweep's release, across every channel holding rows back, for the
+    endings that write nothing to a channel, such as a person closing a finding (AC52).
+    Returns the rows written."""
+    channels = await connection.execute(_CHANNELS_HOLDING, {"now": now, "limit": limit})
+    written = 0
+    for channel in channels.fetchall():
+        written += await release(connection, org_id=channel.org_id, channel_id=channel.id, now=now)
+    return written
 
 
 async def _one_alert_per_problem(

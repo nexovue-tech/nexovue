@@ -31,6 +31,7 @@ from nexovue_platform.alerts.model import (
     NOTIFICATION_STATES,
     PROJECT_NOTIFICATION_KINDS,
     SEVERITIES,
+    WITHHELD_REASONS,
 )
 from nexovue_platform.cases import CASE_EMAIL_KINDS, EVENT_ACTOR_KINDS, NOTE_MAX_LENGTH
 from nexovue_platform.connections import (
@@ -1529,6 +1530,13 @@ class Notification(Base):
     # The PagerDuty alert this row went to, fixed at its subject's first claim on the
     # channel, so a finding and a linked incident share one alert (D29, D35).
     dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # F19 (FR22, FR23, FR26): why a `dropped` row was withheld, the subject that had told
+    # the channel the same news, and when it stopped being held. No foreign keys: the
+    # withholding subject stays a fact of this row, and one that has gone withholds nothing.
+    withheld_why: Mapped[str | None] = mapped_column(Text, nullable=True)
+    withheld_by_incident_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    withheld_by_finding_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    released_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         UniqueConstraint("incident_id", "channel_id", "kind", "sequence"),
@@ -1563,6 +1571,15 @@ class Notification(Base):
             postgresql_where=text("dedup_key IS NOT NULL"),
         ),
         Index("ix_notifications_batch_id", "batch_id"),
+        CheckConstraint(
+            f"withheld_why IN ({_quoted(WITHHELD_REASONS)})", name="withheld_why_is_known"
+        ),
+        Index(
+            "ix_notifications_withheld_unreleased",
+            "org_id",
+            "channel_id",
+            postgresql_where=text("withheld_why IS NOT NULL AND released_at IS NULL"),
+        ),
     )
 
 

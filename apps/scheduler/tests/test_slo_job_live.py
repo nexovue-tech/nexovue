@@ -1250,3 +1250,32 @@ async def test_ac60_an_exclusion_overlapping_an_open_burn_shows_on_its_incident(
     await job.judge_slos(engine, slo_store, project.project_id, burning + 2 * MINUTE)
     [burn_incident] = [row for row in await _incidents(engine, project) if not row.is_event]
     assert [each["id"] for each in burn_incident.detail["exclusions"]] == [str(exclusion)]
+
+
+async def test_t5_2_a_burn_s_incident_says_which_service_and_type_it_is_about(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+) -> None:
+    """Step 5 (T5.2): the job writes what a burn is about, which links and withholding read."""
+    burning = _now() - timedelta(hours=2)
+    _traffic(
+        administrator,
+        project,
+        first=burning - timedelta(hours=25),
+        count=26 * 60,
+        failing=_fast_burn(burning),
+    )
+    await _burn_rule(engine, project)
+    await _counted_target(engine, project)
+
+    await job.judge_slos(engine, slo_store, project.project_id, burning)
+    async with engine.connect() as connection:
+        about = (
+            await connection.execute(
+                text(
+                    "SELECT about_key, about_signal, about_endpoint, about_check_id "
+                    "FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn'"
+                ),
+                {"org_id": project.org_id},
+            )
+        ).one()
+    assert tuple(about) == (f"service:{SERVICE}", "availability", None, None)

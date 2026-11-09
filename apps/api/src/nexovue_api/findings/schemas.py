@@ -163,14 +163,32 @@ class SignalSeries(BaseModel):
     points: list[SignalPoint]
 
 
+class LinkedBurn(BaseModel):
+    """A reliability target's burn beside the finding (F19 FR20, AC85): nexovue's label
+    for the target, never its name, and the figures the job keeps current on the
+    incident while it is open. A figure the burn never had is None, never 0."""
+
+    slo_id: uuid.UUID | None
+    # Composed by nexovue from the service, endpoint or check names (D43): telemetry
+    # text, so a reader that is not a person labels it untrusted.
+    label: str
+    kind: str | None
+    rate: float | None
+    hours_left: float | None
+    allowed: int | None
+    left: int | None
+
+
 class LinkedIncident(BaseModel):
-    """A threshold or *went silent* incident on the same service (BR2, FR16)."""
+    """A threshold or *went silent* incident on the same service (BR2, FR16), or a
+    reliability target's burn on it (F19 FR20)."""
 
     id: uuid.UUID
     rule_name: str
     condition_kind: str
     opened_at: datetime
     resolved_at: datetime | None
+    burn: LinkedBurn | None = None
 
 
 class ReleaseFact(BaseModel):

@@ -85,6 +85,22 @@ Its events are `incident.opened`, `incident.escalated` (it got worse),
 nothing watches it any more — its rule or check was removed, or the rule stopped
 covering it; close your own record too).
 
+**A reliability target's burn** is an incident too, opened when a target's allowed
+failures run out too fast. `data.subject.label` is nexovue's own description of the
+target, such as `checkout availability, 99.9% over 28 days`, never the name a person
+gave it. `details` carries its current figures: how many times faster than allowed,
+how long what is left lasts, what is still allowed, and the target. Its
+`incident.closed` also comes when its source sent nothing for 24 hours, so it can no
+longer be judged; close your own record too. A target that runs out entirely, and an
+exclusion, each arrive as an `incident.opened` that is already resolved. When a
+project's targets stop being judged at all, one incident says so, resolved when
+judging returns.
+
+A webhook receives every event, always. A channel people read may hold back a message
+that repeats news it already had, and a service's snooze may hold back a burn's
+messages to people ([Alert channels](channels.md#keeping-it-quiet)); neither ever
+touches a webhook.
+
 **A finding** is what anomaly detection opens when a service, or a whole project,
 stops behaving as it normally does. Its events are `finding.opened`,
 `finding.escalated` (it became critical), `finding.joined` (another signal or

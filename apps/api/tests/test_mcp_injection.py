@@ -131,6 +131,7 @@ ALLOWED: Final[dict[str, dict[str, str]]] = {
     },
     "get_finding": {
         "finding[].incidents[].condition_kind": "closed vocabulary, written by our code",
+        "finding[].incidents[].burn.kind": "closed: a target's kind, written by the SLO job",
     },
     "get_error_group": {
         "error_group[].group.group_id": "a derived hash",

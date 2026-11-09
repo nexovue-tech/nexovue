@@ -141,13 +141,26 @@ export interface SignalSeries {
   points: SignalPoint[];
 }
 
-/** A threshold or *went silent* incident on the same service (BR2). */
+/** A reliability target's burn beside the finding (F19 FR20, AC85). */
+export interface LinkedBurn {
+  slo_id: string | null;
+  /** nexovue's label for the target, never its name. */
+  label: string;
+  kind: string | null;
+  rate: number | null;
+  hours_left: number | null;
+  allowed: number | null;
+  left: number | null;
+}
+
+/** A threshold or *went silent* incident on the same service (BR2), or a burn on it. */
 export interface LinkedIncident {
   id: string;
   rule_name: string;
   condition_kind: string;
   opened_at: string;
   resolved_at: string | null;
+  burn?: LinkedBurn | null;
 }
 
 /** What *This is the new normal* would make one signal's normal (FR21). */

@@ -91,7 +91,14 @@ async def _burning(db: AsyncSession, team: Team, target: SloTarget) -> Incident:
         subject_label="checkout availability, 99.9% over 28 days",
         severity="critical",
         opened_at=now,
-        detail={"slo_id": str(target.id), "check_id": _check_of(target)},
+        detail={"slo_id": str(target.id)},
+        # What the job writes (T5.2): a deleted check finds its burns by this, not the
+        # detail's figures (founder decision 6, 2026-11-09).
+        about_key=f"service:{target.service_name}"
+        if target.service_name is not None
+        else f"check:{target.check_id}",
+        about_signal="availability",
+        about_check_id=target.check_id,
     )
     db.add(incident)
     db.add(
@@ -107,10 +114,6 @@ async def _burning(db: AsyncSession, team: Team, target: SloTarget) -> Incident:
     )
     await db.flush()
     return incident
-
-
-def _check_of(target: SloTarget) -> str | None:
-    return None if target.check_id is None else str(target.check_id)
 
 
 async def _ended(db: AsyncSession, incident: Incident) -> bool:  # noqa: F811

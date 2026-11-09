@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**In development. Step 1 is on `feature/phase-2` (2026-11-08); Step 2 is on `feature/phase-2` too (2026-11-08), except T2.7, the founder's judgement. Step 3 is on `feature/phase-2` too (2026-11-08). Step 4 is on `feature/phase-2` too** (built 2026-11-08; AC69's last clause added 2026-11-09, after the founder answered decisions 1 to 7, each as recommended). The founder approved the specification, design and plan on 2026-11-02. Step 4 was built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
+**In development. Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
 
 ## Current task
 
-Plan Step 4, *Burn alerts, on their own channel*: on `feature/phase-2` (migrations 0058 to 0060, ADR-034). T4.1 to T4.13 ticked; T4.4 as built, by founder decision 4 (2026-11-09), and T4.7 now with AC69's last clause, by decision 1. Steps 1 to 3 are on `feature/phase-2`; T2.7's list awaits the founder's judgement.
+Plan Step 5, *What a burn may withhold*: on `feature/phase-2` (2026-11-09; migrations 0063 and 0064, ADR-038). T5.1 to T5.9 ticked, with three open decisions below. Steps 1 to 4 are on `feature/phase-2`; T2.7's list awaits the founder's judgement.
 
 ## Completed
 
@@ -20,7 +20,43 @@ Plan Step 4, *Burn alerts, on their own channel*: on `feature/phase-2` (migratio
 
 ## Next action
 
-The coordinator commits Step 4 after `just check`, re-chaining 0058's `down_revision` past the parallel 0055 to 0057. The founder answered Step 3's and Step 4's open decisions on 2026-11-09 (*Open decisions*, below). The founder judges T2.7's list, and walks Steps 2 to 4's *Judgeable* on the dev stack with the demo running, which was not done here.
+The coordinator commits Step 5 after `just check`, restoring 0063's `down_revision` to the parallel 0061 (or the next free number) and renumbering 0063, 0064 and ADR-038 if taken. The founder answers Step 5's three open decisions (*Open decisions*, below), judges T2.7's list, and checks one inbox message and one PagerDuty alert against the running demo after Phase 2 (Step 5's *Judgeable*, not walked here). Step 6 next.
+
+## Step 5, built 2026-11-09
+
+**What was built, by task.**
+
+| Task | Done | Where |
+|---|---|---|
+| T5.1 | `notifications.withheld_why` (`same_news` or `service_snoozed`, checked `NOT VALID`), `withheld_by_incident_id`, `withheld_by_finding_id`, `released_at`, no foreign keys (Alembic **0063**); the partial index `ix_notifications_withheld_unreleased` built `CONCURRENTLY`, and the check validated (**0064**). Both reversible: nothing exists only in these columns. `WITHHELD_REASONS` and `NEWS_KINDS` in the platform model, the frozen copy held by `test_alert_vocabulary.py`. **ADR-038** filed | `0063_…`, `0064_…`, `models.py`, `alerts/model.py`, `docs/decisions/` |
+| T5.2 | `incidents.Subject` carries `about_key`, `about_signal`, `about_endpoint`, `about_check_id`; `_INSERT_INCIDENT` writes them; `_open` links a burn to an open finding on the service it is about; `_LINK_INCIDENTS` links a finding opening later to an open burn by `about_key`; the job composes a burn's subject (`alerting.burn_subject`); a deleted check finds its burns by `about_check_id` (founder decision 6) | `alerts/incidents.py`, `detection/project_job.py`, `slos/alerting.py`, `slos/burns.py`, `apps/api/…/alerts/queries.py` |
+| T5.3 | `_same_news` (FR21's table, both ways), `_open_and_judged` (Y open; a burn as Y judged within 15 minutes), `_reached`; `_WITHHOLD_SECOND` drops a due news row not in a batch whose same news reached the channel within 60 minutes at the same or higher severity, or is due beside it and wins the tie (finding or threshold over a burn, older burn over newer); `_WITHHOLD_UNTOLD_ENDING` drops an ending whose subject has a withheld row and no news that reached the channel (FR24). People's channels only, after `_shape` | `alerts/outbox.py` |
+| T5.4 | `release`: per channel, each subject with unreleased withheld rows that nothing holds any more gets one `opened` at its current severity, unless news of it has reached the channel since; a snoozed ending goes to a channel its news reached; all its rows are marked released. Called at the start of a claim of a people's or PagerDuty channel, so it goes with Y's ending in one message, and from `sweep_deliveries` across channels (`release_everywhere`, `_CHANNELS_HOLDING`, named in the tenancy structure test) | `alerts/outbox.py`, `alerts/tasks.py` |
+| T5.5 | `_DROP_SNOOZED`: a burn's due row on a people's channel, or its news on PagerDuty, while its service's `snoozed_until` is ahead, after the channel's mute and before `_shape` and `_PIN_KEY`; `incidents` gains no `silenced` keyword, `incidents.muted` stays false. All three steps sit behind `_BURN_INVOLVED`, one guarded lookup | `alerts/outbox.py` |
+| T5.6 | `_PIN_KEY`: the linked branch takes a host only at the same or higher severity when a burn is either side; a new branch shares a burn's news with an open burn about the same thing, an error-rate or p95 incident on its service, or its check's `check_state` alert, and a threshold incident's with a burn on its service, at the same or higher severity. `service_silent` and `check_state` rows never join a burn's | `alerts/outbox.py` |
+| T5.7 | `LinkedIncident.burn` (target id, nexovue's label, kind, rate, hours left, allowed, left) from the incident's detail; the finding page's line "Also using allowed failures too fast: …. 14 times faster than allowed. What is left lasts about 2 days.", per kind, and "Open the target"; the service page's "2 targets. 1 running out.", linked to `/slos`; the snooze says "Also holds back reliability target messages.", the mute "Stops findings only. Reliability target alerts continue." MCP labels the label untrusted; the kind is on the closed allow-list | `findings/schemas.py`, `findings/service.py`, `assistant/tools.py`, `features/findings/`, `features/servicedetail/slo-line.ts` (new), `ServiceDetailScreen.tsx`, `shared/detection/quiet.ts` |
+| T5.8 | `test_slo_regression_live.py` (new): AC95 (a), (b), (c) at both burn severities, and (e): the outbox and notify suites collected a second time, unedited, against a tenant holding an unrelated open burn | `apps/scheduler/tests/` |
+| T5.9 | What a burn's webhook events say, and that a webhook gets everything; what a people's channel withholds, releases, and what a snooze and a mute do to targets; PagerDuty's sharing with targets | `docs/product/setup/alerts/webhooks.md`, `channels.md` |
+
+**Files the plan's tasks do not name, and why.** `apps/api/…/assistant/tools.py` and `test_mcp_injection.py` (the new finding field must be labelled or allow-listed); `test_scheduler_postgres_tenancy_structure.py` (the sweep's cross-tenant channel statement, named); `shared/detection/quiet.ts` and its new test (the controls' words live there, shared by the finding and service pages); `apps/api/tests/test_slos_live.py` (the linked burn's API half); `slos/burns.py` (it builds the job's `Minute`).
+
+**Decisions taken while building, within the design.** Each is the founder's to overrule.
+
+- **`released_at` means "no longer held"**, a release written or none owed: a subject whose news reached the channel since (an escalation went through), or that ended unheard, gets no message, and its rows are marked so they are not read again.
+- **A release looks at any Y, not only the one that withheld it**, as the design's "nothing withholds it any more" says; `withheld_by_*` stays as the delivery log's record.
+- **The sweep releases on at most 100 channels per run**, locking each as a claim does, so a sweep and a claim never release one subject twice.
+- **The tie in one claim only sees Y's row if it is pending and unattempted**; a Y itself withheld in that claim leaves X withheld until the next claim or sweep releases it, seconds later.
+
+**Not built or not proved in Step 5, said plainly.**
+
+- **AC58**: F3 writes no `explained` notification on the branch, so there is nothing to hold (*Open decisions*, 2).
+- **A burn noted on a lower-severity PagerDuty alert that escalates** stays a note (*Open decisions*, 3).
+- **Step 5's *Judgeable*** (one email, PagerDuty showing one alert) needs a real inbox and PagerDuty: **not yet run, founder checks after Phase 2.**
+- **The finding and service lines in a browser at 375px**: not checked.
+- **AC50's claim time with and without the rule**: T6.2.
+- **AC53 claims at real past minutes**, because the job reads real ClickHouse minutes; against the dev stack its deliveries worker could claim those rows first. On this worktree's own stores no worker runs.
+
+**Self-review (`/review-diff`), 2026-11-09.** Found and fixed: a snoozed ending was released at `max(severity)` of its held rows, which compares words ("warning" above "critical"), now the incident's severity; the burn guard ran twice per claim, now once; `_CHANNELS_HOLDING` read every tenant's channels unnamed (the tenancy structure test failed; named as a sweep). Tenancy: every new outbox statement binds `org_id` from the claimed channel, and every join inside it matches `org_id`; the one sweep statement is named. Authorization: no new route; `GET /findings/{id}` gains a field read under its existing gate. Migrations: nullable columns, the check `NOT VALID` then validated, the index `CONCURRENTLY` alone, both reversible. No credential, and no target name, description or reason in a notification or the finding's burn (the label is nexovue's). Unintended changes: none; every file is named above. One shell slip: `git checkout --` was run on `DetectionStrip.tsx` to discard this step's own first edit of it, which moved to `ServiceDetailScreen.tsx`; nothing else was in that file's diff.
 
 ## Step 4, built 2026-11-08
 
@@ -215,7 +251,11 @@ Every service's `GET /health` was pre-ticked. On one day, `checkout` had 48,728 
 
 ## Open decisions
 
-None. The founder answered all seven on 2026-11-09, each as recommended.
+Three from Step 5, 2026-11-09. Step 4's seven were answered 2026-11-09 (below).
+
+1. **The finding page's burn figures come from the incident, not `/slos/{id}`.** The design's *Elsewhere* says the label comes with `LinkedIncident` "and the figures from `/slos/{id}` in the browser". Built: the figures come with `LinkedIncident.burn`, from the incident's detail, which the job rewrites every minute while the burn is open (`refresh_detail`), the same figures the incident page shows. **Options:** (a) keep: one request, no second feature's API inside the findings feature, and identical figures to the incident page; (b) fetch `/slos/{id}` in the browser, as written. **Recommendation: (a)**, and amend the design's line.
+2. **AC58 has nothing to test yet.** "An `explained` row must go only to a channel a news message of that finding reached." No `explained` notification kind exists (`NOTIFICATION_KINDS`); F3 writes it, and F3 has not built it. **Recommendation:** when F3 adds it, it joins `_WITHHOLD_UNTOLD_ENDING`'s kinds (one line in `outbox.py`), and AC58's test goes into F3's step, named in F3's plan now.
+3. **A burn noted on a lower-severity PagerDuty alert, which then escalates, stays a note.** FR24a shares an alert "as long as that alert is at the same or a higher severity", and a burn's opening is checked so (AC27). But a subject keeps the key its first row took (`_PIN_KEY`'s first branch), so its later critical escalation goes as a note on the warning alert and does not page. Fixing it means a subject on two alerts, and its ending sent to both, which changes the one-key-per-subject model F6 tested. **Options:** (a) on a burn's escalation above its host's severity, take its own key and page, and send its ending to every alert it is on; (b) leave it, documented. **Recommendation: (a)**, as a small task in Step 6 with its own test, because an unpaged critical is the failure PagerDuty exists to prevent.
 
 **Answered 2026-11-09, kept for the record:**
 
@@ -263,6 +303,17 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 - **AC38's outside tester** comes from the conversation round (spec D64). If nobody there agrees to a later screen test, it reads "not proved".
 
 ## Validation
+
+**Step 5, 2026-11-09,** on worktree `wt/f19s5`, against its own stores (`f19s5-pg`, Postgres 18 with pgvector, port 35432; `f19s5-ch`, ClickHouse 26.3.20.7, ports 38123 and 39000), migrated to Alembic **0064** and ClickHouse 000039 (no new ClickHouse migration), with 0063 chained to 0060 for the run only; it now names 0061 again, for the coordinator to re-chain. 0063 and 0064 were run forward, back to 0060 and forward again. Removed afterwards. `just check` was not run, by instruction.
+
+| What | Result |
+|---|---|
+| Seen failing first | `test_alert_vocabulary.py` (no migration froze `_WITHHELD_REASONS`); `test_migration_rules.py` (0063 drafted with the index built plainly: `create_index on notifications`); `test_detection_links_live.py` (3: `Subject` took no `about_key`); `test_slo_closing_live.py`'s deleted check (found by `detail.check_id` with only `about_check_id` set); `test_slos_live.py`'s AC85 (`KeyError: 'burn'`); `FindingScreen.test.ts` (2), `slo-line.test.ts` (no module), `quiet.test.ts` (2); `test_scheduler_postgres_tenancy_structure.py` (`_CHANNELS_HOLDING` unnamed, a real finding) |
+| Written beside their code, then seen failing by removing what each guards (`mutate.py` in scratch: one change, the suite run, the file restored) | `test_slo_job_live.py`'s T5.2 test (the job's subject without `about_*`). `test_slo_one_message_live.py` with the withholding calls removed from `claim`: 24 of 38 failed; the other 14 hold that news must still go, each failed on its own guard: the severity test (AC25, 2), the hour (AC54, 2), the project in both the statement and the guard (AC56), different endpoints (AC55), the finding's signal (AC55, 2), the batch in both the statement and the guard (AC57), the check pair one way only (AC30), `service_silent` as threshold news (2), the tie's winner (AC24, 2), a release written though news had since reached the channel (AC52), freshness and D56's save (AC53, each). Snooze and PagerDuty: `_DROP_SNOOZED` off (4 of 6 AC59), PagerDuty's endings dropped too (2), the snoozed ending never released (1), the new `_PIN_KEY` branch off (4), the linked branch's severity test off (AC27's critical page), `service_silent` admitted as a guest (1). `test_slo_regression_live.py`: withholding off ((c), 2), the type ignored ((b)), `about_key` ignored ((a)). `test_slo_words.py`: "burning" planted in `slo-line.ts`, "budget" in `finding-words.ts`, each failed |
+| F19 suites, final | `test_slo_one_message_live.py` 55, `test_slo_regression_live.py` 41 (23 outbox and 13 notify tests rerun beside an open burn, unedited, and 5 of its own), `test_detection_links_live.py` 7, `test_slo_job_live.py` 37, `test_slo_blind_live.py` 6, `test_slo_closing_live.py` 6, `test_slo_words.py` 37; web `features/findings`, `servicedetail`, `shared/detection` 233 |
+| Unedited (AC29) | `test_alert_outbox_live.py` and `test_detection_notify_live.py`: 36 passed before the change and after, and again inside `test_slo_regression_live.py` |
+| Wider | Scheduler live suites above with `test_alert_noise_live.py`, `test_alert_delivery_live.py`, `test_detection_coordinator.py` (AC95(d)) and both tenancy structure tests: 2,379 passed. API: the F19, alerts, deletion, MCP, findings-cases, personal-data, read-surface and chokepoint suites, 586 passed and 2 failed: `test_alerts_live.py`'s two AC85 deploy tests insert a `deploy_events` row without `delivery_id`, which F28's 0057 made required; untouched here and failing without this change, for whoever owns Step 4's commit. Offline, API and scheduler (every `test_*.py` not `_live`, less `test_slo_system.py` and `test_connect_guard.py`): 9,781 passed, 1 skipped, 1 failed, `test_setup_schema.py`, because 0063 now names the parallel 0061, absent here (the coordinator's re-chain). Web: `features/findings`, `servicedetail`, `slos`, `alerts`, `app` and `shared/detection`, 420 passed. Whole-repo `mypy .` clean (871 files), `ruff check .` and `ruff format --check .` clean, Biome clean on the touched web folders, `pnpm -r --if-present run typecheck` clean, `verify-tokens.js` clean. No Go changed |
+| Not run | `just check`; the whole-stack suites; a browser at 375px; Step 5's *Judgeable* with a real inbox and PagerDuty: **not yet run, founder checks after Phase 2** |
 
 **Step 4's AC69 clause, 2026-11-09,** on worktree `wt/f19s4`, against its own stores (`f19s4-pg`, port 35432; `f19s4-ch`, port 38123), migrated to Alembic **0060** and ClickHouse 000039, removed afterwards. `just check` was not run, by instruction.
 

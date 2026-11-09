@@ -222,6 +222,11 @@ CROSS_TENANT_STATEMENTS: Final = (
     # Alerting (F21).
     _across("alerts.outbox", "_CLAIMABLE_CHANNELS", f"{_SWEEP}: the delivery claim"),
     _across("alerts.outbox", "_PRUNE_ATTEMPTS", f"{_SWEEP}: delivery attempts past keeping"),
+    _across(
+        "alerts.outbox",
+        "_CHANNELS_HOLDING",
+        f"{_SWEEP}: channels holding withheld rows to release (F19 FR23)",
+    ),
     _across("alerts.health", "_TO_REPORT", f"{_SWEEP}: channels newly failing"),
     _across("alerts.incidents", "_DUE_REPEATS", f"{_SWEEP}: incidents due a repeat"),
     _across("alerts.rules", "_RULES_OF_KINDS", f"{_SWEEP}: the rules a sweep evaluates"),

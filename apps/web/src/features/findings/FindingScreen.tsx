@@ -30,6 +30,7 @@ import type {
   FindingDetail,
   FindingSignal,
   FindingSignalKind,
+  LinkedBurn,
   ReleaseFact,
   SignalSeries,
 } from "./api";
@@ -56,6 +57,7 @@ import {
   signalPlot,
   successSentence,
 } from "./finding-page";
+import { linkedBurnLine } from "./finding-words";
 import {
   falseAlarmIssueSentence,
   linkAnnouncement,
@@ -861,12 +863,32 @@ function Incidents({ finding, zone }: { finding: FindingDetail; zone?: string })
                 ? `, ended ${formatZonedTime(incident.resolved_at, { zone })}`
                 : ", still open"}
             </span>
+            {incident.burn ? (
+              <BurnLine burn={incident.burn} ended={incident.resolved_at !== null} />
+            ) : null}
           </li>
         ))}
       </ul>
       {/* F22 FR53, D58: a linked alert is a rule's record and cannot become a case. */}
       <p className={`text-ink-dim text-sm ${PROSE}`}>{CASE_IS_NOT_AN_ALERT}</p>
     </section>
+  );
+}
+
+/** A linked reliability target's burn: its rate and what is left, and its target (AC85). */
+function BurnLine({ burn, ended }: { burn: LinkedBurn; ended: boolean }) {
+  return (
+    <p className={`text-ink-dim ${PROSE}`}>
+      {linkedBurnLine(burn, ended)}
+      {burn.slo_id ? (
+        <>
+          {" "}
+          <Link to="/slos/$sloId" params={{ sloId: burn.slo_id }} className={LINK}>
+            Open the target
+          </Link>
+        </>
+      ) : null}
+    </p>
   );
 }
 

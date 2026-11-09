@@ -64,7 +64,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
-from nexovue_platform.alerts.model import service_subject
+from nexovue_platform.alerts.model import SLO_RULE_CONDITION, service_subject
 from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
 from nexovue_platform.cases import CASE_JOIN_WINDOW
 from nexovue_platform.detection import (
@@ -351,16 +351,19 @@ _COMPLETED: Final = text(
     """
 )
 # BR2, AC20: an open finding is linked to every open threshold or *went silent*
-# incident on its service. Each run, so an incident that opened while this job was
-# deciding is linked by the next run if its own sweep could not see the finding.
+# incident on its service, and to every open reliability target burn about it (F19
+# FR20), whose key is its target. Each run, so an incident that opened while this job
+# was deciding is linked by the next run if its own sweep could not see the finding.
 _LINK_INCIDENTS: Final = text(
     """
     INSERT INTO finding_incidents (org_id, finding_id, incident_id)
     SELECT :org_id, :finding_id, incidents.id
     FROM incidents
     WHERE incidents.org_id = :org_id AND incidents.project_id = :project_id
-      AND incidents.subject_key = :subject_key AND incidents.resolved_at IS NULL
-      AND incidents.condition_kind = ANY(CAST(:kinds AS text[]))
+      AND incidents.resolved_at IS NULL
+      AND ((incidents.subject_key = :subject_key
+            AND incidents.condition_kind = ANY(CAST(:kinds AS text[])))
+           OR (incidents.condition_kind = :burn_kind AND incidents.about_key = :subject_key))
     ON CONFLICT DO NOTHING
     """
 )
@@ -1477,6 +1480,7 @@ async def _link_incidents(
             "finding_id": finding_id,
             "subject_key": service_subject(key["service_name"]),
             "kinds": sorted(SERVICE_KINDS),
+            "burn_kind": SLO_RULE_CONDITION.kind,
         },
     )
 

@@ -51,7 +51,8 @@ def deliver() -> None:
 @task(SWEEP_DELIVERIES_TASK)
 def sweep_deliveries() -> None:
     """The safety net: anything due that the fast path did not take (ADR-013), the
-    repeats open incidents are owed (FR10), which channels are failing (FR21), and
+    repeats open incidents are owed (FR10), what a burn held back and no longer needs
+    to (F19 FR23), which channels are failing (FR21), and
     whether reliability targets are being judged at all (F19 FR13b): this runs in a
     different container from the one judging them, so it can say when that one stops."""
 
@@ -65,6 +66,16 @@ def sweep_deliveries() -> None:
     blind = with_engine(lambda engine: notices.report_blind(engine, now=datetime.now(UTC)))
     if blind:
         logger.info("reliability target judging changed", projects=blind)
+
+    async def release(engine: AsyncEngine) -> int:
+        async with engine.begin() as connection:
+            return await outbox.release_everywhere(connection, now=datetime.now(UTC))
+
+    # F19 FR23: an ending that wrote nothing to a channel, such as a person closing a
+    # finding, releases what it held back there before this sweep delivers (AC52).
+    released = with_engine(release)
+    if released:
+        logger.info("withheld alerts released", notifications=released)
     _deliver_due()
     outbound = _outbound_for_process()
     reported = with_engine(

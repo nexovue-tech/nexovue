@@ -889,3 +889,72 @@ describe("the release before this finding (F28 AC40, AC43)", () => {
     expect(list.textContent).toContain("CI reported it failed");
   });
 });
+
+describe("a linked reliability target's burn (F19 AC85, T5.7)", () => {
+  it("shows the burn beside the finding, with its rate and what is left, and its target", async () => {
+    stubApi(
+      finding({
+        incidents: [
+          {
+            id: "inc-burn",
+            rule_name: "Reliability targets",
+            condition_kind: "slo_burn",
+            opened_at: minutesAgo(30),
+            resolved_at: null,
+            burn: {
+              slo_id: "slo-1",
+              label: "checkout availability, 99.9% over 28 days",
+              kind: "service_availability",
+              rate: 14.4,
+              hours_left: 50,
+              allowed: 672,
+              left: 312,
+            },
+          },
+        ],
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const section = container.querySelector('section[aria-labelledby="finding-incidents"]');
+    expect(readable(section as Element)).toContain(
+      "Also using allowed failures too fast: checkout availability, 99.9% over 28 days. 14 times faster than allowed. What is left lasts about 2 days.",
+    );
+    expect(container.querySelector('a[href="/slos/slo-1"]')).not.toBeNull();
+  });
+
+  it("says a latency burn's slow requests, and an ended burn without its old figures", async () => {
+    stubApi(
+      finding({
+        incidents: [
+          {
+            id: "inc-burn",
+            rule_name: "Reliability targets",
+            condition_kind: "slo_burn",
+            opened_at: minutesAgo(30),
+            resolved_at: minutesAgo(5),
+            burn: {
+              slo_id: null,
+              label: "checkout latency under 487.2 ms, 95% over 28 days",
+              kind: "service_latency",
+              rate: 9,
+              hours_left: 3,
+              allowed: 10,
+              left: 2,
+            },
+          },
+        ],
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const said = readable(container);
+    expect(said).toContain(
+      "Was using allowed slow requests too fast: checkout latency under 487.2 ms, 95% over 28 days.",
+    );
+    expect(said).not.toContain("times faster");
+    expect(said).not.toContain("failures");
+  });
+});

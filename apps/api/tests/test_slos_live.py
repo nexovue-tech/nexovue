@@ -1342,3 +1342,58 @@ async def test_fr25a_a_channel_of_another_organization_is_refused_beside_its_fie
     )
     assert refused.status_code == 422, refused.text
     assert "channel_ids" in refused.text
+
+
+# --------------------------------------------------------------- Step 5 (T5.7)
+
+
+async def test_ac85_a_finding_s_linked_burn_carries_its_label_and_current_figures(
+    db: AsyncSession,  # noqa: F811
+) -> None:
+    """The finding page shows the burn beside it, with its rate and what is left, from
+    the figures the job keeps current on the incident (AC85's finding half)."""
+    from test_findings_cases_live import _finding
+
+    from nexovue_api.data.postgres.models import FindingIncident, Incident
+
+    team = await _team(db, "Linked")
+    finding = await _finding(db, team)
+    target = uuid.uuid4()
+    burn = Incident(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        rule_name="Reliability targets",
+        condition_kind="slo_burn",
+        subject_key=f"slo:{target}",
+        subject_label="checkout availability, 99.9% over 28 days",
+        severity="critical",
+        opened_at=datetime.now(UTC),
+        detail={
+            "slo_id": str(target),
+            "kind": "service_availability",
+            "rate": 14.4,
+            "hours_left": 50.0,
+            "allowed": 672,
+            "left": 312,
+        },
+        about_key="service:checkout",
+        about_signal="availability",
+    )
+    db.add(burn)
+    await db.flush()
+    db.add(FindingIncident(org_id=team.org_id, finding_id=finding.id, incident_id=burn.id))
+    await db.flush()
+
+    answer = await _call(db, team, team.viewer, "GET", f"/findings/{finding.id}")
+
+    assert answer.status_code == 200, answer.text
+    [linked] = answer.json()["incidents"]
+    assert linked["burn"] == {
+        "slo_id": str(target),
+        "label": "checkout availability, 99.9% over 28 days",
+        "kind": "service_availability",
+        "rate": 14.4,
+        "hours_left": 50.0,
+        "allowed": 672,
+        "left": 312,
+    }

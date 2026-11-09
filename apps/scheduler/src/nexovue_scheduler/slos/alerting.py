@@ -27,7 +27,12 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform import slo
-from nexovue_platform.alerts.model import SloBurnCondition, slo_subject
+from nexovue_platform.alerts.model import (
+    SloBurnCondition,
+    check_subject,
+    service_subject,
+    slo_subject,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -78,13 +83,39 @@ _FORGET_POSITION: Final = text(
 class Minute:
     """One target's burn at one settled minute, as every rule covering it sees it."""
 
-    target_id: uuid.UUID
-    label: str
+    subject: incidents.Subject
     minute: datetime
     judgment: BurnJudgment
     detail: dict[str, Any]
     # FR17: silent for the longest window, with that window measured.
     source_stopped: bool
+
+
+def burn_subject(
+    target_id: uuid.UUID,
+    *,
+    label: str,
+    kind: str,
+    service_name: str | None,
+    endpoint_name: str | None,
+    check_id: uuid.UUID | None,
+) -> incidents.Subject:
+    """A burn's subject: keyed by its target, so two targets on one service are two
+    incidents, and about what the target watches (design, *The link to findings*): its
+    service, or its check when it names none (D19), and its type for FR21's pairs."""
+    about_key: str | None = None
+    if service_name is not None:
+        about_key = service_subject(service_name)
+    elif check_id is not None:
+        about_key = check_subject(check_id)
+    return incidents.Subject(
+        key=slo_subject(target_id),
+        label=label,
+        about_key=about_key,
+        about_signal=slo.signal_of(kind),
+        about_endpoint=endpoint_name,
+        about_check_id=check_id,
+    )
 
 
 def covers(rule: Rule, target_id: uuid.UUID) -> SloBurnCondition | None:
@@ -101,7 +132,7 @@ async def judge_under(
 ) -> int:
     """One rule's position on one target, and the incident it opens, escalates, keeps
     current, resolves or closes. Returns how many notifications were written."""
-    subject = incidents.Subject(key=slo_subject(minute.target_id), label=minute.label)
+    subject = minute.subject
     keys = {"org_id": rule.org_id, "rule_id": rule.id, "subject_key": subject.key}
     stored = (await connection.execute(_POSITION, keys)).first()
     phase: Phase = stored.phase if stored else "ok"

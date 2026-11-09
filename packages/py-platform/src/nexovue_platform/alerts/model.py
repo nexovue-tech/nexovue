@@ -75,12 +75,22 @@ PROJECT_NOTIFICATION_KINDS: Final = ("stopped", "running_again")
 
 # Kinds that end their subject: PagerDuty resolves the alert on either.
 ENDING_KINDS: Final = frozenset({"resolved", "closed"})
+# Kinds that tell a channel news of their subject (F19 FR24): an ending is owed to a
+# channel one of these reached.
+NEWS_KINDS: Final = frozenset({"opened", "flapping", "escalated", "joined", "repeated"})
 
 # `delivering` is claimed under a lease; a worker that dies leaves it to be
 # reclaimed when the lease ends (ADR-013). `dropped` is a decision not to send —
 # a muted channel, or a PagerDuty resolve withheld while the alert still carries
 # another open subject (D35) — recorded so the delivery log still shows it.
 NOTIFICATION_STATES: Final = ("pending", "delivering", "delivered", "failed", "dropped")
+
+# F19 (FR22, FR26): why a `dropped` row was withheld, so a release is a query, not a
+# reading of `outcome_reason`'s words. `same_news`: a channel people read was told the
+# same news by another subject; `service_snoozed`: a burn's service is snoozed.
+WITHHELD_SAME_NEWS: Final = "same_news"
+WITHHELD_SERVICE_SNOOZED: Final = "service_snoozed"
+WITHHELD_REASONS: Final = (WITHHELD_SAME_NEWS, WITHHELD_SERVICE_SNOOZED)
 
 ATTEMPT_OUTCOMES: Final = ("delivered", "retrying", "failed")
 

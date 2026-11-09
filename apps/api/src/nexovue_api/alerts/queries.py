@@ -330,15 +330,15 @@ async def stop_watching_subject(
 async def burn_subjects_of_check(
     session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID
 ) -> list[str]:
-    """The subjects of open burns on targets counting this check (F19 AC70). The check
-    is named by id in each burn's detail, which nexovue alone writes."""
+    """The subjects of open burns on targets counting this check (F19 AC70), by the
+    typed column a burn names its check in (ADR-034; founder decision 6, 2026-11-09)."""
     statement = (
         select(Incident.subject_key)
         .where(
             Incident.org_id == org_id,
             Incident.condition_kind == "slo_burn",
             Incident.resolved_at.is_(None),
-            Incident.detail["check_id"].astext == str(check_id),
+            Incident.about_check_id == check_id,
         )
         .distinct()
     )

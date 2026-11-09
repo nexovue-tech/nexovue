@@ -8,7 +8,8 @@ their paths here.
 
 T3.6 adds the target's tabs and the *Last month* view by name, and "error budget",
 which only the *Definition* tab may say (AC13). T4.9 adds the `slo_burn` messages'
-wording, `alerts/slo_words.py`.
+wording, `alerts/slo_words.py`. T5.7 adds the finding page's linked burn, the service
+page's targets line and the snooze and mute controls.
 """
 
 from __future__ import annotations
@@ -25,6 +26,11 @@ SCANNED: Final = {
     "apps/web/src/features/slos": ("*.ts", "*.tsx"),
     # T4.9: what a burn's messages and notices say.
     "apps/scheduler/src/nexovue_scheduler/alerts": ("slo_words.py",),
+    # T5.7: the finding page's linked burn, the service page's targets line, and the
+    # snooze and mute controls' words.
+    "apps/web/src/features/findings": ("finding-words.ts",),
+    "apps/web/src/features/servicedetail": ("slo-line.ts",),
+    "apps/web/src/shared/detection": ("quiet.ts",),
 }
 # Files each step names, so a renamed tab cannot leave the scan by being absent.
 NAMED: Final = (
@@ -34,6 +40,9 @@ NAMED: Final = (
     "apps/web/src/features/slos/LastMonthView.tsx",
     "apps/web/src/features/slos/month-words.ts",
     "apps/scheduler/src/nexovue_scheduler/alerts/slo_words.py",
+    "apps/web/src/features/findings/finding-words.ts",
+    "apps/web/src/features/servicedetail/slo-line.ts",
+    "apps/web/src/shared/detection/quiet.ts",
 )
 # A phrase one file alone may say, beyond `FORBIDDEN`'s allow-lists (AC13: "error
 # budget" only on the Definition tab).

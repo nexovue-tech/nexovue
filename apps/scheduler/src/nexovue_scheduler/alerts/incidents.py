@@ -13,7 +13,8 @@ muted, and nothing about it is ever sent — not when it opens, escalates or
 resolves — because a person who silenced a rule has said they will look.
 
 **An incident on a service with an open finding is linked to it** (F6 BR2, AC20),
-in the transaction that opens it: detection and a threshold rule watching one
+and so is a reliability target's burn on that service (F19 FR20), in the transaction
+that opens it: detection and a threshold rule watching one
 service are one problem with two records, never two problems. The project job
 links in the other direction when the finding comes second.
 
@@ -94,10 +95,12 @@ _INSERT_INCIDENT: Final = text(
     """
     INSERT INTO incidents
         (org_id, project_id, rule_id, rule_name, condition_kind, subject_key, subject_label,
-         severity, opened_at, muted, flapping, detail)
+         severity, opened_at, muted, flapping, detail,
+         about_key, about_signal, about_endpoint, about_check_id)
     VALUES
         (:org_id, :project_id, :rule_id, :rule_name, :condition_kind, :subject_key,
-         :subject_label, :severity, :at, :muted, :flapping, CAST(:detail AS jsonb))
+         :subject_label, :severity, :at, :muted, :flapping, CAST(:detail AS jsonb),
+         :about_key, :about_signal, :about_endpoint, :about_check_id)
     ON CONFLICT (rule_id, subject_key) WHERE resolved_at IS NULL DO NOTHING
     RETURNING id
     """
@@ -220,10 +223,25 @@ _DUE_REPEATS: Final = text(
 
 @dataclass(frozen=True, slots=True)
 class Subject:
-    """What an incident is about: its key for identity, its label for people."""
+    """What an incident is about: its key for identity, its label for people.
+
+    A burn's key is its target, so `about_*` say what the target watches, for its links
+    and for what it may withhold (F19, ADR-034): `about_key` is `service:<name>`, or
+    `check:<id>` for a check target naming no service; `about_signal` is availability
+    or latency. Null for every other kind."""
 
     key: str
     label: str
+    about_key: str | None = None
+    about_signal: str | None = None
+    about_endpoint: str | None = None
+    about_check_id: uuid.UUID | None = None
+
+    @property
+    def service(self) -> str | None:
+        """The service a finding would be linked through, if this names one."""
+        named = self.key if self.about_key is None else self.about_key
+        return named.removeprefix(SERVICE_PREFIX) if named.startswith(SERVICE_PREFIX) else None
 
 
 async def fire(
@@ -484,17 +502,22 @@ async def _open(
                 "muted": muted,
                 "flapping": flapping,
                 "detail": json.dumps(detail | ({"openings": earlier + 1} if flapping else {})),
+                "about_key": subject.about_key,
+                "about_signal": subject.about_signal,
+                "about_endpoint": subject.about_endpoint,
+                "about_check_id": subject.about_check_id,
             },
         )
     ).scalar_one_or_none()
-    if incident_id is not None and rule.condition_kind in SERVICE_KINDS:
+    linked_service = _linked_service(rule, subject)
+    if incident_id is not None and linked_service is not None:
         await connection.execute(
             _LINK_FINDING,
             {
                 "org_id": rule.org_id,
                 "project_id": rule.project_id,
                 "incident_id": incident_id,
-                "service_name": subject.key.removeprefix(SERVICE_PREFIX),
+                "service_name": linked_service,
             },
         )
     if incident_id is None or muted or still_flapping:
@@ -517,6 +540,14 @@ async def _open(
             else 0
         ),
     )
+
+
+def _linked_service(rule: Rule, subject: Subject) -> str | None:
+    """The service whose open finding this incident joins (F6 BR2; F19 FR20): a service
+    rule's subject, or what a burn's target watches. None for anything else."""
+    if rule.condition_kind in SERVICE_KINDS or subject.about_key is not None:
+        return subject.service
+    return None
 
 
 async def _told_channels(

@@ -59,6 +59,7 @@ import {
   findingSpans,
   neighboursOf,
 } from "./service-detail";
+import { serviceTargetsLine, useServiceTargets } from "./slo-line";
 
 import type { TrendMetric, TrendPlot } from "./trend-series";
 import { buildTrendPlots, describePlot } from "./trend-series";
@@ -145,13 +146,16 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       alerts={<ServiceAlerts projectId={projectId} serviceName={serviceName} />}
       detection={
         projectId === undefined ? null : (
-          <DetectionStrip
-            projectId={projectId}
-            serviceName={serviceName}
-            detection={detection.data}
-            failed={detection.isError}
-            zone={settings.data?.timezone}
-          />
+          <>
+            <DetectionStrip
+              projectId={projectId}
+              serviceName={serviceName}
+              detection={detection.data}
+              failed={detection.isError}
+              zone={settings.data?.timezone}
+            />
+            <TargetsLine projectId={projectId} serviceName={serviceName} />
+          </>
         )
       }
       profiling={
@@ -192,6 +196,26 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
         onRetry: () => void errors.refetch(),
       }}
     />
+  );
+}
+
+/**
+ * "2 targets. 1 running out.", linked to the targets (F19 design, *Elsewhere*). Nothing
+ * while it is unknown or there is none: it is a pointer, not a reading.
+ */
+function TargetsLine({ projectId, serviceName }: { projectId: string; serviceName: string }) {
+  const targets = useServiceTargets(projectId);
+  const line = targets.data ? serviceTargetsLine(targets.data.targets, serviceName) : null;
+  if (line === null) return null;
+  return (
+    <p className="py-2 text-sm">
+      <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        Reliability targets
+      </span>{" "}
+      <Link to="/slos" className="font-medium text-brand-text hover:underline">
+        {line}
+      </Link>
+    </p>
   );
 }
 
