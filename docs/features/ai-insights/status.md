@@ -2,14 +2,14 @@
 
 ## Lifecycle status
 
-**Step 4 built 2026-11-11, awaiting commit** (worktree `wt/f3s4`, from `wt/f3s3`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. migration 0071 sits on 0070 for now; the coordinator re-chains.
-**Step 3 built 2026-11-11, awaiting commit** (worktree `wt/f3s3`, from `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070 needs F22 Step 6's 0068 and 0069 on the branch first.
+**Step 4 built and committed 2026-11-11** (on `feature/phase-2`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. Migration 0071, after 0070.
+**Step 3 built and committed 2026-11-11** (on `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070, after F22 Step 6's 0069.
 **Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-Step 4 awaits the founder's review of the diff and open decisions 9 to 11, then commit after Step 3 (migration chain 0070, then 0071). Then the founder's first real call per format with a free-tier key (`tools/ai-eval/real_call.py`), which is what puts a format on the screen.
+Open decisions 9 to 11 await the founder. Next: the founder's first real call per format with a free-tier key (`tools/ai-eval/real_call.py`), which is what puts a format on the screen.
 
 Step 3 awaits the founder's review of the diff, then commit after F22 Step 6 (migration chain). Then the coordinator's first run of `just insight-fence`. Open decision 7 is the founder's.
 
@@ -715,7 +715,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-11 (Step 4 built, awaiting commit; Step 3 built, awaiting commit; Step 2 committed 2026-11-09)
+2026-11-11 (Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

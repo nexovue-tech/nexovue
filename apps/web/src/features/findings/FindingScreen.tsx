@@ -27,6 +27,7 @@ import { setupDocUrl } from "@/shared/setup-docs";
 
 import type {
   CaseLink,
+  DeployLineAddition,
   FindingDetail,
   FindingSignal,
   FindingSignalKind,
@@ -34,11 +35,12 @@ import type {
   ReleaseFact,
   SignalSeries,
 } from "./api";
-import { useExplanation, useFinding, useFindingAction } from "./api";
+import { useExplanation, useFinding, useFindingAction, useFixes } from "./api";
 import { CaseSection } from "./CaseSection";
 import { ExplanationHeaderLine, ExplanationSection } from "./ExplanationSection";
 import type { HeaderLine } from "./explanation";
 import { headerLine } from "./explanation";
+import { DeployLineExtras, FixBrief, FixSection } from "./FixSection";
 import { backLinkLabel, parseFeedSearch } from "./feed-filter";
 import type { DoneAction } from "./finding-page";
 import {
@@ -61,6 +63,7 @@ import {
   successSentence,
 } from "./finding-page";
 import { linkedBurnLine } from "./finding-words";
+import { deployAddition, SUGGESTED_FIX, showsSection } from "./fix-page";
 import {
   falseAlarmIssueSentence,
   linkAnnouncement,
@@ -145,12 +148,15 @@ function FindingPage({
 }) {
   const announcement = useChangeAnnouncements(finding);
   const explanation = useExplanation(finding);
+  // F5: rungs 1 and 2, read again when a new explanation version arrives.
+  const fixes = useFixes(finding.id, explanation.data?.latest_version ?? null);
   return (
     <div className="flex flex-col gap-8">
       <Header
         finding={finding}
         zone={zone}
         line={headerLine(explanation.data, { failed: explanation.isError, finding })}
+        suggestedFix={showsSection(fixes.data)}
       />
       {/* FR45, AC105: one always-present status region, at page level because the
           case controls return nothing for a viewer. It announces only changes of
@@ -175,13 +181,23 @@ function FindingPage({
         </div>
         <div id="finding-evidence" className="flex min-w-0 flex-col gap-8">
           {/* F3 FR14: the explanation leads the right column; F28's release row is its
-              first row (A45). */}
+              first row (A45), extended by F5, with F5's brief as one line under it (D54). */}
           <ExplanationSection
             finding={finding}
             explanation={explanation.data}
             error={explanation.error}
             onRetry={() => void explanation.refetch()}
-            releaseRow={<ReleaseSection finding={finding} zone={zone} />}
+            releaseRow={
+              <>
+                <ReleaseSection finding={finding} zone={zone} addition={fixes.data?.deploy_line} />
+                <FixBrief
+                  fixes={fixes.data}
+                  pending={fixes.isPending}
+                  error={fixes.error}
+                  onRetry={() => void fixes.refetch()}
+                />
+              </>
+            }
             zone={zone}
           />
           <Signals finding={finding} />
@@ -191,6 +207,8 @@ function FindingPage({
           <Feedback finding={finding} />
         </div>
       </div>
+      {/* D54's fifth row: full width below the split, so a diff has the window. */}
+      <FixSection fixes={fixes.data} />
     </div>
   );
 }
@@ -259,10 +277,13 @@ function Header({
   finding,
   zone,
   line,
+  suggestedFix,
 }: {
   finding: FindingDetail;
   zone?: string;
   line: HeaderLine;
+  /** F5 (D54): the section can fall far down a long case, so the header links to it. */
+  suggestedFix: boolean;
 }) {
   return (
     <header className="flex flex-col gap-1">
@@ -282,6 +303,14 @@ function Header({
         <a href="#finding-evidence" className="underline-offset-2 hover:underline">
           Evidence ↓
         </a>
+        {suggestedFix ? (
+          <>
+            {" · "}
+            <a href={`#${SUGGESTED_FIX.anchor}`} className="underline-offset-2 hover:underline">
+              {SUGGESTED_FIX.jump}
+            </a>
+          </>
+        ) : null}
       </p>
       {finding.muted ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>
@@ -739,7 +768,16 @@ function SignalChart({
  * worded as order. Every row naming an earlier release carries
  * `CAME_FIRST`; the link carries the finding, so the comparison's window reaches it.
  */
-function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+function ReleaseSection({
+  finding,
+  zone,
+  addition,
+}: {
+  finding: FindingDetail;
+  zone?: string;
+  /** F5 FR1: the version before it, and past the look-back, a sentence; drawn in this row. */
+  addition?: DeployLineAddition | null;
+}) {
   const canSetUp = useCan("manage_credentials");
   const context = finding.release_context;
   if (finding.scope === "project") {
@@ -769,6 +807,7 @@ function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: stri
   const line = releaseBefore(finding, { zone });
   const before = context.before;
   const others = elsewhere(context, finding.service_name ?? "");
+  const extras = deployAddition(addition, context, line);
   return (
     <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
       <h3 id="finding-release" className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
@@ -778,6 +817,7 @@ function ReleaseSection({ finding, zone }: { finding: FindingDetail; zone?: stri
         {line.text}
         {line.cameFirst ? ` ${CAME_FIRST}` : ""}
       </p>
+      {extras ? <DeployLineExtras addition={extras} zone={zone} /> : null}
       {before !== null && line.cameFirst ? (
         <Link
           to="/releases/$releaseId"

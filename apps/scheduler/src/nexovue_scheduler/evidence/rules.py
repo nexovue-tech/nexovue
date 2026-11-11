@@ -22,6 +22,7 @@ from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
 from nexovue_platform.evidence import (
+    DEPLOY_LOOKBACK,
     LIKELY,
     POSSIBLE,
     RULE_DEPENDENCY_DEPLOY,
@@ -40,8 +41,6 @@ from nexovue_platform.evidence import (
     evidence_id,
 )
 
-# A deploy this long before the start lines up with it (FR8, rules 1, 3, 4, 5).
-DEPLOY_LOOKBACK: Final = timedelta(minutes=30)
 # A chance below this may be "likely"; below the next, "possible" (FR9).
 CHANCE_LIKELY_BELOW: Final = 0.10
 CHANCE_POSSIBLE_BELOW: Final = 0.50

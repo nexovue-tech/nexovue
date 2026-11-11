@@ -54,6 +54,9 @@ GATHER_HARD_LIMIT_SECONDS: Final = 90
 LOCK_RETRY_SECONDS: Final = 30
 # A person may read again at most once in this long per finding (FR41, a guess).
 READ_AGAIN_EVERY: Final = timedelta(minutes=1)
+# A deploy this long before the start lines up with it (FR8, rules 1, 3, 4, 5). Here, not
+# in the scheduler's rules, because F5's deploy line words the same window (F5 FR1).
+DEPLOY_LOOKBACK: Final = timedelta(minutes=30)
 # A signed deploy asks for a read of an open finding on its service that started
 # within this long after it (design, enqueue table).
 DEPLOY_READ_WINDOW: Final = timedelta(minutes=30)

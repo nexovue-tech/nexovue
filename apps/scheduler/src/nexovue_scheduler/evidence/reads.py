@@ -16,13 +16,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
 
+from nexovue_platform.evidence import DEPLOY_LOOKBACK
 from nexovue_platform.releases import DEPLOYS_AND_VERSIONS, DEPLOYS_ONLY, VERSIONS_ONLY
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from nexovue_scheduler.evidence.rules import (
     BASE_RATE_DAYS,
-    DEPLOY_LOOKBACK,
     CheckChange,
     DeployFact,
     DeployHistory,

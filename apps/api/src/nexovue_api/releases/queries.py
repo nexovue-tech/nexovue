@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Final
 
 from nexovue_platform import releases as releases_platform
-from sqlalchemy import Select, and_, case, delete, func, or_, select, tuple_, update
+from sqlalchemy import Select, and_, case, delete, func, literal, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -922,6 +922,33 @@ async def period_before(
         await session.execute(
             _period_facts(org_id, project_id)
             .where(ReleasePeriod.service_name == service_name, ReleasePeriod.started_at <= at)
+            .order_by(ReleasePeriod.started_at.desc(), ReleasePeriod.id.desc())
+            .limit(1)
+        )
+    ).first()
+
+
+async def period_preceding(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    release_id: uuid.UUID,
+    started_at: datetime,
+    period_id: uuid.UUID,
+) -> Any | None:
+    """The period of another version that ran on the service before this one started
+    (F5 FR1: "the version that ran before it"), in the order `period_before` reads."""
+    return (
+        await session.execute(
+            _period_facts(org_id, project_id)
+            .where(
+                ReleasePeriod.service_name == service_name,
+                ReleasePeriod.release_id != release_id,
+                tuple_(ReleasePeriod.started_at, ReleasePeriod.id)
+                < tuple_(literal(started_at), literal(period_id)),
+            )
             .order_by(ReleasePeriod.started_at.desc(), ReleasePeriod.id.desc())
             .limit(1)
         )

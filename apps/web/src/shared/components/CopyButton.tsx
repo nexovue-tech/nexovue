@@ -15,7 +15,19 @@ import { showToast } from "../toast/toast-store";
 
 const CONFIRMATION_MS = 2000;
 
-export function CopyButton({ value, label }: { value: string; label: string }) {
+export function CopyButton({
+  value,
+  label,
+  onUnavailable,
+}: {
+  value: string;
+  label: string;
+  /**
+   * Called when the clipboard write fails, so a caller whose value is hidden can show it
+   * for selecting: "Select the value" is no use with nothing visible (F5 FR5a).
+   */
+  onUnavailable?: () => void;
+}) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -38,8 +50,9 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
             ? "The browser only allows this over HTTPS. Select the value and copy it."
             : "Select the value and copy it.",
       });
+      onUnavailable?.();
     }
-  }, [value]);
+  }, [value, onUnavailable]);
 
   return (
     <button

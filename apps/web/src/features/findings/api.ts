@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
 import type { DetectionStatus, ProjectTotals } from "@/shared/detection/headline";
@@ -1018,5 +1018,56 @@ export function useRateExplanation(findingId: string) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: explanationQueryKey(findingId) });
     },
+  });
+}
+
+// ------------------------------------------------- F5: rungs 1 and 2 (plan T1.3, T1.4)
+
+/** The version that ran before F28's *release before this* (F5 FR1). */
+export interface EarlierRelease {
+  release_id: string;
+  version: string;
+  last_state: "started" | "finished" | "failed" | "rolled_back" | null;
+}
+
+/** What F5 adds to F28's *Release before this* row: never a line of its own. */
+export interface DeployLineAddition {
+  /** F28's release before the finding, which these sentences extend. */
+  release_id: string;
+  earlier: EarlierRelease | null;
+  sentences: ExplanationSegment[][];
+}
+
+/** The *Suggested fix* section's line for this person; absent when a role has none. */
+export interface FixSectionLine {
+  heading: string | null;
+  sentence: string;
+}
+
+/** `GET /findings/{id}/fixes`: a person's read; a token is refused (F5 AC3). */
+export interface FindingFixes {
+  finding_id: string;
+  deploy_line: DeployLineAddition | null;
+  /** Absent for a finding closed as a false alarm or because its service went (FR5). */
+  brief: { text: string } | null;
+  section: FixSectionLine | null;
+}
+
+export function fixesQueryKey(findingId: string, explanationVersion: number | null) {
+  return ["findings", "fixes", findingId, explanationVersion] as const;
+}
+
+/**
+ * Rungs 1 and 2. The brief is built from F3's stored facts, so it is read again when a
+ * new explanation version arrives, which the explanation's own poll notices; nothing
+ * here polls by itself.
+ */
+export function useFixes(findingId: string, explanationVersion: number | null) {
+  return useQuery({
+    queryKey: fixesQueryKey(findingId, explanationVersion),
+    // A new version keeps the brief on screen while it is read again: no skeleton flash.
+    placeholderData: keepPreviousData,
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingFixes>(`findings/${encodeURIComponent(findingId)}/fixes`, { signal }),
   });
 }

@@ -29,7 +29,8 @@ from nexovue_api.auth.policy import (
 )
 from nexovue_api.deps import AppSettings, DbSession, EmailAvailable, OptionalEmail
 from nexovue_api.errors.exceptions import InvalidRequestError
-from nexovue_api.findings import cases, explanations, links, service
+from nexovue_api.findings import cases, explanations, fix_read, links, service
+from nexovue_api.findings.fix_schemas import FindingFixes
 from nexovue_api.findings.schemas import (
     CaseChanged,
     CaseChangeRequest,
@@ -180,6 +181,24 @@ async def read_explanation(
         show_held_causes=settings.show_held_causes,
         now=datetime.now(UTC),
         person_id=reader.identity.user.id if reader.identity is not None else None,
+    )
+
+
+@router.get(
+    "/{finding_id}/fixes",
+    summary="What changed before a finding, and a brief to copy into your own coding tool",
+)
+async def read_fixes(
+    identity: CurrentIdentity, db: DbSession, settings: AppSettings, finding_id: uuid.UUID
+) -> FindingFixes:
+    """F5 (FR1 to FR5): a person's read, so a token is refused below this route and it
+    stays off the read surface (AC3). Works with AI off; calls no provider and no GitHub."""
+    return await fix_read.read_fixes(
+        db,
+        org_id=identity.org_id,
+        finding_id=finding_id,
+        settings=settings,
+        now=datetime.now(UTC),
     )
 
 

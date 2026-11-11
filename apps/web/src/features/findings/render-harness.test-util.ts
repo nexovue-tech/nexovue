@@ -174,6 +174,13 @@ export function stubApi(
     "GET /releases/markers": json({ markers: [], truncated: false, cap: 500 }),
     // F22 T6.3: the create panel's preselection; a test that cares stubs its own.
     "GET /service-repositories": json({ mappings: [] }),
+    // F5: rungs 1 and 2; a test that cares stubs its own.
+    "GET /findings/f-1/fixes": json({
+      finding_id: "f-1",
+      deploy_line: null,
+      brief: null,
+      section: null,
+    }),
     ...extra,
   };
   vi.stubGlobal(
