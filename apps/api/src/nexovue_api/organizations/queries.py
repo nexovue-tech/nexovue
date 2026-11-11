@@ -26,6 +26,7 @@ from nexovue_api.data.postgres.models import (
     BillingWebhookDelivery,
     Connection,
     Dashboard,
+    ExplanationStoppedRule,
     Job,
     JobResult,
     NotificationChannel,
@@ -118,6 +119,13 @@ async def delete_connections(session: AsyncSession, org_id: uuid.UUID) -> int:
     return await _rows_deleted(session, delete(Connection).where(Connection.org_id == org_id))
 
 
+async def delete_explanation_stopped_rules(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The rules the organization stopped from naming causes (F3 FR54)."""
+    return await _rows_deleted(
+        session, delete(ExplanationStoppedRule).where(ExplanationStoppedRule.org_id == org_id)
+    )
+
+
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
@@ -131,6 +139,7 @@ DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitabl
     "job_results": delete_job_results,
     "connections": delete_connections,
     "dashboards": delete_dashboards,
+    "explanation_stopped_rules": delete_explanation_stopped_rules,
     "users": delete_users,
     "projects": delete_projects,
 }

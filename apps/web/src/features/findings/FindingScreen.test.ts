@@ -1013,7 +1013,15 @@ describe("what lines up with this (F3 T1.11, T1.15)", () => {
         "Deploys",
         "Infrastructure (whole project)",
       ]);
-      expect(look?.querySelector("a")?.getAttribute("href")).toBe("/traces?service=checkout");
+      // F3 Step 2 (FR16, AC21): at the finding's window, with the way back to it.
+      const traces = new URL(look?.querySelector("a")?.getAttribute("href") ?? "", "http://x");
+      expect(traces.pathname).toBe("/traces");
+      expect(traces.searchParams.get("service")).toBe("checkout");
+      expect(traces.searchParams.get("finding")).toBe("f-1");
+      expect(traces.searchParams.get("project")).toBe(PROJECT_ID);
+      expect(Date.parse(traces.searchParams.get("from") ?? "")).toBeLessThan(
+        Date.parse(traces.searchParams.get("to") ?? ""),
+      );
       unmountAll();
     }
   });
@@ -1181,5 +1189,103 @@ describe("what lines up with this (F3 T1.11, T1.15)", () => {
     expect(release?.textContent).toContain("v2.1 was reported 2 hours before this");
     expect(release?.textContent).not.toContain("No deploy recorded");
     expect(headerText(container)).toBe("Not enough evidence to name a likely cause");
+  });
+
+  describe("Step 2: a fact's link, and the rating (F3 T2.4, T2.12)", () => {
+    const errorFact = deployFact({
+      id: "error_group:a1",
+      kind: "error_group",
+      basis: "telemetry_text",
+      sentence: [{ text: "New error: " }, { name: "TimeoutError" }],
+      target: { kind: "error_group", group_id: "a1", services: ["checkout"] },
+    });
+
+    it("links an error fact to its group at the finding's window (AC105)", async () => {
+      const container = await mountWith(json(explanation({ facts: [errorFact] })));
+      const link = section(container)?.querySelector<HTMLAnchorElement>("ol li a");
+      const url = new URL(link?.getAttribute("href") ?? "", "http://x");
+
+      expect(link?.textContent).toBe("Errors");
+      expect(url.pathname).toBe("/errors");
+      expect(url.searchParams.get("group")).toBe("a1");
+      expect(url.searchParams.get("finding")).toBe("f-1");
+    });
+
+    it("says the data aged out instead of linking to it (AC22)", async () => {
+      stubApi(finding({ raw_kept_until: minutesAgo(60 * 24) }), {
+        extra: { "GET /findings/f-1/explanation": json(explanation({ facts: [errorFact] })) },
+      });
+      const { container } = await mountFinding();
+      await heading(container);
+
+      const row = section(container)?.querySelector("ol li");
+      expect(row?.querySelector("a")).toBeNull();
+      expect(row?.textContent).toContain("Raw errors aged out on");
+    });
+
+    it("asks a member whether it was useful, and offers only reasons that fit (AC75)", async () => {
+      const api = stubApi(finding(), {
+        role: "member",
+        extra: {
+          "GET /findings/f-1/explanation": json(
+            explanation({ version: 2, rating_reasons: ["not_useful"] }),
+          ),
+          "POST /findings/f-1/explanation/feedback": json({
+            version: 2,
+            helpful: false,
+            reason: "not_useful",
+          }),
+        },
+      });
+      const { container } = await mountFinding();
+      await heading(container);
+      const buttons = () =>
+        [...(section(container)?.querySelectorAll("fieldset button") ?? [])] as HTMLButtonElement[];
+      const press = async (text: string) =>
+        act(async () =>
+          buttons()
+            .find((button) => button.textContent === text)
+            ?.click(),
+        );
+
+      expect(section(container)?.textContent).toContain("Was this useful?");
+      await press("No");
+      expect(buttons().map((button) => button.textContent)).toEqual([
+        "Yes",
+        "No",
+        "It did not help",
+      ]);
+      await press("It did not help");
+
+      expect(api.to("POST", "/findings/f-1/explanation/feedback")[0]?.body).toEqual({
+        version: 2,
+        helpful: false,
+        reason: "not_useful",
+      });
+    });
+
+    it("shows a carried rating with a way to change it", async () => {
+      const container = await mountWith(
+        json(
+          explanation({
+            version: 3,
+            my_rating: { version: 2, helpful: true, reason: null },
+            rating_reasons: ["not_useful"],
+          }),
+        ),
+        "member",
+      );
+
+      expect(section(container)?.textContent).toContain(
+        "Thanks, recorded. You said it was useful.",
+      );
+      expect(section(container)?.textContent).toContain("Change");
+    });
+
+    it("never offers a viewer the rating (AC23, AC75)", async () => {
+      const container = await mountWith(json(explanation({ version: 1 })), "viewer");
+
+      expect(section(container)?.textContent).not.toContain("Was this useful?");
+    });
   });
 });

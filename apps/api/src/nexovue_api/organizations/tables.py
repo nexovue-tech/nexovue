@@ -53,6 +53,9 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     # F20. Dashboards belong to the organization, not a project (BR1), so a project's
     # deletion leaves them. Before `users`, whom their owner and editor columns name.
     "dashboards",
+    # F3. The rules an organization stopped from naming causes. Before `users`, whom
+    # `created_by` names.
+    "explanation_stopped_rules",
     "users",
     "projects",
 )
@@ -108,6 +111,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # read with its project (it also expires on its own after an hour).
     "finding_explanations": "findings",
     "evidence_error_group_reads": "projects",
+    # F3. A rating goes with the version it rates.
+    "finding_explanation_ratings": "finding_explanations",
     # F19. Targets and their change history go with the project; status and daily
     # counts with their target. The history and a purged target's months have no key
     # to the target, because they outlive its purge (FR31, D46).

@@ -229,6 +229,24 @@ since anyone on the internet could send one: your CI's output shows a 401.
 A project stores at most 1,000 new deploys an hour. A batch that would pass that is
 refused whole with a `Retry-After`, and resent deploys do not count.
 
+## What deploys add to a finding
+
+A finding's page lists the deploys that line up with it, each with how many deploys that
+service recorded in the last 7 days. A signed deploy shortly before a finding, at an hour
+when the service rarely deploys, can be named its likely place to look, and a channel
+that was told the finding then gets one follow-up saying so
+([Alert channels](alerts/channels.md#the-follow-up-naming-a-likely-place-to-look)).
+
+**Not yet switched on.** Until nexovue has measured how often these rules are right, no likely cause is named and no follow-up is sent; the facts, their base rates and *Look next* still show.
+
+- **The clock starts with your first deploy notification.** Until they have run for 7
+  days, a deploy is at most "possibly" the place to look, and the page says how few days
+  it has records for.
+- **If you deploy often**, more than about once a working day, a deploy is at most
+  "possibly", because a deploy before a finding then says little on its own.
+- **A version only seen in your telemetry** is never named on its own; it can only
+  support a signed deploy.
+
 ## What is stored, and what is not
 
 Deploys are stored in clear text, exactly as sent, for as long as the project keeps its

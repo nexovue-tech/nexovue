@@ -2,15 +2,54 @@
 
 ## Lifecycle status
 
-**Step 1 is on `feature/phase-2` (2026-11-09).** Facts on the finding page, with no AI at all (plan T1.0 to T1.15), on worktree branch `wt/f3s1` from `feature/phase-2`. Two tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
+**Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-Step 1 awaits the founder's review of the diff, then commit. Step 2 next.
+Step 2 awaits the founder's review of the diff, then commit. Step 2b is the founder's after Phase 2 (foundation item 30); Step 2c's code (T2.15, T2.16) or Step 3 next, as the founder orders.
 
 
 ## Completed
+
+### Step 2, built 2026-11-09 (on `feature/phase-2`)
+
+**What a person sees.** Every "Look next" link, and each fact's own link, opens its data at the finding's minutes: the window travels in the address (`?from=&to=&project=&finding=`), so a copied link opens the same minutes, the person's own window on every other screen is left as it was, and a line under the window control says "Showing this finding's window, 13:47 to 14:20 Kolkata time", with "Back to the finding" and "Use my own window". An error fact opens its group on the Errors screen; a dependency fact opens traces through the callee, or the caller's calls named by the attribute that named it, or, with none, the caller's calls labelled "not narrowed"; failing calls or slow ones. Raw data past retention reads "Raw traces aged out on {date}" instead of a link. A finding card names its likely cause in one wrapping line. Members rate an explanation ("Was this useful?"); admins see each rule's counts on `/settings/explanations`, can stop a rule naming causes, and copy a counts-only summary. A labelled sample sits at `/findings/sample`, linked from the empty feed with the first findings' date. An incident's page has "Look next" too. A channel people read that was told a finding gets one follow-up when a signed deploy is its likely place to look, with the deploy's base rate, unless the channel turns it off. **While FR50 holds (production), no cause is stated, so no card line and no follow-up appear**; the override shows them outside production.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T2.1 | F28's chart markers re-run: "marks the charts and lists the window's releases (AC40)" passes | `FindingScreen.test.ts` (unchanged) |
+| T2.2 | Parse and build the address window; drop a project or finding that is not an identifier; apply on the six screens only | `shared/url-window.ts` |
+| T2.3 | `useWindowChoice` prefers the address window and never writes the stored one; the six routes keep it; each screen keeps it on a filter change; the window line, with "Back to the finding" and "Use my own window"; `project` selected on arrival | `shared/selection.ts`, `app/router.tsx`, `TraceListScreen.tsx`, `ErrorsScreen.tsx`, `LogsScreen.tsx`, `InfrastructureScreen.tsx`, `app/layout/WindowControl.tsx` |
+| T2.4 | Every link, built in one place; a `target` on each fact in the API (the values a link needs, no message text); `?group=` on Errors | `shared/evidence-links.ts`, `shared/components/LookNextLinks.tsx`, `findings/explanations.py`, `findings/schemas.py`, `features/errors/filters.ts`, `ErrorsScreen.tsx`, `ExplanationSection.tsx` |
+| T2.5 | The card's cause line, wrapping, from `likely_cause_sentence` | `FindingsScreen.tsx` |
+| T2.6 | `explained` in the vocabulary and the kind check; `notification_channels.sends_explained`; the channel switch | `alerts/model.py`, migration `0067`, `channels/` (API), `ChannelDetailScreen.tsx`, `features/alerts/api.ts` |
+| T2.7 | `explained.write`: on any read after the settled time, written or not, for a `likely` cause on a verified record once released; told channels people read with it on and no follow-up at any sequence; 5 per channel in 10 minutes under a per-channel transaction lock, the fifth saying so | `evidence/explained.py`, `evidence/gather.py` |
+| T2.8 | `_TAKEN` reads the newest likely-and-verified version's deploy fact; the composer's own branch (no signals, the base rate, the page as current, no previews); `compose_batch` keeps it out of the count, severity and "still open"; a row that cannot be written, or a finding closed since, is dropped alone with its reason | `alerts/outbox.py`, `alerts/messages.py`, `alerts/payloads.py`, `alerts/delivery.py` |
+| T2.8 (F19) | `explained` joins `_WITHHOLD_UNTOLD_ENDING`: it goes only where news of its finding reached the channel (F19 AC58, F19's *Open decisions* 2) | `alerts/outbox.py` |
+| T2.9 | `explained` never on a webhook; the follow-up, frequent deployers, the 7-day clock and pages with no finding; held until the bar is met | `docs/product/setup/alerts/webhooks.md`, `channels.md`, `setup/deploys.md`, `docs/features/alerts/spec.md` |
+| T2.12 | Ratings (one per person per version, carried until the cause changes, reasons that fit what was shown, audited); rule counts and stopping a rule (audited, per organization); gather passes the stopped rules to `rules.decide`; the rating control; `/settings/explanations` | migration `0067`, `findings/explanations.py`, `explanation_queries.py`, `findings/router.py`, `explanations/router.py` (new), `audit/`, `organizations/`, `evidence/reads.py`, `gather.py`, `features/explanationsettings/` (new), `settings-nav.ts` |
+| T2.13 | `/findings/sample` from fixed data (likely, abstained, absences), no actions or links; the empty feed's sample link, deploy setup link and first findings' date. **Not built:** AC104's deploy-cause and traffic dates (*Open decisions*, 5) | `sample-explanation.ts`, `SampleExplanationScreen.tsx`, `FindingsScreen.tsx`, `app/router.tsx`, `console-routes.json` |
+| T2.14 | An incident's "Look next", its service's or the project's, at its window | `IncidentScreen.tsx` |
+
+Migration **0067** (on 0066): the kind check widened (`NOT VALID`, then validated), `sends_explained`, `finding_explanation_ratings`, `explanation_stopped_rules`; roll forward only (ratings and stopped rules exist nowhere else; added to `test_migration_rules.py`'s list). **No ADR:** nothing settled here is material beyond the design's.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **The link helper lives in `shared/`, not `features/findings/`** as T2.4 named: T2.14 reuses it from `features/alerts`, and biome refuses one feature importing another. Its type `ExplanationFactTarget` lives there too; `findings/api.ts` re-exports it.
+- **The fact's link values are a typed `target` on each fact** in `GET /findings/{id}/explanation`, read from the frozen `values`: an error group's id and services; a dependency's caller, callee, the attribute that named it, and its failure shares and p95s; a release id; another record's id. The design said links are built only by the console; the API only says what the data is. Never message text or exception type.
+- **A dependency link's slow-call threshold is the normal p95** (`min_duration_ms` = `p95_before`), and a failure move wins over a latency move. A `slower` finding's traces link uses its worst reading, as the design says.
+- **The address window is ignored past 31 days**, and on any path but the six, so a stray `from` elsewhere changes nothing.
+- **The follow-up's words are built from the cause's deploy fact**, not the page's header segments: "A likely place to look on checkout: the deploy of checkout v2.1, 4 min before this (3 deploys in 7 days). See the finding's page for the current reading." A service name failing `[A-Za-z0-9._-]{1,80}` reads "a service" as the design says; **a version failing it reads "a version"** (the design names only services). The base-rate words moved to `nexovue_platform.evidence.deploy_rate_words`, so the page and the message say it one way.
+- **A follow-up is dropped at delivery when its finding has closed since** (FR21's "nor once the finding has closed"), and when no likely-and-verified version stands. Any composer that raises drops only its own row (AC78), so a bug in one kind cannot hold back a batch: this applies to every kind, not only `explained`.
+- **One alert with follow-ups in a batch reads as that alert**, with each follow-up as one more line; follow-ups alone read "N findings have a likely place to look".
+- **The channel switch is on the channel's own page**, beside quiet hours, not the list (`ChannelsScreen.tsx` as T2.6 named); its test is in `ChannelsScreen.test.ts`, which mounts both.
+- **`/explanations` has its own router module** (`nexovue_api/explanations/router.py`): in the findings router it inherited the telemetry rate-limit tier, which the coverage test holds to every route in a file that reads ClickHouse; these read Postgres only.
+- **A rule counts only where it was shown:** a held cause (FR50) counts as no cause on `/settings/explanations`, as the page shows it; so in production every rule reads 0 until the bar is met.
+- **The rating's "Yes" carries no reason and "No" always one**, a `CHECK` on the table.
+- **An incident's "Look next" shows on every incident page**, after its evidence, not only those with no finding: the API does not say whether one is linked, except a burn's.
 
 ### Step 1, built 2026-11-09 (on `feature/phase-2`)
 
@@ -63,10 +102,15 @@ ADR-039 (an explanation is a frozen evidence record, with code choosing the caus
 
 ## Next action
 
-The founder reviews Step 1's diff; then commit, and the coordinator re-chains migration 0066. Then Step 2 (links, the card, the follow-up alert). T0.1 and T0.2 are still unticked and not part of Step 1.
+The founder reviews Step 2's diff; then commit. The founder's checks after Phase 2: send a test finding to Slack and email and read the follow-up (Step 2's *Judgeable*; A55 can be overturned there), follow each link from a demo finding and copy one into a private window, and the Playwright checks at 390 and 1920 pixels. T0.1 and T0.2 are still unticked and not part of Step 2. F22's T2.9 (the `explained` timeline event beside F3's row) can now be built, since `explained.write` exists.
 
 
 ## Open decisions
+
+**From Step 2, 2026-11-09:**
+
+5. **AC104's second and third dates have no source** (FR55: "Deploy causes can reach 'likely' from {date}" and "traffic drops from {date}"). The first needs the project's first deploy record, the second when detection starts judging traffic drops; no route gives either (`/releases/coverage` gives a per-service last report; `DetectionStatus` gives only `earliest_judging_date`, which is built as "First findings from {date}"). **Options:** (a) add `first_deploy_record_at` (the earliest signed deploy event) to F28's `/releases/coverage` and a traffic-judging date to F6's detection status, then finish T2.13; (b) say the rule without dates ("once deploy notifications have run for 7 days"), as built now. **Recommendation: (a)**, a small change to two other features' routes, which this step may not make; T2.13 stays unticked until then.
+6. **AC23's token refusal on the rating** is held structurally (`test_authorization_coverage.py`: the route's gate needs a signed-in person, as every token-refused route's does), not by a live request: the explanation test harness overrides the reader and cannot run the real identity dependency for a token. **Recommendation:** accept; the same holds for Step 1's read-again.
 
 **From Step 1, 2026-11-09:**
 
@@ -375,6 +419,12 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Risks
 
+**Added by Step 2 (2026-11-09):**
+
+- **The follow-up changes a path every people-read alert takes** (`_TAKEN`, `compose_batch`, the drop of an unwritable row). AC78's golden fixture holds every earlier kind's bytes on six channel kinds; a later change to an alert's words must rewrite it deliberately (`NEXOVUE_WRITE_OUTBOX_GOLDEN=1`).
+- **Any composer that raises now drops its row** instead of failing the delivery task and retrying until the lease ends; the drop is logged with the row and kind, and the delivery log shows "not sent: this message could not be written".
+- **Nothing in production shows a cause yet** (FR50), so the card line, the follow-up and the rule counts read empty there until the bar is met; their behaviour is proved only with the non-production override.
+
 **What remains after the reviews.**
 
 - **No real user was asked.** The largest gap. T2.10 now sits in the plan, before the costly work.
@@ -397,6 +447,34 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 - **Oracle's free allowance is 2 Arm CPUs and 12 GB,** below the 16 GB minimum, and the bed's demo needs more. Measuring there needs a paid shape, which returns to the founder at deployment.
 
 ## Validation
+
+### Step 2, 2026-11-09
+
+Every behaviour change has a test seen failing first, or proved by removing the behaviour from a saved copy and restoring it. Live suites ran on this build's own containers (`f3s2-pg` on 25432, `f3s2-ch` on 28123, with its reader, eraser and detection-writer users), migrated with Alembic and the Go setup, with every suite's DSN pointed at them.
+
+| Test | Result | Seen failing |
+|---|---|---|
+| `test_alert_vocabulary.py` (26) | pass | yes, before 0067 froze `explained` |
+| `test_evidence_vocabulary.py` (7; 4 new: ratings' reasons, rules, the API's closed lists) | pass | 2 failed with a word dropped from 0067 |
+| `test_migration_rules.py` (43) | pass; 0067's downgrade refuses | — |
+| `test_evidence_explained_live.py` (26, new) | pass | under six mutations: the channel switch, the people-read filter, the channel lock (the race made deterministic: one writer holds its transaction open), the settled read with no new version, the stopped rules, the any-sequence check |
+| `test_outbox_golden_live.py` (7, new): every pre-F3 kind on six channel kinds, byte for byte against a fixture written from the code before Step 2; a follow-up with no cause dropped alone; a raising composer dropping only its row; F19's AC58 both ways; the newest likely cause read at the claim | pass | the golden failed with one existing line's words changed; AC58 failed with `explained` out of the withhold; the drops failed with the drop removed; the claim's read failed without its strength filter |
+| `test_alert_messages.py` (69; 16 new), `test_alert_payloads.py` (16) | pass | 14 failed without the branch, 4 without the batch exclusion, 1 without Slack's unfurl flags, 7 without the closed-finding guard |
+| `test_channels_live.py` (23; 1 new) | pass | yes, without the people-only guard |
+| `test_findings_explanation_live.py` (20; 12 new) | pass | the reason guard, the carried rating and the fact targets each failed when removed |
+| `test_authorization_coverage.py`, `test_ratelimit_coverage.py` | pass | yes: the three new routes unplaced, and `/explanations` on the telemetry tier |
+| `test_deletion_live.py` (28) | pass | 23 failed before `explanation_stopped_rules` had its deletion statement and both tables their seed rows |
+| `test_evidence_link_traces_live.py` (7, new): AC105's callee shapes run against the real trace search | pass | yes, with one shape's attribute dropped from the shared fixture (the console's test failed too) |
+| `test_evidence_gather_live.py`, `test_evidence_store_live.py`, `test_detection_project_job_live.py`, `test_detection_unmoved_live.py`, `test_detection_notify_live.py`, `test_slo_one_message_live.py`, `test_alert_delivery_live.py`, `test_alert_outbox_live.py` | 133 and 55 pass | — (regression) |
+| Web: `url-window.test.ts` (20), `evidence-links.test.ts` (22), `app/url-window-routes.test.ts` (11, the app's own router), `FindingsView.test.ts` (6 new), `FindingScreen.test.ts` (5 new), `SampleExplanationScreen.test.ts` (3), `ExplanationSettingsScreen.test.ts` (7), `ChannelsScreen.test.ts` (2 new), `IncidentScreen.test.ts` (2 new) | pass; **the whole web suite: 2,015 in 165 files** | the channel, incident and empty-feed tests were written first and failed; the rest under mutations (a path left out, the screen's window spread removed, the card line, the fact link and rating removed, the sample's gating, the rule's confirmation) |
+
+Also run: `uv run mypy .` (923 files, no issues), `ruff check .`, `ruff format --check .`, biome on all of `apps/web/src` and both JSON fixtures (one warning, in an untouched file), `pnpm -r --if-present run typecheck`, `verify-tokens.js`. The offline API suite: 5,108 pass (four suites needing ClickHouse ran with it as live suites instead).
+
+**One flake seen once:** `test_slo_one_message_live.py::test_ac56_a_burn_and_a_finding_in_two_projects_both_go` failed once in a 15-file batch and passed alone, in its own file (55) and in two later batches. Not investigated further; F19's.
+
+**Said plainly:** before the reader and writer DSNs were set, one batch ran the evidence and project-job suites with their defaults, `localhost:18123`, another worktree's ClickHouse. Each test's tenant id is random, so no other tenant's rows were read or changed, but a few test rows may remain there. Every later run used this build's own containers only.
+
+**Not run (Step 2):** the Slack and email follow-up as received, and following each link from a demo finding (Step 2's *Judgeable*): **not yet run, founder checks after Phase 2.** The Playwright flow for AC21 and the 390 and 1920 pixel checks: no dev stack in this build. Slack's own handling of `unfurl_links`: not tested.
 
 ### Step 1, 2026-11-09
 
@@ -460,7 +538,7 @@ This is the specification. On approval it amends: `phase-2-foundation.md` (the d
 
 ## Documentation impact
 
-None changed. Listed in `design.md`, *Specification impact*, and in the plan's tasks. New customer and operator documents are `docs/product/setup/ai.md` and `docs/operations/ai.md`, written during Steps 4 and 5.
+**Step 2 (2026-11-09):** `docs/product/setup/alerts/webhooks.md` (no `explained` event on a webhook), `setup/alerts/channels.md` (the follow-up, its limits and switch, frequent deployers, pages with no finding, held until the bar is met), `setup/deploys.md` (what deploys add to a finding, the 7-day clock), `docs/features/alerts/spec.md` (amended: the `explained` kind), F19's `status.md` (AC58 done), `phase-2-tracker.md`. Before Step 2: none changed. Listed in `design.md`, *Specification impact*, and in the plan's tasks. New customer and operator documents are `docs/product/setup/ai.md` and `docs/operations/ai.md`, written during Steps 4 and 5.
 
 ## Cross-feature reconciliation, 2026-11-02
 
@@ -478,7 +556,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-09
+2026-11-09 (Step 2 committed)
 
 ## Founder approval, 2026-11-02
 

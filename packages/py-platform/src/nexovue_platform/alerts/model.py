@@ -45,6 +45,8 @@ SEVERITY_RANK: Final[dict[str, int]] = {"warning": 1, "critical": 2}
 # `adopted`: a finding's level became the new normal by itself, told to the owners
 # outside any rule (D22). `stopped` and `running_again`: detection stopped judging a
 # project, and resumed (D24); their subject is the project, not an incident or finding.
+# F3 adds `explained`: one follow-up naming a finding's likely place to look, to people
+# only. It tells no news (`FINDING_TOLD_KINDS`) and is never an open alert (FR21, FR22).
 NOTIFICATION_KINDS: Final = (
     "opened",
     "escalated",
@@ -56,6 +58,7 @@ NOTIFICATION_KINDS: Final = (
     "adopted",
     "stopped",
     "running_again",
+    "explained",
 )
 NotificationKind = Literal[
     "opened",
@@ -68,7 +71,10 @@ NotificationKind = Literal[
     "adopted",
     "stopped",
     "running_again",
+    "explained",
 ]
+# F3's follow-up kind, named once for the writer, the outbox and the composer.
+EXPLAINED: Final = "explained"
 
 # Kinds whose subject is a project, so the row names neither an incident nor a finding.
 PROJECT_NOTIFICATION_KINDS: Final = ("stopped", "running_again")

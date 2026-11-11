@@ -88,6 +88,8 @@ describe("the sidebar", () => {
       "/alerts/incidents/$incidentId",
       // F6 (D12): reached from a finding's card, a service's timeline and its messages.
       "/findings/$findingId",
+      // F3 FR46: reached from the empty findings feed, and later from `/settings/ai`.
+      "/findings/sample",
       // F19: reached from the targets list, a target's page and its actions.
       "/slos/new",
       "/slos/$sloId",

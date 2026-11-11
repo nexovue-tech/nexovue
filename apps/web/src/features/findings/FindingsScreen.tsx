@@ -16,11 +16,12 @@ import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
+import { formatCalendarDay } from "@/shared/format/zoned";
 import { useCan, useSession } from "@/shared/identity";
 import type { OverviewPlot, OverviewPoint } from "@/shared/overview-plots";
 import { buildOverviewPlots } from "@/shared/overview-plots";
 import { useLiveWindow, useSelection } from "@/shared/selection";
-import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
+import { SETUP_DOCS_PATH, setupDocUrl } from "@/shared/setup-docs";
 
 import type {
   CaseFilter,
@@ -38,6 +39,7 @@ import {
   useProjectSummary,
   useResolveFromFeed,
 } from "./api";
+import { Segments } from "./ExplanationSection";
 import type { FeedChoice } from "./feed-filter";
 import { ACROSS_PROJECTS, FEED_CHOICES, NO_CASES, parseFeedSearch } from "./feed-filter";
 import { caseEndingSentence, caseSentence } from "./finding-page";
@@ -305,7 +307,7 @@ export function FindingsView({
               No finding is muted.
             </p>
           ) : (
-            <SummaryState totals={totals} points={points} checks={checks} />
+            <SummaryState totals={totals} points={points} checks={checks} detection={detection} />
           )}
           <MutedLink count={mutedCount} showing={showingMuted} onToggle={onToggleMuted} />
         </>
@@ -329,10 +331,12 @@ function SummaryState({
   totals,
   points,
   checks,
+  detection,
 }: {
   totals?: ProjectTotals;
   points: readonly OverviewPoint[];
   checks?: CheckCounts;
+  detection?: DetectionStatus;
 }) {
   const headline = headlineFor(totals, checks);
   // `service_count` of zero is the honest signal: nothing reported in this
@@ -386,6 +390,8 @@ function SummaryState({
         </p>
       ) : null}
 
+      <WhatFindingsWillSay detection={detection} />
+
       {/* Overview's own summary. Nothing assesses these yet, so the reader has to. */}
       {reporting && totals ? (
         <dl className="mt-5 flex flex-wrap gap-x-8 gap-y-2 border-line-subtle border-t pt-4">
@@ -423,6 +429,38 @@ function SummaryState({
     </section>
   );
 }
+
+/**
+ * F3 FR46, FR55: before any finding, what a finding's page will say and from when: a
+ * labelled sample from fixed data, the day the first findings can open, read from the
+ * project's own data, and how deploy facts start. The date deploy causes can first reach
+ * "likely" needs the project's first deploy record, which no route gives yet
+ * (`status.md`, *Open decisions*).
+ */
+function WhatFindingsWillSay({ detection }: { detection?: DetectionStatus }) {
+  const firstDay = detection?.earliest_judging_date ?? null;
+  return (
+    <div className="mt-4 flex max-w-prose flex-col gap-1 text-sm">
+      {firstDay ? (
+        <p className="text-ink">First findings from {formatCalendarDay(firstDay)}.</p>
+      ) : null}
+      <p className="text-ink-dim">
+        Each finding says what lines up with it and where to look first;{" "}
+        <a href={setupDocUrl("deploys")} className={TEXT_LINK}>
+          send deploys to get deploy facts
+        </a>
+        . Deploy causes can reach "likely" once deploy notifications have run for 7 days.
+      </p>
+      <p>
+        <Link to="/findings/sample" className={TEXT_LINK}>
+          See a sample explanation
+        </Link>
+      </p>
+    </div>
+  );
+}
+
+const TEXT_LINK = "font-medium text-brand-text underline-offset-2 hover:underline";
 
 /**
  * One of the three charts, as Overview draws it, without the deploy rules: the
@@ -732,8 +770,10 @@ function CaseRow({ finding, context }: { finding: FeedFinding; context: RowConte
  * One finding.
  *
  * What is committed is the shape: a sentence leading, the entity under it, the evidence
- * inline. *Probable cause* stays off the card until Stage 2 can name one, and the v1
- * engine reports no impact figure, so neither has a line here.
+ * inline. An open finding with a likely cause says it in one code-written line, with the
+ * same word as its page and a deploy's rate; it wraps rather than truncates, so the card
+ * shows no less doubt than the page (F3 FR18, AC67). The v1 engine reports no impact
+ * figure, so that has no line.
  *
  * A closed finding is one quiet line naming how it closed: no sparkline, nothing to do.
  * One whose case is still being worked keeps the full case row, in its own tier (FR21),
@@ -779,6 +819,11 @@ function FindingRow({ finding, context }: { finding: FeedFinding; context: RowCo
         <h3 className="text-ink text-sm">
           <FindingLink finding={finding} filter={null} />
         </h3>
+        {finding.likely_cause_sentence ? (
+          <p data-testid="card-cause" className="mt-0.5 max-w-prose text-ink text-sm">
+            <Segments segments={finding.likely_cause_sentence} zone={context.zone} />
+          </p>
+        ) : null}
         {finding.case_state !== null ? (
           <p className="mt-0.5 max-w-prose text-ink text-sm">
             {caseSentence({

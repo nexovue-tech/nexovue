@@ -12,6 +12,11 @@
    version's: nothing is written. Otherwise version = latest + 1, in one transaction.
 6. A failed read asks for one re-read in 60 seconds (`retry_read`), never a repeat of
    the whole job, so a failing read in a wide outage cannot triple the work.
+7. On any read after the settled time, whether or not it wrote a version, the
+   follow-up message `explained` is written where it is owed (`explained.write`, FR21),
+   so a signed deploy already known at opening still sends its one message.
+
+A rule the organization stopped (FR54) names no cause: its facts stay.
 
 No AI code is imported here, directly or not (AC5). In Step 1 AI wording does not
 exist, so every version is written `off`; Step 5 adds the wording decision.
@@ -44,7 +49,7 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from nexovue_scheduler.evidence import inputs, reads, rules, sentences
+from nexovue_scheduler.evidence import explained, inputs, reads, rules, sentences
 from nexovue_scheduler.evidence.rules import Facts, FindingInput
 from nexovue_scheduler.evidence.store import (
     EvidenceReader,
@@ -130,8 +135,11 @@ async def gather(
     reason: ReadReason,
     deployment: Deployment,
     now: datetime | None = None,
+    show_held_causes: bool = False,
 ) -> Gathered | None:
-    """One read of one finding. None when the finding or its project is gone."""
+    """One read of one finding. None when the finding or its project is gone.
+    `show_held_causes` is the non-production override (A60), which also lets a held
+    cause send its follow-up there."""
     async with engine.connect() as lock:
         held = bool(await lock.scalar(_TRY_LOCK, {"key": lock_key(finding_id)}))
         await lock.commit()
@@ -148,6 +156,7 @@ async def gather(
                 reason=reason,
                 deployment=deployment,
                 now=now or datetime.now(UTC),
+                show_held_causes=show_held_causes,
             )
         finally:
             # The hour's error-group write shares this connection; a failed one leaves its
@@ -167,6 +176,7 @@ async def _gather_locked(
     reason: ReadReason,
     deployment: Deployment,
     now: datetime,
+    show_held_causes: bool,
 ) -> Gathered | None:
     async with engine.connect() as connection:
         await connection.begin()
@@ -175,9 +185,10 @@ async def _gather_locked(
             return None
         latest = await reads.latest_version(connection, org_id=org_id, finding_id=finding_id)
         previous_items = await _previous_items(connection, org_id, finding_id) if latest else []
+        stopped = await reads.stopped_rules(connection, org_id=org_id)
         facts = await read_facts(connection, store, row, deployment=deployment, now=now, cache=lock)
         await connection.rollback()
-    cause = rules.decide(facts)
+    cause = rules.decide(facts, stopped_rules=stopped)
     record = sentences.record(facts, cause)
     items = _with_carried(record.items, previous_items, facts.failed_reads)
     book = AliasBook(None if latest is None else latest.aliases)
@@ -195,11 +206,17 @@ async def _gather_locked(
     )
     printed = fingerprint(items, cause)
     retry = bool(facts.failed_reads) and reason != RETRY_READ
+    follow_up = explained.after_settling(reason, row.started_at, now) and explained.sends_for(
+        None if cause is None else cause.as_json(), show_held_causes=show_held_causes
+    )
     if latest is not None and latest.fingerprint == printed:
         if reason == PERSON:
             logger.info("evidence_nothing_new", finding_id=str(finding_id))
         if retry:
             await _enqueue_retry(engine, finding_id, org_id)
+        if follow_up:
+            async with engine.begin() as connection:
+                await explained.write(connection, org_id=org_id, finding_id=finding_id, now=now)
         return Gathered(version=None, reads_failed=record.reads_failed, likely_rule=_rule(cause))
     version = 1 if latest is None else latest.version + 1
     async with engine.begin() as connection:
@@ -228,6 +245,8 @@ async def _gather_locked(
                     finding_id, org_id, RETRY_READ, countdown=RETRY_READ_DELAY_SECONDS
                 ),
             )
+        if follow_up:
+            await explained.write(connection, org_id=org_id, finding_id=finding_id, now=now)
     return Gathered(version=version, reads_failed=record.reads_failed, likely_rule=_rule(cause))
 
 
@@ -584,6 +603,7 @@ def gather_task(finding_id: str, org_id: str, reason: ReadReason) -> None:
             org_id=uuid.UUID(org_id),
             reason=reason,
             deployment=settings.nexovue_deployment,
+            show_held_causes=settings.show_held_causes,
         )
     )
     if gathered is None:

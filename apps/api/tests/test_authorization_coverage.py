@@ -186,6 +186,11 @@ POLICY_OF: Final = {
     "nexovue_api/findings/router.py:remove_issue": "MayOperateCases",
     # F3 A20, FR41: reading a finding's facts again; members and up, never a token.
     "nexovue_api/findings/router.py:read_explanation_again": "MayRequestExplanation",
+    # F3 Step 2: rating an explanation is every working role's, as operating alerts is
+    # (FR20); stopping a rule changes what detection's explanations say (FR54, A64).
+    "nexovue_api/findings/router.py:rate_explanation": "MayOperateAlerts",
+    "nexovue_api/explanations/router.py:stop_rule": "MayConfigureDetection",
+    "nexovue_api/explanations/router.py:resume_rule": "MayConfigureDetection",
     # F19: reliability targets, every working role's (D20, foundation section 5).
     "nexovue_api/slos/router.py:create_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:change_slo": "MayConfigureSlos",

@@ -175,6 +175,42 @@ CAUSE_RULES: Final = (
 # Rules that only ever support another rule's cause (A75, FR8's rule 8).
 SUPPORT_RULES: Final = (RULE_SEEN_VERSION, RULE_NEW_ERROR)
 
+# ------------------------------------------------------------- ratings (FR20)
+
+# Why a person said an explanation was not useful: a closed list, never free text (A21).
+# `wrong_cause` only when a cause was stated; `bad_wording` only when wording was shown.
+WRONG_CAUSE: Final = "wrong_cause"
+NOT_USEFUL: Final = "not_useful"
+BAD_WORDING: Final = "bad_wording"
+RATING_REASONS: Final = (WRONG_CAUSE, NOT_USEFUL, BAD_WORDING)
+
+# ------------------------------------------------------------ the base rate
+
+# Under this many days of deploy records, a rate is too short to judge (FR7).
+BASE_RATE_MIN_DAYS: Final = 7
+
+
+def deploy_rate_words(deploys_last_7_days: int, days_of_records: int) -> str:
+    """FR7: a deploy's base rate in words, never claiming a week it does not have. The
+    page and the follow-up message both say it this way."""
+    count = "deploy" if deploys_last_7_days == 1 else "deploys"
+    if days_of_records < BASE_RATE_MIN_DAYS:
+        days = max(days_of_records, 1)
+        noun = "day" if days == 1 else "days"
+        return (
+            f"{deploys_last_7_days} {count} in the {days} {noun} nexovue has records for, "
+            "too few to judge how usual this is"
+        )
+    return f"{deploys_last_7_days} {count} in 7 days"
+
+
+# ----------------------------------------------------- the follow-up (FR21)
+
+# An `explained` row's sequence: the window's last says more findings have a likely place
+# to look (design, *The cap*). Here so the outbox reads it without the evidence package.
+EXPLAINED_FIRST_SEQUENCE: Final = 0
+EXPLAINED_LAST_SEQUENCE: Final = 1
+
 # ------------------------------------------------------- holding the cause (FR50)
 
 # False until the founder's bar is recorded and met (spec, *Founder decisions*, 2; A60).

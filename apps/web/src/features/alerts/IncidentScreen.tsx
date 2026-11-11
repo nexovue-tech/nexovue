@@ -1,7 +1,9 @@
 import { Link, useParams } from "@tanstack/react-router";
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { LookNextLinks } from "@/shared/components/LookNextLinks";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { lookNext } from "@/shared/evidence-links";
 import { formatRelativeTime } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { setAbsoluteWindow, setSelectedProjectId, useSelection } from "@/shared/selection";
@@ -107,6 +109,33 @@ function BurnFacts({ incident }: { incident: Incident }) {
   );
 }
 
+/** A service's incident names its service in its subject key (F21). */
+const SERVICE_SUBJECT = "service:";
+
+/**
+ * F3 FR53: an incident's page gets "Look next", built by the same helper as a finding's,
+ * at its window: its service's data when it has one, the project's otherwise. It holds
+ * no likely cause and no evidence row (AC101).
+ */
+function IncidentLookNext({ incident }: { incident: Incident }) {
+  const service = incident.subject_key.startsWith(SERVICE_SUBJECT)
+    ? incident.subject_key.slice(SERVICE_SUBJECT.length)
+    : (incident.detail.service ?? null);
+  const entries = lookNext({
+    project_id: incident.project_id,
+    started_at: incident.opened_at,
+    closed_at: incident.is_event ? incident.opened_at : incident.resolved_at,
+    service_name: service || null,
+  });
+  return (
+    <LookNextLinks
+      entries={entries}
+      projectId={incident.project_id}
+      headingId="incident-look-next"
+    />
+  );
+}
+
 function IncidentDetail({ incident }: { incident: Incident }) {
   const open = incident.resolved_at === null && !incident.is_event;
   return (
@@ -172,6 +201,8 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         </h2>
         <Evidence incident={incident} />
       </section>
+
+      <IncidentLookNext incident={incident} />
 
       <section aria-labelledby="incident-told" className="flex flex-col gap-1">
         <h2 id="incident-told" className="font-medium font-serif text-base text-ink">

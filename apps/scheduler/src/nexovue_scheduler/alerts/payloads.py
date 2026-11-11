@@ -77,7 +77,7 @@ def slack(message: AlertMessage) -> bytes:
     """An incoming-webhook message: the summary as text, so a notification preview
     reads well, and the detail in a coloured attachment."""
     summary = slack_text(message.summary)
-    body = {
+    body: dict[str, Any] = {
         "text": summary,
         "attachments": [
             {
@@ -88,6 +88,11 @@ def slack(message: AlertMessage) -> bytes:
             }
         ],
     }
+    if not message.unfurl:
+        # F3's follow-up names customer text: no preview of any link it holds (AC27).
+        # Slack's own behaviour with these was not tested.
+        body["unfurl_links"] = False
+        body["unfurl_media"] = False
     return _json(body)
 
 

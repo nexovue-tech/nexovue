@@ -31,6 +31,8 @@ KINDS: Final[dict[EventKind, tuple[str, ...]]] = {
         # F6: a person's word on a finding, and a service's mute or snooze.
         "finding.",
         "service.",
+        # F3: a rule stopped from naming causes, or started again.
+        "explanation.",
     ),
     "support": ("support.",),
 }

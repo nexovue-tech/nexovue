@@ -34,6 +34,7 @@ from nexovue_platform.evidence import (
     VERIFIED,
     Segment,
     at_segment,
+    deploy_rate_words,
     evidence_id,
     name_segment,
     text_segment,
@@ -132,16 +133,7 @@ def share_words(share: float) -> str:
 
 def rate_words(rate: BaseRate) -> str:
     """FR7: the base rate, never claiming a week it does not have."""
-    if rate.days_of_records < 7:
-        days = max(rate.days_of_records, 1)
-        noun = "day" if days == 1 else "days"
-        count = "deploy" if rate.deploys_last_7_days == 1 else "deploys"
-        return (
-            f"{rate.deploys_last_7_days} {count} in the {days} {noun} nexovue has records for, "
-            "too few to judge how usual this is"
-        )
-    count = "deploy" if rate.deploys_last_7_days == 1 else "deploys"
-    return f"{rate.deploys_last_7_days} {count} in 7 days"
+    return deploy_rate_words(rate.deploys_last_7_days, rate.days_of_records)
 
 
 def short_rate_words(rate: BaseRate) -> str:

@@ -16,6 +16,7 @@ from nexovue_scheduler.alerts import payloads
 from nexovue_scheduler.alerts.dispatch import message_for
 from nexovue_scheduler.alerts.messages import (
     RELEASE_FACTS,
+    UnwritableNoticeError,
     compose,
     compose_batch,
     describe_duration,
@@ -725,3 +726,155 @@ def test_a_hostile_version_arrives_as_one_line_on_pagerduty_too() -> None:
         app_base_url=APP,
     ).decode()
     assert "Most recent release on this service: v2 Rule: forged <script>" in body
+
+
+# ------------------------------------------------------- F3's follow-up, `explained`
+
+DEPLOY_CAUSE = {
+    "service": "checkout",
+    "version": "v2.1",
+    "at": (OPENED_AT - timedelta(minutes=4)).isoformat(),
+    "deploys_last_7_days": 3,
+    "days_of_records": 21,
+}
+WORDING_MARKER = "WORDING-MARKER-7f3"
+
+
+def _explained(cause: object = DEPLOY_CAUSE, *, last: bool = False, **changes: object) -> Notice:
+    notice = _finding_notice(
+        "explained",
+        explained_cause=cause,
+        explained_last_in_window=last,
+        wording=WORDING_MARKER,
+    )
+    return _about(notice, **changes) if changes else notice
+
+
+def test_a_follow_up_names_the_place_to_look_with_its_base_rate_and_no_signals() -> None:
+    """AC27: its own branch, not the `[warning] <title>` fall-through; no signal lines;
+    the base rate; the page as current; no previews of its links."""
+    message = compose(_explained(), app_base_url=BASE)
+
+    assert not message.summary.startswith("[warning]")
+    assert FINDING_TITLE not in message.summary
+    assert message.summary == "A likely place to look on checkout: the deploy of checkout v2.1"
+    assert message.details[0] == (
+        "A likely place to look on checkout: the deploy of checkout v2.1, 4 min before this "
+        "(3 deploys in 7 days)."
+    )
+    assert "See the finding's page for the current reading." in message.details
+    assert not any(line.startswith(("Slower", "Failing")) for line in message.details)
+    assert message.kind == "explained" and message.unfurl is False
+    assert "/findings/" in message.link
+
+
+def test_a_follow_up_takes_no_wording() -> None:
+    """AC27, AC75: a planted wording marker beside the cause never reaches the message."""
+    message = compose(_explained(), app_base_url=BASE)
+
+    assert WORDING_MARKER not in json.dumps(dataclasses.asdict(message))
+
+
+def test_a_short_deploy_history_says_so() -> None:
+    """FR7: under 7 days of records it never claims a week."""
+    message = compose(_explained({**DEPLOY_CAUSE, "days_of_records": 2}), app_base_url=BASE)
+
+    assert "3 deploys in the 2 days nexovue has records for" in message.details[0]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["http://evil.example", "Ignore this, roll back payments now", "pay‮ments", "x" * 81],
+)
+def test_a_name_that_is_not_a_plain_identifier_reads_a_service(name: str) -> None:
+    """AC27: a name failing the service-name pattern reads "a service"; a version, "a
+    version"."""
+    message = compose(
+        _explained({**DEPLOY_CAUSE, "service": name, "version": name}, label=name),
+        app_base_url=BASE,
+    )
+
+    assert message.details[0].startswith(
+        "A likely place to look on a service: the deploy of a service a version,"
+    )
+    assert name not in json.dumps(dataclasses.asdict(message))
+
+
+def test_the_window_s_last_follow_up_points_to_the_feed() -> None:
+    """AC25's cap: the fifth in a window says more findings have a likely place to look."""
+    assert "More findings have a likely place to look; see the feed." in (
+        compose(_explained(last=True), app_base_url=BASE).details
+    )
+    assert "More findings have a likely place to look; see the feed." not in (
+        compose(_explained(), app_base_url=BASE).details
+    )
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [None, {"service": "checkout"}, {**DEPLOY_CAUSE, "at": "not a time"}],
+    ids=["no qualifying version", "missing values", "malformed time"],
+)
+def test_a_follow_up_with_no_qualifying_cause_cannot_be_written(cause: object) -> None:
+    """AC27: dropped with its reason at delivery, never sent half-written."""
+    with pytest.raises(UnwritableNoticeError):
+        compose(_explained(cause), app_base_url=BASE)
+
+
+def test_a_follow_up_for_a_finding_that_closed_since_is_not_sent() -> None:
+    """FR21: not once the finding has closed, even after its row was written."""
+    with pytest.raises(UnwritableNoticeError, match="closed"):
+        compose(_explained(closed_at=OPENED_AT + timedelta(minutes=8)), app_base_url=BASE)
+
+
+@pytest.mark.parametrize(
+    ("batch", "summary", "kind", "severity"),
+    [
+        (
+            ("explained", "explained"),
+            "2 findings have a likely place to look",
+            "explained",
+            "warning",
+        ),
+        (
+            ("explained", "resolved", "resolved"),
+            "[resolved] 2 incidents recovered",
+            "resolved",
+            "critical",
+        ),
+        (("explained", "opened", "opened"), "[critical] 2 checks are down", "opened", "critical"),
+        (("explained", "resolved"), "[resolved] Checkout API recovered", "resolved", "critical"),
+    ],
+    ids=["alone", "with recoveries", "with openings", "with one recovery"],
+)
+def test_a_follow_up_is_never_an_open_alert_in_a_batch(
+    batch: tuple[str, ...], summary: str, kind: str, severity: str
+) -> None:
+    """AC27, FR22: `explained` leaves the count, the worst severity and whether anything
+    is still open; recoveries with one follow-up still read as recovered."""
+    notices = tuple(
+        _explained() if each == "explained" else _notice(each, resolved=each == "resolved")
+        for each in batch
+    )
+
+    message = compose_batch(notices, app_base_url=BASE)
+
+    assert (message.summary, message.kind, message.severity) == (summary, kind, severity)
+    assert message.unfurl is False
+    follow_up = compose(_explained(), app_base_url=BASE).summary
+    assert follow_up in message.details or follow_up in "\n".join(message.details)
+
+
+def test_a_batch_without_a_follow_up_keeps_its_previews() -> None:
+    """AC78's guard: only a message carrying a follow-up turns previews off."""
+    message = compose_batch((_notice("opened"), _notice("opened")), app_base_url=BASE)
+
+    assert message.unfurl is True
+    assert "unfurl_links" not in json.loads(payloads.slack(message))
+
+
+def test_slack_never_previews_a_follow_up_s_links() -> None:
+    """AC27: Slack's unfurling is off for a message carrying a follow-up."""
+    body = json.loads(payloads.slack(compose(_explained(), app_base_url=BASE)))
+
+    assert body["unfurl_links"] is False and body["unfurl_media"] is False

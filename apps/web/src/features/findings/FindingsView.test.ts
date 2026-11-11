@@ -272,6 +272,93 @@ describe("the feed leads when there is anything in it", () => {
     expect(await readable({ findings: [FINDING] })).not.toContain("Probably");
   });
 
+  describe("the empty feed's sample and dates (F3 FR46, FR55; AC84, AC104)", () => {
+    it("links to the labelled sample and says how deploy facts start", async () => {
+      const container = await render({ findings: [] });
+      const sample = [...container.querySelectorAll("a")].find(
+        (link) => link.textContent === "See a sample explanation",
+      );
+
+      expect(sample?.getAttribute("href")).toBe("/findings/sample");
+      expect(container.textContent).toContain("send deploys to get deploy facts");
+    });
+
+    it("gives the first findings' date from the project's own data", async () => {
+      const container = await render({
+        findings: [],
+        detection: {
+          state: "learning",
+          services_total: 2,
+          services_learning: 2,
+          services_judged: 0,
+          services_delayed: 0,
+          services_muted: 0,
+          earliest_judging_date: "2026-11-16",
+          not_running_since: null,
+          delayed_since: null,
+          open_findings: 0,
+          services_too_many: 0,
+          judged_service_limit: 50,
+        },
+      });
+
+      expect(container.textContent).toContain("First findings from 16 Nov");
+    });
+  });
+
+  describe("the card's likely cause (F3 FR18, AC67, AC75)", () => {
+    const deploy = [
+      { text: "Likely: deploy of " },
+      { name: "checkout" },
+      { text: " " },
+      { name: "v2.1" },
+      { text: " (3 in 7 days)" },
+    ];
+    const cardOf = async (finding: FeedFinding) =>
+      (await render({ findings: [finding] })).querySelector('[data-testid="card-cause"]');
+
+    it("states a deploy cause with its rate, and wraps rather than truncating", async () => {
+      const line = await cardOf({ ...FINDING, likely_cause_sentence: deploy });
+
+      expect(line?.textContent).toBe("Likely: deploy of checkout v2.1 (3 in 7 days)");
+      expect(line?.className).not.toContain("truncate");
+    });
+
+    it("says 'from telemetry only' and never 'Likely' for a possible cause", async () => {
+      const possible = await cardOf({
+        ...FINDING,
+        likely_cause_sentence: [
+          { text: "Possibly, from telemetry only: calls to " },
+          { name: "payments" },
+        ],
+      });
+
+      expect(possible?.textContent).toContain("from telemetry only");
+      expect(possible?.textContent).not.toContain("Likely");
+    });
+
+    it("has no line with no cause, or for a closed finding", async () => {
+      expect(await cardOf({ ...FINDING, likely_cause_sentence: null })).toBeNull();
+      expect(await cardOf({ ...closed("recovered"), likely_cause_sentence: deploy })).toBeNull();
+    });
+
+    it("shows a name as text, never a link, and carries no planted wording", async () => {
+      const container = await render({
+        findings: [
+          {
+            ...FINDING,
+            likely_cause_sentence: [{ text: "Likely: calls to " }, { name: "http://evil.example" }],
+            wording: "WORDING-MARKER",
+          } as FeedFinding,
+        ],
+      });
+      const line = container.querySelector('[data-testid="card-cause"]');
+
+      expect(line?.querySelector("a, img")).toBeNull();
+      expect(container.textContent).not.toContain("WORDING-MARKER");
+    });
+  });
+
   it("gives a closed finding one quiet line with no trend to read", async () => {
     const container = await render({ findings: [closed("recovered")] });
 

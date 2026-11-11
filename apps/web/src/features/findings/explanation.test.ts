@@ -9,7 +9,6 @@ import {
   changeAnnouncement,
   headerLine,
   listedFacts,
-  lookNext,
   plainText,
   readAgainWait,
   readLine,
@@ -241,25 +240,5 @@ describe("a page left open (AC69)", () => {
       60_000,
     );
     expect(explanationRefetchMs({ state: "closed", started_at: STARTED }, opened)).toBe(false);
-  });
-});
-
-describe("Look next (FR42, AC66)", () => {
-  it("opens the service on every screen, and the whole project's infrastructure", () => {
-    expect(lookNext({ scope: "service", service_name: "checkout" })).toEqual([
-      { label: "Traces", to: "/traces", search: { service: "checkout" } },
-      { label: "Logs", to: "/logs", search: { service: "checkout" } },
-      { label: "Errors", to: "/errors", search: { service_name: "checkout" } },
-      { label: "Deploys", to: "/releases", search: {} },
-      { label: "Infrastructure (whole project)", to: "/infrastructure", search: {} },
-    ]);
-  });
-
-  it("opens the project for a project finding", () => {
-    expect(
-      lookNext({ scope: "project", service_name: null }).every(
-        (link) => !Object.keys(link.search).length,
-      ),
-    ).toBe(true);
   });
 });

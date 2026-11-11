@@ -98,6 +98,9 @@ export function ChannelDetailScreen() {
               {canManage ? <SendTest channel={channel.data} /> : null}
               {canManage ? <Mute channel={channel.data} /> : null}
               {canManage && PEOPLE_READ.has(channel.data.kind) ? (
+                <FollowUp channel={channel.data} />
+              ) : null}
+              {canManage && PEOPLE_READ.has(channel.data.kind) ? (
                 <Quiet channel={channel.data} />
               ) : null}
             </div>
@@ -476,6 +479,39 @@ function Quiet({ channel }: { channel: ChannelSummary }) {
       </div>
       {save.error ? <InlineFailure title="Quiet hours were not saved" error={save.error} /> : null}
       <UnsavedChangesPrompt guard={guard} what="the quiet hours" />
+    </section>
+  );
+}
+
+/**
+ * F3 FR48: whether this channel gets a finding's one follow-up naming a likely place to
+ * look, written from facts. On by default; the finding's page is the same either way.
+ * Only channels people read: PagerDuty and webhooks never receive it.
+ */
+function FollowUp({ channel }: { channel: ChannelSummary }) {
+  const save = useUpdateChannel(channel.id);
+  return (
+    <section aria-labelledby="follow-up" className="flex flex-col gap-2">
+      <h2 id="follow-up" className="font-medium font-serif text-base text-ink">
+        Follow-up messages
+      </h2>
+      <label className="flex max-w-3xl items-start gap-2 text-ink text-sm">
+        <input
+          type="checkbox"
+          name="sends-explained"
+          className="mt-1"
+          checked={channel.sends_explained}
+          disabled={save.isPending}
+          onChange={(event) => save.mutate({ sends_explained: event.target.checked })}
+        />
+        <span>
+          After a finding was sent here, send one more message when a signed deploy is its likely
+          place to look, with how often that service deploys. At most one per finding.
+        </span>
+      </label>
+      {save.error ? (
+        <InlineFailure title="The follow-up setting was not saved" error={save.error} />
+      ) : null}
     </section>
   );
 }

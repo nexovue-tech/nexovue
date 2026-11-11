@@ -44,6 +44,36 @@ its runs, the service, or the error — for as long as it exists: a message abou
 check you have since deleted still opens the incident. Never a request or response
 body, a header, a secret, or a stack trace: those stay behind the link.
 
+## The follow-up naming a likely place to look
+
+When a finding was sent to a channel people read (email, the owners, Slack, Teams,
+Discord), that channel may get one more message about it, about five minutes later:
+when nexovue's rules find a **signed deploy** of the service shortly before the finding
+started, and deploys at that hour are rare for that service. It says which deploy, how
+long before, and how many deploys the service had in the last 7 days, and points to the
+finding's page for the current reading. It is written from facts by fixed rules, never
+by AI.
+
+**Not yet switched on.** Until nexovue has measured how often these rules are right, no likely cause is named and no follow-up is sent; the facts, their base rates and *Look next* still show.
+
+- **At most one per finding per channel**, and at most five a channel in 10 minutes;
+  the fifth says more findings have a likely place to look, on the findings feed.
+- **Not for a muted, flapping, snoozed or closed finding**, and only to a channel that
+  was told the finding itself.
+- **Never to PagerDuty or a webhook.** Those receive the alert and its link; the
+  likely cause is on the page.
+- **Turn it off per channel** on the channel's page, under *Follow-up messages*. The
+  finding's page is the same either way.
+
+**If you deploy often.** "Likely" needs deploys at that hour to be rare for the service:
+a service deploying more than about once a working day gets at most "Possibly" on the
+page, and no follow-up. Deploy causes reach "likely" only once deploy notifications have
+run for 7 days ([Deploys](../deploys.md)).
+
+**Pages with no finding.** An incident from a threshold rule or a check has no
+explanation and no follow-up. Its page offers *Look next*: links to the service's (or
+the project's) traces, logs, errors, deploys and infrastructure for its window.
+
 ## Keeping it quiet
 
 - **Grouping.** When several checks fail within half a minute of each other, a

@@ -64,7 +64,13 @@ async def deliver_due(
         if not claimed.channels:
             break
         for claimed_batch in claimed.batches:
-            batch = await with_release_line(engine, claimed_batch)
+            writable = await _without_unwritable(engine, claimed_batch, outbound.app_base_url)
+            report.dropped += len(claimed_batch.notices) - (
+                0 if writable is None else len(writable.notices)
+            )
+            if writable is None:
+                continue
+            batch = await with_release_line(engine, writable)
             result = await _send(engine, outbound, batch, now=now())
             async with engine.begin() as connection:
                 recorded = await outbox.record(connection, batch, result, now=now())
@@ -78,6 +84,36 @@ async def deliver_due(
                 http_status=result.http_status,
             )
     return report
+
+
+async def _without_unwritable(
+    engine: AsyncEngine, batch: outbox.Batch, app_base_url: str
+) -> outbox.Batch | None:
+    """The batch less any notice that cannot be put into words, each dropped with why,
+    so one bad row never holds back the rest (F3 AC27, AC78). None when none is left.
+
+    Composed here once, alone, before the batch's own message is: a composer that raises
+    for one row names that row."""
+    unwritable: list[uuid.UUID] = []
+    for notice in batch.notices:
+        try:
+            messages.compose(notice, app_base_url=app_base_url)
+        except Exception as failure:  # any composer's failure drops only its own row
+            logger.warning(
+                "alert notice dropped: it could not be written",
+                batch_id=str(batch.id),
+                notification_id=str(notice.id),
+                kind=notice.kind,
+                reason=type(failure).__name__,
+                why=str(failure) if isinstance(failure, messages.UnwritableNoticeError) else None,
+            )
+            unwritable.append(notice.id)
+    if not unwritable:
+        return batch
+    async with engine.begin() as connection:
+        await outbox.drop_unwritable(connection, batch, unwritable, reason=outbox.UNWRITABLE_REASON)
+    kept = tuple(notice for notice in batch.notices if notice.id not in unwritable)
+    return replace(batch, notices=kept) if kept else None
 
 
 async def with_release_line(engine: AsyncEngine, batch: outbox.Batch) -> outbox.Batch:

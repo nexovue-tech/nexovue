@@ -36,6 +36,8 @@ from nexovue_api.findings.schemas import (
     CaseFilter,
     CaseNote,
     CreateLinkRequest,
+    ExplanationFeedbackRequest,
+    ExplanationRating,
     FalseAlarmRequest,
     FeedState,
     FindingChanged,
@@ -177,6 +179,7 @@ async def read_explanation(
         number=version,
         show_held_causes=settings.show_held_causes,
         now=datetime.now(UTC),
+        person_id=reader.identity.user.id if reader.identity is not None else None,
     )
 
 
@@ -191,6 +194,30 @@ async def read_explanation_again(
     `next_read_at`, which the page shows beside the button."""
     return await explanations.read_again(
         db, org_id=identity.org_id, finding_id=finding_id, now=datetime.now(UTC)
+    )
+
+
+@router.post(
+    "/{finding_id}/explanation/feedback",
+    summary="Say whether a finding's explanation was useful; one rating per person per version",
+)
+async def rate_explanation(
+    identity: MayOperateAlerts,
+    db: DbSession,
+    settings: AppSettings,
+    finding_id: uuid.UUID,
+    request: ExplanationFeedbackRequest,
+) -> ExplanationRating:
+    """FR20: owners, admins and members; never a viewer or a token. A reason only fits
+    what was shown: no "wrong cause" without a stated cause (AC75)."""
+    return await explanations.rate(
+        db,
+        org_id=identity.org_id,
+        finding_id=finding_id,
+        person_id=identity.user.id,
+        request=request,
+        show_held_causes=settings.show_held_causes,
+        now=datetime.now(UTC),
     )
 
 

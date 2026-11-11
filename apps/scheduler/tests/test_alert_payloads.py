@@ -257,6 +257,10 @@ def _row(kind: str) -> SimpleNamespace:
         adopted_shifts=[],
         case_root_id=None,
         case_opened_at=None,
+        # F3: the notification's kind and sequence, and a follow-up's cause.
+        kind="opened",
+        sequence=0,
+        cause_values=None,
     )
 
 

@@ -1,17 +1,23 @@
-import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { FactLink, LookNextLinks } from "@/shared/components/LookNextLinks";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { factLink, lookNext, type WindowSource } from "@/shared/evidence-links";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
-import { setSelectedProjectId } from "@/shared/selection";
 import { setupDocUrl } from "@/shared/setup-docs";
 
-import type { ExplanationFact, ExplanationSegment, FindingDetail, FindingExplanation } from "./api";
-import { useReadAgain } from "./api";
+import type {
+  ExplanationFact,
+  ExplanationSegment,
+  FindingDetail,
+  FindingExplanation,
+  RatingReason,
+} from "./api";
+import { useRateExplanation, useReadAgain } from "./api";
 import type { HeaderLine } from "./explanation";
 import {
   basisLabel,
@@ -19,7 +25,8 @@ import {
   changeAnnouncement,
   FIRST_FACTS,
   listedFacts,
-  lookNext,
+  RATING_WORDS,
+  ratingLine,
   readAgainWait,
   readLine,
   refusedUntil,
@@ -105,6 +112,7 @@ export function ExplanationSection({
   onRetry,
   releaseRow,
   zone,
+  sample = false,
 }: {
   finding: FindingDetail;
   explanation: FindingExplanation | undefined;
@@ -113,6 +121,11 @@ export function ExplanationSection({
   onRetry: () => void;
   releaseRow: ReactNode;
   zone?: string;
+  /**
+   * F3 FR46: the labelled sample at `/findings/sample`, from fixed data. It offers no
+   * action and no link, since nothing behind it exists, and makes no API call.
+   */
+  sample?: boolean;
 }) {
   const announcement = useVersionAnnouncement(explanation);
   return (
@@ -125,15 +138,18 @@ export function ExplanationSection({
       </p>
       {releaseRow}
       <div className="flex flex-col gap-3">
-        <div className="order-first md:order-none">
-          <LookNext finding={finding} />
-        </div>
+        {sample ? null : (
+          <div className="order-first md:order-none">
+            <LookNext finding={finding} />
+          </div>
+        )}
         <Body
           finding={finding}
           explanation={explanation}
           error={error}
           onRetry={onRetry}
           zone={zone}
+          sample={sample}
         />
       </div>
     </section>
@@ -146,12 +162,14 @@ function Body({
   error,
   onRetry,
   zone,
+  sample,
 }: {
   finding: FindingDetail;
   explanation: FindingExplanation | undefined;
   error: unknown;
   onRetry: () => void;
   zone?: string;
+  sample: boolean;
 }) {
   const failed = error != null;
   // A failed refetch keeps what is held: `isError` is true then too (design, *stale*).
@@ -189,14 +207,40 @@ function Body({
       explanation.likely_cause.rule.includes("deploy") ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>{WORDS.signedTimingOnly}</p>
       ) : null}
-      <Facts facts={listedFacts(explanation.facts)} zone={zone} />
+      <Facts facts={listedFacts(explanation.facts)} finding={finding} zone={zone} links={!sample} />
       <SetupStep explanation={explanation} />
-      <ReadAgain finding={finding} explanation={explanation} zone={zone} />
+      {sample ? null : (
+        <>
+          <ReadAgain finding={finding} explanation={explanation} zone={zone} />
+          <Rating finding={finding} explanation={explanation} />
+        </>
+      )}
     </div>
   );
 }
 
-function Facts({ facts, zone }: { facts: ExplanationFact[]; zone?: string }) {
+/** What links and the window are built from: the finding as the page already has it. */
+function windowSource(finding: FindingDetail): WindowSource {
+  return {
+    project_id: finding.project_id,
+    finding_id: finding.id,
+    started_at: finding.started_at,
+    closed_at: finding.closed_at,
+    raw_kept_until: finding.raw_kept_until ?? null,
+  };
+}
+
+function Facts({
+  facts,
+  finding,
+  zone,
+  links,
+}: {
+  facts: ExplanationFact[];
+  finding: FindingDetail;
+  zone?: string;
+  links: boolean;
+}) {
   const [all, setAll] = useState(false);
   const firstHidden = useRef<HTMLLIElement | null>(null);
   useEffect(() => {
@@ -212,7 +256,7 @@ function Facts({ facts, zone }: { facts: ExplanationFact[]; zone?: string }) {
             key={fact.id}
             ref={index === FIRST_FACTS ? firstHidden : undefined}
             tabIndex={index === FIRST_FACTS ? -1 : undefined}
-            className="grid gap-x-4 gap-y-1 text-sm md:grid-cols-[2rem_minmax(0,1fr)_14rem]"
+            className="grid gap-x-4 gap-y-1 text-sm md:grid-cols-[2rem_minmax(0,1fr)_14rem_minmax(0,14rem)]"
           >
             <span className="font-mono text-ink-dim">{fact.number}</span>
             <span className="min-w-0 text-ink [overflow-wrap:anywhere]">
@@ -229,6 +273,7 @@ function Facts({ facts, zone }: { facts: ExplanationFact[]; zone?: string }) {
             ) : (
               <span />
             )}
+            {links ? <FactLinkCell fact={fact} finding={finding} /> : <span />}
           </li>
         ))}
       </ol>
@@ -289,32 +334,88 @@ function ReadAgain({
   );
 }
 
-/** FR42: always here, built from the finding, in every state (AC66). */
+function FactLinkCell({ fact, finding }: { fact: ExplanationFact; finding: FindingDetail }) {
+  const entry = factLink(fact, windowSource(finding));
+  if (entry === null) return <span />;
+  return <FactLink entry={entry} projectId={finding.project_id} />;
+}
+
+/**
+ * FR42: always here, built from the finding, in every state (AC66), each link at the
+ * finding's window in the address (FR16, AC21).
+ */
 function LookNext({ finding }: { finding: FindingDetail }) {
+  const entries = lookNext({
+    ...windowSource(finding),
+    service_name: finding.scope === "service" ? finding.service_name : null,
+    signals: finding.signals,
+  });
   return (
-    <nav aria-labelledby="finding-look-next" className="flex flex-col gap-1">
-      <h3
-        id="finding-look-next"
-        className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
-      >
-        Look next
-      </h3>
-      {/* Not yet window-aware (plan T2.3): each opens the service or project. */}
-      <ul className="flex flex-col gap-x-4 md:flex-row md:flex-wrap">
-        {lookNext(finding).map((link) => (
-          <li key={link.label}>
-            <Link
-              to={link.to}
-              search={link.search}
-              onClick={() => setSelectedProjectId(finding.project_id)}
-              className={`${LINK} ${TAP}`}
-            >
-              {link.label}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <LookNextLinks entries={entries} projectId={finding.project_id} headingId="finding-look-next" />
+  );
+}
+
+/**
+ * FR20: "Was this useful?", for owners, admins and members, AI on or off; never a
+ * viewer. A "No" takes a reason from the list the API offers for this version, so "the
+ * likely cause is wrong" appears only with a stated cause (AC75). Carried to a later
+ * version until the cause changes (AC83).
+ */
+function Rating({
+  finding,
+  explanation,
+}: {
+  finding: FindingDetail;
+  explanation: FindingExplanation;
+}) {
+  const may = useCan("operate_alerts");
+  const rate = useRateExplanation(finding.id);
+  const [changing, setChanging] = useState(false);
+  const [saying, setSaying] = useState<"no" | null>(null);
+  if (!may || explanation.version === null) return null;
+  const version = explanation.version;
+  const mine = explanation.my_rating ?? null;
+  const send = (helpful: boolean, reason: RatingReason | null) => {
+    rate.mutate({ version, helpful, reason }, { onSuccess: () => setChanging(false) });
+    setSaying(null);
+  };
+  if (mine !== null && !changing) {
+    return (
+      <p className="flex flex-wrap items-center gap-x-3 text-ink-dim text-sm">
+        <span role="status">{ratingLine(mine)}</span>
+        <button type="button" className={`${LINK} ${TAP}`} onClick={() => setChanging(true)}>
+          Change
+        </button>
+      </p>
+    );
+  }
+  return (
+    <fieldset className="flex flex-col gap-1" disabled={rate.isPending}>
+      <legend className="text-ink text-sm">{RATING_WORDS.question}</legend>
+      <div className="flex flex-wrap items-center gap-x-3">
+        <button type="button" className={`${LINK} ${TAP}`} onClick={() => send(true, null)}>
+          {RATING_WORDS.yes}
+        </button>
+        <button type="button" className={`${LINK} ${TAP}`} onClick={() => setSaying("no")}>
+          {RATING_WORDS.no}
+        </button>
+      </div>
+      {saying === "no" ? (
+        <ul className="flex flex-col gap-x-4 md:flex-row md:flex-wrap">
+          {(explanation.rating_reasons ?? []).map((reason) => (
+            <li key={reason}>
+              <button
+                type="button"
+                className={`${LINK} ${TAP}`}
+                onClick={() => send(false, reason)}
+              >
+                {RATING_WORDS.reasons[reason]}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </fieldset>
   );
 }
 

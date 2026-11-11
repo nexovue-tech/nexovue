@@ -47,6 +47,7 @@ export const OWNERS: ChannelSummary = {
   muted_until: null,
   muted_by: null,
   quiet_hours: null,
+  sends_explained: true,
   created_at: minutesAgo(600),
   rules: [{ id: "rule-default", name: "Any check down", project_id: PROJECT_ID }],
 };

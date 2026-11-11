@@ -1,5 +1,7 @@
 """`GET /findings/{id}/explanation` and `POST .../read-again`, against real Postgres
-(F3 plan T1.10, T1.14; AC23, AC80, AC92, FR47, FR3).
+(F3 plan T1.10, T1.14; AC23, AC80, AC92, FR47, FR3). Step 2 (T2.4, T2.12): each fact's
+link target, `POST .../feedback`, and `/explanations/...` (AC75, AC83, AC99, AC105's
+target half).
 
 A token reads the facts in its own project and gets the same 404 as a missing finding
 elsewhere; a token or a viewer may not ask for a read; a member may, once a minute. A
@@ -359,3 +361,278 @@ class _NoTelemetry:
             return []
 
         return nothing
+
+
+# ------------------------------------------------------------------ Step 2
+
+
+async def _send(
+    db: AsyncSession,
+    reader: Reader,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+    **settings: Any,
+) -> httpx.Response:
+    async with _client(db, reader, **settings) as client:
+        return await client.request(method, f"{API_PREFIX}{path}", json=body)
+
+
+async def _audit(db: AsyncSession, tenant: ProvisionedTenant, action: str) -> list[Any]:
+    return list(
+        await db.execute(
+            text("SELECT target, detail FROM audit_log WHERE org_id = :org_id AND action = :a"),
+            {"org_id": tenant.organization.id, "a": action},
+        )
+    )
+
+
+def _rate(version: int, helpful: bool, reason: str | None = None) -> dict[str, Any]:
+    return {"version": version, "helpful": helpful, "reason": reason}
+
+
+async def test_a_member_rates_once_per_version_and_it_is_audited(db: AsyncSession) -> None:
+    """FR20, AC75: "Yes", or "No" with a listed reason; a second rating replaces the first."""
+    acme = await _tenant(db)
+    finding = await _finding(db, acme)
+    await _version(db, finding, 1, cause=CAUSE)
+    member = _person(acme, "member")
+    path = f"/findings/{finding.id}/explanation/feedback"
+
+    first = await _send(db, member, "POST", path, _rate(1, True), SHOW_HELD_CAUSES=True)
+    second = await _send(
+        db, member, "POST", path, _rate(1, False, "wrong_cause"), SHOW_HELD_CAUSES=True
+    )
+    read = await _get(db, member, f"/findings/{finding.id}/explanation", SHOW_HELD_CAUSES=True)
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert read.json()["my_rating"] == {"version": 1, "helpful": False, "reason": "wrong_cause"}
+    assert read.json()["rating_reasons"] == ["wrong_cause", "not_useful"]
+    count = await db.scalar(
+        text("SELECT count(*) FROM finding_explanation_ratings WHERE org_id = :org_id"),
+        {"org_id": acme.organization.id},
+    )
+    assert count == 1
+    audited = await _audit(db, acme, "finding.explanation_rated")
+    assert [row.detail["reason"] for row in audited] == [None, "wrong_cause"]
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        (_rate(1, False), 422),
+        (_rate(1, True, "not_useful"), 422),
+        (_rate(1, False, "free text"), 422),
+        (_rate(1, False, "wrong_cause"), 422),
+        (_rate(1, False, "bad_wording"), 422),
+        (_rate(9, True), 404),
+    ],
+    ids=[
+        "no without reason",
+        "yes with reason",
+        "unknown reason",
+        "no cause stated",
+        "no wording shown",
+        "no such version",
+    ],
+)
+async def test_a_rating_must_fit_what_was_shown(
+    db: AsyncSession, body: dict[str, Any], status: int
+) -> None:
+    """AC75: no "wrong cause" with no stated cause (a held one is not stated), no "poor
+    wording" with no wording, no free text."""
+    acme = await _tenant(db)
+    finding = await _finding(db, acme)
+    await _version(db, finding, 1, cause=CAUSE)
+
+    refused = await _send(
+        db, _person(acme, "member"), "POST", f"/findings/{finding.id}/explanation/feedback", body
+    )
+
+    assert refused.status_code == status
+
+
+async def test_a_viewer_and_a_token_may_not_rate(db: AsyncSession) -> None:
+    """AC23, AC75: the rating is not a viewer's, and a token is refused as anywhere."""
+    acme = await _tenant(db)
+    finding = await _finding(db, acme)
+    await _version(db, finding, 1)
+    path = f"/findings/{finding.id}/explanation/feedback"
+
+    viewer = await _send(db, _person(acme, "viewer"), "POST", path, _rate(1, True))
+    token_read = await _get(db, _token(acme), f"/findings/{finding.id}/explanation")
+
+    # A token never reaches the route: its gate needs a signed-in person, which
+    # `test_authorization_coverage.py` holds for every mutating route.
+    assert viewer.status_code == 403
+    assert token_read.json()["rating_reasons"] == [] and token_read.json()["my_rating"] is None
+
+
+async def test_a_rating_carries_to_a_later_version_until_the_cause_changes(
+    db: AsyncSession,
+) -> None:
+    """AC83: version 2 keeps version 1's cause and its rating; version 3 names another."""
+    acme = await _tenant(db)
+    finding = await _finding(db, acme)
+    other = {**CAUSE, "evidence_id": "dependency:abc", "rule": "dependency_finding"}
+    await _version(db, finding, 1, cause=CAUSE)
+    await _version(db, finding, 2, cause=CAUSE)
+    await _version(db, finding, 3, cause=other)
+    member = _person(acme, "member")
+    await _send(
+        db,
+        member,
+        "POST",
+        f"/findings/{finding.id}/explanation/feedback",
+        _rate(1, True),
+        SHOW_HELD_CAUSES=True,
+    )
+
+    async def mine(version: int) -> Any:
+        read = await _get(
+            db,
+            member,
+            f"/findings/{finding.id}/explanation?version={version}",
+            SHOW_HELD_CAUSES=True,
+        )
+        return read.json()["my_rating"]
+
+    assert await mine(2) == {"version": 1, "helpful": True, "reason": None}
+    assert await mine(3) is None
+
+
+async def test_a_fact_carries_what_its_link_needs_and_nothing_else(db: AsyncSession) -> None:
+    """AC22, AC105's API half: an error group's id and services; a dependency's caller,
+    callee, the attribute that named it and what moved."""
+    acme = await _tenant(db)
+    finding = await _finding(db, acme)
+    db.add(
+        FindingExplanation(
+            org_id=finding.org_id,
+            project_id=finding.project_id,
+            finding_id=finding.id,
+            version=1,
+            fingerprint="f" * 64,
+            evidence={
+                "items": [
+                    {
+                        "id": "error_group:g-1",
+                        "kind": "error_group",
+                        "basis": "telemetry_text",
+                        "sentence": [{"text": "New error"}],
+                        "values": {
+                            "group_id": "g-1",
+                            "services": ["checkout"],
+                            "first_seen": "2026-11-09T10:00:00+00:00",
+                            "exception_type": "TimeoutError",
+                        },
+                    },
+                    {
+                        "id": "dependency:x",
+                        "kind": "dependency",
+                        "basis": "telemetry",
+                        "sentence": [{"text": "Calls"}],
+                        "values": {
+                            "caller": "checkout",
+                            "callee": "(payments)",
+                            "callee_attr": "peer.service",
+                            "failure_share_before": 0.004,
+                            "failure_share_during": 0.06,
+                            "p95_before": 120.0,
+                            "p95_during": 480.0,
+                            "calls_during": 900,
+                        },
+                    },
+                    {
+                        "id": "traffic:t",
+                        "kind": "traffic",
+                        "basis": "telemetry",
+                        "sentence": [{"text": "Traffic"}],
+                        "values": {"service": "checkout"},
+                    },
+                ]
+            },
+            aliases={},
+            summary={"header": None, "card": None},
+        )
+    )
+    await db.flush()
+
+    facts = (await _get(db, _person(acme), f"/findings/{finding.id}/explanation")).json()["facts"]
+
+    error, dependency, traffic = (fact["target"] for fact in facts)
+    assert (error["kind"], error["group_id"], error["services"]) == (
+        "error_group",
+        "g-1",
+        ["checkout"],
+    )
+    assert (dependency["caller"], dependency["callee"], dependency["callee_attr"]) == (
+        "checkout",
+        "(payments)",
+        "peer.service",
+    )
+    assert dependency["failure_share_during"] == 0.06 and dependency["p95_before"] == 120.0
+    assert "TimeoutError" not in json.dumps(error) and "calls_during" not in dependency
+    assert traffic is None
+
+
+PLANTED_NAME: Final = "planted-service-name-7f3"
+
+
+async def test_rule_counts_are_counts_only_and_need_detection_settings(db: AsyncSession) -> None:
+    """AC99: an admin reads counts per rule, and a planted name never appears; a viewer and
+    a member are refused."""
+    acme = await _tenant(db)
+    finding = await _finding(db, acme, service=PLANTED_NAME)
+    await _version(db, finding, 1, cause=CAUSE)
+    await _send(
+        db,
+        _person(acme, "member"),
+        "POST",
+        f"/findings/{finding.id}/explanation/feedback",
+        _rate(1, False, "wrong_cause"),
+        SHOW_HELD_CAUSES=True,
+    )
+
+    member = await _send(db, _person(acme, "member"), "GET", "/explanations/rule-counts")
+    owner = _person(acme)
+    counts = await _send(db, owner, "GET", "/explanations/rule-counts", SHOW_HELD_CAUSES=True)
+    held = await _send(db, owner, "GET", "/explanations/rule-counts")
+
+    signed = next(row for row in counts.json()["rules"] if row["rule"] == "signed_deploy")
+    assert (signed["named"], signed["wrong_cause"], signed["stopped"]) == (1, 1, False)
+    assert PLANTED_NAME not in counts.text and "checkout" not in counts.text
+    held_signed = next(row for row in held.json()["rules"] if row["rule"] == "signed_deploy")
+    assert held_signed["named"] == 0 and held.json()["without_cause_not_useful"] == 1
+    assert member.status_code == 403
+
+
+async def test_stopping_a_rule_is_audited_and_stays_in_its_organization(
+    db: AsyncSession,
+) -> None:
+    """AC99: stopped here, written down, shown as stopped; another organization's rule
+    still runs; an unknown rule is refused; a viewer may not stop one."""
+    acme, globex = await _tenant(db), await _tenant(db)
+
+    stopped = await _send(db, _person(acme), "PUT", "/explanations/stopped-rules/signed_deploy")
+    again = await _send(db, _person(acme), "PUT", "/explanations/stopped-rules/signed_deploy")
+    unknown = await _send(db, _person(acme), "PUT", "/explanations/stopped-rules/new_error")
+    viewer = await _send(
+        db, _person(acme, "viewer"), "PUT", "/explanations/stopped-rules/traffic_rose"
+    )
+    mine = await _send(db, _person(acme), "GET", "/explanations/rule-counts")
+    theirs = await _send(db, _person(globex), "GET", "/explanations/rule-counts")
+
+    assert stopped.json() == {"rule": "signed_deploy", "stopped": True}
+    assert again.status_code == 200 and unknown.status_code == 422
+    assert viewer.status_code == 403
+
+    def stopped_rules(response: httpx.Response) -> list[str]:
+        return [row["rule"] for row in response.json()["rules"] if row["stopped"]]
+
+    assert stopped_rules(mine) == ["signed_deploy"] and stopped_rules(theirs) == []
+    assert len(await _audit(db, acme, "explanation.rule_stopped")) == 1
+
+    resumed = await _send(db, _person(acme), "DELETE", "/explanations/stopped-rules/signed_deploy")
+    assert resumed.json() == {"rule": "signed_deploy", "stopped": False}
+    assert len(await _audit(db, acme, "explanation.rule_resumed")) == 1

@@ -291,6 +291,57 @@ describe("the incident page", () => {
   });
 });
 
+describe("Look next on an incident with no finding (F3 FR53, AC101)", () => {
+  const lookNext = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLAnchorElement>('[aria-labelledby="incident-look-next"] a'),
+  ];
+
+  it("opens its service's data for its window", async () => {
+    const slow = incident({
+      condition_kind: "service_latency_p95",
+      subject_key: "service:checkout",
+      subject_label: "checkout",
+      opened_at: "2026-11-09T14:02:00.000Z",
+      resolved_at: "2026-11-09T14:30:00.000Z",
+      detail: { service: "checkout", reading: "p95 latency", value: 720, threshold: 500 },
+    });
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(slow) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+
+    const links = await waitFor(
+      () => lookNext(container).length > 0 && lookNext(container),
+      "Look next",
+    );
+    expect(links.map((link) => link.textContent)).toEqual([
+      "Traces",
+      "Logs",
+      "Errors",
+      "Deploys",
+      "Infrastructure (whole project)",
+    ]);
+    const traces = new URL(links[0].getAttribute("href") ?? "", "http://x");
+    expect(traces.searchParams.get("service")).toBe("checkout");
+    expect(traces.searchParams.get("from")).toBe("2026-11-09T13:47:00.000Z");
+    expect(traces.searchParams.get("to")).toBe("2026-11-09T14:35:00.000Z");
+    expect(traces.searchParams.get("finding")).toBeNull();
+  });
+
+  it("opens the project's data for a check's incident, which has no service", async () => {
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+
+    const [traces] = await waitFor(
+      () => lookNext(container).length > 0 && lookNext(container),
+      "Look next",
+    );
+    expect(
+      new URL(traces.getAttribute("href") ?? "", "http://x").searchParams.get("service"),
+    ).toBeNull();
+  });
+});
+
 describe("a case is not an alert (F22 FR53, AC121)", () => {
   it("says a linked alert is a rule's own record and cannot become a case", async () => {
     stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });

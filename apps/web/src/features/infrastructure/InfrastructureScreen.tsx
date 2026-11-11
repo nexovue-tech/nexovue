@@ -14,6 +14,7 @@ import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
+import { keepUrlWindow } from "@/shared/url-window";
 import type { NodeSummary, NodeTrendPoint, SignalSummary } from "./api";
 import { nodeSeriesKey, useNodes, useNodeTrend, useSignals } from "./api";
 import { DatabasesView } from "./databases/DatabasesView";
@@ -147,7 +148,12 @@ export function InfrastructureScreen() {
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every control they tried on the way.
   const show = (next: Record<string, string | undefined>) =>
-    void navigate({ to: "/infrastructure", search: () => filterParams(next), replace: true });
+    void navigate({
+      to: "/infrastructure",
+      // F3 FR16: a finding's window, carried in the address, survives a filter change.
+      search: () => ({ ...keepUrlWindow(search), ...filterParams(next) }),
+      replace: true,
+    });
 
   const narrowed = appliedFilters(definitions, filters).length > 0;
 

@@ -58,7 +58,12 @@ from nexovue_platform.detection import (
     SHIFT_REASONS,
     SIGNALS,
 )
-from nexovue_platform.evidence import WORDING_REASONS, WORDING_STATES
+from nexovue_platform.evidence import (
+    CAUSE_RULES,
+    RATING_REASONS,
+    WORDING_REASONS,
+    WORDING_STATES,
+)
 from nexovue_platform.releases import DEPLOY_STATES, OTHER_VERSION, START_BASES
 from sqlalchemy import (
     BigInteger,
@@ -1309,6 +1314,10 @@ class NotificationChannel(Base):
     failing_since: Mapped[OptionalTimestamp]
     last_delivered_at: Mapped[OptionalTimestamp]
     failing_reported_at: Mapped[OptionalTimestamp]
+    # F3 FR48: a channel people read gets a finding's `explained` follow-up unless off.
+    sends_explained: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     created_at: Mapped[CreatedAt]
     updated_at: Mapped[CreatedAt]
 
@@ -1923,6 +1932,58 @@ class FindingExplanation(Base):
         ),
         CheckConstraint("wording_generation >= 0", name="wording_generation_counts_up"),
     )
+
+
+class FindingExplanationRating(Base):
+    """ "Was this useful?" (F3 FR20): one per person per version. A reason from a closed
+    list, never free text (A21). Kept with no name when the person is deleted."""
+
+    __tablename__ = "finding_explanation_ratings"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    explanation_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    helpful: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "explanation_id"],
+            ["finding_explanations.org_id", "finding_explanations.id"],
+            ondelete="CASCADE",
+            name="fk_finding_explanation_ratings_explanation",
+        ),
+        UniqueConstraint("explanation_id", "user_id", name="uq_finding_explanation_ratings_person"),
+        CheckConstraint(
+            f"reason IS NULL OR reason IN ({_quoted(RATING_REASONS)})", name="reason_is_known"
+        ),
+        CheckConstraint("helpful = (reason IS NULL)", name="reason_only_when_not_helpful"),
+        Index("ix_finding_explanation_ratings_org_id", "org_id"),
+    )
+
+
+class ExplanationStoppedRule(Base):
+    """A rule an organization stopped from naming causes (F3 FR54, A64). Its facts stay."""
+
+    __tablename__ = "explanation_stopped_rules"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    rule: Mapped[str] = mapped_column(Text, primary_key=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (CheckConstraint(f"rule IN ({_quoted(CAUSE_RULES)})", name="rule_is_known"),)
 
 
 class EvidenceErrorGroupRead(Base):

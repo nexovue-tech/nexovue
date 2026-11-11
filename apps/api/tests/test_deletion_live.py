@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 import pytest
 from live import require_stack
 from nexovue_platform import erasure
+from nexovue_platform.evidence import CAUSE_RULES
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -62,8 +63,10 @@ from nexovue_api.data.postgres.models import (
     ErrorGroupSeen,
     ErrorGroupWatermark,
     EvidenceErrorGroupRead,
+    ExplanationStoppedRule,
     Finding,
     FindingExplanation,
+    FindingExplanationRating,
     FindingIncident,
     FindingLink,
     Incident,
@@ -185,6 +188,9 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     # F3: each finding's explanation, and the project's hour of error-group reads.
     "finding_explanations",
     "evidence_error_group_reads",
+    # F3 Step 2: ratings of each explanation, and the rules the organization stopped.
+    "finding_explanation_ratings",
+    "explanation_stopped_rules",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -268,6 +274,9 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     # F3: one explanation per finding, and one error-group read per finding's minute.
     "finding_explanations": ROWS_PER_TABLE,
     "evidence_error_group_reads": ROWS_PER_TABLE,
+    # F3 Step 2: a person's rating of each explanation, and one stopped rule per finding.
+    "finding_explanation_ratings": ROWS_PER_TABLE,
+    "explanation_stopped_rules": ROWS_PER_TABLE,
 }
 
 
@@ -708,6 +717,7 @@ async def _write_detection_rows(
     person, linked to the incident and told to the channel, and the service's state,
     normal, shift and settings."""
     finding_id, service = uuid.uuid4(), f"checkout-{index}"
+    explanation_id = uuid.uuid4()
     db.add(
         Finding(
             id=finding_id,
@@ -765,6 +775,7 @@ async def _write_detection_rows(
                 muted_by=tenant.user_id,
             ),
             FindingExplanation(
+                id=explanation_id,
                 org_id=tenant.org_id,
                 project_id=tenant.project_id,
                 finding_id=finding_id,
@@ -773,6 +784,16 @@ async def _write_detection_rows(
                 evidence={"items": []},
                 aliases={"names": {"service_1": service}, "facts": {}},
                 summary={},
+            ),
+            FindingExplanationRating(
+                org_id=tenant.org_id,
+                explanation_id=explanation_id,
+                user_id=tenant.user_id,
+                helpful=False,
+                reason="not_useful",
+            ),
+            ExplanationStoppedRule(
+                org_id=tenant.org_id, rule=CAUSE_RULES[index], created_by=tenant.user_id
             ),
             EvidenceErrorGroupRead(
                 org_id=tenant.org_id,

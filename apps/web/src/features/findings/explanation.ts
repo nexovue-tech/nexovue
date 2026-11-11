@@ -5,9 +5,11 @@ import type {
   ExplanationBasis,
   ExplanationFact,
   ExplanationKind,
+  ExplanationRating,
   ExplanationSegment,
   FindingDetail,
   FindingExplanation,
+  RatingReason,
 } from "./api";
 
 /**
@@ -212,29 +214,6 @@ export function plainText(segments: readonly ExplanationSegment[], zone?: string
     .join("");
 }
 
-export interface LookNextLink {
-  label: string;
-  to: "/traces" | "/logs" | "/errors" | "/releases" | "/infrastructure";
-  search: Record<string, string>;
-}
-
-/**
- * FR42: "Look next" always renders, from the finding itself, in every state of the
- * explanation. Step 1's links open the service or project and are **not yet
- * window-aware**: the window in the URL is plan T2.3.
- */
-export function lookNext(finding: Pick<FindingDetail, "scope" | "service_name">): LookNextLink[] {
-  const service = finding.scope === "service" ? finding.service_name : null;
-  const scoped = (key: string): Record<string, string> => (service ? { [key]: service } : {});
-  return [
-    { label: "Traces", to: "/traces", search: scoped("service") },
-    { label: "Logs", to: "/logs", search: scoped("service") },
-    { label: "Errors", to: "/errors", search: scoped("service_name") },
-    { label: "Deploys", to: "/releases", search: {} },
-    { label: "Infrastructure (whole project)", to: "/infrastructure", search: {} },
-  ];
-}
-
 /** The kinds the section names, for an accessible label on a fact. */
 export const KIND_WORDS: Record<ExplanationKind, string> = {
   deploy: "Deploy",
@@ -247,3 +226,24 @@ export const KIND_WORDS: Record<ExplanationKind, string> = {
   infrastructure: "Infrastructure",
   absence: "Missing",
 };
+
+/** FR20's words (design, *Words, recorded once*). */
+export const RATING_WORDS = {
+  question: "Was this useful?",
+  yes: "Yes",
+  no: "No",
+  reasons: {
+    wrong_cause: "The likely cause is wrong",
+    not_useful: "It did not help",
+    bad_wording: "The AI wording is poor",
+  } satisfies Record<RatingReason, string>,
+  thanks: "Thanks, recorded.",
+} as const;
+
+/** What a person sees after rating: what they said, carried to later versions (AC83). */
+export function ratingLine(rating: ExplanationRating): string {
+  const said = rating.helpful
+    ? "you said it was useful"
+    : `you said: ${RATING_WORDS.reasons[rating.reason ?? "not_useful"]}`;
+  return `${RATING_WORDS.thanks} ${said[0].toUpperCase()}${said.slice(1)}.`;
+}

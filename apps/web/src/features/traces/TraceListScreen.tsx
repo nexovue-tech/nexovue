@@ -10,6 +10,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { keepUrlWindow } from "@/shared/url-window";
 
 import type { TraceSummary } from "./api";
 import { traceExportUrl, traceFailed, useTraceFacets, useTraceList } from "./api";
@@ -72,7 +73,12 @@ export function TraceListScreen() {
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every dropdown they tried on the way.
   const setFilters = (next: TraceFilters) =>
-    void navigate({ to: "/traces", search: () => toSearchParams(next), replace: true });
+    void navigate({
+      to: "/traces",
+      // F3 FR16: a finding's window, carried in the address, survives a filter change.
+      search: () => ({ ...keepUrlWindow(search), ...toSearchParams(next) }),
+      replace: true,
+    });
 
   const traces = list.data?.traces ?? [];
   const ceiling = slowestDuration(traces);

@@ -13,12 +13,15 @@ from typing import Any
 
 from nexovue_platform.evidence import GATHER_EVIDENCE_TASK, ReadReason, gather_evidence_request
 from nexovue_platform.jobs import ENQUEUE_UNLESS_WAITING, WAKE
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    ExplanationStoppedRule,
     Finding,
     FindingExplanation,
+    FindingExplanationRating,
     Job,
     Organization,
     Plan,
@@ -186,3 +189,124 @@ async def queue_read(
     request = gather_evidence_request(finding_id, org_id, reason)
     await session.execute(text(ENQUEUE_UNLESS_WAITING), request.parameters())
     await session.execute(text(WAKE), request.wake_parameters())
+
+
+# ------------------------------------------------------------- ratings (FR20)
+
+
+async def ratings_of(
+    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, user_id: uuid.UUID
+) -> list[Any]:
+    """A person's ratings of this finding's versions, newest version first, with the
+    cause each version named, for carrying one to a later version (AC83)."""
+    rows = await session.execute(
+        select(
+            FindingExplanation.version,
+            FindingExplanation.likely_cause,
+            FindingExplanationRating.helpful,
+            FindingExplanationRating.reason,
+        )
+        .join(
+            FindingExplanation,
+            (FindingExplanation.org_id == FindingExplanationRating.org_id)
+            & (FindingExplanation.id == FindingExplanationRating.explanation_id),
+        )
+        .where(
+            FindingExplanationRating.org_id == org_id,
+            FindingExplanationRating.user_id == user_id,
+            FindingExplanation.finding_id == finding_id,
+        )
+        .order_by(FindingExplanation.version.desc())
+    )
+    return list(rows)
+
+
+async def save_rating(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    explanation_id: uuid.UUID,
+    user_id: uuid.UUID,
+    helpful: bool,
+    reason: str | None,
+    at: datetime,
+) -> None:
+    """One rating per person per version; a second replaces the first."""
+    statement = insert(FindingExplanationRating).values(
+        org_id=org_id,
+        explanation_id=explanation_id,
+        user_id=user_id,
+        helpful=helpful,
+        reason=reason,
+        created_at=at,
+        updated_at=at,
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            constraint="uq_finding_explanation_ratings_person",
+            set_={"helpful": helpful, "reason": reason, "updated_at": at},
+        )
+    )
+
+
+# ------------------------------------------------- rules on /settings/explanations
+
+
+async def latest_causes_in_organization(session: AsyncSession, *, org_id: uuid.UUID) -> list[Any]:
+    """Each finding's latest stored cause in the organization, for the rule counts."""
+    rows = await session.execute(
+        select(FindingExplanation.likely_cause)
+        .where(FindingExplanation.org_id == org_id)
+        .distinct(FindingExplanation.finding_id)
+        .order_by(FindingExplanation.finding_id, FindingExplanation.version.desc())
+    )
+    return [row.likely_cause for row in rows]
+
+
+async def ratings_in_organization(session: AsyncSession, *, org_id: uuid.UUID) -> list[Any]:
+    """Every rating, with the cause its version named. Counts only leave this module's
+    caller: no name, no finding, no person (FR54)."""
+    rows = await session.execute(
+        select(
+            FindingExplanation.likely_cause,
+            FindingExplanationRating.helpful,
+            FindingExplanationRating.reason,
+        )
+        .join(
+            FindingExplanation,
+            (FindingExplanation.org_id == FindingExplanationRating.org_id)
+            & (FindingExplanation.id == FindingExplanationRating.explanation_id),
+        )
+        .where(FindingExplanationRating.org_id == org_id)
+    )
+    return list(rows)
+
+
+async def stopped_rules(session: AsyncSession, *, org_id: uuid.UUID) -> set[str]:
+    rows = await session.scalars(
+        select(ExplanationStoppedRule.rule).where(ExplanationStoppedRule.org_id == org_id)
+    )
+    return set(rows)
+
+
+async def stop_rule(
+    session: AsyncSession, *, org_id: uuid.UUID, rule: str, user_id: uuid.UUID, at: datetime
+) -> bool:
+    """Returns whether it was running until now."""
+    stopped = await session.execute(
+        insert(ExplanationStoppedRule)
+        .values(org_id=org_id, rule=rule, created_by=user_id, created_at=at)
+        .on_conflict_do_nothing()
+        .returning(ExplanationStoppedRule.rule)
+    )
+    return stopped.first() is not None
+
+
+async def resume_rule(session: AsyncSession, *, org_id: uuid.UUID, rule: str) -> bool:
+    """Returns whether it was stopped until now."""
+    resumed = await session.execute(
+        delete(ExplanationStoppedRule)
+        .where(ExplanationStoppedRule.org_id == org_id, ExplanationStoppedRule.rule == rule)
+        .returning(ExplanationStoppedRule.rule)
+    )
+    return resumed.first() is not None

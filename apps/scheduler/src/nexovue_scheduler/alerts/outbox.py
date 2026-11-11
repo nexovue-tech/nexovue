@@ -55,12 +55,14 @@ from typing import Any, Final, Literal
 from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 from nexovue_platform.alerts.model import (
     ENDING_KINDS,
+    EXPLAINED,
     NEWS_KINDS,
     SEVERITY_RANK,
     WITHHELD_SAME_NEWS,
     WITHHELD_SERVICE_SNOOZED,
 )
 from nexovue_platform.alerts.quiet_hours import parse_quiet_hours, quiet_until
+from nexovue_platform.evidence import EXPLAINED_LAST_SEQUENCE
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -95,6 +97,14 @@ NOTHING_TOLD_REASON: Final = (
     "not sent: this channel was never told about it, because the same news reached it first"
 )
 SNOOZED_REASON: Final = "not sent: the service is snoozed"
+# F3: a row that cannot be put into words is dropped alone, so the batch still goes
+# (AC27, AC78).
+UNWRITABLE_REASON: Final = "not sent: this message could not be written"
+
+# F3's follow-up names its cause from the finding's explanation, read at the claim
+# (design, *Data path*); the composer finds it in the subject's detail under these keys.
+EXPLAINED_CAUSE: Final = "explained_cause"
+EXPLAINED_LAST_IN_WINDOW: Final = "explained_last_in_window"
 
 # A finding's notices are routed by rules of this kind; a project's are detection's own.
 ANOMALY_FINDING: Final = "anomaly_finding"
@@ -324,6 +334,9 @@ def _open_for_another(key: str) -> str:
 
 
 _ENDING: Final = ", ".join(f"'{kind}'" for kind in sorted(ENDING_KINDS))
+# F3's follow-up, like an ending, is owed only where news of its finding reached the
+# channel (F19 FR24, AC58).
+_OWED_ONLY_WHERE_TOLD: Final = f"{_ENDING}, '{EXPLAINED}'"
 # A burn's news shares an alert sent at the same or a higher severity, so a critical
 # burn after a warning alert pages rather than becoming a note (F19 FR24a, AC27).
 _HOST_SEVERE_ENOUGH: Final = f"{_rank('host.severity')} >= {_rank('notifications.severity')}"
@@ -508,14 +521,15 @@ _WITHHOLD_SECOND: Final = text(
     RETURNING notifications.id
     """
 )
-# FR24: an ending is owed only where a news row of its subject reached the channel. A
-# subject with nothing withheld here is untouched, which keeps F6's behaviour.
+# FR24: an ending is owed only where a news row of its subject reached the channel, and
+# so is F3's follow-up (AC58). A subject with nothing withheld here is untouched, which
+# keeps F6's behaviour.
 _WITHHOLD_UNTOLD_ENDING: Final = text(
     f"""
     UPDATE notifications
     SET state = 'dropped', outcome_reason = :reason, lease_until = NULL
     WHERE org_id = :org_id AND channel_id = :channel_id AND batch_id IS NULL AND ({_DUE})
-      AND kind IN ({_ENDING})
+      AND kind IN ({_OWED_ONLY_WHERE_TOLD})
       AND EXISTS (
           SELECT 1 FROM notifications AS held
           WHERE held.org_id = notifications.org_id
@@ -617,7 +631,7 @@ _TAKEN: Final = text(
     f"""
     SELECT notifications.id, notifications.project_id, notifications.incident_id,
            notifications.finding_id, notifications.kind, notifications.severity,
-           notifications.created_at, notifications.attempts,
+           notifications.created_at, notifications.attempts, notifications.sequence,
            incidents.rule_id, incidents.rule_name, incidents.condition_kind,
            incidents.subject_key, incidents.subject_label, incidents.opened_at,
            incidents.resolved_at, incidents.detail,
@@ -628,7 +642,8 @@ _TAKEN: Final = text(
            finding_rule.id AS finding_rule_id, finding_rule.name AS finding_rule_name,
            coalesce(notifications.dedup_key, {_OWN_KEY}) AS pagerduty_key,
            {_OWN_KEY} AS own_key,
-           adopted.shifts AS adopted_shifts
+           adopted.shifts AS adopted_shifts,
+           cause.cause_values
     FROM notifications
     JOIN projects
         ON projects.id = notifications.project_id AND projects.org_id = notifications.org_id
@@ -668,8 +683,31 @@ _TAKEN: Final = text(
           AND shifts.reason = 'adopted'
           AND shifts.from_minute >= findings.started_at
     ) AS adopted ON true
+    -- F3's follow-up: the deploy fact behind the latest version whose cause is likely
+    -- and rests on a verified record, as it is sent (design, *Data path*).
+    LEFT JOIN LATERAL (
+        SELECT item -> 'values' AS cause_values
+        FROM finding_explanations AS explanation
+        CROSS JOIN LATERAL jsonb_array_elements(explanation.evidence -> 'items') AS item
+        WHERE notifications.kind = '{EXPLAINED}'
+          AND explanation.org_id = notifications.org_id
+          AND explanation.finding_id = notifications.finding_id
+          AND explanation.likely_cause ->> 'strength' = 'likely'
+          AND explanation.likely_cause ->> 'basis' = 'verified'
+          AND item ->> 'id' = explanation.likely_cause ->> 'evidence_id'
+          AND item ->> 'kind' = 'deploy'
+        ORDER BY explanation.version DESC
+        LIMIT 1
+    ) AS cause ON true
     WHERE notifications.org_id = :org_id AND notifications.id = ANY(CAST(:ids AS uuid[]))
     ORDER BY notifications.created_at
+    """
+)
+_DROP_UNWRITABLE: Final = text(
+    """
+    UPDATE notifications
+    SET state = 'dropped', outcome_reason = :reason, lease_until = NULL
+    WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[])) AND lease_until = :lease_until
     """
 )
 _FIRST_ATTEMPT: Final = text(
@@ -1107,6 +1145,23 @@ def retry_delay(attempts: int, result: SendResult) -> float:
     return delay
 
 
+async def drop_unwritable(
+    connection: AsyncConnection, batch: Batch, ids: list[uuid.UUID], *, reason: str
+) -> int:
+    """Drop rows of a claimed batch that could not be put into words, with why, while
+    the claim's lease is still theirs (AC27, AC78). Returns the rows dropped."""
+    dropped = await connection.execute(
+        _DROP_UNWRITABLE,
+        {
+            "org_id": batch.channel.org_id,
+            "ids": ids,
+            "lease_until": batch.lease_until,
+            "reason": reason,
+        },
+    )
+    return dropped.rowcount
+
+
 async def prune_attempts(connection: AsyncConnection, *, before: datetime) -> int:
     """The delivery log is kept 30 days (FR20)."""
     return (await connection.execute(_PRUNE_ATTEMPTS, {"before": before})).rowcount
@@ -1124,6 +1179,17 @@ def _notice(row: Any) -> Notice:
         pagerduty_key=row.pagerduty_key,
         noted=row.pagerduty_key != row.own_key,
     )
+
+
+def _follow_up_detail(row: Any) -> dict[str, Any]:
+    """F3's follow-up only: the cause it names, and whether it is its window's last.
+    Every other kind's detail is exactly as before (AC78)."""
+    if row.kind != EXPLAINED:
+        return {}
+    return {
+        EXPLAINED_CAUSE: row.cause_values,
+        EXPLAINED_LAST_IN_WINDOW: row.sequence == EXPLAINED_LAST_SEQUENCE,
+    }
 
 
 def _subject(row: Any) -> Subject:
@@ -1160,7 +1226,8 @@ def _subject(row: Any) -> Subject:
                 "closed_reason": row.closed_reason,
                 "project": row.project_name,
                 "adopted_shifts": row.adopted_shifts or [],
-            },
+            }
+            | _follow_up_detail(row),
             case=None
             if row.case_root_id is None or row.case_opened_at is None
             else CaseOfSubject(root_id=row.case_root_id, opened_at=row.case_opened_at),

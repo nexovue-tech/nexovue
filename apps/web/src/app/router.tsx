@@ -11,7 +11,7 @@ import {
 import { parseNewRuleSearch } from "@/features/alerts/search";
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
-import { ERROR_FILTERS } from "@/features/errors/filters";
+import { ERROR_FILTERS, parseErrorGroupSearch } from "@/features/errors/filters";
 import { parseFeedSearch } from "@/features/findings/feed-filter";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
@@ -28,8 +28,10 @@ import { SYNTHETIC_FILTERS } from "@/features/synthetics/filters";
 import { parseCheckSearch, parseNewCheckSearch } from "@/features/synthetics/search";
 import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
+import type { FilterValues } from "@/shared/components/FilterBar";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
+import { keepUrlWindow } from "@/shared/url-window";
 
 import { HostedOnly } from "./HostedOnly";
 import { AppShell } from "./layout/AppShell";
@@ -49,6 +51,14 @@ const OrganizationScreen = lazyRouteComponent(
 const PlatformScreen = lazyRouteComponent(
   () => import("@/features/admin/PlatformScreen"),
   "PlatformScreen",
+);
+const SampleExplanationScreen = lazyRouteComponent(
+  () => import("@/features/findings/SampleExplanationScreen"),
+  "SampleExplanationScreen",
+);
+const ExplanationSettingsScreen = lazyRouteComponent(
+  () => import("@/features/explanationsettings/ExplanationSettingsScreen"),
+  "ExplanationSettingsScreen",
 );
 const AlertsScreen = lazyRouteComponent(
   () => import("@/features/alerts/AlertsScreen"),
@@ -309,6 +319,14 @@ const findingRoute = createRoute({
   validateSearch: parseFeedSearch,
 });
 
+// F3 FR46: a labelled sample from fixed data, before any real finding exists. Static,
+// so it outranks `$findingId`.
+const sampleExplanationRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/findings/sample",
+  component: SampleExplanationScreen,
+});
+
 const servicesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/services",
@@ -323,6 +341,8 @@ const serviceRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/services/$name",
   component: ServiceDetailRoute,
+  // F3 FR16: a finding's link carries its window here, and nothing else.
+  validateSearch: keepUrlWindow,
 });
 
 /** The route owns the parameter; the screen owns everything after it. */
@@ -348,7 +368,11 @@ const tracesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces",
   component: TraceListScreen,
-  validateSearch: (search: Record<string, unknown>) => toSearchParams(parseTraceFilters(search)),
+  // F3 FR16: the window a finding's link carries stays beside the filters (AC21).
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...keepUrlWindow(search),
+    ...toSearchParams(parseTraceFilters(search)),
+  }),
 });
 
 const traceRoute = createRoute({
@@ -367,7 +391,12 @@ const errorsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/errors",
   component: ErrorsScreen,
-  validateSearch: (search: Record<string, unknown>) => parseFilterValues(ERROR_FILTERS, search),
+  // F3: the window a finding's link carries, and the group it opens (FR16, AC105).
+  validateSearch: (search: Record<string, unknown>): FilterValues => ({
+    ...keepUrlWindow(search),
+    ...parseFilterValues(ERROR_FILTERS, search),
+    ...parseErrorGroupSearch(search),
+  }),
 });
 
 const logsRoute = createRoute({
@@ -377,6 +406,7 @@ const logsRoute = createRoute({
   // The service and the severity live here so arriving from another screen can
   // land already narrowed, and so a narrowed view is a link someone can send.
   validateSearch: (search: Record<string, unknown>) => ({
+    ...keepUrlWindow(search),
     ...(scopedService(search.service) ? { service: scopedService(search.service) as string } : {}),
     ...(severityFilterById(String(search.severity ?? "")).id === "all"
       ? {}
@@ -391,6 +421,7 @@ const infrastructureRoute = createRoute({
   // Hosts and databases are two views of one route, so it validates both sets.
   // Their keys are disjoint, so neither view can see the other's filters.
   validateSearch: (search: Record<string, unknown>) => ({
+    ...keepUrlWindow(search),
     ...parseFilterValues(infrastructureFilters([]), search),
     ...parseFilterValues(databaseFilters([]), search),
   }),
@@ -478,6 +509,8 @@ const releasesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/releases",
   component: ReleasesScreen,
+  // F3 FR16: a finding's "Deploys" link carries its window here.
+  validateSearch: keepUrlWindow,
 });
 
 const releaseRoute = createRoute({
@@ -640,6 +673,13 @@ const settingsSupportRoute = createRoute({
       <SupportAccessScreen />
     </HostedOnly>
   ),
+});
+
+// F3 FR54: rating and rule counts, and a rule stopped from naming causes.
+const settingsExplanationsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/explanations",
+  component: ExplanationSettingsScreen,
 });
 
 const settingsChannelsRoute = createRoute({
@@ -841,6 +881,7 @@ const routeTree = rootRoute.addChildren([
     findingsRoute,
     overviewRoute,
     findingRoute,
+    sampleExplanationRoute,
     alertsRoute,
     newRuleRoute,
     ruleRoute,
@@ -881,6 +922,7 @@ const routeTree = rootRoute.addChildren([
     settingsApiTokensRoute,
     settingsAuditRoute,
     settingsSupportRoute,
+    settingsExplanationsRoute,
     settingsChannelsRoute,
     settingsChannelRoute,
     settingsConnectionsRoute,

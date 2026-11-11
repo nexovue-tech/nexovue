@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 FindingScope = Literal["service", "project"]
 FindingSeverity = Literal["critical", "warning"]
@@ -569,6 +569,29 @@ ExplanationKind = Literal[
 ExplanationBasis = Literal["verified", "telemetry", "telemetry_text"]
 
 
+class ExplanationFactTarget(BaseModel):
+    """Where a fact's link goes, as the values it was read with (F3 FR16, AC105). The
+    console builds the link (`features/findings/evidence-links.ts`); this only says
+    what the data is. Names are customer text, shown and sent as text only."""
+
+    kind: Literal["error_group", "dependency", "deploy", "host", "finding", "check", "incident"]
+    # An error group's id and the services it was seen in.
+    group_id: str | None = None
+    services: list[str] = []
+    # A dependency: who called whom, the attribute a told-only callee was named by, and
+    # what moved (failure shares and p95 in milliseconds, before and during).
+    caller: str | None = None
+    callee: str | None = None
+    callee_attr: str | None = None
+    failure_share_before: float | None = None
+    failure_share_during: float | None = None
+    p95_before: float | None = None
+    p95_during: float | None = None
+    # A deploy's release, when F28 filed one; a finding's, check's or incident's id.
+    release_id: str | None = None
+    id: str | None = None
+
+
 class ExplanationFact(BaseModel):
     """One frozen fact, numbered as the page shows it (FR4, FR44)."""
 
@@ -589,6 +612,8 @@ class ExplanationFact(BaseModel):
     # Whether this fact is the cause's or supports it (FR44's order is already applied).
     is_cause: bool
     supports_cause: bool
+    # Where the fact's link goes, for a kind that has one (F3 Step 2, FR16).
+    target: ExplanationFactTarget | None = None
 
 
 class ExplanationCause(BaseModel):
@@ -604,6 +629,18 @@ class ExplanationCause(BaseModel):
 
 
 ExplanationState = Literal["reading", "not_read", "read"]
+RatingReason = Literal["wrong_cause", "not_useful", "bad_wording"]
+
+
+class ExplanationRating(BaseModel):
+    """A person's "Was this useful?" (FR20). Carried to later versions unless the likely
+    cause changed (AC83)."""
+
+    version: int
+    helpful: bool
+    reason: RatingReason | None
+
+
 WordingState = Literal["off", "pending", "done", "failed", "over_limit", "abstained", "held"]
 
 
@@ -630,6 +667,58 @@ class FindingExplanation(BaseModel):
     wording: None = None
     # When a person may next ask for the facts to be read again (FR41).
     next_read_at: datetime | None
+    # FR20: the reasons a "No" may give for this version, and this person's own
+    # rating, carried from an earlier version with the same cause. Neither for a token.
+    rating_reasons: list[RatingReason] = []
+    my_rating: ExplanationRating | None = None
+
+
+class ExplanationFeedbackRequest(BaseModel):
+    """`POST .../explanation/feedback` (FR20). "Yes", or "No" with a reason from a
+    closed list; never free text (A21)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+    helpful: bool
+    reason: RatingReason | None = None
+
+
+RuleName = Literal[
+    "signed_deploy",
+    "dependency_finding",
+    "signed_deploy_weak",
+    "dependency_deploy",
+    "dependency_edge",
+    "traffic_rose",
+    "project_deploy",
+    "project_shared_dependency",
+]
+
+
+class RuleCount(BaseModel):
+    """One rule's numbers on `/settings/explanations` (FR54): counts only, no names."""
+
+    rule: RuleName
+    # Findings whose latest explanation names a cause by this rule.
+    named: int
+    useful: int
+    wrong_cause: int
+    not_useful: int
+    bad_wording: int
+    stopped: bool
+
+
+class RuleCountsResponse(BaseModel):
+    rules: list[RuleCount]
+    # Ratings of explanations that named no cause.
+    without_cause_useful: int
+    without_cause_not_useful: int
+
+
+class StoppedRule(BaseModel):
+    rule: RuleName
+    stopped: bool
 
 
 class ReadAgainAccepted(BaseModel):

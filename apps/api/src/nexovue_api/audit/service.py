@@ -166,6 +166,12 @@ CONNECTION_CREATED: Final = "connection.created"
 CONNECTION_CREDENTIAL_REPLACED: Final = "connection.credential_replaced"
 CONNECTION_DELETED: Final = "connection.deleted"
 FINDING_FALSE_ALARM: Final = "finding.false_alarm"
+# F3. A person's judgement of an explanation, and a rule an organization stopped from
+# naming causes, or started again (FR20, FR54). The reason is a closed-list word.
+FINDING_EXPLANATION_RATED: Final = "finding.explanation_rated"
+EXPLANATION_RULE_STOPPED: Final = "explanation.rule_stopped"
+EXPLANATION_RULE_RESUMED: Final = "explanation.rule_resumed"
+EXPLANATION_RULE_TARGET: Final = "explanation_rule"
 FINDING_NEW_NORMAL: Final = "finding.new_normal"
 FINDING_ADOPTED: Final = detection.ADOPTED_AUDIT_ACTION
 SERVICE_SNOOZED: Final = "service.snoozed"
@@ -1190,6 +1196,42 @@ def record_finding_new_normal(
         action=FINDING_NEW_NORMAL,
         target=_target(FINDING_TARGET, finding_id),
         detail={"shifts": shifts},
+    )
+
+
+def record_explanation_rated(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    version: int,
+    helpful: bool,
+    reason: str | None,
+) -> None:
+    """Somebody said whether a finding's explanation was useful (F3 FR20)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=FINDING_EXPLANATION_RATED,
+        target=_target(FINDING_TARGET, finding_id),
+        detail={"version": version, "helpful": helpful, "reason": reason},
+    )
+
+
+def record_explanation_rule(
+    db: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID, rule: str, stopped: bool
+) -> None:
+    """A rule stopped from naming causes in this organization, or started again (F3 FR54).
+    The rule is one of nexovue's own names, never customer text."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=EXPLANATION_RULE_STOPPED if stopped else EXPLANATION_RULE_RESUMED,
+        target=f"{EXPLANATION_RULE_TARGET}:{rule}",
+        detail={"rule": rule},
     )
 
 

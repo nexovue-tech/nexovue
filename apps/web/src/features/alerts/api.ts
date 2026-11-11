@@ -221,6 +221,8 @@ export interface ChannelSummary {
   muted_until: string | null;
   muted_by: string | null;
   quiet_hours: QuietHours | null;
+  /** F3 FR48: whether a channel people read gets a finding's follow-up message. */
+  sends_explained: boolean;
   created_at: string;
   rules: { id: string; name: string; project_id: string }[];
 }
@@ -249,6 +251,7 @@ export interface UpdateChannel {
   name?: string;
   config?: Record<string, unknown>;
   secret?: string;
+  sends_explained?: boolean;
 }
 
 export interface DeliveryAttempt {

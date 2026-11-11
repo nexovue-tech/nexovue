@@ -110,6 +110,11 @@ nothing more is sent about it until it has stayed normal for 30 minutes) and
 a new normal set by a person or adopted after 7 days with no answer, or the service
 gone). A channel hears `finding.resolved` only for a finding it was told about.
 
+A webhook never receives the follow-up a channel people read can get when a signed
+deploy is a finding's likely place to look (*explained*; see [Alert channels](channels.md#the-follow-up-naming-a-likely-place-to-look)).
+There is no `finding.explained` event: the likely cause is on the finding's page, and the
+link in `finding.opened` leads there. PagerDuty does not receive it either.
+
 The *Send test* button sends `test.opened`, with `data.subject.kind` `test`.
 
 `data.rule` is the rule that routed the message, or `null` when none did.

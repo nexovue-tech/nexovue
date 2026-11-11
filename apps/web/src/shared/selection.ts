@@ -7,10 +7,11 @@
  * a feature may not import app/, so the shared layer has to hold the value.
  */
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { formatDate } from "./format/time";
 import { refetchIntervalFor, useRefreshPreference } from "./refresh";
+import { useUrlWindow } from "./url-window";
 
 export interface TimeRange {
   id: string;
@@ -253,6 +254,22 @@ export function readSelection(): Selection {
 }
 
 /**
+ * The window this screen reads: a valid window in the address first, then the stored one
+ * (F3 FR16). The address's is never written back, so following a finding's link leaves
+ * the window a person chose for every other screen as it was (AC21).
+ */
+export function useWindowChoice(): WindowChoice {
+  const stored = useSelection().window;
+  const inAddress = useUrlWindow();
+  const from = inAddress?.from;
+  const to = inAddress?.to;
+  return useMemo<WindowChoice>(
+    () => (from && to ? { kind: "absolute", from, to } : stored),
+    [from, to, stored],
+  );
+}
+
+/**
  * What a query key should carry for a window, and the whole reason this type exists.
  *
  * **A resolved window cannot go in a cache key.** `to` is "now", so a key holding it
@@ -330,7 +347,7 @@ function day(at: Date): string {
 
 /** What this screen is showing, for the sentence under its heading. */
 export function useWindowPhrase(): string {
-  return describeWindowChoice(useSelection().window);
+  return describeWindowChoice(useWindowChoice());
 }
 
 export function timeRangeById(rangeId: string): TimeRange {
@@ -426,7 +443,7 @@ export function liveOptions(window: TimeWindow | LiveWindow): { refetchInterval:
 }
 
 export function useLiveWindow(): LiveWindow {
-  const { window: choice } = useSelection();
+  const choice = useWindowChoice();
   const preference = useRefreshPreference();
   const [now, setNow] = useState(() => Date.now());
 

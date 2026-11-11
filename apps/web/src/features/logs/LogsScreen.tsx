@@ -11,6 +11,7 @@ import { plural } from "@/shared/format/plural";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { useDeclaredStream } from "@/shared/refresh";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { keepUrlWindow } from "@/shared/url-window";
 import type { LogSearchFilters, ServiceFacet, SeverityFacet } from "./api";
 import { logExportUrl, useLogFacets, useLogSearch } from "./api";
 import { bufferLineCount, downloadBuffer } from "./log-export";
@@ -94,6 +95,8 @@ export function LogsScreen() {
     void navigate({
       to: "/logs",
       search: () => ({
+        // F3 FR16: a finding's window, carried in the address, survives a filter change.
+        ...keepUrlWindow(routeSearch),
         ...(next.service ? { service: next.service } : {}),
         ...(next.severity && next.severity !== "all" ? { severity: next.severity } : {}),
       }),

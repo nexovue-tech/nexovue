@@ -13,6 +13,7 @@ import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { keepUrlWindow } from "@/shared/url-window";
 import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
 import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
@@ -25,7 +26,7 @@ import {
   firstWithStacktrace,
   isNewInWindow,
 } from "./error-groups";
-import { errorFilters } from "./filters";
+import { errorFilters, parseErrorGroupSearch } from "./filters";
 import type { SymbolicationState } from "./symbolication";
 import { useSymbolication } from "./symbolication";
 
@@ -67,9 +68,18 @@ export function ErrorsScreen() {
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every control they tried on the way.
   const show = (next: Record<string, string | undefined>) =>
-    void navigate({ to: "/errors", search: () => filterParams(next), replace: true });
+    void navigate({
+      to: "/errors",
+      // F3 FR16: a finding's window, carried in the address, survives a filter change.
+      search: () => ({ ...keepUrlWindow(search), ...filterParams(next) }),
+      replace: true,
+    });
 
-  const [selectedGroupId, setSelectedGroupId] = useState<string>();
+  // F3 (AC105): a finding's error fact opens its group through `?group=`; choosing
+  // another here is this screen's own state, as before.
+  const [selectedGroupId, setSelectedGroupId] = useState<string | undefined>(
+    () => parseErrorGroupSearch(search).group,
+  );
 
   const groups = useErrorGroups(projectId, timeWindow, filterParams(filters));
   const listed = groups.data?.groups ?? [];

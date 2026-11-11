@@ -152,6 +152,33 @@ describe("quiet hours", () => {
   });
 });
 
+describe("the follow-up naming a likely place to look (F3 FR48, AC84)", () => {
+  const checkbox = (container: HTMLElement) =>
+    container.querySelector<HTMLInputElement>('input[name="sends-explained"]');
+
+  it("is on by default and turned off from the channel's page", async () => {
+    const api = stubApi({
+      ...alertReads({ channels: [channel()] }),
+      "PATCH /channels/ch-slack": json(channel({ sends_explained: false })),
+    });
+    const { container } = await mountAt("/settings/channels/ch-slack");
+
+    const toggle = await waitFor(() => checkbox(container), "the follow-up switch");
+    expect(toggle.checked).toBe(true);
+    await click(toggle);
+    const [sent] = await waitFor(() => api.to("PATCH", "/channels/ch-slack"), "the save");
+    expect(sent.body).toEqual({ sends_explained: false });
+  });
+
+  it("is not offered for PagerDuty or a webhook, which never receive it", async () => {
+    stubApi(alertReads({ channels: [channel({ id: "ch-pd", kind: "pagerduty", name: "PD" })] }));
+    const { container } = await mountAt("/settings/channels/ch-pd");
+
+    await waitFor(() => readable(container).includes("Send a test"), "the page");
+    expect(checkbox(container)).toBeNull();
+  });
+});
+
 describe("a webhook's settings", () => {
   it("edit the URL in place, which is configuration and shown whole", async () => {
     const hook = channel({

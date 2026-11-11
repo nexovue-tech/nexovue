@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
 import type { DetectionStatus, ProjectTotals } from "@/shared/detection/headline";
+import type { ExplanationFactTarget } from "@/shared/evidence-links";
 import type { OverviewPoint } from "@/shared/overview-plots";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
@@ -203,6 +204,11 @@ export interface CasePeople {
 export interface FeedFinding extends Finding, CasePeople {
   /** Named in the case filters, which read every project. */
   project_name?: string;
+  /**
+   * F3 FR18: the card's likely-cause line, written by code, as segments; null with no
+   * cause or while it is held. Never model words.
+   */
+  likely_cause_sentence?: ExplanationSegment[] | null;
 }
 
 /** The service's latest other case, for a finding that holds none (FR9, FR13). */
@@ -838,6 +844,20 @@ export interface ExplanationFact {
   read: string | null;
   is_cause: boolean;
   supports_cause: boolean;
+  /** Where the fact's link goes, as the values it was read with (F3 Step 2, FR16). */
+  target?: ExplanationFactTarget | null;
+}
+
+/** What a fact's link needs: `shared/evidence-links.ts` holds the type and builds the link. */
+export type { ExplanationFactTarget };
+
+export type RatingReason = "wrong_cause" | "not_useful" | "bad_wording";
+
+/** A person's "Was this useful?" (FR20), carried while the cause is unchanged (AC83). */
+export interface ExplanationRating {
+  version: number;
+  helpful: boolean;
+  reason: RatingReason | null;
 }
 
 export interface ExplanationCause {
@@ -875,6 +895,9 @@ export interface FindingExplanation {
   wording_state: WordingState;
   wording: null;
   next_read_at: string | null;
+  /** FR20: the reasons a "No" may give here; empty for a token. */
+  rating_reasons?: RatingReason[];
+  my_rating?: ExplanationRating | null;
 }
 
 export function explanationQueryKey(findingId: string) {
@@ -920,6 +943,28 @@ export function useReadAgain(findingId: string) {
     mutationFn: () =>
       apiClient.post<ReadAgainAccepted>(
         `findings/${encodeURIComponent(findingId)}/explanation/read-again`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: explanationQueryKey(findingId) });
+    },
+  });
+}
+
+export interface RateRequest {
+  version: number;
+  helpful: boolean;
+  reason: RatingReason | null;
+}
+
+/** FR20: one rating per person per version; the page reads it back as `my_rating`. */
+export function useRateExplanation(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "rate-explanation", findingId],
+    mutationFn: (rating: RateRequest) =>
+      apiClient.post<ExplanationRating>(
+        `findings/${encodeURIComponent(findingId)}/explanation/feedback`,
+        rating,
       ),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: explanationQueryKey(findingId) });

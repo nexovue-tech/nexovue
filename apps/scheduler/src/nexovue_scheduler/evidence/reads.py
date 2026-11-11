@@ -101,6 +101,8 @@ _CHECK_CHANGES: Final = text(
     LIMIT :limit
     """
 )
+# The rules this organization stopped from naming a cause (FR54, plan T2.12).
+_STOPPED_RULES: Final = text("SELECT rule FROM explanation_stopped_rules WHERE org_id = :org_id")
 # Install-wide, no tenant: read only on a self-hosted install (FR11), where every
 # project on it is the operator's own.
 _INTAKE_REFUSALS: Final = text(
@@ -162,6 +164,12 @@ async def latest_version(
     return (
         await connection.execute(_LATEST_VERSION, {"org_id": org_id, "finding_id": finding_id})
     ).first()
+
+
+async def stopped_rules(connection: AsyncConnection, *, org_id: uuid.UUID) -> frozenset[str]:
+    """FR54: a stopped rule names no cause in this organization; its facts stay."""
+    rows = await connection.execute(_STOPPED_RULES, {"org_id": org_id})
+    return frozenset(row.rule for row in rows)
 
 
 async def open_findings_of(

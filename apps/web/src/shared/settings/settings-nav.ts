@@ -16,6 +16,7 @@ export type SettingsPath =
   | "/settings/audit"
   | "/settings/support"
   | "/settings/channels"
+  | "/settings/explanations"
   | "/settings/connections"
   | "/settings/projects"
   | "/settings/billing"
@@ -120,6 +121,14 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
           "email",
           "on-call",
         ],
+      },
+      {
+        // F3 FR54: rating and rule counts, and stopping a rule naming causes. Not an AI
+        // screen: it stands with AI off.
+        path: "/settings/explanations",
+        title: "Explanations",
+        requires: "configure_detection",
+        keywords: ["explanation", "likely cause", "rule", "rating", "useful", "evidence"],
       },
       {
         path: "/settings/connections",
