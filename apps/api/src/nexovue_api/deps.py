@@ -26,7 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from nexovue_api.alerts.evaluation import EvaluationReader
-from nexovue_api.apitokens.tokens import TOKENS_ARE_READ_ONLY, looks_like_api_token
+from nexovue_api.apitokens.tokens import (
+    ASSISTANT_TICKET_PREFIX,
+    TICKETS_ARE_NOT_PEOPLE,
+    TOKENS_ARE_READ_ONLY,
+    looks_like_api_token,
+)
 from nexovue_api.auth.sessions import (
     Session,
     SessionStore,
@@ -189,6 +194,9 @@ async def get_current_session(
         # the wrong credential for this route instead of "your session expired"
         # (F36, FR15).
         raise PermissionDeniedError(TOKENS_ARE_READ_ONLY)
+    if presented is not None and presented.startswith(ASSISTANT_TICKET_PREFIX):
+        # F4 trap 6: a clear refusal, not "your session has expired".
+        raise PermissionDeniedError(TICKETS_ARE_NOT_PEOPLE)
 
     token = session_token_from_headers(connection.headers)
     if token is None:

@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 import pytest
 from live import require_stack
 from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
+from nexovue_platform.assistant_records import TICKET_PURPOSE
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
     DEPLOY_WEBHOOK_PURPOSE,
@@ -225,6 +226,35 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
                 "sealed": _box(OLD_AI, AI_CONNECTION_PURPOSE).seal(
                     PLAINTEXT, owner=key_owner(str(org), str(ai_connection), AI_BASE_URL)
                 ),
+            },
+        )
+        # F4: a question's ticket, sealed under the `ai` ring for its own message, while the
+        # question is in flight (`keys.SEALED_COLUMNS`).
+        conversation = uuid.uuid4()
+        message = uuid.uuid4()
+        await connection.execute(
+            text(
+                "INSERT INTO assistant_conversations (id, org_id, user_id, project_id, title) "
+                "VALUES (:id, :org, :user, :project, 'q')"
+            ),
+            {"id": conversation, "org": org, "user": user, "project": project},
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO assistant_messages (id, org_id, project_id, conversation_id, "
+                "user_id, question, context, data_level, ticket_hash, sealed_ticket, "
+                "call_seconds, queue_expires_at, deadline_at, hard_ends_at) VALUES (:id, :org, "
+                ":project, :conversation, :user, 'q', '{}', 'facts', :hash, :sealed, 30, "
+                "now() + interval '1 hour', now() + interval '1 hour', now() + interval '1 hour')"
+            ),
+            {
+                "id": message,
+                "org": org,
+                "project": project,
+                "conversation": conversation,
+                "user": user,
+                "hash": f"keys-suite-{message}",
+                "sealed": _box(OLD_AI, TICKET_PURPOSE).seal(PLAINTEXT, owner=str(message)),
             },
         )
     try:

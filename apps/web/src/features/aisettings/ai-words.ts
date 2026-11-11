@@ -188,3 +188,48 @@ export const OUTCOME_WORDS: Record<string, string> = {
 export function outcomeLine(outcome: string): string {
   return OUTCOME_WORDS[outcome] ?? OUTCOME_WORDS.unknown;
 }
+
+// ---------------------------------------------------------------- F4: chat (T2.12)
+
+export const CHAT_MCP_LINE =
+  "This switch does not affect the MCP server. Your own AI tools reach it with API tokens your team made.";
+export const CHAT_MASKING_LINE =
+  "Masking catches some credentials: Bearer and Basic values, card numbers, passwords in URLs, and attributes with credential-like names. A password written into a log line's text may not be caught. Names and customer ids stay, and are sent.";
+export const CHAT_NO_READS = "Chat has read nothing yet.";
+export const CHAT_DATA_LEVEL_WORDS: Record<"facts" | "facts_and_text", string> = {
+  facts: "Facts only: findings and services, never log text",
+  facts_and_text: "Facts and text: also log lines, which anyone who can reach your service writes",
+};
+export const CHAT_COUNT_WORDS: Record<string, string> = {
+  answered: "Answered",
+  partial: "Partial",
+  abstained: "Not enough evidence",
+  withheld: "Withheld by the checks",
+  failed: "Failed",
+  unavailable: "Not available",
+  over_limit: "Over the limit",
+  refused: "Refused",
+  stopped: "Stopped",
+};
+/** Share of chat's own ceiling at which the section warns (FR19; design, a guess). */
+export const CHAT_WARNING_SHARE = 0.8;
+/** Chat's ceiling: the share of the month's limit questions may reach (F3's `CHAT_SHARE`). */
+export const CHAT_SHARE = 0.8;
+
+export function maskingOffLine(rules: string[]): string {
+  return rules.length === 0
+    ? "This project has every default masking rule on."
+    : `This project has these masking rules off: ${rules.join(", ")}.`;
+}
+
+export function chatNearCeiling(used: number, limit: number | null): boolean {
+  return limit !== null && limit > 0 && used >= limit * CHAT_SHARE * CHAT_WARNING_SHARE;
+}
+
+export function countWord(kind: string): string {
+  if (kind.startsWith("rejected_"))
+    return `Rejected: ${kind.slice("rejected_".length).replaceAll("_", " ")}`;
+  if (kind.startsWith("wrong_"))
+    return `Marked wrong: ${kind.slice("wrong_".length).replaceAll("_", " ")}`;
+  return CHAT_COUNT_WORDS[kind] ?? kind.replaceAll("_", " ");
+}

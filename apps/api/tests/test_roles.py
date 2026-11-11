@@ -12,6 +12,7 @@ from nexovue_api import roles
 def test_each_role_runs_the_process_the_compose_files_ran() -> None:
     assert roles.command_for("api", []) == [
         "uvicorn", "nexovue_api.main:app", "--host", "0.0.0.0", "--port", "8000",
+        "--no-access-log",
     ]  # fmt: skip
     assert roles.command_for("scheduler-beat", []) == ["python", "-m", "nexovue_scheduler", "beat"]
     assert roles.command_for("scheduler-deliveries", [])[-4:] == [
@@ -30,11 +31,17 @@ def test_the_connections_role_takes_its_two_queues_and_its_own_tasks() -> None:
 
 
 def test_the_insight_role_takes_its_queue_and_its_own_tasks() -> None:
-    """F3: the AI role claims `insight` alone, on four children, loading its own tasks."""
+    """F3 and F4: the AI role claims chat's queue first and then `insight`, on six children,
+    loading its own tasks."""
     assert roles.command_for("scheduler-insight", []) == [
         *("python", "-m", "nexovue_scheduler", "worker"),
-        *("--queues", "insight", "--concurrency", "4", "--tasks", "insight"),
+        *("--queues", "assistant,insight", "--concurrency", "6", "--tasks", "insight"),
     ]
+
+
+def test_the_api_keeps_query_strings_out_of_its_logs() -> None:
+    """F4 AC65: uvicorn's access line would carry a chat tool's search phrase."""
+    assert "--no-access-log" in roles.command_for("api", [])
 
 
 def test_extra_arguments_reach_the_role() -> None:

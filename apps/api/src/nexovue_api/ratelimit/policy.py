@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Final, Protocol
 
-from nexovue_api.apitokens.tokens import looks_like_api_token
+from nexovue_api.apitokens.tokens import looks_like_api_token, looks_like_assistant_ticket
 from nexovue_api.settings import API_PREFIX
 
 
@@ -279,6 +279,9 @@ TELEMETRY_PATHS: Final = (
     # F20 D41: the dashboard batch, on a prefix of its own, so `/dashboards`, which reads
     # Postgres only and must answer while ClickHouse is down, stays on the default tier.
     f"{API_PREFIX}/dashboard-panels",
+    # F4 T2.12: chat's consent preview reads the project's newest log line. Only the
+    # preview: the rest of `/ai` reads Postgres and must answer while ClickHouse is down.
+    f"{API_PREFIX}/ai/preview",
 )
 
 # F20. One dashboard is one request and many scans, each charged (`ratelimit/charge.py`),
@@ -317,6 +320,9 @@ def tier_for(path: str, *, presented: str | None = None) -> Tier | None:
         return None
     if presented is not None and looks_like_api_token(presented):
         return TOKEN_TIER
+    if presented is not None and looks_like_assistant_ticket(presented):
+        # F4: a question's ticket reads as its person would, on the path's own tier.
+        return tier_for_path(path)
     if path.startswith(ASSISTANT_PATH):
         # An assistant with no token, or a bad one, is still a caller to count:
         # otherwise the refusal itself is free to repeat.

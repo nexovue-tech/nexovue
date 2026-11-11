@@ -539,7 +539,7 @@ function DashboardFields({
 }) {
   const definition = document.definition;
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className="grid gap-4 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
         <TextField
           label="Title"

@@ -26,7 +26,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX
+from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX, ASSISTANT_TICKET_PREFIX
 from nexovue_api.auth.sessions import Session, SessionStore
 from nexovue_api.middleware import ratelimit as ratelimit_middleware
 from nexovue_api.middleware.ratelimit import TOO_MANY_CONCURRENT_DETAIL, RateLimitMiddleware
@@ -38,6 +38,7 @@ from nexovue_api.ratelimit.policy import (
     TOKEN_TIER,
     FixedPlanLimits,
 )
+from nexovue_api.ratelimit.ticket_owners import TicketOwner, TicketOwners
 from nexovue_api.ratelimit.token_owners import TokenOwners
 from nexovue_api.settings import API_PREFIX
 
@@ -67,12 +68,23 @@ class _Owners:
         return self.by_token.get(presented)
 
 
+class _TicketOwners:
+    """Whose person each question ticket belongs to (F4)."""
+
+    def __init__(self) -> None:
+        self.by_ticket: dict[str, TicketOwner] = {}
+
+    async def owner_of(self, presented: str) -> TicketOwner | None:
+        return self.by_ticket.get(presented)
+
+
 class _World:
     """One app under test, its people and tokens, and a gate slow reads wait at."""
 
     def __init__(self) -> None:
         self.sessions = _Sessions()
         self.owners = _Owners()
+        self.ticket_owners = _TicketOwners()
         self.released = asyncio.Event()
 
         async def read(_: Request) -> PlainTextResponse:
@@ -97,6 +109,7 @@ class _World:
             plan_limits=FixedPlanLimits(),
             sessions=cast(SessionStore, self.sessions),
             token_owners=cast(TokenOwners, self.owners),
+            ticket_owners=cast(TicketOwners, self.ticket_owners),
         )
 
     def person(self, org_id: str) -> str:
@@ -105,6 +118,13 @@ class _World:
             user_id=str(uuid.uuid4()), org_id=org_id, created_at=datetime.now(UTC)
         )
         return token
+
+    def ticket_for(self, person: str) -> str:
+        """A question ticket asked by the person holding session `person`."""
+        session = self.sessions.by_token[person]
+        ticket = f"{ASSISTANT_TICKET_PREFIX}{uuid.uuid4().hex}"
+        self.ticket_owners.by_ticket[ticket] = TicketOwner(session.user_id, session.org_id)
+        return ticket
 
     def token(self, org_id: str | None = None) -> str:
         """A token-shaped value, owned by `org_id` when one is given."""
@@ -345,3 +365,24 @@ async def test_an_organizations_in_flight_slots_come_back() -> None:
         answered = await _reads(runner, token, 2 * ceiling)
 
     assert set(answered) == {200}
+
+
+async def test_a_question_ticket_spends_its_person_s_own_allowance() -> None:
+    """F4 AC13: chat is no way round a person's limit, and pays nothing from the address."""
+    world = _World()
+    person = world.person(str(uuid.uuid4()))
+    ticket = world.ticket_for(person)
+    async with _client(world) as desk:
+        assert set(await _reads(desk, ticket, TELEMETRY_TIER.quota.limit)) == {200}
+        # The person's own screen is spent by their questions' reads, and the reverse.
+        assert await _reads(desk, person, 1) == [429]
+    async with _client(world) as elsewhere:
+        assert await _reads(elsewhere, world.person(str(uuid.uuid4())), 1) == [200]
+
+
+async def test_an_invented_ticket_is_counted_against_its_address() -> None:
+    world = _World()
+    invented = f"{ASSISTANT_TICKET_PREFIX}{uuid.uuid4().hex}"
+    async with _client(world) as caller:
+        assert set(await _reads(caller, invented, TELEMETRY_TIER.quota.limit)) == {200}
+        assert await _reads(caller, None, 1) == [429]

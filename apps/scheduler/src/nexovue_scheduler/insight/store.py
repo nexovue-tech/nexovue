@@ -551,15 +551,23 @@ async def _limit_refusal(
             return ("failed", "run_cap")
     if too_long:
         return ("failed", "too_long")
-    month = month_of(now)
-    await connection.execute(_MONTH_ROW, {"org_id": version.org_id, "month": month})
-    taken = await connection.scalar(
-        _RESERVE,
-        {"org_id": version.org_id, "month": month, "reserve": reserve, "ceiling": ceiling},
-    )
-    if taken is None:
+    if not await reserve_month(
+        connection, org_id=version.org_id, month=month_of(now), reserve=reserve, ceiling=ceiling
+    ):
         return ("over_limit", None)
     return None
+
+
+async def reserve_month(
+    connection: AsyncConnection, *, org_id: str, month: date, reserve: int, ceiling: int
+) -> bool:
+    """Take `reserve` tokens of the month, or nothing when used plus reserved would pass
+    `ceiling`. Atomic, in the caller's transaction; F4's chat reserves through it too."""
+    await connection.execute(_MONTH_ROW, {"org_id": org_id, "month": month})
+    taken = await connection.scalar(
+        _RESERVE, {"org_id": org_id, "month": month, "reserve": reserve, "ceiling": ceiling}
+    )
+    return taken is not None
 
 
 async def set_state(

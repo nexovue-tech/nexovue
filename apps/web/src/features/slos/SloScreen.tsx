@@ -73,7 +73,7 @@ function Target({ view, zone }: { view: SloView; zone: string }) {
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{view.name}</h1>
         <p className="text-ink-dim text-sm">{view.label}</p>
       </header>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid gap-6 @3xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <section aria-label="Where it stands" className="flex flex-col gap-2">
           <p>
             <SloBadge view={shown} />

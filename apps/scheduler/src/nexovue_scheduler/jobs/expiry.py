@@ -1,7 +1,8 @@
 """The expiry sweep: deletes what Redis used to forget on its own (ADR-020), what
 detection keeps only for a while (`detection/retention.py`), the evidence job's hour
 (`evidence/retention.py`), AI runs and monthly usage past 13 months
-(`nexovue_platform.ai_records`), and what reliability
+(`nexovue_platform.ai_records`), chat's questions past their project's derived retention
+and its records past 13 months (`nexovue_platform.assistant_records`), and what reliability
 targets keep: a deleted target past restoring, and figures past 400 days
 (`slos/retention.py`).
 
@@ -10,7 +11,8 @@ sweep is about disk, never correctness — a missed run leaves rows that answer
 nothing. Detection's are different: a closed finding past its project's derived
 retention still names services, so a missed run keeps telemetry text a day
 longer than the plan says (security m4). It deletes in batches so a backlog is
-cleared in bites, never one long lock.
+cleared in bites, never one long lock. One table that fails is logged and skipped, so it
+never keeps the tables after it, or the spent jobs, from being cleared (F4 AC35).
 """
 
 from __future__ import annotations
@@ -18,9 +20,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Final
 
-from nexovue_platform import ai_records
+from nexovue_platform import ai_records, assistant_records
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.detection import retention
@@ -50,6 +53,7 @@ _EXPIRED: Final = (
     *retention.EXPIRED,
     *evidence_retention.EXPIRED,
     *ai_records.EXPIRED,
+    *assistant_records.EXPIRED,
     *slo_retention.EXPIRED,
 )
 
@@ -61,21 +65,28 @@ async def sweep(engine: AsyncEngine) -> dict[str, int]:
         "slo_targets": await slo_retention.purge_deleted(engine, now=datetime.now(UTC))
     }
     for table, key, lapsed in _EXPIRED:
-        statement = text(
-            # Every part is a constant above; nothing here came from a caller.
-            f"DELETE FROM {table} WHERE ({key}) IN "
-            f"(SELECT {key} FROM {table} WHERE {lapsed} LIMIT :batch)"
-        )
-        total = 0
-        while True:
-            async with engine.begin() as connection:
-                deleted = (await connection.execute(statement, {"batch": BATCH})).rowcount
-            total += deleted
-            if deleted < BATCH:
-                break
-        removed[table] = total
+        try:
+            removed[table] = await _clear(engine, table, key, lapsed)
+        except SQLAlchemyError as error:
+            reason = repr(getattr(error, "orig", error))
+            logger.error("an expiry table failed; the rest still run", table=table, error=reason)
     removed["jobs"] = await queue.sweep_spent(engine)
     return removed
+
+
+async def _clear(engine: AsyncEngine, table: str, key: str, lapsed: str) -> int:
+    statement = text(
+        # Every part is a constant above; nothing here came from a caller.
+        f"DELETE FROM {table} WHERE ({key}) IN "
+        f"(SELECT {key} FROM {table} WHERE {lapsed} LIMIT :batch)"
+    )
+    total = 0
+    while True:
+        async with engine.begin() as connection:
+            deleted = (await connection.execute(statement, {"batch": BATCH})).rowcount
+        total += deleted
+        if deleted < BATCH:
+            return total
 
 
 @task(SWEEP_EXPIRED_TASK)

@@ -264,6 +264,29 @@ class ExportedNote(BaseModel):
     created_at: datetime
 
 
+class ExportedStep(BaseModel):
+    """A tool read chat made for the person's question: the tool, and its arguments as
+    stored, free-text phrases included (F4 AC34). Never what it read."""
+
+    tool: str
+    arguments: dict[str, Any]
+
+
+class ExportedQuestion(BaseModel):
+    """A question the person asked chat (F4 AC34): their words, its outcome, its checked
+    answer as stored, its steps, and whether they marked it wrong and why."""
+
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    project_id: uuid.UUID
+    question: str
+    state: str
+    answer: dict[str, Any] | None
+    wrong_reason: str | None
+    created_at: datetime
+    steps: list[ExportedStep]
+
+
 class ExportedSloChange(BaseModel):
     """A change the person made to a reliability target (F19 FR30, AC88). It stays the
     organization's record after they leave."""
@@ -330,3 +353,7 @@ class PersonalDataExport(BaseModel):
     slo_target_changes_truncated: bool
     slo_exclusions: list[ExportedSloExclusion]
     slo_exclusions_truncated: bool
+    # F4: the questions they asked chat, newest first, bounded the same way. Runbooks they
+    # wrote join when runbooks exist (F4 plan Step 5).
+    chat_questions: list[ExportedQuestion]
+    chat_questions_truncated: bool

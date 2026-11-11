@@ -11,7 +11,8 @@ tenancy structure test reads them.
 2. **The input limit:** an input estimated over `MAX_INPUT_TOKENS` ends `too_long` before
    anything is reserved.
 3. **The monthly limit:** a run reserves its estimate plus the most it may write, against the
-   share its finding's severity may use; a run that dies keeps what it reserved.
+   share its finding's severity may use; a run that dies keeps what it reserved. F4's chat
+   reserves against its own share, `CHAT_SHARE`, through the same statement.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ RUN_CAP_WINDOW: Final = timedelta(hours=24)
 # A10; 20% kept for critical findings is a guess).
 WARNING_SHARE: Final = 0.8
 CRITICAL_SHARE: Final = 1.0
+# F4: chat stops at this part of the limit, leaving the rest to wording (F4 D50, a guess).
+CHAT_SHARE: Final = 0.8
 
 
 def share_for(severity: object) -> float:
@@ -41,6 +44,11 @@ def share_for(severity: object) -> float:
 def ceiling(monthly_limit: int, severity: object) -> int:
     """Used plus reserved tokens may not pass this after a reservation."""
     return int(monthly_limit * share_for(severity))
+
+
+def chat_ceiling(monthly_limit: int) -> int:
+    """F4: what used plus reserved tokens may reach after a question's reservation."""
+    return int(monthly_limit * CHAT_SHARE)
 
 
 def input_estimate(body: bytes) -> int:

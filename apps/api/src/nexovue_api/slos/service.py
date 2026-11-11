@@ -640,7 +640,7 @@ async def _routing(
     return _Routing(
         rules=tuple(rules),
         snoozes=await queries.snoozes(db, org_id=reader.org_id, project_id=project_id, now=now),
-        for_person=not reader.is_token,
+        for_person=reader.is_person,
     )
 
 
@@ -821,5 +821,5 @@ def _deleted_line(
         deleted_at=target.deleted_at,
         purged_on=(target.deleted_at + slo.RESTORE_FOR).date(),
         days_held=len(days),
-        deleted_by_name=None if reader.is_token else deleted_by_name,
+        deleted_by_name=deleted_by_name if reader.is_person else None,
     )

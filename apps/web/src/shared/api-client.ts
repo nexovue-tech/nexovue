@@ -54,6 +54,7 @@ export class ApiError extends Error {
   }
 }
 
+const HTTP_FORBIDDEN = 403;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
 const HTTP_UNPROCESSABLE = 422;
@@ -88,6 +89,21 @@ export function isDashboardNotFound(error: unknown): boolean {
 /** A 404 that names the project: a link to one the reader cannot open. */
 export function isProjectNotFound(error: unknown): boolean {
   return isNotFound(error) && hasProblemSlug(error, PROJECT_NOT_FOUND);
+}
+
+/**
+ * True when the API refused the caller this resource. The central handler renders a whole
+ * screen forbidden on a 403; chat's side panel says it inside itself instead (F4 AC73).
+ */
+export function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_FORBIDDEN;
+}
+
+/** The problem's own `code`, when the API names why it refused (F4's refusals, AC79). */
+export function problemCode(error: unknown): string | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  const code = error.problem?.code;
+  return typeof code === "string" ? code : undefined;
 }
 
 /**

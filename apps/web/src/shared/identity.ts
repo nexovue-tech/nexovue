@@ -18,6 +18,8 @@ export type Action =
   | "configure_slos"
   | "edit_dashboards"
   | "request_explanation"
+  | "ask_assistant"
+  | "manage_knowledge"
   | "manage_channels"
   | "manage_connections"
   | "manage_ai"

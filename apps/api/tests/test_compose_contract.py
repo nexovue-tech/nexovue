@@ -8,6 +8,7 @@ absence fails here rather than skipping.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import subprocess
 from pathlib import Path
@@ -545,6 +546,8 @@ INSIGHT_ROLE_VARIABLES: Final = frozenset(
         "AI_SECRET_KEY",
         "AI_SECRET_PREVIOUS_KEYS",
         "AI_PRIVATE_ENDPOINTS",
+        # F4: where chat's tools read the API; an address, never a credential.
+        "INTERNAL_API_URL",
     }
 )
 
@@ -562,7 +565,7 @@ def test_the_insight_role_holds_exactly_its_own_variables(layout: str, tmp_path:
         "postgresql+asyncpg://nexovue_insight:"
     )
     assert insight["command"] == [INSIGHT_ROLE]
-    assert insight["deploy"]["resources"]["limits"]["memory"] == str(384 * 2**20)
+    assert insight["deploy"]["resources"]["limits"]["memory"] == str(576 * 2**20)
 
 
 def test_only_the_api_and_the_insight_role_hold_the_ai_key(layout: str, tmp_path: Path) -> None:
@@ -592,7 +595,7 @@ def test_only_setup_and_the_insight_role_hold_its_password(layout: str, tmp_path
     assert holders == {"setup", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
 
 
-def test_the_insight_role_shares_a_network_with_postgres_and_the_monitor_alone(
+def test_the_insight_role_shares_a_network_with_postgres_the_api_and_the_monitor_alone(
     layout: str, tmp_path: Path
 ) -> None:
     """AC42's Compose half: who the AI role can reach by name. Prometheus scrapes it, and its
@@ -607,7 +610,8 @@ def test_the_insight_role_shares_a_network_with_postgres_and_the_monitor_alone(
     }
 
     assert own == {"ai"}
-    assert neighbours == {"postgres", "prometheus"}, f"{layout}: {sorted(neighbours)}"
+    # F4: the API joins, so chat's loop reads through it (design, *The network*).
+    assert neighbours == {"api", "postgres", "prometheus"}, f"{layout}: {sorted(neighbours)}"
 
 
 def test_the_insight_role_can_be_left_out_by_one_setting(tmp_path: Path) -> None:
@@ -636,7 +640,7 @@ def test_the_development_stack_runs_the_insight_role_on_its_own_tasks_and_networ
     service = dev["services"][INSIGHT_ROLE]
 
     argv = service["command"].split()
-    assert argv[argv.index("--queues") + 1] == "insight"
+    assert argv[argv.index("--queues") + 1] == "assistant,insight"
     assert argv[argv.index("--tasks") + 1] == "insight"
     assert service["environment"]["SCHEDULER_ROLE"] == "insight"
     assert "nexovue_insight:" in service["environment"]["POSTGRES_DSN"]
@@ -645,3 +649,18 @@ def test_the_development_stack_runs_the_insight_role_on_its_own_tasks_and_networ
     # The dead `insight` service and its model address are gone (F3 owns the removal).
     assert "insight" not in dev["services"]
     assert "LLM_BASE_URL" not in (COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8")
+
+
+def test_the_development_fake_provider_is_one_the_insight_role_may_reach() -> None:
+    """F4 plan T2.0: its fixed address on the dev `ai` subnet is the one the role's default
+    `AI_PRIVATE_ENDPOINTS` names, and it runs only when asked for, by its profile."""
+    dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
+    infra = yaml.safe_load((COMPOSE / "compose.infra.dev.yaml").read_text(encoding="utf-8"))
+    fake = dev["services"]["fake-provider"]
+    address = fake["networks"]["ai"]["ipv4_address"]
+    subnet = infra["networks"]["ai"]["ipam"]["config"][0]["subnet"]
+    endpoints = dev["services"][INSIGHT_ROLE]["environment"]["AI_PRIVATE_ENDPOINTS"]
+
+    assert fake["profiles"] == ["fake-provider"]
+    assert ipaddress.ip_address(address) in ipaddress.ip_network(subnet)
+    assert f"{address}:8080" in endpoints

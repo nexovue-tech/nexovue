@@ -184,7 +184,9 @@ services:
     command: >-
       uv run --package nexovue-api
       uvicorn nexovue_api.main:app --host 0.0.0.0 --port 8000 --reload
-      --reload-dir apps/api/src --timeout-graceful-shutdown 10
+      --reload-dir apps/api/src --timeout-graceful-shutdown 10 --no-access-log
+    # F4: also on `ai`, where chat's loop reads through it (design, *The network*).
+    networks: [default, ai]
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -647,7 +649,7 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      python -m nexovue_scheduler worker --queues insight --concurrency 4 --tasks insight
+      python -m nexovue_scheduler worker --queues assistant,insight --concurrency 6 --tasks insight
     healthcheck:
       test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
       interval: 15s
@@ -668,7 +670,9 @@ services:
       # The API's key (DEV_AI_SECRET_KEY), empty unless a developer sets one; production needs one.
       AI_SECRET_KEY: ${DEV_AI_SECRET_KEY:-}
       AI_SECRET_PREVIOUS_KEYS: ${DEV_AI_SECRET_PREVIOUS_KEYS:-}
-      AI_PRIVATE_ENDPOINTS: ${DEV_AI_PRIVATE_ENDPOINTS:-}
+      # The fake provider below, unless a developer names their own (F4 plan T2.0).
+      AI_PRIVATE_ENDPOINTS: ${DEV_AI_PRIVATE_ENDPOINTS:-172.30.250.10:8080}
+      INTERNAL_API_URL: http://api:8000
     networks: [ai]
     depends_on:
       python-deps:
@@ -678,7 +682,35 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 576M
+
+  # F4 plan T2.0: a fake chat provider at a fixed address on `ai`, so chat answers on the dev
+  # stack with no key and no model. `--profile fake-provider`; `FAKE_PROVIDER_MODE=hostile`
+  # runs the injection suite's provider instead. Connect it in /settings/ai as an
+  # OpenAI-compatible provider at http://172.30.250.10:8080/v1.
+  fake-provider:
+    profiles: ["fake-provider"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: uv run --package nexovue-platform python tools/ai-eval/fake_provider/server.py
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    environment:
+      FAKE_PROVIDER_MODE: ${FAKE_PROVIDER_MODE:-scripted}
+      PYTHONPATH: /workspace/tools/ai-eval
+    networks:
+      ai:
+        ipv4_address: 172.30.250.10
+    depends_on:
+      python-deps:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   # Only for developers who want a container rather than a native install.
   # On macOS prefer running Ollama natively: Docker has no Metal passthrough,

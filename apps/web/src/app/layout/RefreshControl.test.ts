@@ -15,6 +15,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ASSISTANT_QUERY_ROOT } from "@/shared/assistant-context";
 import type { FixedIntervalRefresh } from "@/shared/refresh";
 import { declareStream, setPaused } from "@/shared/refresh";
 
@@ -196,5 +197,53 @@ describe("the refresh control while a dashboard is open", () => {
     setPaused(true);
     const text = await show(base({ zone: "America/New_York" }));
     expect(text).toContain("21:14");
+  });
+});
+
+/** A screen's reading answered a minute ago, and chat's panel polling beside it. */
+function ScreenWithChatPolling({ polled }: { polled: number }) {
+  useQuery({
+    queryKey: ["screen-reading"],
+    queryFn: async () => 1,
+    // Fresh, so it does not read again on mount and move the age itself.
+    staleTime: Number.POSITIVE_INFINITY,
+    initialData: 1,
+    initialDataUpdatedAt: polled - 60_000,
+  });
+  useQuery({
+    queryKey: [ASSISTANT_QUERY_ROOT, "message", "m-1"],
+    queryFn: () => new Promise<number>(() => {}),
+    initialData: 1,
+    initialDataUpdatedAt: polled,
+  });
+  return null;
+}
+
+describe("the refresh control beside chat's panel (F4 AC75)", () => {
+  it("is moved neither in age nor in fetching by a polling assistant query", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const polled = new Date("2026-11-12T09:31:00Z").getTime();
+    vi.setSystemTime(polled);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(RefreshControl),
+          createElement(ScreenWithChatPolling, { polled }),
+        ),
+      );
+    });
+    // The assistant query starts a fetch that never ends, as a poll in flight is.
+    await act(async () => {
+      void client.refetchQueries({ queryKey: [ASSISTANT_QUERY_ROOT] });
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("updated 1m ago");
+    expect(container.textContent).not.toContain("updating…");
+    vi.useRealTimers();
   });
 });

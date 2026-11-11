@@ -6,7 +6,8 @@ tool cannot see what its endpoint would refuse (AC33). None of them writes — t
 service functions they call are the ones behind `GET`s, and
 `test_mcp_tools.py` holds that as a rule rather than a habit.
 
-Each answer is bounded (`bounds.py`) and names its untrusted fields (FR33): the
+Each answer is bounded (`nexovue_platform.assistant_tools.bounded`) and names its
+untrusted fields (FR33): the
 reader is a customer's own AI, and a log body or a service name is text written
 by whoever reached that customer's services. Each window defaults to the last
 hour, because "what is failing?" asked without a window is a question about
@@ -28,6 +29,7 @@ from urllib.parse import urlsplit
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
+from nexovue_platform.assistant_tools import MAX_ROWS, bounded
 from nexovue_platform.checks.config import (
     ApiCheckConfig,
     CheckConfig,
@@ -42,7 +44,6 @@ from starlette.types import Scope
 
 from nexovue_api.alerts import service as alerts
 from nexovue_api.assistant.auth import reader_of, resources_of
-from nexovue_api.assistant.bounds import MAX_ROWS, bounded
 from nexovue_api.auth.dependencies import Reader, get_tenant_repository
 from nexovue_api.checks import service as checks
 from nexovue_api.checks.schemas import CheckSummary, DisplayedState

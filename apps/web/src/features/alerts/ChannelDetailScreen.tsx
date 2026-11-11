@@ -87,7 +87,7 @@ export function ChannelDetailScreen() {
         // measure because each is prose and a form; what changed is that they no
         // longer queue single file to keep it.
         <div className="flex flex-col gap-8">
-          <div className="flex flex-col gap-8 xl:flex-row xl:items-start xl:gap-10">
+          <div className="flex flex-col gap-8 @5xl:flex-row @5xl:items-start @5xl:gap-10">
             <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-8">
               <Overview channel={channel.data} />
               {canManage && channel.data.kind !== "owners" ? (

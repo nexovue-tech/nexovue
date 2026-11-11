@@ -2,6 +2,7 @@ import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { ASSISTANT_QUERY_ROOT } from "@/shared/assistant-context";
 import { SelectField } from "@/shared/components/SelectField";
 import { formatZonedTime } from "@/shared/format/zoned";
 import type { FixedIntervalRefresh, LiveStream } from "@/shared/refresh";
@@ -28,6 +29,14 @@ import { useLiveWindow } from "@/shared/selection";
  * pause buttons is not twelve times the control.
  */
 
+/**
+ * F4 AC75: chat's panel polls a question every 1.5 s, and its answers say nothing about how
+ * fresh the screen's readings are, so they move neither the age nor the fetching state.
+ */
+function isAssistantQuery(key: readonly unknown[]): boolean {
+  return key[0] === ASSISTANT_QUERY_ROOT;
+}
+
 /** How often the "updated N ago" line re-reads the clock. */
 const CLOCK_MS = 1_000;
 
@@ -35,7 +44,7 @@ export function RefreshControl() {
   const preference = useRefreshPreference();
   const live = useLiveWindow();
   const updatedAt = useNewestData();
-  const fetching = useIsFetching() > 0;
+  const fetching = useIsFetching({ predicate: (query) => !isAssistantQuery(query.queryKey) }) > 0;
   const stream = useLiveStream();
 
   // A dashboard says what its refresh is, and the control shows that and not the
@@ -285,6 +294,7 @@ function useNewestData(): Date | undefined {
       const times = client
         .getQueryCache()
         .getAll()
+        .filter((query) => !isAssistantQuery(query.queryKey))
         .map((query) => query.state.dataUpdatedAt)
         .filter((at) => at > 0);
       setNewest(times.length > 0 ? Math.max(...times) : undefined);

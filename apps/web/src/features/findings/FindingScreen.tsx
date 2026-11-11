@@ -3,6 +3,13 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, isConflict } from "@/shared/api-client";
+import {
+  type AssistantSubject,
+  clearAssistantSubject,
+  openAssistant,
+  setAssistantSubject,
+  useOffersAssistant,
+} from "@/shared/assistant-context";
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
 import { ChartReleases } from "@/shared/components/ChartReleases";
@@ -136,6 +143,36 @@ export function FindingScreen() {
   );
 }
 
+/** F4: chat's panel names this finding as its subject while the page is open. */
+function useAssistantSubject(finding: FindingDetail): void {
+  const { id, title, service_name } = finding;
+  useEffect(() => {
+    const subject: AssistantSubject = {
+      headline: title,
+      findingId: id,
+      serviceName: service_name ?? undefined,
+    };
+    setAssistantSubject(subject);
+    return () => clearAssistantSubject(subject);
+  }, [id, title, service_name]);
+}
+
+/** F4: opens chat in a new conversation about this finding, hidden as the TopBar's is. */
+function AskAboutFinding() {
+  if (!useOffersAssistant()) return null;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => openAssistant({ fresh: true })}
+        className="inline-flex min-h-11 items-center font-medium text-brand-text text-sm underline-offset-2 hover:underline md:min-h-0"
+      >
+        Ask about this finding
+      </button>
+    </div>
+  );
+}
+
 function FindingPage({
   finding,
   zone,
@@ -150,8 +187,10 @@ function FindingPage({
   const explanation = useExplanation(finding);
   // F5: rungs 1 and 2, read again when a new explanation version arrives.
   const fixes = useFixes(finding.id, explanation.data?.latest_version ?? null);
+  useAssistantSubject(finding);
   return (
     <div className="flex flex-col gap-8">
+      <AskAboutFinding />
       <Header
         finding={finding}
         zone={zone}
@@ -166,7 +205,7 @@ function FindingPage({
       </p>
       {/* One DOM order, everywhere (D86, NFR8): work before evidence; the left
           column at a wide window, stacked in the same order below it. */}
-      <div className="grid gap-8 lg:grid-cols-2">
+      <div className="grid gap-8 @3xl:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-8">
           <CaseSection
             finding={finding}

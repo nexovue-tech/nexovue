@@ -209,7 +209,7 @@ export function CompareView({
             mergedFrames={compared.data.merged_frames}
             difference
           />
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid gap-6 @3xl:grid-cols-2">
             <ChangesTable
               title="Grew most"
               functions={compared.data.functions

@@ -43,6 +43,16 @@ INGEST_KEYS_CANNOT_READ: Final = (
 )
 # `nvk_` is the server-side ingest key, `nvp_` the browser one.
 INGEST_KEY_SCHEMES: Final = ("nvk_", "nvp_")
+# F4: a chat question's ticket (`assistant/tickets.py`). Here beside the other schemes, for
+# the reason the sentences above give: the session and reader dependencies both refuse it.
+ASSISTANT_TICKET_PREFIX: Final = "nvat_"
+TICKETS_ARE_NOT_PEOPLE: Final = "A question ticket is not a person and reaches no person's route."
+TICKETS_NOT_ACCEPTED: Final = "This server does not accept question tickets."
+
+
+def looks_like_assistant_ticket(candidate: str) -> bool:
+    """A claim, not proof: it decides which lookup runs."""
+    return candidate.startswith(ASSISTANT_TICKET_PREFIX)
 
 
 def looks_like_api_token(candidate: str) -> bool:

@@ -65,6 +65,7 @@ import {
   useUsage,
   type WireFormat,
 } from "./api";
+import { ChatSection } from "./ChatSection";
 
 /**
  * `/settings/ai` (F3 FR23 to FR32; design *AI settings*): connect a provider, test it, set a
@@ -133,6 +134,9 @@ function Managed({ settings }: { settings: AISettings }) {
               <SwitchSection settings={settings} />
               <ProjectsSection />
               <UsageSection />
+              <Section id="ai-chat" title="Chat">
+                <ChatSection />
+              </Section>
             </>
           ) : null}
         </>

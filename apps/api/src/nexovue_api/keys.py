@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
+from nexovue_platform.assistant_records import TICKET_PURPOSE
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
     DEPLOY_WEBHOOK_PURPOSE,
@@ -210,6 +211,22 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
             "UPDATE ai_connections SET sealed_key = :new WHERE id = :pk AND sealed_key = :old"
         ),
         owner=lambda row: key_owner(str(row.org_id), str(row.pk), row.base_url),
+    ),
+    # F4: a question's ticket, sealed for the worker while it is in flight, bound to its
+    # own message (design, section 1). Null once the question ends.
+    SealedColumn(
+        name="assistant_messages.sealed_ticket",
+        purpose=TICKET_PURPOSE,
+        keys=lambda keys: keys.ai,
+        page=text(
+            "SELECT id AS pk, sealed_ticket AS sealed FROM assistant_messages "
+            "WHERE sealed_ticket IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE assistant_messages SET sealed_ticket = :new "
+            "WHERE id = :pk AND sealed_ticket = :old"
+        ),
+        owner=lambda row: str(row.pk),
     ),
 )
 

@@ -18,7 +18,6 @@ from nexovue_api.ai.schemas import (
     CheckAccepted,
     CheckResult,
     ConsentRequest,
-    Preview,
     ProjectOptOut,
     RunRow,
     SaveConnection,
@@ -31,18 +30,8 @@ from nexovue_api.auth.dependencies import CurrentIdentity, Identity
 from nexovue_api.auth.permissions import Action, may
 from nexovue_api.auth.policy import MayConsentAIDisclosure, MayManageAI
 from nexovue_api.deps import AppSettings, DbSession, OptionalEmail
-from nexovue_api.settings import Settings
 
 router = APIRouter(prefix="/ai", tags=["ai"])
-
-
-def availability_of(settings: Settings) -> service.Availability:
-    return service.Availability(
-        deployment=settings.nexovue_deployment,
-        keys=settings.ai_keys,
-        insight_replicas=settings.scheduler_insight_replicas,
-        app_base_url=settings.app_base_url,
-    )
 
 
 def _actor(identity: Identity) -> service.Actor:
@@ -62,7 +51,7 @@ async def read_connection(
         org_id=identity.org_id,
         # A support view reads on or off only: the address may carry a customer's secret path.
         may_manage=identity.impersonation is None and may(identity.user.role, Action.MANAGE_AI),
-        availability=availability_of(settings),
+        availability=service.availability_of(settings),
     )
 
 
@@ -78,7 +67,7 @@ async def save_connection(
         db,
         actor=_actor(identity),
         request=request,
-        availability=availability_of(settings),
+        availability=service.availability_of(settings),
         email=email,
     )
 
@@ -92,7 +81,7 @@ async def delete_connection(
     identity: MayManageAI, db: DbSession, settings: AppSettings, email: OptionalEmail
 ) -> None:
     await service.delete_connection(
-        db, actor=_actor(identity), availability=availability_of(settings), email=email
+        db, actor=_actor(identity), availability=service.availability_of(settings), email=email
     )
 
 
@@ -103,18 +92,13 @@ async def delete_connection(
 )
 async def start_check(identity: MayManageAI, db: DbSession, settings: AppSettings) -> CheckAccepted:
     return await service.start_check(
-        db, actor=_actor(identity), availability=availability_of(settings)
+        db, actor=_actor(identity), availability=service.availability_of(settings)
     )
 
 
 @router.get("/connection/check/{request_id}", summary="What a connection test found")
 async def check_result(identity: MayManageAI, db: DbSession, request_id: uuid.UUID) -> CheckResult:
     return await service.check_result(db, org_id=identity.org_id, request_id=request_id)
-
-
-@router.get("/preview", summary="The exact request for the newest finding's facts")
-async def read_preview(identity: MayManageAI, db: DbSession) -> Preview:
-    return await service.preview(db, org_id=identity.org_id)
 
 
 @router.post("/consent", summary="An owner agrees to send these facts to this address")
@@ -129,7 +113,7 @@ async def consent(
         actor=_actor(identity),
         fingerprint=request.fingerprint,
         schema_version=request.schema_version,
-        availability=availability_of(settings),
+        availability=service.availability_of(settings),
         now=datetime.now(UTC),
     )
 
@@ -139,7 +123,7 @@ async def switch(
     identity: MayManageAI, db: DbSession, settings: AppSettings, request: SwitchRequest
 ) -> SwitchState:
     return await service.switch(
-        db, actor=_actor(identity), on=request.on, availability=availability_of(settings)
+        db, actor=_actor(identity), on=request.on, availability=service.availability_of(settings)
     )
 
 
@@ -157,7 +141,7 @@ async def opt_out(
         actor=_actor(identity),
         project_id=project_id,
         opted_out=True,
-        availability=availability_of(settings),
+        availability=service.availability_of(settings),
         now=datetime.now(UTC),
     )
 
@@ -171,7 +155,7 @@ async def opt_in(
         actor=_actor(identity),
         project_id=project_id,
         opted_out=False,
-        availability=availability_of(settings),
+        availability=service.availability_of(settings),
         now=datetime.now(UTC),
     )
 

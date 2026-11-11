@@ -73,7 +73,7 @@ const PERCENT = 100;
 const RATE_COLUMN = "w-20 shrink-0 text-right";
 const ERRORS_COLUMN = "w-28 shrink-0 text-right";
 const LATENCY_COLUMN = "w-16 shrink-0 text-right";
-const WIDE_ONLY = "hidden lg:block";
+const WIDE_ONLY = "hidden @3xl:block";
 
 /** Each chart's y axis reads in its own unit; a bare number would say nothing. */
 const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
@@ -487,7 +487,7 @@ function ServiceHeader({
 /** The six numbers the overview row carries, given room to be read one at a time. */
 function HeadlineMetrics({ row }: { row: ServiceHealth }) {
   return (
-    <dl className="grid grid-cols-2 gap-px border-line border-y bg-line sm:grid-cols-3 lg:grid-cols-6">
+    <dl className="grid grid-cols-2 gap-px border-line border-y bg-line sm:grid-cols-3 @3xl:grid-cols-6">
       <Headline label="Req/min" value={formatRatePerMinute(row.requests_per_minute)} />
       <Headline label="Requests" value={formatCount(row.request_count)} />
       <Headline
@@ -561,7 +561,7 @@ function TrendSection({
         }
       />
       {bucketCount > 0 ? (
-        <div className="grid gap-4 px-4 lg:grid-cols-3">
+        <div className="grid gap-4 px-4 @3xl:grid-cols-3">
           {plots.map((plot) => (
             <TrendPanel
               key={plot.metric}

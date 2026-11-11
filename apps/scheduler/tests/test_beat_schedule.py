@@ -14,6 +14,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import CheckDefinition
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.beat import (
+    ASSISTANT_SWEEP_ENTRY,
     ATTEMPT_PRUNE_ENTRY,
     BASELINE_SWEEP_ENTRY,
     CASES_SWEEP_ENTRY,
@@ -204,6 +206,18 @@ def test_cases_are_swept_every_five_minutes_on_light_by_a_registered_task() -> N
     assert sweep.interval_seconds == 300
     assert sweep.request.expires_seconds == 300
     assert CASES_SWEEP_TASK in registry.registered()
+
+
+def test_chat_questions_are_swept_every_minute_on_insight_by_an_insight_task() -> None:
+    """F4 T2.9: who writes `unavailable` and settles a dead question's tokens. It runs only
+    where the AI account is, on `insight`, by a task only the insight set loads."""
+    sweep = _scheduler()._sweep_entries()[ASSISTANT_SWEEP_ENTRY]
+
+    assert sweep.request.task == ASSISTANT_SWEEP_TASK
+    assert sweep.request.queue == "insight"
+    assert sweep.interval_seconds == 60
+    assert ASSISTANT_SWEEP_TASK in registry.registered(registry.TASK_SETS["insight"])
+    assert "nexovue_scheduler.insight.assistant_sweep" not in registry.TASK_MODULES
 
 
 def test_with_no_live_connection_beat_adds_no_connection_sweep() -> None:

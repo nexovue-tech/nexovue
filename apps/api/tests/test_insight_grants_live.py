@@ -48,6 +48,12 @@ EXPECTED_TABLE_RIGHTS: Final = {
     ("ai_runs", "INSERT"),
     ("ai_usage_monthly", "SELECT"),
     ("ai_usage_monthly", "INSERT"),
+    # F4 (design, *Grants*): rows limited by row-level security, not by grant.
+    ("assistant_steps", "SELECT"),
+    ("assistant_steps", "INSERT"),
+    ("assistant_read_log", "INSERT"),
+    ("assistant_monthly_counts", "INSERT"),
+    ("assistant_settings", "SELECT"),
 }
 # Column rights where there is no table right (design, *The Postgres account*).
 EXPECTED_COLUMN_RIGHTS: Final = {
@@ -92,7 +98,41 @@ EXPECTED_COLUMN_RIGHTS: Final = {
     },
     ("ai_connections", "UPDATE"): {"checked_at", "checked_ok", "checked_fingerprint"},
     # F3 Step 5: `org_id` too, so the wording job's re-check binds the organization (NFR5).
-    ("projects", "SELECT"): {"id", "org_id", "deleted_at"},
+    # F4: the name and zone a question's context states.
+    ("projects", "SELECT"): {"id", "org_id", "name", "timezone", "deleted_at"},
+    ("organizations", "SELECT"): {"id", "deleted_at"},
+    ("assistant_messages", "SELECT"): {
+        "id",
+        "org_id",
+        "project_id",
+        "conversation_id",
+        "user_id",
+        "question",
+        "context",
+        "history",
+        "data_level",
+        "state",
+        "phase",
+        "failure_reason",
+        "rejection_reason",
+        "abstain_reason",
+        "reserved_tokens",
+        "reserved_month",
+        "used_tokens",
+        "tokens_estimated",
+        "sealed_ticket",
+        "call_seconds",
+        "queue_expires_at",
+        "deadline_at",
+        "hard_ends_at",
+        "created_at",
+        "finished_at",
+    },
+    ("assistant_messages", "UPDATE"): {"state", "phase", "reserved_tokens", "reserved_month"},
+    ("assistant_steps", "UPDATE"): {"state", "row_count", "was_cut", "failure", "finished_at"},
+    ("assistant_monthly_counts", "SELECT"): {"org_id", "month", "kind", "count"},
+    ("assistant_monthly_counts", "UPDATE"): {"count"},
+    ("assistant_conversations", "SELECT"): {"id", "org_id", "project_id"},
     ("ai_runs", "UPDATE"): {
         "input_tokens",
         "output_tokens",
@@ -103,7 +143,9 @@ EXPECTED_COLUMN_RIGHTS: Final = {
     ("ai_usage_monthly", "UPDATE"): {"used_tokens", "reserved_tokens"},
 }
 EXPECTED_FUNCTIONS: Final = {
-    "insight_claim_jobs(text,integer,integer)",
+    "insight_claim_jobs(text,text[],integer,integer)",
+    "assistant_finish_message(uuid,text,jsonb,text,text,text,text)",
+    "assistant_record_spend(uuid,bigint,boolean)",
     "insight_retry_job(uuid,text,double precision,text)",
     "insight_finish_job(uuid,text)",
     "insight_store_check_result(uuid,uuid,jsonb,double precision)",

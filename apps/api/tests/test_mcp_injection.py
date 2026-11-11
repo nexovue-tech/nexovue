@@ -32,10 +32,10 @@ from datetime import date, datetime
 from typing import Any, Final, Literal, get_args, get_origin
 
 import pytest
+from nexovue_platform.assistant_tools import UNTRUSTED_NOTE, bounded
 from pydantic import BaseModel
 
 from nexovue_api.alerts.schemas import IncidentSummary
-from nexovue_api.assistant.bounds import UNTRUSTED_NOTE, bounded
 from nexovue_api.assistant.tools import UNTRUSTED_FIELDS, CheckRow
 from nexovue_api.deploys.schemas import DeployEventSummary
 from nexovue_api.detection.schemas import ServiceDetection

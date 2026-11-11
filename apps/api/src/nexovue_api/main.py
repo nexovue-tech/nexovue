@@ -16,10 +16,13 @@ from nexovue_platform.telemetry.logging import configure_logging
 
 from nexovue_api.admin import router as admin_router
 from nexovue_api.ai import router as ai_router
+from nexovue_api.ai.preview import router as ai_preview_router
 from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.apitokens import router as apitokens_router
+from nexovue_api.assistant import router as assistant_router
 from nexovue_api.assistant import server as assistant_server
+from nexovue_api.assistant.tickets import ticket_check
 from nexovue_api.audit import router as audit_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.billing import router as billing_router
@@ -109,6 +112,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Dependencies read configuration from here, so a test that builds the app
     # with explicit settings gets those and not whatever the environment holds.
     app.state.settings = settings
+    # F4: how a question ticket is checked on a read (`auth/dependencies.py`).
+    app.state.ticket_check = ticket_check
     # F20: the dashboard batch's process caps and kept answers, in memory and per
     # process like the limiter's counts. A share per organization only where more than
     # one can exist (D26).
@@ -179,6 +184,8 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(connections_router.service_repositories_router)
     versioned.include_router(connection_tests_router.router)
     versioned.include_router(ai_router.router)
+    versioned.include_router(ai_preview_router.router)
+    versioned.include_router(assistant_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(releases_router.router)

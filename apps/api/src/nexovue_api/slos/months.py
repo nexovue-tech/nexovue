@@ -227,7 +227,7 @@ async def history(db: AsyncSession, *, reader: Reader, target_id: uuid.UUID) -> 
                 what=change.what,
                 before=change.before,
                 after=change.after,
-                by_name=None if reader.is_token else name,
+                by_name=name if reader.is_person else None,
             )
             for change, name in changes
         ]

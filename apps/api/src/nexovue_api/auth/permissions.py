@@ -33,6 +33,11 @@ class Action(StrEnum):
     # A finding's explanation (F3, A20): read its facts again now, and later ask for
     # plainer wording. Not alert operation: wording spends the customer's money.
     REQUEST_EXPLANATION = "request_explanation"
+    # Asking chat a question (F4, foundation section 5): it spends the customer's tokens and
+    # reads as the person, so not a viewer's.
+    ASK_ASSISTANT = "ask_assistant"
+    # Writing runbooks chat can find (F4 D48): a member's, as notes are.
+    MANAGE_KNOWLEDGE = "manage_knowledge"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
     # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
@@ -83,6 +88,8 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.CONFIGURE_SLOS: _EVERYONE_WHO_WORKS,
     Action.EDIT_DASHBOARDS: _EVERYONE_WHO_WORKS,
     Action.REQUEST_EXPLANATION: _EVERYONE_WHO_WORKS,
+    Action.ASK_ASSISTANT: _EVERYONE_WHO_WORKS,
+    Action.MANAGE_KNOWLEDGE: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
     Action.MANAGE_AI: _ADMINISTRATORS,

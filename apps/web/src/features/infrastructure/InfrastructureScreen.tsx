@@ -70,10 +70,10 @@ const CPU_COLUMN = "w-28 shrink-0 text-right";
 /* 104px of sparkline plus its 12px gutter, reserved on every row. */
 const TREND_COLUMN = "w-29 shrink-0 pl-3";
 const MEMORY_COLUMN = "w-32 shrink-0 text-right";
-const STORAGE_COLUMN = "hidden w-32 shrink-0 text-right lg:block";
+const STORAGE_COLUMN = "hidden w-32 shrink-0 text-right @3xl:block";
 const DISK_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 const NETWORK_COLUMN = "hidden w-28 shrink-0 text-right md:block";
-const SEEN_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
+const SEEN_COLUMN = "hidden w-24 shrink-0 text-right @3xl:block";
 
 /**
  * Hosts and databases are one destination, not two.
@@ -478,13 +478,13 @@ function NodeRow({
         <span className="shrink-0 font-mono text-2xs text-ink-dim">{node.kind}</span>
         {node.stale ? <StoppedReportingBadge node={node} /> : null}
         {node.container && node.host ? (
-          <span className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim lg:inline">
+          <span className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim @3xl:inline">
             on {node.host}
           </span>
         ) : null}
         {node.reporter_instance ? (
           <span
-            className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim lg:inline"
+            className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim @3xl:inline"
             title={`service.instance.id ${node.reporter_instance}`}
           >
             instance {node.reporter_instance}

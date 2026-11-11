@@ -41,10 +41,13 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
     "connections": ("nexovue_scheduler.connections.tasks",),
     # F3: the AI role, on its own account and network: the connection test (Step 4), the
     # wording job and its sweep (Step 5). `all` never loads these.
+    # F4: chat's loop and its sweep (plan T2.9), here and never in `TASK_MODULES`.
     "insight": (
         "nexovue_scheduler.insight.check",
         "nexovue_scheduler.insight.word",
         "nexovue_scheduler.insight.sweep",
+        "nexovue_scheduler.insight.assistant",
+        "nexovue_scheduler.insight.assistant_sweep",
     ),
 }
 # The module a worker's forkserver imports before any child exists, per task set.

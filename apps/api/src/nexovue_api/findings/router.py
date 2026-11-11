@@ -85,7 +85,7 @@ async def list_findings(
     ] = None,
 ) -> FindingListResponse:
     now = datetime.now(UTC)
-    for_person = not reader.is_token
+    for_person = reader.is_person
     if case is not None:
         # A person's filter reads the organization, so a named project is not used;
         # a token's is proved readable first, the same 404 as `get_finding` (AC110).
@@ -153,7 +153,7 @@ async def get_finding(
         org_id=reader.org_id,
         finding_id=finding_id,
         project_scope=reader.project_scope,
-        for_member=not reader.is_token,
+        for_member=reader.is_person,
         now=datetime.now(UTC),
         email_available=email_available,
     )
@@ -262,7 +262,7 @@ async def read_timeline(
         finding_id=finding_id,
         project_scope=reader.project_scope,
         real_person=reader.is_real_person,
-        token=reader.is_token,
+        token=not reader.is_person,
         before=before,
     )
 

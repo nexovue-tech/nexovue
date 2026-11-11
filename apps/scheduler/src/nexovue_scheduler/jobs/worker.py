@@ -50,8 +50,9 @@ from pathlib import Path
 from typing import Any, Final
 
 import asyncpg
+from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
-from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE
+from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE, INSIGHT_QUEUE
 from nexovue_platform.jobs import NOTIFY_CHANNEL
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -66,6 +67,9 @@ from nexovue_scheduler.jobs.queue import ClaimedJob
 logger = get_logger(__name__)
 
 POLL_SECONDS: Final = 1.0
+# Guesses (F4 design, *Capacity*): T8.1 measures them.
+ASSISTANT_CONCURRENCY: Final = 4
+INSIGHT_CONCURRENCY: Final = 4
 # With every slot busy the loop claims nothing, so it asks Postgres this often
 # anyway: readiness is a recent answer, and long jobs must not read as an outage.
 REACH_POSTGRES_SECONDS: Final = 10.0
@@ -80,6 +84,10 @@ DIED: Final = "died"
 REAP_SECONDS: Final = 5.0
 # The most jobs a worker runs at once from each capped queue.
 QUEUE_CAPS: Final[Mapping[str, int]] = {
+    # F4: `scheduler-insight`'s two queues, chat first because a person is waiting; each
+    # keeps at least 2 of the role's 6 slots while the other is full (design, *The loop*).
+    ASSISTANT_QUEUE: ASSISTANT_CONCURRENCY,
+    INSIGHT_QUEUE: INSIGHT_CONCURRENCY,
     DETECTION_QUEUE: DETECTION_CONCURRENCY,
     # F3: gathering a finding's facts holds at most 2 slots, under the shared floor (NFR2).
     EVIDENCE_QUEUE: EVIDENCE_CONCURRENCY,

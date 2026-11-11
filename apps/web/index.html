@@ -3,7 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- F4 T2.11: `interactive-widget=resizes-content` so chat's composer stays above a phone's
+         keyboard. From memory of the viewport spec, not checked against current browser
+         documentation (unreachable from the build session), and not yet tried on real iOS
+         or Android: the hardening pass does both. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+    />
     <meta name="color-scheme" content="dark light" />
     <title>nexovue</title>
     <script>

@@ -5,7 +5,8 @@ Runs only in `just insight-fence`, against the kit it installed under its own Co
 wrong file. Every probe is a plain TCP connect from Python in the container, which has no curl.
 
 Kafka, ClickHouse and the object store must be unreachable by name, by their addresses on the
-default network, and through the `ai` network's gateway; Postgres must be reachable by name;
+default network, and through the `ai` network's gateway; Postgres and, for F4's chat, the API
+must be reachable by name;
 and a recording site on the Docker host, outside Compose, must be reachable at the gateway, as
 a provider on the operator's own network would be. A cloud metadata address is tried and its
 answer only printed: Compose is not an outbound firewall, so the host's rules decide it
@@ -31,6 +32,8 @@ CONNECT_SECONDS: Final = 3
 # What the role must not reach, by service and port, in the self-hosted layout.
 CLOSED: Final = {"kafka": 9092, "clickhouse": 8123, "seaweedfs": 8333}
 METADATA: Final = ("169.254.169.254", 80)
+# F4: the API, which chat's loop reads through as the asking person (AC66).
+API_PORT: Final = 8000
 
 
 def _require_install() -> None:
@@ -98,6 +101,13 @@ def test_the_stores_it_must_not_touch_are_closed_to_it() -> None:
 def test_postgres_is_open_to_it_by_name() -> None:
     _require_install()
     assert _connects_from_insight("postgres", 5432) == "open"
+
+
+def test_the_api_is_open_to_it_by_name() -> None:
+    """F4 AC66: chat's tools read through the API, so the API joins `ai`; Kafka, ClickHouse
+    and the object store stay closed (above)."""
+    _require_install()
+    assert _connects_from_insight("api", API_PORT) == "open"
 
 
 def test_a_peer_outside_compose_is_open_at_the_gateway() -> None:

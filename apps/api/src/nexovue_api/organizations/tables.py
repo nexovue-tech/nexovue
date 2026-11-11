@@ -62,6 +62,11 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     "ai_connections",
     "ai_usage_monthly",
     "ai_runs",
+    # F4. Chat's settings, counts and read record belong to the organization. Before
+    # `users`, whom consent, a count and a read name, and before `projects`.
+    "assistant_settings",
+    "assistant_monthly_counts",
+    "assistant_read_log",
     "users",
     "projects",
 )
@@ -165,6 +170,11 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "totp_enrolments": "users",
     "totp_challenges": "users",
     "totp_spent_codes": "users",
+    # F4. A conversation goes with its person; its questions and steps with it.
+    "assistant_conversations": "users",
+    "assistant_question_counts": "users",
+    "assistant_messages": "assistant_conversations",
+    "assistant_steps": "assistant_messages",
 }
 
 # The organization row itself, which a deletion scrubs and keeps rather than

@@ -9,6 +9,7 @@ construct its own would be a router that could read another tenant.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Final
@@ -22,8 +23,11 @@ from nexovue_api.apitokens import service as api_tokens
 from nexovue_api.apitokens.tokens import (
     INGEST_KEY_SCHEMES,
     INGEST_KEYS_CANNOT_READ,
+    TICKETS_ARE_NOT_PEOPLE,
+    TICKETS_NOT_ACCEPTED,
     TOKENS_ARE_READ_ONLY,
     looks_like_api_token,
+    looks_like_assistant_ticket,
 )
 from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.audit import service as audit
@@ -175,6 +179,9 @@ class Reader:
     token_id: uuid.UUID | None = None
     # The person, when it is one. None for a token — there is no user behind it.
     identity: Identity | None = None
+    # F4: the question a chat ticket reads for. Neither a person nor a token (design,
+    # trap 2): it gets no person fields, and its project is its question's.
+    message_id: uuid.UUID | None = None
 
     @property
     def is_token(self) -> bool:
@@ -210,6 +217,8 @@ def _refuse_a_token_here(connection: HTTPConnection) -> None:
     presented = _presented_bearer(connection)
     if presented is not None and looks_like_api_token(presented):
         raise PermissionDeniedError(TOKENS_ARE_READ_ONLY)
+    if presented is not None and looks_like_assistant_ticket(presented):
+        raise PermissionDeniedError(TICKETS_ARE_NOT_PEOPLE)
 
 
 def _usage_for(connection: HTTPConnection) -> TokenUsage | None:
@@ -222,6 +231,27 @@ def _usage_for(connection: HTTPConnection) -> TokenUsage | None:
     resources = getattr(getattr(connection.scope.get("app"), "state", None), "resources", None)
     usage: TokenUsage | None = getattr(resources, "token_usage", None)
     return usage
+
+
+@dataclass(frozen=True, slots=True)
+class TicketScope:
+    """What a valid question ticket reads as: one organization, one project, one question."""
+
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    message_id: uuid.UUID
+
+
+# F4: the ticket check is registered on the app (`main.py`), not imported here, so the
+# dependency every route reads through, reliability targets' among them, reaches no AI
+# code (`test_detection_has_no_ai.py`), as `_usage_for` reads the token counter.
+TicketCheck = Callable[[AsyncSession, str, HTTPConnection], Awaitable[TicketScope]]
+
+
+def _ticket_check_for(connection: HTTPConnection) -> TicketCheck | None:
+    state = getattr(connection.scope.get("app"), "state", None)
+    check: TicketCheck | None = getattr(state, "ticket_check", None)
+    return check
 
 
 async def get_current_reader(
@@ -243,6 +273,15 @@ async def get_current_reader(
         if usage is not None:
             usage.count(token.id, now)
         return _reader_for_token(token)
+    if presented is not None and looks_like_assistant_ticket(presented):
+        # Rechecked on every read: the person, the scope, and whether chat is still on.
+        check = _ticket_check_for(connection)
+        if check is None:
+            raise UnauthenticatedError(TICKETS_NOT_ACCEPTED)
+        ticket = await check(db, presented, connection)
+        return Reader(
+            org_id=ticket.org_id, project_scope=ticket.project_id, message_id=ticket.message_id
+        )
     session = await get_current_session(connection, sessions)
     identity = await get_current_identity(connection, session, db)
     return Reader(org_id=identity.org_id, identity=identity)

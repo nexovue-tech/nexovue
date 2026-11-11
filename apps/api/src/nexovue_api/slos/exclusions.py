@@ -67,9 +67,9 @@ async def list_exclusions(
                 ends_at=row.ends_at,
                 reason=row.reason,
                 created_at=row.created_at,
-                created_by_name=None if reader.is_token else created_by,
+                created_by_name=created_by if reader.is_person else None,
                 removed_at=row.removed_at,
-                removed_by_name=None if reader.is_token else removed_by,
+                removed_by_name=removed_by if reader.is_person else None,
                 removal_not_recounted=row.removal_not_recounted,
             )
             for row, created_by, removed_by in rows

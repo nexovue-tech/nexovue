@@ -3733,3 +3733,235 @@ class DashboardVersion(Base):
         ),
         CheckConstraint("jsonb_typeof(definition) = 'object'", name="definition_is_an_object"),
     )
+
+
+# ----------------------------------------------------------------------------- F4: chat
+# Migration 0073 holds the checks, row-level security and the two settling functions; the
+# closed lists are `nexovue_platform.assistant_records`'s.
+
+
+class AssistantSettings(Base):
+    """Chat's own switch, daily limit, data level and an owner's consent (F4 FR24, FR25)."""
+
+    __tablename__ = "assistant_settings"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    daily_question_limit: Mapped[int] = mapped_column(Integer, nullable=False, server_default="50")
+    data_level: Mapped[str] = mapped_column(Text, nullable=False, server_default="facts")
+    mask_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    consented_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    consented_at: Mapped[OptionalTimestamp]
+    consented_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_disclosure_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consented_data_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "consented_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (consented_by)",
+            name="fk_assistant_settings_consented_by",
+        ),
+    )
+
+
+class AssistantConversation(Base):
+    """One person's conversation in one project. Goes with the person or the project."""
+
+    __tablename__ = "assistant_conversations"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[CreatedAt]
+    last_message_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
+            name="fk_assistant_conversations_user",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_assistant_conversations_project",
+        ),
+        UniqueConstraint("org_id", "id", name="uq_assistant_conversations_org_id_id"),
+        Index(
+            "ix_assistant_conversations_user_project_last",
+            "user_id",
+            "project_id",
+            text("last_message_at DESC"),
+        ),
+    )
+
+
+class AssistantMessage(Base):
+    """One question: its clocks, its sealed ticket while in flight, and its checked answer.
+
+    The AI account sees a row only while it is in flight or holds a reservation, and ends it
+    only through `assistant_finish_message` (migration 0073; design, *Settling*)."""
+
+    __tablename__ = "assistant_messages"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    history: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    data_level: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    phase: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="waiting")
+    answer: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    abstain_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    reserved_month: Mapped[date | None] = mapped_column(Date, nullable=True)
+    used_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    tokens_estimated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    wrong_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ticket_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sealed_ticket: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    call_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    queue_expires_at: Mapped[RequiredTimestamp]
+    deadline_at: Mapped[RequiredTimestamp]
+    hard_ends_at: Mapped[RequiredTimestamp]
+    created_at: Mapped[CreatedAt]
+    finished_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "conversation_id"],
+            ["assistant_conversations.org_id", "assistant_conversations.id"],
+            ondelete="CASCADE",
+            name="fk_assistant_messages_conversation",
+        ),
+        UniqueConstraint("org_id", "id", name="uq_assistant_messages_org_id_id"),
+        Index(
+            "uq_assistant_one_in_flight",
+            "user_id",
+            unique=True,
+            postgresql_where=text("state IN ('queued', 'running')"),
+        ),
+        Index(
+            "uq_assistant_messages_ticket_hash",
+            "ticket_hash",
+            unique=True,
+            postgresql_where=text("ticket_hash IS NOT NULL"),
+        ),
+        Index(
+            "ix_assistant_messages_conversation_created",
+            "conversation_id",
+            text("created_at DESC"),
+        ),
+        Index(
+            "ix_assistant_messages_unsettled",
+            "hard_ends_at",
+            postgresql_where=text("state IN ('queued', 'running') OR reserved_tokens > 0"),
+        ),
+    )
+
+
+class AssistantStep(Base):
+    """One tool read of a question: what was asked for, in validated form, and how it went.
+    Never the result (FD9)."""
+
+    __tablename__ = "assistant_steps"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("assistant_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool: Mapped[str] = mapped_column(Text, nullable=False)
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    display_arguments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    from_time: Mapped[OptionalTimestamp]
+    to_time: Mapped[OptionalTimestamp]
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    was_cut: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="running")
+    failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[CreatedAt]
+    finished_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "position", name="uq_assistant_steps_position"),
+    )
+
+
+class AssistantQuestionCount(Base):
+    """Questions a person asked on one UTC day. No text; survives a conversation's deletion,
+    so deleting cannot reset the daily limit (D56)."""
+
+    __tablename__ = "assistant_question_counts"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class AssistantMonthlyCount(Base):
+    """Outcomes and wrong marks by kind, per month. No text (D47)."""
+
+    __tablename__ = "assistant_monthly_counts"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    month: Mapped[date] = mapped_column(Date, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class AssistantReadLog(Base):
+    """What chat read and sent where: tool, range, rows, provider. No filter values, so a
+    question's words cannot get in; no link to a conversation, so deleting one keeps it."""
+
+    __tablename__ = "assistant_read_log"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    at: Mapped[CreatedAt]
+    tool: Mapped[str] = mapped_column(Text, nullable=False)
+    from_time: Mapped[OptionalTimestamp]
+    to_time: Mapped[OptionalTimestamp]
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider_label: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (Index("ix_assistant_read_log_org_at", "org_id", text("at DESC")),)

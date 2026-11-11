@@ -199,6 +199,9 @@ class Settings(BaseSettings):
     # (FR32, A23): `10.0.0.5:11434,192.168.1.0/24:8000`. A malformed or too-wide entry stops
     # the process (AC37); the connect-time guard reads the parsed form (`ai_endpoints`).
     ai_private_endpoints: str = ""
+    # F4: where chat's tools read the API, over the `ai` network (design, *The internal
+    # client*). Only ever this address; a model never chooses one.
+    internal_api_url: str = "http://api:8000"
 
     # Where this process answers /healthz, /readyz and /metrics (`health.py`).
     # Internal: no edge routes it. Every role uses the same port in its own

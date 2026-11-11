@@ -8,6 +8,8 @@ telemetry. Deleting an account is the member removal that already exists
 
 from __future__ import annotations
 
+import uuid
+from collections import defaultdict
 from datetime import datetime
 from typing import Final
 
@@ -31,9 +33,11 @@ from nexovue_api.profile.schemas import (
     ExportedNote,
     ExportedOrganization,
     ExportedProfile,
+    ExportedQuestion,
     ExportedSession,
     ExportedSloChange,
     ExportedSloExclusion,
+    ExportedStep,
     PersonalDataExport,
 )
 from nexovue_api.slos import queries as slo_queries
@@ -44,6 +48,8 @@ MAX_ACTIVITY_ENTRIES: Final = 10_000
 MAX_NOTES_EXPORTED: Final = 10_000
 # And for reliability target changes (F19 AC88).
 MAX_SLO_CHANGES_EXPORTED: Final = 10_000
+# And for questions asked chat (F4 AC34), each at most 2,000 characters.
+MAX_CHAT_QUESTIONS_EXPORTED: Final = 10_000
 
 SOLE_OWNER_REFUSAL: Final = (
     "You are this organization's only owner. "
@@ -72,6 +78,15 @@ async def export(
     exclusions = await slo_queries.exclusions_made_by(
         db, org_id=organization.id, user_id=user.id, limit=MAX_SLO_CHANGES_EXPORTED + 1
     )
+    questions = await queries.chat_questions(
+        db, org_id=organization.id, user_id=user.id, limit=MAX_CHAT_QUESTIONS_EXPORTED + 1
+    )
+    kept_questions = questions[:MAX_CHAT_QUESTIONS_EXPORTED]
+    steps_of: dict[uuid.UUID, list[ExportedStep]] = defaultdict(list)
+    for step in await queries.chat_steps(
+        db, org_id=organization.id, message_ids=[question.id for question in kept_questions]
+    ):
+        steps_of[step.message_id].append(ExportedStep(tool=step.tool, arguments=step.arguments))
     return PersonalDataExport(
         exported_at=now,
         profile=ExportedProfile(
@@ -163,6 +178,21 @@ async def export(
             for exclusion in exclusions[:MAX_SLO_CHANGES_EXPORTED]
         ],
         slo_exclusions_truncated=len(exclusions) > MAX_SLO_CHANGES_EXPORTED,
+        chat_questions=[
+            ExportedQuestion(
+                id=question.id,
+                conversation_id=question.conversation_id,
+                project_id=question.project_id,
+                question=question.question,
+                state=question.state,
+                answer=question.answer,
+                wrong_reason=question.wrong_reason,
+                created_at=question.created_at,
+                steps=steps_of[question.id],
+            )
+            for question in kept_questions
+        ],
+        chat_questions_truncated=len(questions) > MAX_CHAT_QUESTIONS_EXPORTED,
     )
 
 

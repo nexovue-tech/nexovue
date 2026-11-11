@@ -44,3 +44,12 @@ services:
     ports:
       - "${SEAWEEDFS_S3_HOST_PORT:-18333}:8333"
       - "${SEAWEEDFS_MASTER_HOST_PORT:-19333}:9333"
+
+# F4 plan T2.0: the dev `ai` network has a fixed subnet, so the fake provider has an address
+# `AI_PRIVATE_ENDPOINTS` can name (F3's guard takes addresses, not names). Development only;
+# a deployed install's `ai` network keeps Docker's choice.
+networks:
+  ai:
+    ipam:
+      config:
+        - subnet: 172.30.250.0/24

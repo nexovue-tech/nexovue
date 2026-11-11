@@ -24,6 +24,9 @@ from nexovue_api.data.postgres.models import (
     AIRun,
     AIUsageMonth,
     ApiToken,
+    AssistantMonthlyCount,
+    AssistantReadLog,
+    AssistantSettings,
     AuditLogEntry,
     BillingSubscription,
     BillingWebhookDelivery,
@@ -144,6 +147,24 @@ async def delete_ai_runs(session: AsyncSession, org_id: uuid.UUID) -> int:
     return await _rows_deleted(session, delete(AIRun).where(AIRun.org_id == org_id))
 
 
+async def delete_assistant_settings(session: AsyncSession, org_id: uuid.UUID) -> int:
+    return await _rows_deleted(
+        session, delete(AssistantSettings).where(AssistantSettings.org_id == org_id)
+    )
+
+
+async def delete_assistant_monthly_counts(session: AsyncSession, org_id: uuid.UUID) -> int:
+    return await _rows_deleted(
+        session, delete(AssistantMonthlyCount).where(AssistantMonthlyCount.org_id == org_id)
+    )
+
+
+async def delete_assistant_read_log(session: AsyncSession, org_id: uuid.UUID) -> int:
+    return await _rows_deleted(
+        session, delete(AssistantReadLog).where(AssistantReadLog.org_id == org_id)
+    )
+
+
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
@@ -161,6 +182,9 @@ DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitabl
     "ai_connections": delete_ai_connections,
     "ai_usage_monthly": delete_ai_usage_monthly,
     "ai_runs": delete_ai_runs,
+    "assistant_settings": delete_assistant_settings,
+    "assistant_monthly_counts": delete_assistant_monthly_counts,
+    "assistant_read_log": delete_assistant_read_log,
     "users": delete_users,
     "projects": delete_projects,
 }

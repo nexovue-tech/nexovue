@@ -38,7 +38,16 @@ SOURCE_ROOTS: Final = (
     REPOSITORY / "packages/contracts/gen/python",
 )
 
-REPOSITORY_AI_MODULES: Final = frozenset({"nexovue_api.assistant", "nexovue_api.llm_observability"})
+# F4 adds chat's catalog (design, *Failure handling*): detection, alerts and findings never
+# import it.
+REPOSITORY_AI_MODULES: Final = frozenset(
+    {
+        "nexovue_api.assistant",
+        "nexovue_api.llm_observability",
+        "nexovue_platform.assistant_tools",
+        "nexovue_platform.assistant_masks",
+    }
+)
 AI_PACKAGES: Final = frozenset(
     {
         # Model providers' SDKs.

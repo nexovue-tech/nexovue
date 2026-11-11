@@ -18,6 +18,8 @@ const WORK: Action[] = [
   "configure_slos",
   "edit_dashboards",
   "request_explanation",
+  "ask_assistant",
+  "manage_knowledge",
 ];
 const ADMINISTER: Action[] = [
   ...WORK,

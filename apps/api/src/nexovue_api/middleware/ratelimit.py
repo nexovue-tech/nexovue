@@ -21,6 +21,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from nexovue_api.apitokens.tokens import looks_like_assistant_ticket
 from nexovue_api.auth.clients import client_ip_of
 from nexovue_api.auth.sessions import (
     Session,
@@ -41,6 +42,7 @@ from nexovue_api.ratelimit.policy import (
     Tier,
     tier_for,
 )
+from nexovue_api.ratelimit.ticket_owners import TicketOwner, TicketOwners
 from nexovue_api.ratelimit.token_owners import TokenOwners
 
 logger = get_logger(__name__)
@@ -98,10 +100,12 @@ class RateLimitMiddleware:
         trusted_proxy_count: int = 0,
         sessions: SessionStore | None = None,
         token_owners: TokenOwners | None = None,
+        ticket_owners: TicketOwners | None = None,
     ) -> None:
         self._app = app
         self._sessions = sessions
         self._token_owners = token_owners
+        self._ticket_owners = ticket_owners
         self._limiter = limiter
         self._plan_limits = plan_limits
         self._enabled = enabled
@@ -129,6 +133,21 @@ class RateLimitMiddleware:
             await self._limit(
                 scope, receive, send, limiter, _per_token(tier, presented, owner, multiplier)
             )
+            return
+
+        if presented is not None and looks_like_assistant_ticket(presented):
+            # F4: a question's ticket pays from its person's and organization's allowance,
+            # on the path's own tier, as that person's screen would.
+            payer = await self._ticket_owner(scope, presented)
+            multiplier = await plan_limits.multiplier_for(payer.org_id if payer else None)
+            if payer is not None:
+                counted = _per_person(tier, payer, multiplier)
+            else:
+                receive, identities = await _identities(
+                    receive, tier, scope, self._client_ip(scope)
+                )
+                counted = _per_address(tier, identities, multiplier)
+            await self._limit(scope, receive, send, limiter, counted)
             return
 
         signed_in = None if tier is AUTH_TIER else await self._signed_in(scope)
@@ -223,6 +242,12 @@ class RateLimitMiddleware:
         )
         return None if owners is None else await owners.organization_of(presented)
 
+    async def _ticket_owner(self, scope: Scope, presented: str) -> TicketOwner | None:
+        owners = self._ticket_owners or getattr(
+            getattr(scope.get("app"), "state", None), "ticket_owners", None
+        )
+        return None if owners is None else await owners.owner_of(presented)
+
     async def _reject(
         self,
         request: Request,
@@ -285,7 +310,7 @@ class RateLimitMiddleware:
         )
 
 
-def _per_person(tier: Tier, session: Session, multiplier: float) -> list[Counted]:
+def _per_person(tier: Tier, session: Session | TicketOwner, multiplier: float) -> list[Counted]:
     """A signed-in read: counted for the person, then for their organization.
 
     Not the address: a team in one office is several people behind one address,

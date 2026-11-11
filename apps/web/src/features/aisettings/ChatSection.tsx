@@ -1,0 +1,354 @@
+import { useState } from "react";
+
+import { Button } from "@/shared/components/Button";
+import { InlineFailure } from "@/shared/components/InlineFailure";
+import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatZonedTime } from "@/shared/format/zoned";
+import { useCan } from "@/shared/identity";
+import { useProjectSelection } from "@/shared/projects";
+
+import {
+  CHAT_DATA_LEVEL_WORDS,
+  CHAT_MASKING_LINE,
+  CHAT_MCP_LINE,
+  CHAT_NO_READS,
+  chatNearCeiling,
+  countWord,
+  maskingOffLine,
+  SELLING_LINE,
+} from "./ai-words";
+import { useUsage } from "./api";
+import {
+  type ChatSettings,
+  type DataLevel,
+  useChatAvailability,
+  useChatConsent,
+  useChatPreview,
+  useChatReads,
+  useChatSettings,
+  useSaveChatSettings,
+} from "./chat-api";
+
+const HEADING = "font-mono text-2xs text-ink-dim uppercase tracking-caps";
+
+/**
+ * `/settings/ai`'s Chat section (F4 T2.12; design, *`/settings/ai`, Chat section*): on or off,
+ * the owner's consent and its preview, the data level, the daily limit, counts with no text,
+ * a warning near chat's ceiling, what was sent where, tested or not, and the MCP sentence.
+ * The screen is `MANAGE_AI`'s already; agreeing is `CONSENT_AI_DISCLOSURE`'s.
+ */
+export function ChatSection({ now = Date.now() }: { now?: number }) {
+  const settings = useChatSettings();
+  if (settings.isPending) return <SkeletonRows rows={4} label="Loading chat's settings" />;
+  if (settings.isError) {
+    return (
+      <InlineFailure
+        title="Chat's settings could not be loaded"
+        error={settings.error}
+        onRetry={() => void settings.refetch()}
+      />
+    );
+  }
+  return <ChatSettingsView settings={settings.data} now={now} />;
+}
+
+function ChatSettingsView({ settings, now }: { settings: ChatSettings; now: number }) {
+  const { projectId } = useProjectSelection();
+  const availability = useChatAvailability(projectId);
+  const usage = useUsage(true);
+  const mayConsent = useCan("consent_ai_disclosure");
+  const save = useSaveChatSettings();
+  const consent = useChatConsent();
+  const [dataLevel, setDataLevel] = useState<DataLevel>(settings.data_level);
+  const [limit, setLimit] = useState(String(settings.daily_question_limit));
+  const [showPreview, setShowPreview] = useState(false);
+  const preview = useChatPreview(showPreview ? projectId : undefined);
+  const near =
+    usage.data !== undefined &&
+    chatNearCeiling(
+      usage.data.used_tokens + usage.data.reserved_tokens,
+      usage.data.monthly_token_limit,
+    );
+
+  const saveWith = (enabled: boolean) =>
+    save.mutate({
+      enabled,
+      daily_question_limit: Number(limit),
+      data_level: dataLevel,
+      mask_emails: settings.mask_emails,
+    });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p role="status" className="max-w-prose text-ink">
+        Chat is {settings.enabled ? "on" : "off"}.{" "}
+        {availability.data
+          ? availability.data.tested
+            ? "This model passed a dated real call: tested."
+            : "This model has not passed a dated real call: not tested."
+          : null}
+      </p>
+      {near ? (
+        <p className="max-w-prose text-warning-text">
+          This month's AI use has passed 80% of chat's share. Questions stop at that share, to keep
+          room for critical finding explanations.
+        </p>
+      ) : null}
+
+      <div className="flex flex-col gap-2">
+        <h3 className={HEADING}>Consent</h3>
+        {settings.consent_current && settings.consented_at ? (
+          <p className="max-w-prose text-ink">
+            {settings.consented_by_name ?? "An owner"} agreed on{" "}
+            {formatZonedTime(settings.consented_at, { now })}, at "
+            {CHAT_DATA_LEVEL_WORDS[settings.data_level]}".
+          </p>
+        ) : (
+          <p className="max-w-prose text-ink">
+            {availability.data && availability.data.waiting_for.length > 0
+              ? `Waiting for an owner to agree: ${availability.data.waiting_for.join(", ")}.`
+              : "No owner has agreed to what chat sends."}
+          </p>
+        )}
+        <p className="max-w-prose text-ink-dim">{SELLING_LINE}</p>
+        <div>
+          <Button variant="secondary" onClick={() => setShowPreview(!showPreview)}>
+            {showPreview ? "Hide what would be sent" : "Show what would be sent"}
+          </Button>
+        </div>
+        {showPreview ? <PreviewView preview={preview} /> : null}
+        {mayConsent && preview.data ? (
+          <div>
+            <Button
+              pending={consent.isPending}
+              pendingLabel="Agreeing…"
+              onClick={() =>
+                consent.mutate({
+                  fingerprint: preview.data.consent_fingerprint,
+                  disclosure_version: preview.data.disclosure_version,
+                  data_level: dataLevel,
+                })
+              }
+            >
+              Agree to send this, at the level chosen below
+            </Button>
+          </div>
+        ) : null}
+        {consent.isSuccess ? (
+          <p role="status" className="max-w-prose text-ink">
+            Agreed. Once chat is on, members and admins can ask; answers go to the provider named
+            above.
+          </p>
+        ) : null}
+        {consent.isError ? (
+          <InlineFailure title="The agreement was not recorded" error={consent.error} />
+        ) : null}
+      </div>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className={HEADING}>Data level</legend>
+        {(["facts", "facts_and_text"] as const).map((level) => (
+          <label key={level} className="flex items-start gap-2">
+            <input
+              type="radio"
+              name="chat-data-level"
+              checked={dataLevel === level}
+              onChange={() => setDataLevel(level)}
+            />
+            <span className="max-w-prose">{CHAT_DATA_LEVEL_WORDS[level]}</span>
+          </label>
+        ))}
+      </fieldset>
+
+      <label className="flex max-w-xs flex-col gap-1">
+        <span className={HEADING}>Questions a person may ask a day</span>
+        <input
+          type="number"
+          min={1}
+          max={1000}
+          value={limit}
+          onChange={(event) => setLimit(event.target.value)}
+          className="rounded border border-line bg-page px-2 py-1"
+        />
+      </label>
+
+      <div className="flex gap-2">
+        <Button
+          pending={save.isPending}
+          pendingLabel="Saving…"
+          onClick={() => saveWith(settings.enabled)}
+        >
+          Save
+        </Button>
+        <Button variant="secondary" onClick={() => saveWith(!settings.enabled)}>
+          {settings.enabled ? "Turn chat off" : "Turn chat on"}
+        </Button>
+      </div>
+      {save.isError ? (
+        <InlineFailure title="Chat's settings were not saved" error={save.error} />
+      ) : null}
+
+      <Counts settings={settings} />
+      <Reads now={now} />
+      <p className="max-w-prose text-ink-dim">{CHAT_MCP_LINE}</p>
+    </div>
+  );
+}
+
+function PreviewView({ preview }: { preview: ReturnType<typeof useChatPreview> }) {
+  if (preview.isPending) return <SkeletonRows rows={3} label="Reading what would be sent" />;
+  if (preview.isError) {
+    return (
+      <InlineFailure
+        title="The preview could not be built"
+        error={preview.error}
+        onRetry={() => void preview.refetch()}
+      />
+    );
+  }
+  const data = preview.data;
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="max-w-prose text-ink">
+        Sent to {data.provider_label}, at {data.address}, for the model {data.model}, from the
+        project {data.project_name}.
+      </p>
+      <div>
+        <h4 className={HEADING}>Everything chat can send</h4>
+        <ul className="list-disc pl-5">
+          {data.kinds.map((kind) => (
+            <li key={kind.kind} className="max-w-prose">
+              {kind.kind} — from {kind.source} ({CHAT_DATA_LEVEL_WORDS[kind.level].split(":")[0]})
+            </li>
+          ))}
+        </ul>
+      </div>
+      {data.samples.map((sample) => (
+        <div key={sample.kind} className="flex flex-col gap-1">
+          <h4 className={HEADING}>
+            {sample.kind}
+            {sample.labelled_sample ? " — a built-in sample: this project has none yet" : ""}
+          </h4>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-line bg-page p-2 font-mono text-xs">
+            {sample.sent}
+          </pre>
+        </div>
+      ))}
+      <p className="max-w-prose text-ink">{maskingOffLine(data.masking_rules_off)}</p>
+      <p className="max-w-prose text-ink-dim">{CHAT_MASKING_LINE}</p>
+      <p className="max-w-prose text-ink-dim">
+        Email addresses are {data.mask_emails ? "masked" : "sent"}. Runbooks and notes sent at once
+        for search: {data.sent_for_embedding}.
+      </p>
+    </div>
+  );
+}
+
+function Counts({ settings }: { settings: ChatSettings }) {
+  const outcomes = Object.entries(settings.monthly_counts);
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className={HEADING}>This month</h3>
+      {outcomes.length === 0 ? (
+        <p className="text-ink-dim">No questions yet.</p>
+      ) : (
+        <ul>
+          {outcomes.map(([kind, count]) => (
+            <li key={kind}>
+              {countWord(kind)}: {count}
+            </li>
+          ))}
+        </ul>
+      )}
+      {settings.people_this_month.length > 0 ? (
+        <table className="max-w-md text-left">
+          <thead>
+            <tr>
+              <th className={HEADING}>Person</th>
+              <th className={HEADING}>Questions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {settings.people_this_month.map((person) => (
+              <tr key={person.name}>
+                <td>{person.name}</td>
+                <td>{person.questions}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </div>
+  );
+}
+
+function Reads({ now }: { now: number }) {
+  const reads = useChatReads();
+  const [filter, setFilter] = useState("");
+  if (reads.isPending) return <SkeletonRows rows={3} label="Loading what was sent" />;
+  if (reads.isError) {
+    return (
+      <InlineFailure
+        title="What was sent could not be read"
+        error={reads.error}
+        onRetry={() => void reads.refetch()}
+      />
+    );
+  }
+  const shown = reads.data.filter((row) =>
+    `${row.person ?? ""} ${row.project ?? ""} ${row.tool}`
+      .toLowerCase()
+      .includes(filter.toLowerCase()),
+  );
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className={HEADING}>What was sent</h3>
+      {reads.data.length === 0 ? (
+        <p className="text-ink-dim">{CHAT_NO_READS}</p>
+      ) : (
+        <>
+          <label className="flex max-w-xs flex-col gap-1">
+            <span className="text-ink-dim text-xs">Filter by person, project or tool</span>
+            <input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              className="rounded border border-line bg-page px-2 py-1"
+            />
+          </label>
+          <div className="overflow-x-auto">
+            <table className="text-left text-xs">
+              <thead>
+                <tr>
+                  {["Person", "Time", "Project", "Tool", "Range", "Rows", "Provider"].map(
+                    (name) => (
+                      <th key={name} className={HEADING}>
+                        {name}
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((row) => (
+                  <tr key={`${row.at}-${row.tool}-${row.person}`}>
+                    <td>{row.person ?? "Former member"}</td>
+                    <td>{formatZonedTime(row.at, { now })}</td>
+                    <td>{row.project ?? "—"}</td>
+                    <td className="font-mono">{row.tool}</td>
+                    <td>
+                      {row.from_time && row.to_time
+                        ? `${formatZonedTime(row.from_time, { now })} to ${formatZonedTime(row.to_time, { now })}`
+                        : "—"}
+                    </td>
+                    <td>{row.row_count ?? "—"}</td>
+                    <td>{row.provider_label}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

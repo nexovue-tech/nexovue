@@ -22,15 +22,15 @@ from typing import Final
 
 import pytest
 from environment import TEST_ENVIRONMENT
-
-from nexovue_api import assistant
-from nexovue_api.assistant.bounds import (
+from nexovue_platform.assistant_tools import (
     MAX_CHARACTERS,
     MAX_ROWS,
     NARROW_BY,
     UNTRUSTED_NOTE,
     bounded,
 )
+
+from nexovue_api import assistant
 from nexovue_api.assistant.server import MCP_PATH, SERVER_INSTRUCTIONS, allowed_hosts
 from nexovue_api.assistant.tools import UNTRUSTED_FIELDS, check_row, window
 from nexovue_api.errors.exceptions import InvalidRequestError

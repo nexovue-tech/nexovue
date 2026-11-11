@@ -46,6 +46,13 @@ from nexovue_api.data.postgres.models import (
     AlertRule,
     AlertRuleChannel,
     ApiToken,
+    AssistantConversation,
+    AssistantMessage,
+    AssistantMonthlyCount,
+    AssistantQuestionCount,
+    AssistantReadLog,
+    AssistantSettings,
+    AssistantStep,
     BaselineShift,
     BillingSubscription,
     BillingWebhookDelivery,
@@ -200,6 +207,13 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "ai_project_opt_outs",
     "ai_usage_monthly",
     "ai_runs",
+    "assistant_settings",
+    "assistant_conversations",
+    "assistant_messages",
+    "assistant_steps",
+    "assistant_question_counts",
+    "assistant_monthly_counts",
+    "assistant_read_log",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -292,6 +306,16 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "ai_project_opt_outs": 1,
     "ai_usage_monthly": ROWS_PER_TABLE,
     "ai_runs": ROWS_PER_TABLE,
+    # F4 Step 2: chat's settings (one per organization), the person's conversations, each
+    # with a finished question and a step, their daily counts, the month's outcome counts
+    # and the read record.
+    "assistant_settings": 1,
+    "assistant_conversations": ROWS_PER_TABLE,
+    "assistant_messages": ROWS_PER_TABLE,
+    "assistant_steps": ROWS_PER_TABLE,
+    "assistant_question_counts": ROWS_PER_TABLE,
+    "assistant_monthly_counts": ROWS_PER_TABLE,
+    "assistant_read_log": ROWS_PER_TABLE,
 }
 
 
@@ -965,7 +989,70 @@ async def _write_ai_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> Non
                 provider_host="https://models.example.com",
             )
         )
+    await _seed_chat(db, tenant, now)
     await db.flush()
+
+
+async def _seed_chat(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """F4's rows: finished questions, so no reservation or ticket is held."""
+    db.add(AssistantSettings(org_id=tenant.org_id, consented_by=tenant.user_id))
+    for index in range(ROWS_PER_TABLE):
+        conversation = AssistantConversation(
+            id=uuid.uuid4(),
+            org_id=tenant.org_id,
+            user_id=tenant.user_id,
+            project_id=tenant.project_id,
+            title="q",
+        )
+        db.add(conversation)
+        await db.flush()
+        message = AssistantMessage(
+            id=uuid.uuid4(),
+            org_id=tenant.org_id,
+            project_id=tenant.project_id,
+            conversation_id=conversation.id,
+            user_id=tenant.user_id,
+            question="What is failing?",
+            context={},
+            data_level="facts",
+            state="answered",
+            phase=None,
+            call_seconds=30,
+            queue_expires_at=now,
+            deadline_at=now,
+            hard_ends_at=now,
+        )
+        db.add(message)
+        await db.flush()
+        db.add(
+            AssistantStep(
+                org_id=tenant.org_id,
+                message_id=message.id,
+                position=1,
+                tool="list_services",
+                arguments={},
+                state="read",
+            )
+        )
+        db.add(
+            AssistantQuestionCount(
+                org_id=tenant.org_id, user_id=tenant.user_id, day=date(2026, 1, 1 + index), count=1
+            )
+        )
+        db.add(
+            AssistantMonthlyCount(
+                org_id=tenant.org_id, month=date(2026, 1 + index, 1), kind="answered", count=1
+            )
+        )
+        db.add(
+            AssistantReadLog(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                user_id=tenant.user_id,
+                tool="list_services",
+                provider_label="OpenAI-compatible",
+            )
+        )
 
 
 async def _row_counts(db: AsyncSession, tenant: Tenant) -> dict[str, int]:

@@ -441,7 +441,7 @@ function RunsAndEvidence({
       ) : list.length === 0 ? (
         <p className="text-ink-dim text-sm">{noRunsSentence(check)}</p>
       ) : (
-        <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+        <div className="grid min-w-0 grid-cols-1 gap-4 @5xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <ol className="flex max-h-[28rem] flex-col overflow-y-auto border-line-subtle border-t">
             {list.map((run) => (
               <RunRow

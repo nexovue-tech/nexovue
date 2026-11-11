@@ -411,7 +411,7 @@ function SummaryState({
           still leads. */}
       {reporting && points.length > 0 ? (
         <>
-          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+          <div className="mt-5 grid gap-4 @3xl:grid-cols-3">
             {buildOverviewPlots(points).map((plot) => (
               <FeedPanel key={plot.metric} plot={plot} />
             ))}

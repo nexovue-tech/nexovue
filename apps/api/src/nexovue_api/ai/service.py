@@ -93,6 +93,7 @@ from nexovue_api.errors.exceptions import (
     InvalidRequestError,
     NotFoundError,
 )
+from nexovue_api.settings import Settings
 
 logger = get_logger(__name__)
 
@@ -135,6 +136,16 @@ class Availability:
     @property
     def container_running(self) -> bool:
         return self.insight_replicas > 0
+
+
+def availability_of(settings: Settings) -> Availability:
+    """Read from settings; F4's ticket check asks it on every read, so it lives here."""
+    return Availability(
+        deployment=settings.nexovue_deployment,
+        keys=settings.ai_keys,
+        insight_replicas=settings.scheduler_insight_replicas,
+        app_base_url=settings.app_base_url,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +236,20 @@ def _missing(row: AIConnection | None, availability: Availability) -> list[Missi
 
 def _is_on(row: AIConnection | None, unavailable: UnavailableReason | None) -> bool:
     return row is not None and row.enabled and unavailable is None and _consent_current(row)
+
+
+async def connection_in_use(
+    session: AsyncSession, *, org_id: uuid.UUID, availability: Availability
+) -> AIConnection | None:
+    """F4: the organization's connection when AI is on here, else None. Chat asks this
+    before every question and on every ticket read, and never re-implements the rule."""
+    row = await queries.connection_of(session, org_id=org_id)
+    return row if _is_on(row, await _unavailable(session, availability)) else None
+
+
+def consent_fingerprint_of(row: AIConnection) -> str:
+    """F4: the fingerprint an owner's consent covers, which chat's consent binds to."""
+    return _consent_fingerprint(row)
 
 
 async def settings_view(

@@ -12,6 +12,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openAssistant, resetAssistant } from "@/shared/assistant-context";
 import { identityFor } from "@/shared/identity.test-util";
 import type { FixedIntervalRefresh } from "@/shared/refresh";
 import { declareStream, setPaused } from "@/shared/refresh";
@@ -97,6 +98,7 @@ afterEach(() => {
   document.body.replaceChildren();
   declareStream(undefined);
   setPaused(false);
+  resetAssistant();
   vi.unstubAllGlobals();
 });
 
@@ -145,5 +147,32 @@ describe("full screen", () => {
     expect(router.history.location.search).toContain("6h");
     expect(router.history.length).toBe(before);
     expect(container.textContent).toContain("Pick a range");
+  });
+
+  /**
+   * F4's chat panel is not among what full screen keeps (FR55), so a panel left open before
+   * full screen stays out of it, and nothing behind it is made inert: below `lg` an open
+   * panel makes the screen behind it inert, which with the panel hidden would leave a wall
+   * display no one can use. Leaving full screen brings the panel back as it was.
+   */
+  const chatPanel = (container: HTMLElement) =>
+    container.querySelector('aside[aria-label="Ask about your telemetry"]');
+
+  it("keeps chat's open panel out of full screen, and nothing inert behind it", async () => {
+    declareStream(declaration);
+    openAssistant();
+    const { container } = await mountAt("/dashboards/d1?display=1");
+    expect(chatPanel(container)).toBeNull();
+    expect(container.querySelector("[inert]")).toBeNull();
+    expect(container.textContent).toContain("Leave full screen");
+  });
+
+  it("brings chat's open panel back on leaving full screen", async () => {
+    declareStream(declaration);
+    openAssistant();
+    const { container } = await mountAt("/dashboards/d1?display=1");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
+    expect(chatPanel(container)?.hasAttribute("hidden")).toBe(false);
   });
 });

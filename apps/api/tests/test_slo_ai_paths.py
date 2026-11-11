@@ -40,12 +40,12 @@ import pytest
 from clickhouse_cleanup import delete_after_run
 from live import require_stack
 from nexovue_platform import slo
+from nexovue_platform.assistant_tools import bounded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 import nexovue_api
 from nexovue_api.alerts import service as alerts
-from nexovue_api.assistant.bounds import bounded
 from nexovue_api.assistant.tools import UNTRUSTED_FIELDS
 from nexovue_api.signup.service import provision_tenant
 

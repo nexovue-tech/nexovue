@@ -161,6 +161,10 @@ EXEMPT: Final = {
     # only as its hash, rotatable — and the only thing it can do is mark that one
     # heartbeat as called. It has its own rate tier.
     "receive_heartbeat",
+    # F4 (design, *Routes*): a person deletes their own conversation, whatever their role,
+    # as an author deletes their own note; it touches only that person's rows, refuses
+    # another's with the same 404, and refuses while a question in it is in flight.
+    "delete_conversation",
 }
 
 
@@ -296,6 +300,15 @@ POLICY_OF: Final = {
     "nexovue_api/members/router.py:remove_member": "MayManageMembers",
     "nexovue_api/support/router.py:grant_support_access": "MayGrantSupport",
     "nexovue_api/support/router.py:withdraw_support_access": "MayGrantSupport",
+    # F4: asking spends the organization's tokens and reads as the person; settings are an
+    # admin's; agreeing to what chat sends is the owner's own act, as F3's consent is.
+    "nexovue_api/assistant/router.py:start_conversation": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:ask_question": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:stop_question": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:mark_wrong": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:unmark_wrong": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:save_settings": "MayManageAI",
+    "nexovue_api/assistant/router.py:agree": "MayConsentAIDisclosure",
 }
 
 # Reads that return a secret, and so are an action even though they change
@@ -315,6 +328,9 @@ SECRET_READS: Final = {
     # gate, nothing else would notice (`docs/changes/super-admin-in-the-console/`).
     "nexovue_api/admin/router.py:search_organizations": "MayAdministerThePlatform",
     "nexovue_api/admin/router.py:organization": "MayAdministerThePlatform",
+    # F4: what chat sent where, and each person's question counts: an admin's to read.
+    "nexovue_api/assistant/router.py:read_settings": "MayManageAI",
+    "nexovue_api/assistant/router.py:read_reads": "MayManageAI",
 }
 
 

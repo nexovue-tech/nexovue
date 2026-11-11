@@ -17,7 +17,12 @@ from typing import Final
 CONSOLE_FILES: Final = Path("/srv/web")
 
 ROLES: Final[dict[str, list[str]]] = {
-    "api": ["uvicorn", "nexovue_api.main:app", "--host", "0.0.0.0", "--port", "8000"],
+    # `--no-access-log` (F4, AC65): uvicorn's access line carries the query string, where a
+    # chat tool's search phrase travels; `middleware/request_log.py` records each request.
+    "api": [
+        *("uvicorn", "nexovue_api.main:app", "--host", "0.0.0.0", "--port", "8000"),
+        "--no-access-log",
+    ],
     "scheduler-beat": ["python", "-m", "nexovue_scheduler", "beat"],
     # Capped queues together hold at most 4 of the 8 slots, so probes and alert sweeps
     # keep 4 whatever detection, evidence, releases and SLO work ask (F3 A56, F19 D66).
@@ -37,10 +42,11 @@ ROLES: Final[dict[str, list[str]]] = {
         *("--concurrency", "3", "--tasks", "connections"),
     ],
     # F3: the AI role, idle until an organization turns AI on (FD6). Its own account,
-    # network and tasks; it claims `insight` alone, through its account's functions.
+    # network and tasks; it claims `assistant` (F4's chat) and `insight` alone, through its
+    # account's functions, `assistant` first because a person is waiting.
     "scheduler-insight": [
         *("python", "-m", "nexovue_scheduler", "worker"),
-        *("--queues", "insight", "--concurrency", "4", "--tasks", "insight"),
+        *("--queues", "assistant,insight", "--concurrency", "6", "--tasks", "insight"),
     ],
     "scheduler-health": ["python", "-m", "nexovue_scheduler", "health"],
     "setup": ["python", "-m", "nexovue_api.setup"],

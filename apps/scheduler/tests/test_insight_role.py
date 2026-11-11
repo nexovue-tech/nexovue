@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.evidence import INSIGHT_QUEUE
 from nexovue_platform.import_walk import ai_imports_reachable_from
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -70,7 +71,8 @@ def test_the_insight_statements_call_the_functions_and_name_no_table() -> None:
         "insight_finish_job",
     ]
     assert not [text for text in texts if "jobs " in text.replace("_jobs(", "(")]
-    assert statements.queues == frozenset({INSIGHT_QUEUE})
+    # F4: chat's queue too, through the same functions.
+    assert statements.queues == frozenset({INSIGHT_QUEUE, ASSISTANT_QUEUE})
 
 
 async def test_an_insight_worker_refuses_a_queue_its_functions_cannot_claim() -> None:

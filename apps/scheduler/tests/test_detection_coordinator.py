@@ -16,8 +16,9 @@ from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
+from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
-from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE
+from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE, INSIGHT_QUEUE
 
 from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
@@ -34,7 +35,7 @@ from nexovue_scheduler.detection.project_job import (
 from nexovue_scheduler.detection.projects import ActiveProject, fair_order
 from nexovue_scheduler.detection.settle import Span
 from nexovue_scheduler.jobs import registry
-from nexovue_scheduler.jobs.worker import QUEUE_CAPS
+from nexovue_scheduler.jobs.worker import ASSISTANT_CONCURRENCY, INSIGHT_CONCURRENCY, QUEUE_CAPS
 
 SETTLED: Final = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 BIG, SMALL, OTHER = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -124,6 +125,9 @@ def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> N
         **slos.QUEUE_CAPS,
         **releases.QUEUE_CAPS,
         CONNECTIONS_QUEUE: CONNECTIONS_QUEUE_CAP,
+        # F4: `scheduler-insight`'s two queues, in its own worker.
+        ASSISTANT_QUEUE: ASSISTANT_CONCURRENCY,
+        INSIGHT_QUEUE: INSIGHT_CONCURRENCY,
     }
     assert EVIDENCE_CONCURRENCY == 2
     assert DETECTION_CONCURRENCY == 2

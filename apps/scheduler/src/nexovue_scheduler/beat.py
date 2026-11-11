@@ -33,6 +33,7 @@ from nexovue_platform.alerts.tasks import (
     PRUNE_ATTEMPTS_TASK,
     SWEEP_DELIVERIES_TASK,
 )
+from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import (
     RUN_CHECK_TASK,
     SHARED_QUEUE,
@@ -98,6 +99,11 @@ BASELINE_SWEEP_ENTRY: Final = "sweep:detection-baselines"
 # The rows that lapse rather than being removed (ADR-020): sessions, links, results, jobs.
 EXPIRY_SWEEP_SECONDS: Final = 60
 EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
+
+# F4: questions past their clock become `unavailable`, and dead ones' tokens are settled, by
+# chat's own sweep on `insight` (design, *Settling*). Every minute is a guess.
+ASSISTANT_SWEEP_SECONDS: Final = 60
+ASSISTANT_SWEEP_ENTRY: Final = "sweep:assistant"
 
 # F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
 CASES_SWEEP_SECONDS: Final = 300
@@ -453,6 +459,7 @@ class Beat:
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
             CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
             RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
+            ASSISTANT_SWEEP_ENTRY: (ASSISTANT_SWEEP_TASK, ASSISTANT_SWEEP_SECONDS, INSIGHT_QUEUE),
         }
         if self.ai_on:
             wanted[INSIGHT_SWEEP_ENTRY] = (SWEEP_INSIGHT_TASK, INSIGHT_SWEEP_SECONDS, INSIGHT_QUEUE)

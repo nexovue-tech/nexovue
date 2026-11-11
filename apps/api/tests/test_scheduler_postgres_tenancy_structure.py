@@ -331,6 +331,14 @@ CROSS_TENANT_STATEMENTS: Final = (
         "an audit row with no organization",
     ),
     _across("erasure.owed", "_OVERDUE", "ADR-014: how many erasures are overdue, install-wide"),
+    # F4: chat's sweep (design, *Settling*).
+    _across(
+        "insight.assistant_sweep",
+        "_LAPSED",
+        f"{_SWEEP}: questions past their clock in every organization, so each is ended "
+        "`unavailable` and what it held is settled; row-level security shows the AI account "
+        "only questions in flight or still holding tokens",
+    ),
 )
 
 

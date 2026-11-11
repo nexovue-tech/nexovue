@@ -42,12 +42,15 @@ IDLE_IN_TRANSACTION_TIMEOUT: Final = "30s"
 # ("tuple concurrently updated"); each step holds this for its transaction.
 _PROVISION_LOCK_KEY: Final = 7_340_211_068
 
-# The four functions of migration 0070, by signature.
+# The functions of migrations 0070 and 0073, by signature. F4 (0073) gave the claim a queue
+# list, for `assistant` beside `insight`, and added chat's two settling functions.
 INSIGHT_FUNCTIONS: Final = (
-    "insight_claim_jobs(text, integer, integer)",
+    "insight_claim_jobs(text, text[], integer, integer)",
     "insight_retry_job(uuid, text, double precision, text)",
     "insight_finish_job(uuid, text)",
     "insight_store_check_result(uuid, uuid, jsonb, double precision)",
+    "assistant_finish_message(uuid, text, jsonb, text, text, text, text)",
+    "assistant_record_spend(uuid, bigint, boolean)",
 )
 
 # What the account may do (design, *The Postgres account*). Column lists, never a table
@@ -69,14 +72,36 @@ INSIGHT_GRANTS: Final = (
     "ON ai_connections TO nexovue_insight",
     "GRANT SELECT ON ai_project_opt_outs TO nexovue_insight",
     # So a run can re-check that its project still exists before it spends, bound by
-    # organization like every other statement.
-    "GRANT SELECT (id, org_id, deleted_at) ON projects TO nexovue_insight",
+    # organization like every other statement. F4: the name and zone a question's context
+    # states, and whose organization it is.
+    "GRANT SELECT (id, org_id, name, timezone, deleted_at) ON projects TO nexovue_insight",
+    "GRANT SELECT (id, deleted_at) ON organizations TO nexovue_insight",
     # A run's address and purpose stay as written; only its ending may change (AC72).
     "GRANT SELECT, INSERT ON ai_runs TO nexovue_insight",
     "GRANT UPDATE (input_tokens, output_tokens, tokens_estimated, outcome, finished_at) "
     "ON ai_runs TO nexovue_insight",
     "GRANT SELECT, INSERT ON ai_usage_monthly TO nexovue_insight",
     "GRANT UPDATE (used_tokens, reserved_tokens) ON ai_usage_monthly TO nexovue_insight",
+    # F4 (design, *Grants*). Row-level security (migration 0073) shows a message only while it
+    # is in flight or holds a reservation, and a step only through such a message. Never
+    # `ticket_hash`, `answer` or `wrong_reason`; a final write only through the function.
+    "GRANT SELECT (id, org_id, project_id, conversation_id, user_id, question, context, "
+    "history, data_level, state, phase, failure_reason, rejection_reason, abstain_reason, "
+    "reserved_tokens, reserved_month, used_tokens, tokens_estimated, sealed_ticket, "
+    "call_seconds, queue_expires_at, deadline_at, hard_ends_at, created_at, finished_at) "
+    "ON assistant_messages TO nexovue_insight",
+    "GRANT UPDATE (state, phase, reserved_tokens, reserved_month) "
+    "ON assistant_messages TO nexovue_insight",
+    "GRANT SELECT, INSERT ON assistant_steps TO nexovue_insight",
+    "GRANT UPDATE (state, row_count, was_cut, failure, finished_at) "
+    "ON assistant_steps TO nexovue_insight",
+    "GRANT INSERT ON assistant_read_log TO nexovue_insight",
+    # An upsert needs SELECT on what it reads and its conflict columns.
+    "GRANT SELECT (org_id, month, kind, count), INSERT ON assistant_monthly_counts "
+    "TO nexovue_insight",
+    "GRANT UPDATE (count) ON assistant_monthly_counts TO nexovue_insight",
+    "GRANT SELECT (id, org_id, project_id) ON assistant_conversations TO nexovue_insight",
+    "GRANT SELECT ON assistant_settings TO nexovue_insight",
     *(
         f"GRANT EXECUTE ON FUNCTION {signature} TO nexovue_insight"
         for signature in INSIGHT_FUNCTIONS

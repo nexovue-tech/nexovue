@@ -107,8 +107,9 @@ _NUMBER_WORDS: Final = [
     "half",
     "quarter",
 ]
-# A start the bed extends (FR37). Matched as whole words, any case.
-_CAUSAL: Final = (
+# A start the bed extends (FR37). Matched as whole words, any case. These lists, `URL` and
+# `EMAIL` are the one copy: F4's chat checks extend them and never restate them.
+CAUSAL_PHRASES: Final = (
     "caused",
     "causes",
     "causing",
@@ -128,8 +129,8 @@ _CAUSAL: Final = (
     "as a result",
     "responsible for",
 )
-_ORIGIN: Final = ("source", "sources", "origin", "originated", "culprit", "at fault", "blame")
-_COMMANDS: Final = (
+ORIGIN_WORDS: Final = ("source", "sources", "origin", "originated", "culprit", "at fault", "blame")
+COMMAND_WORDS: Final = (
     "run",
     "delete",
     "restart",
@@ -145,8 +146,8 @@ _COMMANDS: Final = (
     "drop",
     "execute",
 )
-_URL: Final = re.compile(r"[a-z][a-z0-9+.-]*://|\bwww\.", re.IGNORECASE)
-_EMAIL: Final = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+URL: Final = re.compile(r"[a-z][a-z0-9+.-]*://|\bwww\.", re.IGNORECASE)
+EMAIL: Final = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 _DOMAIN: Final = re.compile(
     r"\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b", re.IGNORECASE
 )
@@ -258,13 +259,13 @@ def check_claim(claim: Claim, model_input: Mapping[str, Any]) -> Rule | None:
     prose = _ALIAS.sub(_ALIAS_STAND_IN, claim.text)
     if not _numbers_match(prose, cited):
         return "number"
-    if _has_any(prose, _NUMBER_WORDS):
+    if has_any(prose, _NUMBER_WORDS):
         return "number_word"
-    if _has_any(prose, _CAUSAL):
+    if has_any(prose, CAUSAL_PHRASES):
         return "causal"
-    if _has_any(prose, _ORIGIN) and not _cites_the_cause(claim, model_input):
+    if has_any(prose, ORIGIN_WORDS) and not _cites_the_cause(claim, model_input):
         return "origin"
-    if _opens_with_command(prose):
+    if opens_with_command(prose):
         return "command"
     if _has_link_or_markup(prose):
         return "link"
@@ -385,7 +386,7 @@ def _numbers_match(prose: str, cited: Sequence[Mapping[str, Any]]) -> bool:
     return True
 
 
-def _has_any(prose: str, phrases: Iterable[str]) -> bool:
+def has_any(prose: str, phrases: Iterable[str]) -> bool:
     lowered = prose.lower()
     return any(re.search(rf"\b{re.escape(phrase)}\b", lowered) for phrase in phrases)
 
@@ -398,10 +399,12 @@ def _cites_the_cause(claim: Claim, model_input: Mapping[str, Any]) -> bool:
     return cause.get("evidence_id") in claim.evidence_ids
 
 
-def _opens_with_command(prose: str) -> bool:
+def opens_with_command(prose: str, words: Iterable[str] = COMMAND_WORDS) -> bool:
+    """Whether any sentence or clause of `prose` starts with one of `words`."""
+    chosen = tuple(words)
     for start in _SENTENCE_START.findall(prose):
         opening = start.lower()
-        if any(opening == word or opening.startswith(f"{word} ") for word in _COMMANDS):
+        if any(opening == word or opening.startswith(f"{word} ") for word in chosen):
             return True
     return False
 
@@ -409,4 +412,4 @@ def _opens_with_command(prose: str) -> bool:
 def _has_link_or_markup(prose: str) -> bool:
     if any(character in _MARKUP for character in prose):
         return True
-    return bool(_URL.search(prose) or _EMAIL.search(prose) or _DOMAIN.search(prose))
+    return bool(URL.search(prose) or EMAIL.search(prose) or _DOMAIN.search(prose))

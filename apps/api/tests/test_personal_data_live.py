@@ -39,10 +39,14 @@ from nexovue_api.auth.totp import SecondFactorStore
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import (
     ApiToken,
+    AssistantConversation,
+    AssistantMessage,
+    AssistantStep,
     AuditLogEntry,
     DetectionState,
     Finding,
     FindingNote,
+    Project,
     SessionRecord,
     SloExclusion,
     SloTarget,
@@ -365,6 +369,91 @@ async def test_the_notes_are_cut_at_their_own_bound_and_say_so(
     assert len(export.notes_written) == 2
     assert export.notes_truncated is True
     assert export.truncated is False
+
+
+async def _chat_question(
+    db: AsyncSession, acme: ProvisionedTenant, user: User, words: str, *, wrong: str | None
+) -> AssistantMessage:
+    project_id = (
+        await db.scalars(select(Project.id).where(Project.org_id == acme.organization.id))
+    ).first()
+    assert project_id is not None
+    conversation = AssistantConversation(
+        org_id=acme.organization.id, user_id=user.id, project_id=project_id, title=words
+    )
+    db.add(conversation)
+    await db.flush()
+    now = _now()
+    message = AssistantMessage(
+        org_id=acme.organization.id,
+        project_id=project_id,
+        conversation_id=conversation.id,
+        user_id=user.id,
+        question=words,
+        context={},
+        data_level="facts_and_text",
+        state="answered",
+        phase=None,
+        answer={"sentences": [{"text": "checkout had 3 errors.", "label": "counted"}]},
+        wrong_reason=wrong,
+        call_seconds=30,
+        queue_expires_at=now,
+        deadline_at=now,
+        hard_ends_at=now,
+    )
+    db.add(message)
+    await db.flush()
+    db.add(
+        AssistantStep(
+            org_id=acme.organization.id,
+            message_id=message.id,
+            position=1,
+            tool="search_logs",
+            arguments={"q": "card declined for priya"},
+            display_arguments=None,
+            state="read",
+        )
+    )
+    await db.flush()
+    return message
+
+
+async def test_the_export_holds_the_person_s_chat_questions_and_nobody_else_s(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F4 AC34: their questions, the free-text step arguments as stored, the answer, and
+    their "this was wrong" mark; a colleague's questions are not in it."""
+    priya = await _join(db, acme, "member", "Priya")
+    asked = await _chat_question(db, acme, priya, "why is checkout failing?", wrong="wrong_cause")
+    await _chat_question(db, acme, acme.user, "the owner's own question", wrong=None)
+
+    export = await personal_data.export(db, user=priya, organization=acme.organization, now=_now())
+    body = export.model_dump(mode="json")
+
+    [question] = body["chat_questions"]
+    assert (question["id"], question["question"]) == (str(asked.id), "why is checkout failing?")
+    assert question["wrong_reason"] == "wrong_cause"
+    assert question["answer"]["sentences"][0]["text"] == "checkout had 3 errors."
+    assert question["steps"] == [
+        {"tool": "search_logs", "arguments": {"q": "card declined for priya"}}
+    ]
+    assert body["chat_questions_truncated"] is False
+    assert "the owner's own question" not in json.dumps(body)
+
+
+async def test_the_chat_questions_are_cut_at_their_own_bound_and_say_so(
+    db: AsyncSession, acme: ProvisionedTenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(personal_data, "MAX_CHAT_QUESTIONS_EXPORTED", 2)
+    for index in range(3):
+        await _chat_question(db, acme, acme.user, f"question {index}", wrong=None)
+
+    export = await personal_data.export(
+        db, user=acme.user, organization=acme.organization, now=_now()
+    )
+
+    assert len(export.chat_questions) == 2
+    assert export.chat_questions_truncated is True
 
 
 # ---- deleting your own account -------------------------------------------------------

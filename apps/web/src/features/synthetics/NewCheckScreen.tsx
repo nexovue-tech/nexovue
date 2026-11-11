@@ -110,7 +110,7 @@ function KindChooser() {
   // two thirds the width of the screen. Three seats them 3 + 2
   // (`docs/quality/console-review-2026-09-20.md`).
   return (
-    <ul className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <ul className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 @3xl:grid-cols-3">
       {CHECK_TYPES.map((kind) => (
         <li key={kind}>
           <Link

@@ -17,7 +17,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Final
 
-# The most one untrusted part may carry, in characters, after stripping (a guess F4 tunes).
+# The most one untrusted part may carry, in characters, after stripping (a guess). A feature
+# that has already cut a part to its own, larger cap names that cap (F4's tool results).
 MAX_UNTRUSTED_CHARACTERS: Final = 4000
 # Bidirectional controls and the tag block, as `evidence.display_name` removes them.
 _HIDDEN_RANGES: Final = ((0x202A, 0x202E), (0x2066, 0x2069), (0xE0000, 0xE007F))
@@ -54,14 +55,17 @@ class Untrusted:
     label: str
     text: str
     tag: str = field(default_factory=fence_tag)
+    max_characters: int = MAX_UNTRUSTED_CHARACTERS
 
     def __post_init__(self) -> None:
         if not self.label.replace(" ", "").isalnum():
             raise ValueError("an untrusted part's label is nexovue's own words: letters and spaces")
+        if self.max_characters < 1:
+            raise ValueError("an untrusted part's cap must be at least one character")
 
     def render(self) -> str:
         """The fenced form a request carries: the text as one JSON string, capped."""
-        kept = strip_hidden(self.text)[:MAX_UNTRUSTED_CHARACTERS]
+        kept = strip_hidden(self.text)[: self.max_characters]
         encoded = json.dumps(kept, ensure_ascii=True)
         return (
             f'<{self.tag} label="{self.label}">\n'

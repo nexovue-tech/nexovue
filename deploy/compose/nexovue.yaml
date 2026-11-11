@@ -287,6 +287,10 @@ services:
   api:
     <<: [*service-defaults, *nexovue-image]
     command: ["api"]
+    # F4: also on `ai`, so chat's loop in `scheduler-insight` reads through this API as the
+    # asking person (design, *The network*). Kafka, ClickHouse and the object store stay
+    # out of that role's reach.
+    networks: [default, ai]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
       interval: 10s
@@ -492,6 +496,8 @@ services:
       AI_SECRET_PREVIOUS_KEYS: ${AI_SECRET_PREVIOUS_KEYS:-}
       # Private addresses with ports an operator lets a provider connection reach (FR32).
       AI_PRIVATE_ENDPOINTS: ${AI_PRIVATE_ENDPOINTS:-}
+      # F4: chat's tools read the API here, over `ai`, never through a public address.
+      INTERNAL_API_URL: http://api:8000
     networks: [ai]
     depends_on:
       <<: *after-setup
@@ -501,9 +507,9 @@ services:
       replicas: ${SCHEDULER_INSIGHT_REPLICAS:-1}
       resources:
         limits:
-          # A guess (design, *Memory*): four children at 48 MiB each with the parent and
-          # forkserver. T3.10 reads a real run.
-          memory: 384M
+          # A guess (F4 design, *Worker memory*): six children at 48 MiB each with the parent
+          # and forkserver. F3's T3.10 record replaces it; F4's T8.1 measures.
+          memory: 576M
 
   # ---------- the monitor, ready to connect (design.md §10) ----------
   # Opt-in: `--profile monitoring`. Scrapes every service's /metrics and evaluates the alerts in

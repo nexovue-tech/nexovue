@@ -26,6 +26,7 @@ from nexovue_platform.email import EmailError, EmailSender, Message
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.assistant import privacy as assistant_privacy
 from nexovue_api.audit import service as audit
 from nexovue_api.auth import recovery_codes, set_password
 from nexovue_api.auth.credentials import is_valid_email, normalize_email
@@ -201,6 +202,10 @@ async def scrub(db: AsyncSession, *, member: User, now: datetime) -> None:
     # F22 FR8, AC10: removal and account deletion clear them from every active
     # case first, with an event, through the same code as a demotion.
     await cases.clear_assignee(db, org_id=member.org_id, user_id=member.id, now=now)
+    # F4 (C1): their conversations go, after any question in flight is settled.
+    await assistant_privacy.forget_person(db, org_id=member.org_id, user_id=member.id)
+    # F4 (C1): their conversations go, after any question in flight is settled.
+    await assistant_privacy.forget_person(db, org_id=member.org_id, user_id=member.id)
     address, name = member.email, member.name
     target = audit.person_target(member.id)
     # Every entry naming them now names their id; the entries themselves stay,
