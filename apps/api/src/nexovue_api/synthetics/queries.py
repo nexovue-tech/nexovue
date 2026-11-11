@@ -162,15 +162,17 @@ def check_summaries_sql(*, check_type: bool, down_only: bool) -> str:
 # over, because `avg` over no rows returns NaN rather than nothing, and the service turns
 # that count into a gap rather than a zero: a check with no response time drawn at zero
 # reads as the site getting instantly fast.
-CHECK_TRENDS_SQL: Final = f"""
-SELECT
+_CHECK_TREND_COLUMNS: Final = f"""
     check_id,
     {_BUCKET_NANOS} AS bucket_nanos,
     countIf(metric_name = '{METRIC_STATUS}' AND {COUNTED_RUN}) AS runs,
     countIf(metric_name = '{METRIC_STATUS}' AND {COUNTED_RUN} AND value = {UP_VALUE})
         AS successful_runs,
     countIf(metric_name = '{METRIC_DURATION}' AND {COUNTED_RUN}) AS duration_points,
-    avgIf(value, metric_name = '{METRIC_DURATION}' AND {COUNTED_RUN}) AS mean_seconds
+    avgIf(value, metric_name = '{METRIC_DURATION}' AND {COUNTED_RUN}) AS mean_seconds"""
+
+CHECK_TRENDS_SQL: Final = f"""
+SELECT{_CHECK_TREND_COLUMNS}
 FROM (
     SELECT
         timestamp,
@@ -181,6 +183,31 @@ FROM (
     WHERE tenant_id = {{tenant_id:String}}
       AND project_id = {{project_id:String}}
       AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}')
+    {_WINDOW_PREDICATE}
+    {ONE_ROW_PER_READING}
+)
+GROUP BY check_id, bucket_nanos
+ORDER BY check_id, bucket_nanos
+LIMIT {{limit:UInt32}}
+"""
+
+# One check's history, for a dashboard's `check_trend` panel (F20, T5.1c): the same
+# buckets bound to one `check_id`, which the panel resolved from the check's name in the
+# displayed project before the read. Reading every check and keeping one would make one
+# line cost the whole project's checks, up to `MAX_TREND_ROWS` (AC95).
+CHECK_TREND_SQL: Final = f"""
+SELECT{_CHECK_TREND_COLUMNS}
+FROM (
+    SELECT
+        timestamp,
+        {CHECK_ID} AS check_id,
+        metric_name,
+        any(value) AS value,{READING_ATTRIBUTES}
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}')
+      AND {CHECK_ID} = {{check_id:String}}
     {_WINDOW_PREDICATE}
     {ONE_ROW_PER_READING}
 )

@@ -12,18 +12,24 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import ColumnElement, delete, func, select, text
+from nexovue_platform.alerts.model import service_subject
+from sqlalchemy import ColumnElement, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    Check,
     Dashboard,
     DashboardVersion,
+    Incident,
     ServiceLastSeen,
     User,
 )
 
 # The live list, at most: the cap on live dashboards (FR9).
 LIST_LIMIT: Final = 1_000
+# What an incident about a service is keyed by: a threshold rule's subject, or a burn's
+# `about_key` (`nexovue_platform.alerts.model`). `service_subject("")` is the bare prefix.
+SERVICE_SUBJECT_PREFIX: Final = service_subject("")
 
 
 def _live() -> ColumnElement[bool]:
@@ -184,3 +190,74 @@ async def project_last_seen(
     )
     newest: datetime | None = await session.scalar(statement)
     return newest
+
+
+async def checks_named(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    names: Sequence[str],
+) -> dict[str, list[str]]:
+    """Each named check's ids in the project: none is `not_in_project`, two `ambiguous`,
+    since check names are not unique (F20, FR16, AC22). Another project's checks of that
+    name are never read."""
+    if not names:
+        return {}
+    statement = (
+        select(Check.name, Check.id)
+        .where(Check.org_id == org_id, Check.project_id == project_id, Check.name.in_(list(names)))
+        .order_by(Check.name, Check.id)
+    )
+    found: dict[str, list[str]] = {}
+    for name, check_id in (await session.execute(statement)).tuples().all():
+        found.setdefault(name, []).append(str(check_id))
+    return found
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceIncident:
+    id: uuid.UUID
+    service_name: str
+    rule_name: str
+    severity: str
+    opened_at: datetime
+    resolved_at: datetime | None
+
+
+async def service_incidents_in_window(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    limit: int,
+) -> list[ServiceIncident]:
+    """Alert incidents open at any moment of the window whose rule names a service, newest
+    first (F20, FR67). A service-error, latency or silence rule keys its incident by the
+    service; a burn names the service it is about, when it is about one."""
+    about = func.coalesce(Incident.about_key, Incident.subject_key)
+    statement = (
+        select(Incident, about)
+        .where(
+            Incident.org_id == org_id,
+            Incident.project_id == project_id,
+            Incident.opened_at < end,
+            or_(Incident.resolved_at.is_(None), Incident.resolved_at >= start),
+            about.startswith(SERVICE_SUBJECT_PREFIX, autoescape=True),
+        )
+        .order_by(Incident.opened_at.desc(), Incident.id)
+        .limit(limit)
+    )
+    return [
+        ServiceIncident(
+            id=incident.id,
+            service_name=key.removeprefix(SERVICE_SUBJECT_PREFIX),
+            rule_name=incident.rule_name,
+            severity=incident.severity,
+            opened_at=incident.opened_at,
+            resolved_at=incident.resolved_at,
+        )
+        for incident, key in (await session.execute(statement)).tuples().all()
+    ]

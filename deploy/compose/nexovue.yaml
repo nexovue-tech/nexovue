@@ -314,8 +314,10 @@ services:
       AI_SECRET_KEY: ${AI_SECRET_KEY:-}
       AI_SECRET_PREVIOUS_KEYS: ${AI_SECRET_PREVIOUS_KEYS:-}
       SCHEDULER_INSIGHT_REPLICAS: ${SCHEDULER_INSIGHT_REPLICAS:-1}
-      # Reads as the read-only account; the API holds no ClickHouse credential that writes.
-      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # Reads as the API's own read-only account (users.d/api-reader.xml), whose per-user
+      # memory and concurrency bounds hold every API read below the server's cap, the
+      # scheduler's sweeps outside them (F20, ADR-045). It holds no credential that writes.
+      CLICKHOUSE_DSN: clickhouse://nexovue_api_reader:${CLICKHOUSE_API_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # What the console hands a customer to export to: the edge's ingest name.
       OTLP_ENDPOINT: https://${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
       # The edge is the one hop in front of the API, so the caller is the last X-Forwarded-For

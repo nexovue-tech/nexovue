@@ -11,6 +11,15 @@ real middleware: slots that free just before each 5 s wait ends give a 200 with 
 inside the console's 25 s; a bucket that stays full gives a 429 at the end of its wait,
 and the handler never runs.
 
+Step 5 (T5.1a to T5.3): each new kind against the screen it came from, over a fixed
+window (AC14): an endpoint's chart sums to its row and equals a one-endpoint service's
+trend; a top-nodes chart chooses in the store from the displayed project, each line that
+node's own (AC26); a check's chart is `/synthetics/checks/trend`'s for that check, read by
+one statement bound to the id its name resolved to, with another project's check
+`not_in_project` and a shared name `ambiguous` (AC22, AC95); a statement's chart is
+`/dbstats/statements/trend`'s; numbers and tables are their screens' rows, and a compared
+number's previous value is the route's over the previous window (T5.2, T5.3).
+
 Step 4 (T4.1, T4.2, T4.9): a `top_services_trend` panel chooses its lines in the store
 and from the displayed project alone, each line equal to that service's trend (AC26,
 AC14); a `node_trend` panel for a host late in the alphabet, on a fleet past the fleet
@@ -46,7 +55,7 @@ from test_findings_cases_live import Team, _client, _reachable, _team, db  # noq
 from nexovue_api.auth.dependencies import get_tenant_repository
 from nexovue_api.auth.sessions import Session
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import Dashboard, ServiceLastSeen, User
+from nexovue_api.data.postgres.models import Check, Dashboard, ServiceLastSeen, User
 from nexovue_api.middleware.ratelimit import SCOPE_ORGANIZATION, SCOPE_SESSION
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import (
@@ -831,3 +840,546 @@ async def test_a_fixed_windows_newest_bucket_is_not_marked(
         ).json()["panels"]["p_settled"]
     assert panel["state"] == "ok"
     assert panel["incomplete_from"] is None
+
+
+# ------------------------------------------------------------ Step 5 (T5.1, T5.2)
+
+ENDPOINT_INSERT: Final = """
+INSERT INTO endpoint_stats_1m
+    (tenant_id, project_id, service_name, span_kind, span_name, minute,
+     request_count, error_count, latency_quantiles)
+SELECT
+    {tenant:String}, {project:String}, {service:String}, 'SERVER', {endpoint:String},
+    toDateTime({start:DateTime}) + toIntervalMinute(intDiv(number, {per_minute:UInt32})) AS minute,
+    count(), countIf(number % 10 = 0),
+    quantilesState(0.5, 0.95, 0.99)(toFloat64(number % 311))
+FROM numbers({total:UInt32})
+GROUP BY minute
+"""
+
+# One reading a minute of one metric, `odd` every `every`th minute and `value` otherwise.
+GAUGE_INSERT: Final = """
+INSERT INTO metrics_gauge
+    (timestamp, start_timestamp, received_at, tenant_id, project_id, service_name,
+     scope_name, scope_version, metric_name, metric_unit, metric_description,
+     resource_attrs, attrs, flags, value)
+SELECT
+    toDateTime64({start:DateTime}, 3) + toIntervalMinute(number) AS at,
+    at, at, {tenant:String}, {project:String}, {service:String}, '', '',
+    {metric:String}, '', '',
+    CAST({resource:String} AS JSON), CAST({attrs:String} AS JSON), 0,
+    if(number % {every:UInt32} = {every:UInt32} - 1, {odd:Float64}, {value:Float64})
+FROM numbers({minutes:UInt32})
+"""
+
+
+async def _seed_endpoint(
+    team: Team, service: str, endpoint: str, start: datetime, *, minutes: int, per_minute: int
+) -> None:
+    writer = await _connect(WRITER_DSN)
+    try:
+        await writer.command(
+            ENDPOINT_INSERT,
+            parameters={
+                "tenant": str(team.org_id),
+                "project": str(team.project_id),
+                "service": service,
+                "endpoint": endpoint,
+                "start": start.replace(tzinfo=None),
+                "per_minute": per_minute,
+                "total": minutes * per_minute,
+            },
+        )
+    finally:
+        await writer.close()
+
+
+async def _seed_gauge(
+    team: Team,
+    start: datetime,
+    *,
+    metric: str,
+    resource: str,
+    attrs: str = "{}",
+    minutes: int,
+    value: float,
+    odd: float | None = None,
+    every: int = 1_000_000,
+    project: str | None = None,
+    service: str = "otelcol",
+) -> None:
+    writer = await _connect(WRITER_DSN)
+    try:
+        await writer.command(
+            GAUGE_INSERT,
+            parameters={
+                "start": start.replace(tzinfo=None),
+                "tenant": str(team.org_id),
+                "project": project or str(team.project_id),
+                "service": service,
+                "metric": metric,
+                "resource": resource,
+                "attrs": attrs,
+                "minutes": minutes,
+                "value": value,
+                "odd": value if odd is None else odd,
+                "every": every,
+            },
+        )
+    finally:
+        await writer.close()
+
+
+def _fixed(start: datetime, minutes: int, team: Team) -> dict[str, str]:
+    return {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=minutes)).isoformat(),
+        "project_id": str(team.project_id),
+    }
+
+
+async def _batch(
+    client: httpx.AsyncClient, dashboard: Dashboard, window: dict[str, str]
+) -> dict[str, Any]:
+    answer = await client.get(
+        f"{API_PREFIX}/dashboard-panels/read", params=window | {"dashboard_id": str(dashboard.id)}
+    )
+    assert answer.status_code == 200, answer.text
+    panels: dict[str, Any] = answer.json()["panels"]
+    return panels
+
+
+async def test_ac14_an_endpoint_chart_sums_to_its_row_and_is_its_own_trend(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """T5.1a. `checkout` serves two endpoints; the chart of one sums, bucket by bucket, to
+    that endpoint's row on the services screen, never the other's. `solo` serves one, so
+    its endpoint's chart is its service's trend, to the digit."""
+    start = _hour_ago()
+    await _seed_endpoint(acme, "checkout", "GET /orders", start, minutes=30, per_minute=40)
+    await _seed_endpoint(acme, "checkout", "POST /pay", start, minutes=30, per_minute=7)
+    await _seed_endpoint(acme, "solo", "GET /orders", start, minutes=30, per_minute=25)
+    db.add_all(
+        ServiceLastSeen(
+            org_id=acme.org_id, project_id=acme.project_id, service_name=name, last_seen_at=start
+        )
+        for name in ("checkout", "solo")
+    )
+    endpoint = {"span_kind": "SERVER", "endpoint": "GET /orders"}
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_rate", "endpoint_trend", service="checkout", signal="rate", **endpoint),
+        _panel("p_solo", "endpoint_trend", service="solo", signal="latency", **endpoint),
+        _panel("p_solo_errors", "endpoint_trend", service="solo", signal="errors", **endpoint),
+    )
+    window = _fixed(start, 30, acme)
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panels = await _batch(client, dashboard, window)
+        rows = (
+            await client.get(f"{API_PREFIX}/services/checkout/endpoints", params=window)
+        ).json()["endpoints"]
+        solo = (
+            await client.get(
+                f"{API_PREFIX}/services/trend", params=window | {"service_name": "solo"}
+            )
+        ).json()["services"][0]["points"]
+
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    [orders] = [row for row in rows if row["endpoint"] == "GET /orders"]
+    # One-minute buckets over 30 minutes: a bucket's rate is its count.
+    assert sum(_line(panels["p_rate"], "requests_per_minute")) == orders["request_count"]
+    for quantile in ("p50_ms", "p95_ms", "p99_ms"):
+        assert _line(panels["p_solo"], quantile) == [point[quantile] for point in solo]
+    assert _line(panels["p_solo_errors"], "error_rate") == [point["error_rate"] for point in solo]
+
+
+def _host(name: str) -> str:
+    return f'{{"host.name":"{name}"}}'
+
+
+async def test_ac26_ac14_top_nodes_choose_in_the_store_from_this_project_each_its_own_line(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """T5.1b. Six machines here, three busier ones in another project: the chart of the
+    three highest is the three highest here, and each line equals that node's own chart."""
+    start = _hour_ago()
+    minutes = 20
+    for index, value in enumerate((0.1, 0.2, 0.3, 0.4, 0.5, 0.6)):
+        await _seed_gauge(
+            acme,
+            start,
+            metric="system.cpu.utilization",
+            resource=_host(f"web-{index}"),
+            minutes=minutes,
+            value=value,
+            odd=value / 2,
+            every=4,
+        )
+    elsewhere = str(uuid.uuid4())
+    for index in range(3):
+        await _seed_gauge(
+            acme,
+            start,
+            metric="system.cpu.utilization",
+            resource=_host(f"noisy-{index}"),
+            minutes=minutes,
+            value=0.99,
+            project=elsewhere,
+        )
+    node = {"host": "web-5", "container": "", "reporter": "", "reporter_instance": ""}
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_top", "top_nodes_trend", metric="system.cpu.utilization", count=3),
+        _panel("p_one", "node_trend", node=node, metric="system.cpu.utilization"),
+    )
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panels = await _batch(client, dashboard, _fixed(start, minutes, acme))
+
+    top = panels["p_top"]
+    assert top["state"] == "ok"
+    assert [line["node"]["host"] for line in top["series"]] == ["web-3", "web-4", "web-5"]
+    [web_5] = [line for line in top["series"] if line["node"]["host"] == "web-5"]
+    assert web_5["points"] == panels["p_one"]["series"][0]["points"]
+
+
+async def _check(db: AsyncSession, team: Team, name: str) -> Check:  # noqa: F811
+    check = Check(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        name=name,
+        type="api",
+        interval_seconds=60,
+        config={},
+    )
+    db.add(check)
+    await db.flush()
+    return check
+
+
+async def _seed_check(team: Team, check: Check, start: datetime, *, minutes: int) -> None:
+    resource = f'{{"synthetic.check.id":"{check.id}"}}'
+    final = '{"synthetic.check.final":"true"}'
+    # Down every fourth minute, and timed only when up.
+    await _seed_gauge(
+        team,
+        start,
+        metric="synthetic.check.status",
+        resource=resource,
+        attrs=final,
+        minutes=minutes,
+        value=1.0,
+        odd=0.0,
+        every=4,
+        service="nexovue-prober",
+    )
+    await _seed_gauge(
+        team,
+        start,
+        metric="synthetic.check.duration",
+        resource=resource,
+        attrs=final,
+        minutes=minutes,
+        value=0.25,
+        service="nexovue-prober",
+    )
+
+
+async def test_ac14_ac22_ac95_a_check_chart_is_its_checks_trend_by_one_bound_statement(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    from nexovue_api.synthetics.queries import CHECK_TREND_SQL
+
+    globex = await _team(db, f"Remote{uuid.uuid4().hex[:8]}")
+    start = _hour_ago()
+    login = await _check(db, acme, "Login")
+    other = await _check(db, acme, "Search")
+    await _check(db, acme, "Twin")
+    await _check(db, acme, "Twin")
+    remote = await _check(db, globex, "Remote")
+    for check in (login, other):
+        await _seed_check(acme, check, start, minutes=30)
+    await _seed_check(globex, remote, start, minutes=30)
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_up", "check_trend", check="Login", signal="uptime"),
+        _panel("p_time", "check_trend", check="Login", signal="duration"),
+        _panel("p_remote", "check_trend", check="Remote", signal="uptime"),
+        _panel("p_twin", "check_trend", check="Twin", signal="uptime"),
+    )
+    window = _fixed(start, 30, acme)
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        route = (await client.get(f"{API_PREFIX}/synthetics/checks/trend", params=window)).json()
+        app = client._transport.app  # type: ignore[attr-defined]
+        app.dependency_overrides[get_tenant_repository] = lambda: _Recorded(
+            reader, str(acme.org_id), ran
+        )
+        panels = await _batch(client, dashboard, window)
+
+    [points] = [check["points"] for check in route["checks"] if check["check_id"] == str(login.id)]
+    assert _line(panels["p_up"], "uptime_percent") == [
+        100.0 * point["successful_runs"] / point["runs"] for point in points if point["runs"]
+    ]
+    assert _line(panels["p_time"], "mean_duration_ms") == [
+        point["mean_duration_ms"] for point in points if point["mean_duration_ms"] is not None
+    ]
+    assert 0.0 in _line(panels["p_up"], "uptime_percent")
+    # Another project's check of that name, and a shared name, read nothing (AC22).
+    assert panels["p_remote"] == {"state": "not_in_project", "kind": "check_trend"}
+    assert panels["p_twin"] == {"state": "ambiguous", "kind": "check_trend"}
+    # One statement, bound to the one check, for both of its panels (AC95).
+    assert [(sql, parameters["check_id"]) for sql, parameters in ran] == [
+        (CHECK_TREND_SQL, str(login.id))
+    ]
+
+
+async def test_ac14_a_statement_chart_is_its_statements_trend(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """T5.1d: one hash on one server, never its neighbour's."""
+    start = _hour_ago()
+    server = '{"server.address":"db-1","server.port":5432}'
+    for query_hash, seconds in (("h-orders", 0.04), ("h-users", 0.9)):
+        await _seed_gauge(
+            acme,
+            start,
+            metric="db.client.operation.duration",
+            resource=server,
+            attrs=f'{{"db.query.hash":"{query_hash}","db.namespace":"app"}}',
+            minutes=20,
+            value=seconds,
+            odd=seconds * 3,
+            every=5,
+            service="checkout",
+        )
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel(
+            "p_statement",
+            "statement_trend",
+            query_hash="h-orders",
+            server_address="db-1",
+            server_port=5432,
+            label="Orders",
+        ),
+    )
+    window = _fixed(start, 20, acme)
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panels = await _batch(client, dashboard, window)
+        route = (await client.get(f"{API_PREFIX}/dbstats/statements/trend", params=window)).json()
+
+    [orders] = [found for found in route["statements"] if found["query_hash"] == "h-orders"]
+    assert _line(panels["p_statement"], "mean_ms") == [
+        point["mean_ms"] for point in orders["points"]
+    ]
+    assert max(_line(panels["p_statement"], "mean_ms")) < 900
+
+
+async def test_ac14_numbers_and_tables_are_their_screens_rows_and_a_compare_its_previous_read(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """T5.2, T5.3. Over 20 minutes whose previous 20 the data covers: each number is its
+    route's, each compared value is its route's over the previous window, and each table
+    is its screen's first rows. A window whose previous one is empty compares nothing."""
+    start = _hour_ago()
+    await _seed(acme, "checkout", start, minutes=40, per_minute=50)
+    await _seed(acme, "payment", start, minutes=40, per_minute=30)
+    await _seed_endpoint(acme, "checkout", "POST /pay", start, minutes=40, per_minute=9)
+    db.add_all(
+        ServiceLastSeen(
+            org_id=acme.org_id, project_id=acme.project_id, service_name=name, last_seen_at=start
+        )
+        for name in ("checkout", "payment")
+    )
+    small = {"height": "small"}
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_rate", "project_number", measure="requests_per_minute", compare=True) | small,
+        _panel("p_services", "project_number", measure="service_count", compare=False) | small,
+        _panel(
+            "p_checkout", "service_number", service="checkout", measure="error_rate", compare=True
+        )
+        | small,
+        _panel("p_ranked", "services_table", order="worst", rows=1),
+        _panel("p_endpoints", "endpoints_table", service="checkout", order="slowest", rows=5),
+    )
+    window = _fixed(start + timedelta(minutes=20), 20, acme)
+    previous = _fixed(start, 20, acme)
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panels = await _batch(client, dashboard, window)
+        early = await _batch(client, dashboard, _fixed(start, 20, acme))
+        totals = (await client.get(f"{API_PREFIX}/services/overview", params=window)).json()
+        before = (await client.get(f"{API_PREFIX}/services/overview", params=previous)).json()
+        checkout = (await client.get(f"{API_PREFIX}/services/checkout", params=window)).json()
+        checkout_before = (
+            await client.get(f"{API_PREFIX}/services/checkout", params=previous)
+        ).json()
+        ranked = (await client.get(f"{API_PREFIX}/services", params=window | {"limit": 1})).json()
+        endpoints = (
+            await client.get(
+                f"{API_PREFIX}/services/checkout/endpoints",
+                params=window | {"limit": 5, "order": "slowest"},
+            )
+        ).json()
+
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    assert panels["p_rate"]["number"] == {
+        "measure": "requests_per_minute",
+        "value": totals["totals"]["requests_per_minute"],
+        "previous": before["totals"]["requests_per_minute"],
+        "previous_coverage": 1.0,
+    }
+    assert panels["p_services"]["number"]["value"] == totals["totals"]["service_count"] == 2
+    assert panels["p_checkout"]["number"]["value"] == checkout["service"]["error_rate"]
+    assert panels["p_checkout"]["number"]["previous"] == checkout_before["service"]["error_rate"]
+    assert panels["p_ranked"]["rows"] == ranked["services"]
+    assert panels["p_endpoints"]["rows"] == endpoints["endpoints"]
+    # The first 20 minutes have no window before them: a number, and no comparison (AC73).
+    assert early["p_rate"]["number"]["previous"] is None
+    assert early["p_rate"]["number"]["previous_coverage"] is None
+
+
+EDGES_INSERT: Final = """
+INSERT INTO service_edges_1m
+    (tenant_id, project_id, client_service, server_service, edge_kind, minute,
+     call_count, error_count, latency_quantiles)
+SELECT
+    {tenant:String}, {project:String}, 'checkout', callee, 'CLIENT->SERVER',
+    toDateTime({start:DateTime}) + toIntervalMinute(number % 10) AS minute,
+    count(), countIf(callee = 'payment' AND number % 3 = 0),
+    quantilesState(0.5, 0.95, 0.99)(toFloat64(number % 97))
+FROM numbers(300)
+ARRAY JOIN ['payment', 'inventory'] AS callee
+GROUP BY callee, minute
+"""
+
+VITALS_INSERT: Final = """
+INSERT INTO web_vitals_1m
+    (tenant_id, project_id, vital_name, route, url_path, device_class, country, minute,
+     reading_count, value_quantiles)
+SELECT
+    {tenant:String}, {project:String}, vital, '/', '/', device, 'IN',
+    toDateTime({start:DateTime}) + toIntervalMinute(number % 10) AS minute,
+    count(), quantilesState(0.5, 0.75, 0.95)(toFloat64(number % 50))
+FROM numbers(200)
+ARRAY JOIN ['LCP', 'CLS'] AS vital, ['mobile', 'desktop'] AS device
+GROUP BY vital, device, minute
+"""
+
+ERROR_INSERT: Final = """
+INSERT INTO logs (timestamp, received_at, retention_days, tenant_id, project_id,
+                  trace_id, span_id, service_name, severity, severity_number,
+                  body, body_structured, resource_attrs, log_attrs,
+                  exception_type, exception_message, timestamp_source)
+SELECT toDateTime64({start:DateTime}, 3) + toIntervalSecond(number * 7),
+       toDateTime64({start:DateTime}, 3) + toIntervalSecond(number * 7), 30,
+       {tenant:String}, {project:String}, repeat('0', 32), repeat('0', 16), 'checkout',
+       'ERROR', 17, {message:String}, '{}', {resource:String}, {attrs:String},
+       {type:String}, {message:String}, 'event'
+FROM numbers({count:UInt32})
+"""
+
+
+async def _seed_rest(team: Team, start: datetime) -> None:
+    """The dependency, browser and error rows the remaining tables read."""
+    keys = {"tenant": str(team.org_id), "project": str(team.project_id)}
+    writer = await _connect(WRITER_DSN)
+    try:
+        await writer.command(EDGES_INSERT, parameters=keys | {"start": start.replace(tzinfo=None)})
+        await writer.command(VITALS_INSERT, parameters=keys | {"start": start.replace(tzinfo=None)})
+        for error_type, count in (("TimeoutError", 9), ("KeyError", 4)):
+            await writer.command(
+                ERROR_INSERT,
+                parameters=keys
+                | {
+                    "start": start.replace(tzinfo=None),
+                    "message": f"{error_type} while charging",
+                    "type": error_type,
+                    "count": count,
+                    "resource": '{"service":{"name":"checkout"}}',
+                    "attrs": f'{{"exception":{{"type":"{error_type}","message":"x"}}}}',
+                },
+            )
+    finally:
+        await writer.close()
+
+
+async def test_ac14_the_other_tables_are_their_screens_first_rows(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """T5.2: dependencies, web vitals, error groups and slow statements, each its screen's
+    own rows over the same window, cut to the panel's count."""
+    start = _hour_ago()
+    await _seed_rest(acme, start)
+    await _seed_gauge(
+        acme,
+        start,
+        metric="db.client.operation.duration",
+        resource='{"server.address":"db-1","server.port":5432}',
+        attrs='{"db.query.hash":"h-1","db.namespace":"app"}',
+        minutes=10,
+        value=0.02,
+        service="checkout",
+    )
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="checkout",
+            last_seen_at=start,
+        )
+    )
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_deps", "dependencies_table", failing_only=False, rows=20),
+        _panel("p_failing", "dependencies_table", failing_only=True, rows=20),
+        _panel("p_vitals", "web_vitals_table", device_class="mobile"),
+        _panel("p_errors", "error_groups_table", service="checkout", rows=1),
+        _panel("p_statements", "database_statements_table", rows=20),
+    )
+    window = _fixed(start, 10, acme)
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panels = await _batch(client, dashboard, window)
+
+        async def rows(path: str, key: str, **params: Any) -> Any:
+            answer = await client.get(f"{API_PREFIX}{path}", params=window | params)
+            assert answer.status_code == 200, answer.text
+            return answer.json()[key]
+
+        edges = await rows("/service-map", "edges", limit=20)
+        failing = await rows("/service-map", "edges", limit=20, failing_only="true")
+        vitals = await rows("/rum/web-vitals", "vitals", device_class="mobile")
+        groups = await rows("/error-groups", "groups", limit=1, service_name="checkout")
+        statements = await rows("/dbstats/statements", "statements", limit=20)
+
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    assert panels["p_deps"]["rows"] == edges and len(edges) == 2
+    assert panels["p_failing"]["rows"] == failing and len(failing) == 1
+    assert panels["p_vitals"]["rows"] == vitals and vitals
+    assert panels["p_errors"]["rows"] == groups
+    assert groups[0]["exception_type"] == "TimeoutError"
+    assert panels["p_statements"]["rows"] == statements and statements

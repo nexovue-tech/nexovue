@@ -14,20 +14,33 @@ import type { WindowChoice } from "@/shared/selection";
 import {
   clearScreenOverride,
   setScreenOverride,
+  TIME_RANGES,
   useSelection,
   windowCacheKey,
 } from "@/shared/selection";
+import { setupDocUrl } from "@/shared/setup-docs";
 import type { Dashboard, DashboardContext, PanelReadResponse, StoredPanel } from "./api";
 import { refreshIntervalOf, useDashboard, useDashboardContext, useDashboardPanels } from "./api";
 import { gridSpans } from "./grid-spans";
 import type { KeptReadings } from "./kept-readings";
 import { allFailing, keptLine, nextExpiry, nextKept } from "./kept-readings";
 import { NotePanel } from "./NotePanel";
+import { OpenFindingsPanel } from "./OpenFindingsPanel";
 import { CorrelationId, PanelFrame, PanelWords, StaleStrip } from "./PanelFrame";
-import { panelTitle, stateWords, TIME_KINDS, transient, unread } from "./panel-words";
-import { TimePanel } from "./TimePanel";
+import { PanelReading } from "./PanelReading";
+import { marksFor } from "./panel-marks";
+import {
+  KNOWN_KINDS,
+  panelTitle,
+  serviceOf,
+  stateWords,
+  TIME_KINDS,
+  transient,
+  unread,
+} from "./panel-words";
 import { chartHeight, syncKeyOf } from "./time-lines";
 import { useVisiblePanels } from "./visible-panels";
+import { WindowStrip } from "./WindowStrip";
 
 /**
  * A saved dashboard, read in one charged batch (F20, Step 2).
@@ -82,6 +95,7 @@ export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
     [onScreen],
   );
   const canEdit = useCan("edit_dashboards");
+  const canConfigureChecks = useCan("operate_checks");
   const [kept, setKept] = useState<KeptReadings>({});
   const [lastGoodAt, setLastGoodAt] = useState<string | undefined>();
   // The moment the page last judged its lines: each read, and each line's expiry.
@@ -139,12 +153,27 @@ export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
       lastGoodAt={lastGoodAt}
       intervalMs={intervalMs}
       canEdit={canEdit}
+      canConfigureChecks={canConfigureChecks}
       onReadAgain={() => void panels.refetch()}
       onDrag={onDrag}
+      onWiden={widen}
       watch={onScreen.watch}
       panelIds={panelIds}
     />
   );
+}
+
+/** "Show the last 7 days": the widest live range a raw panel may read (FR17). */
+export function widestRangeWithin(limitDays: number): (typeof TIME_RANGES)[number] | undefined {
+  const minutes = limitDays * MINUTES_PER_DAY;
+  return [...TIME_RANGES].reverse().find((range) => range.minutes <= minutes);
+}
+
+const MINUTES_PER_DAY = 1440;
+
+function widen(limitDays: number): void {
+  const range = widestRangeWithin(limitDays);
+  if (range) setScreenOverride({ window: { kind: "relative", rangeId: range.id } });
 }
 
 function newestGoodRead(answer: PanelReadResponse): string | undefined {
@@ -176,8 +205,11 @@ interface ViewProps {
   lastGoodAt: string | undefined;
   intervalMs: number | false;
   canEdit: boolean;
+  canConfigureChecks: boolean;
   onReadAgain: () => void;
   onDrag: (fromSeconds: number, toSeconds: number) => void;
+  /** A raw panel's "Show the last 7 days" (FR17). */
+  onWiden: (limitDays: number) => void;
   watch: (element: HTMLElement | null) => void;
   /** After a drag, the panels read so far; undefined when every panel is read. */
   panelIds: readonly string[] | undefined;
@@ -186,7 +218,10 @@ interface ViewProps {
 function DashboardView(props: ViewProps) {
   const { dashboard, context, answer, canEdit } = props;
   const zone = context?.project.timezone ?? "UTC";
-  const scanPanels = dashboard.definition.panels.filter((panel) => panel.kind !== "note");
+  // Notes and open findings are drawn from the definition and the context, never read.
+  const scanPanels = dashboard.definition.panels.filter(
+    (panel) => panel.kind !== "note" && panel.kind !== "open_findings",
+  );
   const unreadIds = answer
     ? scanPanels.filter((panel) => {
         const result = answer.panels[panel.id];
@@ -209,6 +244,14 @@ function DashboardView(props: ViewProps) {
         <p className={detection.wrong ? "text-critical-text text-sm" : "text-ink-dim text-sm"}>
           {detection.title}
         </p>
+      ) : null}
+      {context ? (
+        <WindowStrip
+          context={context}
+          now={props.now}
+          // An empty strip never reads as calm while detection is not judging (FR63).
+          empty={detection ? detection.title : "no findings, alert incidents or releases."}
+        />
       ) : null}
       {unreadIds.length > 0 ? (
         <button
@@ -417,6 +460,9 @@ function PanelCell(
     const text = typeof panel.settings.text === "string" ? panel.settings.text : "";
     return frame(<NotePanel text={text} />);
   }
+  if (panel.kind === "open_findings") {
+    return frame(<OpenFindingsPanel context={context} service={serviceOf(panel)} />);
+  }
   const result = answer?.panels[panel.id];
   const awaitingScroll = props.panelIds !== undefined && !props.panelIds.includes(panel.id);
   if (result === undefined && awaitingScroll) {
@@ -445,20 +491,28 @@ function PanelCell(
     return frame(<PanelWords words="Could not read this." />);
   }
   if (result.state === "ok") {
-    if (!TIME_KINDS.has(panel.kind)) {
+    if (!KNOWN_KINDS.has(panel.kind)) {
       return frame(<PanelWords words="This panel type is no longer available." />);
     }
+    const chart = TIME_KINDS.has(panel.kind);
+    const marking = marksFor(panel, context, result);
     return frame(
-      <TimePanel
-        panel={panel}
-        reading={result}
-        zone={zone}
-        syncKey={syncKeyOf(dashboard.id)}
-        onDrag={props.onDrag}
-        asTable={asTable}
-        description={`${title.service ? `${title.service} · ` : ""}${title.text} across the window.`}
-      />,
-      <TableToggle asTable={asTable} onToggle={() => setAsTable((before) => !before)} />,
+      <>
+        <PanelReading
+          panel={panel}
+          reading={result}
+          zone={zone}
+          syncKey={syncKeyOf(dashboard.id)}
+          onDrag={props.onDrag}
+          marks={marking.marks}
+          asTable={asTable}
+          description={`${title.service ? `${title.service} · ` : ""}${title.text} across the window.`}
+        />
+        <MarkingNote note={marking.note} coverage={marking.coverage} />
+      </>,
+      chart ? (
+        <TableToggle asTable={asTable} onToggle={() => setAsTable((before) => !before)} />
+      ) : undefined,
     );
   }
   const words =
@@ -467,7 +521,26 @@ function PanelCell(
       owner: dashboard.owner,
       projectName: context?.project.name ?? "this project",
       overLimit: props.overLimit,
+      canConfigureChecks: props.canConfigureChecks,
+      windowStart: answer?.window_start,
     }) ?? "";
+  if (result.state === "window_too_wide") {
+    const range = widestRangeWithin(result.limit_days);
+    return frame(
+      <div className="flex flex-col items-start gap-2 text-ink-dim text-sm">
+        <p>{words}</p>
+        {range ? (
+          <button
+            type="button"
+            onClick={() => props.onWiden(result.limit_days)}
+            className="inline-flex min-h-11 items-center text-brand underline md:min-h-0"
+          >
+            Show the last {range.label}
+          </button>
+        ) : null}
+      </div>,
+    );
+  }
   const old = transient(result) ? keptLine(kept[panel.id], intervalMs, now) : undefined;
   if (old) return frame(<KeptChart {...props} reading={old} />);
   return frame(
@@ -490,10 +563,34 @@ function KeptChart(
   return (
     <>
       <StaleStrip since={formatZonedTime(reading.read_at, { zone })} />
-      {TIME_KINDS.has(panel.kind) ? (
-        <TimePanel panel={panel} reading={reading} zone={zone} description="An earlier reading." />
+      {KNOWN_KINDS.has(panel.kind) ? (
+        <PanelReading
+          panel={panel}
+          reading={reading}
+          zone={zone}
+          description="An earlier reading."
+        />
       ) : null}
     </>
+  );
+}
+
+/** What a chart's marks are, said under it: the whole project's, or no deploy information. */
+function MarkingNote({ note, coverage }: { note?: string; coverage?: string }) {
+  if (!note && !coverage) return null;
+  return (
+    <p className="mt-1 text-ink-dim text-xs">
+      {note}
+      {note && coverage ? " " : null}
+      {coverage ? (
+        <>
+          {coverage}{" "}
+          <a href={setupDocUrl("deploys")} className="text-brand underline">
+            How releases are found
+          </a>
+        </>
+      ) : null}
+    </p>
   );
 }
 

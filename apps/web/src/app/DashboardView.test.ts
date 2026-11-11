@@ -124,6 +124,12 @@ function context(detection: DetectionStatus = judging): DashboardContext {
     last_seen_at: at(1),
     findings: [],
     findings_truncated: false,
+    markers: [],
+    markers_truncated: false,
+    markers_cap: 500,
+    coverage: {},
+    incidents: [],
+    incidents_truncated: false,
     open_findings: { total: 1, by_service: { checkout: 1 } },
   };
 }
@@ -554,6 +560,96 @@ describe("the dashboard view", () => {
     const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
 
     await waitFor(() => text(container).includes("Detection is not running"), "detection's line");
+  });
+
+  it("draws Step 5's number, table and open findings, and an outage leaves the findings (T5.6a, AC61)", async () => {
+    const number = {
+      ...panel("p_number", "project_number", { measure: "p95_ms", compare: true }),
+      height: "small" as const,
+    };
+    const table = panel("p_table", "services_table", { order: "worst", rows: 1 });
+    const open = {
+      ...panel("p_open", "open_findings", { service: null }),
+      height: "small" as const,
+    };
+    const hostile = "<img src=x onerror=alert(1)>";
+    stubApi({
+      ...viewOf(
+        json(
+          batch({
+            p_number: {
+              ...(ok() as Extract<PanelResult, { state: "ok" }>),
+              kind: "project_number",
+              series: [],
+              number: { measure: "p95_ms", value: 88, previous: null, previous_coverage: 0.5 },
+            },
+            p_table: {
+              ...(ok() as Extract<PanelResult, { state: "ok" }>),
+              kind: "services_table",
+              series: [],
+              rows: [{ service_name: hostile, requests_per_minute: 4, error_rate: 0, p95_ms: 9 }],
+            },
+          }),
+        ),
+      ),
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(dashboard([number, table, open])),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(() => text(section(container, "p_table")).includes(hostile), "the table");
+
+    expect(text(section(container, "p_number"))).toContain("88ms");
+    expect(text(section(container, "p_number"))).toContain("Not enough history to compare");
+    // A hostile value is text, never an element (AC35's render half).
+    expect(section(container, "p_table")?.querySelector("img")).toBeNull();
+    expect(text(section(container, "p_table")?.querySelector("thead") ?? null)).toContain(
+      "p95 (est.)",
+    );
+    // Open findings come from the context, with no scan, judged by detection (AC97).
+    expect(text(section(container, "p_open"))).toContain("1");
+  });
+
+  it("offers a raw panel past its window the widest one it may read (FR17, AC23)", async () => {
+    const check = panel("p_check", "check_trend", { check: "Login", signal: "uptime" });
+    stubApi({
+      ...viewOf(
+        json(batch({ p_check: { state: "window_too_wide", kind: "check_trend", limit_days: 30 } })),
+      ),
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(dashboard([check])),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(section(container, "p_check")).includes("at most 30 days"),
+      "the words",
+    );
+
+    expect(text(section(container, "p_check"))).toContain("Show the last 7 days");
+  });
+
+  it("lists the window's findings, incidents and releases above the grid (FR47)", async () => {
+    stubApi({
+      ...viewOf(json(batch({ p_rate: ok() }))),
+      [`GET /dashboards/${DASHBOARD_ID}/context`]: json({
+        ...context(),
+        findings: [
+          {
+            id: "f-1",
+            scope: "service",
+            service_name: "checkout",
+            severity: "critical",
+            title: "checkout is slower than normal",
+            started_at: at(30),
+            closed_at: null,
+          },
+        ],
+      }),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(() => text(container).includes("In this window"), "the strip");
+
+    expect(container.querySelector('a[href="/findings/f-1"]')?.textContent).toBe(
+      "checkout is slower than normal",
+    );
+    expect(text(container)).toContain("Findings are judged from their own readings");
   });
 
   it("says a dashboard that does not exist plainly, with a way back to the list (AC75)", async () => {

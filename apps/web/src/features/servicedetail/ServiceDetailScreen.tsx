@@ -16,6 +16,7 @@ import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import type { DeployMarker } from "@/shared/deploy-markers";
 import { releaseMarkers } from "@/shared/deploy-markers";
 import { useDetectionSettings, useServiceDetection } from "@/shared/detection/api";
+import { findingSpans } from "@/shared/finding-spans";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, formatPercent } from "@/shared/format/number";
@@ -56,7 +57,6 @@ import {
   describeServiceErrors,
   describeSilence,
   detailState,
-  findingSpans,
   neighboursOf,
 } from "./service-detail";
 import { serviceTargetsLine, useServiceTargets } from "./slo-line";

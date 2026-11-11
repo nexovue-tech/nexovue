@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FindingMarker } from "@/shared/detection/api";
+import { findingSpans } from "@/shared/finding-spans";
 import type { ServiceEdge } from "@/shared/service-peers";
 import { collapseAddressPeers } from "@/shared/service-peers";
 import type { EndpointHealth, ErrorGroupSummary, ServiceHealth } from "./api";
@@ -12,7 +13,6 @@ import {
   describeServiceErrors,
   describeSilence,
   detailState,
-  findingSpans,
   neighboursOf,
 } from "./service-detail";
 
@@ -260,7 +260,7 @@ describe("findings on the timeline (F6, design *The service screen*)", () => {
 
   it("shades each finding across the minutes it was open", () => {
     expect(findingSpans([marker({})], window)).toEqual([
-      { from: seconds("2026-11-04T12:10:00Z"), to: seconds("2026-11-04T12:20:00Z") },
+      { from: seconds("2026-11-04T12:10:00Z"), to: seconds("2026-11-04T12:20:00Z"), id: "f-1" },
     ]);
   });
 
@@ -270,7 +270,7 @@ describe("findings on the timeline (F6, design *The service screen*)", () => {
       window,
     );
 
-    expect(spans).toEqual([{ from: seconds(window.from), to: seconds(window.to) }]);
+    expect(spans).toEqual([{ from: seconds(window.from), to: seconds(window.to), id: "f-1" }]);
   });
 
   it("draws nothing for a finding wholly outside the window", () => {

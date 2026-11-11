@@ -9,13 +9,27 @@ import { CHART_HEIGHT } from "@/shared/components/TrendChart";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 import type { WindowChoice } from "@/shared/selection";
 
-import type { Definition, NodeChoice, PanelResult, PreviewAsk, Signal, StoredPanel } from "./api";
-import { useNodeChoices, usePanelPreview, useServiceChoices } from "./api";
+import type {
+  Definition,
+  NodeChoice,
+  PanelResult,
+  PreviewAsk,
+  Signal,
+  StatementChoice,
+  StoredPanel,
+} from "./api";
+import {
+  useCheckChoices,
+  useNodeChoices,
+  usePanelPreview,
+  useServiceChoices,
+  useStatementChoices,
+} from "./api";
 import { NotePanel } from "./NotePanel";
 import { PanelWords } from "./PanelFrame";
+import { PanelReading } from "./PanelReading";
 import type { NodeRef } from "./panel-words";
-import { nodeName, nodeOf, signalOf, stateWords, TIME_KINDS } from "./panel-words";
-import { TimePanel } from "./TimePanel";
+import { KNOWN_KINDS, MEASURE_NAMES, nodeName, nodeOf, signalOf, stateWords } from "./panel-words";
 
 /**
  * What a panel shows, chosen in the side sheet (F20, T3.3; FR23, FR24).
@@ -30,20 +44,31 @@ import { TimePanel } from "./TimePanel";
  * **Apply reads once.** Each Apply is one charged read of this one panel, inside the
  * sheet, with the live window; typing reads nothing (AC135).
  *
- * Step 4 adds the top-N chart and one machine's metric; checks, statements and the rest
- * join with Step 5's kinds.
+ * Step 4 added the top-N chart and one machine's metric; Step 5 adds every other kind:
+ * endpoints, the top machines, checks and statements by their real names, numbers with
+ * their comparison, open findings and the ranked tables.
  */
 
-type Kind = "project_trend" | "service_trend" | "top_services_trend" | "node_trend" | "note";
+type Kind =
+  | "project_trend"
+  | "service_trend"
+  | "top_services_trend"
+  | "node_trend"
+  | "top_nodes_trend"
+  | "endpoint_trend"
+  | "check_trend"
+  | "statement_trend"
+  | "project_number"
+  | "service_number"
+  | "open_findings"
+  | "services_table"
+  | "endpoints_table"
+  | "dependencies_table"
+  | "error_groups_table"
+  | "database_statements_table"
+  | "web_vitals_table"
+  | "note";
 type Order = "worst" | "slowest";
-
-const KINDS: ReadonlySet<string> = new Set<Kind>([
-  "project_trend",
-  "service_trend",
-  "top_services_trend",
-  "node_trend",
-  "note",
-]);
 
 const KIND_GROUPS: readonly { question: string; kinds: readonly { id: Kind; label: string }[] }[] =
   [
@@ -52,18 +77,91 @@ const KIND_GROUPS: readonly { question: string; kinds: readonly { id: Kind; labe
       kinds: [
         { id: "project_trend", label: "The whole project over time" },
         { id: "top_services_trend", label: "The worst or slowest services over time" },
+        { id: "project_number", label: "One number for the whole project" },
+        { id: "services_table", label: "The worst or slowest services, as a table" },
+        { id: "dependencies_table", label: "The busiest or failing dependencies" },
       ],
     },
     {
       question: "How is a service doing",
-      kinds: [{ id: "service_trend", label: "One service over time" }],
+      kinds: [
+        { id: "service_trend", label: "One service over time" },
+        { id: "endpoint_trend", label: "One endpoint over time" },
+        { id: "service_number", label: "One number for a service" },
+        { id: "endpoints_table", label: "The worst or slowest endpoints" },
+        { id: "open_findings", label: "How many findings are open" },
+      ],
     },
     {
       question: "Machines",
-      kinds: [{ id: "node_trend", label: "One machine's metric over time" }],
+      kinds: [
+        { id: "node_trend", label: "One machine's metric over time" },
+        { id: "top_nodes_trend", label: "The machines highest on a metric" },
+      ],
     },
+    { question: "Checks", kinds: [{ id: "check_trend", label: "One check over time" }] },
+    {
+      question: "Errors",
+      kinds: [{ id: "error_groups_table", label: "The most frequent errors" }],
+    },
+    {
+      question: "Databases",
+      kinds: [
+        { id: "statement_trend", label: "One statement's cost over time" },
+        { id: "database_statements_table", label: "The slowest statements" },
+      ],
+    },
+    { question: "Browsers", kinds: [{ id: "web_vitals_table", label: "Core Web Vitals" }] },
     { question: "Text", kinds: [{ id: "note", label: "A note" }] },
   ];
+
+const KINDS: ReadonlySet<string> = new Set(
+  KIND_GROUPS.flatMap((group) => group.kinds.map((kind) => kind.id)),
+);
+
+/** Kinds reading one service, named or picked; those reading the project may name none. */
+const NEEDS_SERVICE: ReadonlySet<Kind> = new Set([
+  "service_trend",
+  "endpoint_trend",
+  "service_number",
+]);
+const MAY_NAME_SERVICE: ReadonlySet<Kind> = new Set([
+  "open_findings",
+  "endpoints_table",
+  "error_groups_table",
+]);
+const SIGNAL_KINDS: ReadonlySet<Kind> = new Set([
+  "project_trend",
+  "service_trend",
+  "top_services_trend",
+  "endpoint_trend",
+]);
+const ORDER_KINDS: ReadonlySet<Kind> = new Set([
+  "top_services_trend",
+  "services_table",
+  "endpoints_table",
+]);
+const ROW_KINDS: ReadonlySet<Kind> = new Set([
+  "services_table",
+  "endpoints_table",
+  "dependencies_table",
+  "error_groups_table",
+  "database_statements_table",
+]);
+
+const CHECK_SIGNALS = [
+  { id: "uptime", label: "Uptime" },
+  { id: "duration", label: "Duration" },
+];
+const SPAN_KINDS = [
+  { id: "SERVER", label: "A request it serves" },
+  { id: "CONSUMER", label: "A message it consumes" },
+];
+const SERVICE_MEASURES = ["requests_per_minute", "error_rate", "p50_ms", "p95_ms", "p99_ms"];
+const PROJECT_MEASURES = [...SERVICE_MEASURES, "service_count"];
+/** A table holds 1 to 20 rows (FR6). */
+const ROW_COUNTS = [5, 10, 20].map((count) => ({ id: String(count), label: String(count) }));
+const DEFAULT_ROWS = "10";
 
 const SIGNALS: readonly { id: Signal; label: string }[] = [
   { id: "rate", label: "Rate" },
@@ -118,8 +216,27 @@ interface Form {
   chosen: string;
   typed: string;
   followsPicker: boolean;
+  /** For a kind that may name a service: the whole project instead. */
+  wholeProject: boolean;
   text: string;
   title: string;
+  spanKind: string;
+  endpoint: string;
+  checkSignal: string;
+  check: string;
+  /** The chosen statement, as its key; NONE until one is chosen. */
+  statement: string;
+  label: string;
+  measure: string;
+  compare: boolean;
+  rows: string;
+  failingOnly: boolean;
+  deviceClass: string;
+}
+
+function setting(panel: StoredPanel | undefined, name: string): string {
+  const value = panel?.settings[name];
+  return typeof value === "string" ? value : NONE;
 }
 
 function formOf(panel: StoredPanel | undefined): Form {
@@ -130,13 +247,50 @@ function formOf(panel: StoredPanel | undefined): Form {
     order: panel?.settings.order === "slowest" ? "slowest" : "worst",
     count: typeof panel?.settings.count === "number" ? String(panel.settings.count) : MOST_LINES,
     node: panel && nodeOf(panel) ? nodeKey(nodeOf(panel) as NodeRef) : NONE,
-    metric: typeof panel?.settings.metric === "string" ? panel.settings.metric : NONE,
+    metric: setting(panel, "metric"),
     chosen: typeof service === "string" ? service : NONE,
     typed: "",
     followsPicker: typeof service === "object" && service !== null,
-    text: typeof panel?.settings.text === "string" ? panel.settings.text : "",
+    wholeProject: panel !== undefined && service === null,
+    text: setting(panel, "text"),
     title: panel?.title ?? "",
+    spanKind: setting(panel, "span_kind") || "SERVER",
+    endpoint: setting(panel, "endpoint"),
+    checkSignal: panel?.settings.signal === "duration" ? "duration" : "uptime",
+    check: setting(panel, "check"),
+    statement:
+      panel?.kind === "statement_trend"
+        ? statementKey({
+            query_hash: setting(panel, "query_hash"),
+            server: {
+              address: setting(panel, "server_address"),
+              port: Number(panel.settings.server_port) || 0,
+            },
+          })
+        : NONE,
+    label: setting(panel, "label"),
+    measure: setting(panel, "measure") || "p95_ms",
+    compare: panel?.settings.compare === true,
+    rows: typeof panel?.settings.rows === "number" ? String(panel.settings.rows) : DEFAULT_ROWS,
+    failingOnly: panel?.settings.failing_only === true,
+    deviceClass: setting(panel, "device_class"),
   };
+}
+
+/** One statement's identity as a select's value: hash, server and port. */
+export function statementKey(statement: Pick<StatementChoice, "query_hash" | "server">): string {
+  return JSON.stringify([statement.query_hash, statement.server.address, statement.server.port]);
+}
+
+function statementFromKey(key: string): [string, string, number] | undefined {
+  try {
+    const [hash, address, port] = JSON.parse(key) as [string, string, number];
+    return typeof hash === "string" && typeof address === "string" && typeof port === "number"
+      ? [hash, address, port]
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isKind(kind: string): kind is Kind {
@@ -175,23 +329,89 @@ function panelOf(
     width: initial?.width ?? DEFAULT_WIDTH,
     height: initial && initial.kind === form.kind ? initial.height : ("medium" as const),
   };
-  if (form.kind === "note") return { ...base, settings: { text: form.text } };
-  if (form.kind === "project_trend") return { ...base, settings: { signal: form.signal } };
-  if (form.kind === "top_services_trend") {
-    return {
-      ...base,
-      settings: { signal: form.signal, order: form.order, count: Number(form.count) },
-    };
-  }
-  if (form.kind === "node_trend") {
-    const node = form.node === NONE ? undefined : nodeFromKey(form.node);
-    if (node === undefined) return { missing: "Choose a machine." };
-    if (form.metric === NONE) return { missing: "Choose what to show for it." };
-    return { ...base, settings: { node, metric: form.metric } };
-  }
+  const settings = settingsOf(form);
+  if (isMissing(settings)) return settings;
+  return { ...base, settings };
+}
+
+function isMissing(value: Record<string, unknown>): value is { missing: string } {
+  return Object.keys(value).length === 1 && typeof value.missing === "string";
+}
+
+/** The settings the spec's table allows for the form's kind, or what is missing (FR6). */
+function settingsOf(form: Form): Record<string, unknown> {
   const service = serviceOf(form);
-  if (service === undefined) return { missing: "Choose a service, or type its name." };
-  return { ...base, settings: { service, signal: form.signal } };
+  const optionalService = form.wholeProject ? null : service;
+  if (NEEDS_SERVICE.has(form.kind) && service === undefined) {
+    return { missing: "Choose a service, or type its name." };
+  }
+  if (MAY_NAME_SERVICE.has(form.kind) && optionalService === undefined) {
+    return { missing: "Choose a service, or the whole project." };
+  }
+  const rows = Number(form.rows);
+  switch (form.kind) {
+    case "note":
+      return { text: form.text };
+    case "project_trend":
+      return { signal: form.signal };
+    case "service_trend":
+      return { service, signal: form.signal };
+    case "top_services_trend":
+      return { signal: form.signal, order: form.order, count: Number(form.count) };
+    case "node_trend": {
+      const node = form.node === NONE ? undefined : nodeFromKey(form.node);
+      if (node === undefined) return { missing: "Choose a machine." };
+      if (form.metric === NONE) return { missing: "Choose what to show for it." };
+      return { node, metric: form.metric };
+    }
+    case "top_nodes_trend":
+      if (form.metric === NONE) return { missing: "Choose a metric." };
+      return { metric: form.metric, count: Number(form.count) };
+    case "endpoint_trend":
+      if (form.endpoint.trim() === "") return { missing: "Type the endpoint's name." };
+      return {
+        service,
+        span_kind: form.spanKind,
+        endpoint: form.endpoint.trim(),
+        signal: form.signal,
+      };
+    case "check_trend":
+      if (form.check.trim() === "") return { missing: "Choose a check, or type its name." };
+      return { check: form.check.trim(), signal: form.checkSignal };
+    case "statement_trend": {
+      const statement = statementFromKey(form.statement);
+      if (statement === undefined) return { missing: "Choose a statement." };
+      const [query_hash, server_address, server_port] = statement;
+      return {
+        query_hash,
+        server_address,
+        server_port,
+        label: form.label.trim() === "" ? null : form.label.trim(),
+      };
+    }
+    case "project_number":
+      return { measure: form.measure, compare: form.compare };
+    case "service_number":
+      return {
+        service,
+        measure: form.measure === "service_count" ? "p95_ms" : form.measure,
+        compare: form.compare,
+      };
+    case "open_findings":
+      return { service: optionalService };
+    case "services_table":
+      return { order: form.order, rows };
+    case "endpoints_table":
+      return { service: optionalService, order: form.order, rows };
+    case "dependencies_table":
+      return { failing_only: form.failingOnly, rows };
+    case "error_groups_table":
+      return { service: optionalService, rows };
+    case "database_statements_table":
+      return { rows };
+    case "web_vitals_table":
+      return { device_class: form.deviceClass.trim() === "" ? null : form.deviceClass.trim() };
+  }
 }
 
 function serviceOf(form: Form): string | { picker: true } | undefined {
@@ -239,8 +459,15 @@ export function PanelPicker({
   const [ask, setAsk] = useState<PreviewAsk | undefined>();
   const [applied, setApplied] = useState<StoredPanel | undefined>();
   const [problem, setProblem] = useState<string | undefined>();
-  const services = useServiceChoices(form.kind === "service_trend" ? projectId : undefined, choice);
-  const nodes = useNodeChoices(form.kind === "node_trend" ? projectId : undefined, choice);
+  const namesService = NEEDS_SERVICE.has(form.kind) || MAY_NAME_SERVICE.has(form.kind);
+  const services = useServiceChoices(namesService ? projectId : undefined, choice);
+  const machines = form.kind === "node_trend" || form.kind === "top_nodes_trend";
+  const nodes = useNodeChoices(machines ? projectId : undefined, choice);
+  const checks = useCheckChoices(form.kind === "check_trend" ? projectId : undefined);
+  const statements = useStatementChoices(
+    form.kind === "statement_trend" ? projectId : undefined,
+    choice,
+  );
   const preview = usePanelPreview(ask, projectId, choice, undefined);
   const update = (changes: Partial<Form>) => setForm((current) => ({ ...current, ...changes }));
   const candidate = panelOf(form, panelId, initial);
@@ -253,8 +480,8 @@ export function PanelPicker({
     }
     setProblem(undefined);
     setApplied(candidate);
-    // A note reads nothing: it is drawn from its own text.
-    if (candidate.kind === "note") return;
+    // A note and open findings read nothing: drawn from their text and the page's context.
+    if (candidate.kind === "note" || candidate.kind === "open_findings") return;
     setAsk((current) => ({
       definition: definitionWith(definition, candidate),
       panelIds: [candidate.id],
@@ -298,7 +525,17 @@ export function PanelPicker({
       </fieldset>
 
       <div className="flex flex-col gap-3">
-        {form.kind === "service_trend" ? (
+        {MAY_NAME_SERVICE.has(form.kind) ? (
+          <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-0">
+            <input
+              type="checkbox"
+              checked={form.wholeProject}
+              onChange={(event) => update({ wholeProject: event.target.checked })}
+            />
+            The whole project
+          </label>
+        ) : null}
+        {namesService && !(MAY_NAME_SERVICE.has(form.kind) && form.wholeProject) ? (
           <ServiceChoice
             form={form}
             update={update}
@@ -308,6 +545,13 @@ export function PanelPicker({
             onRetry={() => void services.refetch()}
           />
         ) : null}
+        <StepFiveFields
+          form={form}
+          update={update}
+          checks={checks}
+          statements={statements}
+          metrics={[...new Set((nodes.data ?? []).flatMap((node) => node.signals))].sort()}
+        />
         {form.kind === "node_trend" ? (
           <NodeChoiceFields
             form={form}
@@ -318,29 +562,40 @@ export function PanelPicker({
             onRetry={() => void nodes.refetch()}
           />
         ) : null}
-        {form.kind === "top_services_trend" ? (
-          <>
-            <SelectField
-              label="Chooses"
-              value={form.order}
-              options={ORDERS}
-              optionLabel={(order) => order.label}
-              onChange={(order) => update({ order: order as Order })}
-              stacked
-            />
-            <SelectField
-              label="How many services"
-              value={form.count}
-              options={COUNTS}
-              optionLabel={(count) => count.label}
-              onChange={(count) => update({ count })}
-              stacked
-            />
-          </>
+        {ORDER_KINDS.has(form.kind) ? (
+          <SelectField
+            label="Chooses"
+            value={form.order}
+            options={ORDERS}
+            optionLabel={(order) => order.label}
+            onChange={(order) => update({ order: order as Order })}
+            stacked
+          />
+        ) : null}
+        {form.kind === "top_services_trend" || form.kind === "top_nodes_trend" ? (
+          <SelectField
+            label={form.kind === "top_nodes_trend" ? "How many machines" : "How many services"}
+            value={form.count}
+            options={COUNTS}
+            optionLabel={(count) => count.label}
+            onChange={(count) => update({ count })}
+            stacked
+          />
+        ) : null}
+        {ROW_KINDS.has(form.kind) ? (
+          <SelectField
+            label="Rows"
+            value={form.rows}
+            options={ROW_COUNTS}
+            optionLabel={(count) => count.label}
+            onChange={(rows) => update({ rows })}
+            stacked
+          />
         ) : null}
         {form.kind === "note" ? (
           <NoteText value={form.text} onChange={(text) => update({ text })} />
-        ) : form.kind === "node_trend" ? null : (
+        ) : null}
+        {SIGNAL_KINDS.has(form.kind) ? (
           <SelectField
             label="Shows"
             value={form.signal}
@@ -349,7 +604,7 @@ export function PanelPicker({
             onChange={(signal) => update({ signal: signal as Signal })}
             stacked
           />
-        )}
+        ) : null}
         <TextField
           label="Title (optional)"
           name="panel-title"
@@ -555,6 +810,13 @@ function PreviewBody({
     const text = typeof applied.settings.text === "string" ? applied.settings.text : "";
     return <NotePanel text={text} />;
   }
+  if (applied.kind === "open_findings") {
+    return (
+      <p className="text-ink-dim text-sm">
+        Counts this project's open findings when the dashboard is open. It reads nothing.
+      </p>
+    );
+  }
   if (pending) {
     return (
       <div
@@ -583,10 +845,10 @@ function PreviewBody({
     );
   }
   if (!result) return null;
-  if (result.state === "ok" && TIME_KINDS.has(applied.kind)) {
+  if (result.state === "ok" && KNOWN_KINDS.has(applied.kind)) {
     return (
       <>
-        <TimePanel panel={applied} reading={result} zone={zone} description="A preview." />
+        <PanelReading panel={applied} reading={result} zone={zone} description="A preview." />
         <p className="text-ink-dim text-xs">Applied</p>
       </>
     );
@@ -675,4 +937,193 @@ function NodeChoiceFields({
       />
     </>
   );
+}
+
+/**
+ * The settings Step 5's kinds add: an endpoint, a check and a statement by their real
+ * names where the project lists them, a machine metric, a measure and its comparison, a
+ * dependency filter and a device class (FR6, FR23). Labels are escaped and values raw.
+ */
+function StepFiveFields({
+  form,
+  update,
+  checks,
+  statements,
+  metrics,
+}: {
+  form: Form;
+  update: (changes: Partial<Form>) => void;
+  checks: { isPending: boolean; isError: boolean; data: string[] | undefined };
+  statements: { isPending: boolean; isError: boolean; data: StatementChoice[] | undefined };
+  metrics: string[];
+}) {
+  switch (form.kind) {
+    case "endpoint_trend":
+      return (
+        <>
+          <SelectField
+            label="Endpoint kind"
+            value={form.spanKind}
+            options={SPAN_KINDS}
+            optionLabel={(kind) => kind.label}
+            onChange={(spanKind) => update({ spanKind })}
+            stacked
+          />
+          <TextField
+            label="Endpoint"
+            name="endpoint"
+            value={form.endpoint}
+            onChange={(endpoint) => update({ endpoint })}
+            hint={
+              form.endpoint === ""
+                ? "As the services screen names it, such as GET /orders."
+                : `Reads as: ${visibleEscapes(form.endpoint)}`
+            }
+            required={false}
+          />
+        </>
+      );
+    case "top_nodes_trend":
+      return (
+        <SelectField
+          label="Metric"
+          value={form.metric}
+          options={[
+            {
+              id: NONE,
+              label: metrics.length === 0 ? "No machine has reported" : "Choose a metric",
+            },
+            ...metrics.map((metric) => ({ id: metric, label: visibleEscapes(metric) })),
+          ]}
+          optionLabel={(option) => option.label}
+          onChange={(metric) => update({ metric })}
+          stacked
+        />
+      );
+    case "check_trend":
+      return (
+        <>
+          {checks.isPending ? (
+            <SkeletonRows rows={1} label="Listing checks" />
+          ) : checks.isError ? (
+            <p className="text-sm text-warning-text">Could not list checks. Type a name instead.</p>
+          ) : (
+            <SelectField
+              label="Check"
+              value={(checks.data ?? []).includes(form.check) ? form.check : NONE}
+              options={[
+                { id: NONE, label: "Choose a check" },
+                ...(checks.data ?? []).map((name) => ({ id: name, label: visibleEscapes(name) })),
+              ]}
+              optionLabel={(option) => option.label}
+              onChange={(check) => update({ check })}
+              stacked
+            />
+          )}
+          <TextField
+            label="Or type its name"
+            name="typed-check"
+            value={form.check}
+            onChange={(check) => update({ check })}
+            hint="Read by name in the displayed project, so one dashboard works on each."
+            required={false}
+          />
+          <SelectField
+            label="Shows"
+            value={form.checkSignal}
+            options={CHECK_SIGNALS}
+            optionLabel={(signal) => signal.label}
+            onChange={(checkSignal) => update({ checkSignal })}
+            stacked
+          />
+        </>
+      );
+    case "statement_trend":
+      return (
+        <>
+          {statements.isPending ? (
+            <SkeletonRows rows={1} label="Listing statements" />
+          ) : statements.isError ? (
+            <p className="text-sm text-warning-text">Could not list statements.</p>
+          ) : (
+            <SelectField
+              label="Statement"
+              value={form.statement}
+              options={[
+                {
+                  id: NONE,
+                  label:
+                    (statements.data ?? []).length === 0
+                      ? "No statement reported in this window"
+                      : "Choose a statement",
+                },
+                ...(statements.data ?? []).map((statement) => ({
+                  id: statementKey(statement),
+                  label: `${visibleEscapes(statement.query_hash)} on ${visibleEscapes(statement.server.address)}:${statement.server.port}`,
+                })),
+              ]}
+              optionLabel={(option) => option.label}
+              onChange={(statement) => update({ statement })}
+              stacked
+            />
+          )}
+          <TextField
+            label="Label (optional)"
+            name="statement-label"
+            value={form.label}
+            onChange={(label) => update({ label: label.slice(0, LABEL_MAX_LENGTH) })}
+            hint="No statement text is kept, so name it for your team."
+            required={false}
+          />
+        </>
+      );
+    case "project_number":
+    case "service_number": {
+      const measures = form.kind === "project_number" ? PROJECT_MEASURES : SERVICE_MEASURES;
+      return (
+        <>
+          <SelectField
+            label="Shows"
+            value={measures.includes(form.measure) ? form.measure : "p95_ms"}
+            options={measures.map((measure) => ({ id: measure, label: MEASURE_NAMES[measure] }))}
+            optionLabel={(option) => option.label}
+            onChange={(measure) => update({ measure })}
+            stacked
+          />
+          <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-0">
+            <input
+              type="checkbox"
+              checked={form.compare}
+              onChange={(event) => update({ compare: event.target.checked })}
+            />
+            Compare with the window before (two reads)
+          </label>
+        </>
+      );
+    }
+    case "dependencies_table":
+      return (
+        <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-0">
+          <input
+            type="checkbox"
+            checked={form.failingOnly}
+            onChange={(event) => update({ failingOnly: event.target.checked })}
+          />
+          Only dependencies that failed
+        </label>
+      );
+    case "web_vitals_table":
+      return (
+        <TextField
+          label="Device class (optional)"
+          name="device-class"
+          value={form.deviceClass}
+          onChange={(deviceClass) => update({ deviceClass })}
+          hint="Such as mobile or desktop; empty reads every device."
+          required={false}
+        />
+      );
+    default:
+      return null;
+  }
 }

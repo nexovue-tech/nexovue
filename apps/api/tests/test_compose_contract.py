@@ -53,6 +53,7 @@ SETTINGS: Final = {
     "CLICKHOUSE_USER": "nexovue",
     "CLICKHOUSE_PASSWORD": "clickhouse-secret",
     "CLICKHOUSE_READER_PASSWORD": "reader-secret",
+    "CLICKHOUSE_API_READER_PASSWORD": "api-reader-secret",
     "CLICKHOUSE_ERASER_PASSWORD": "eraser-secret",
     "CLICKHOUSE_DETECTION_WRITER_PASSWORD": "detection-writer-secret",
     "KAFKA_CLUSTER_ID": "fo8KHCs9Tl-KmwwdLj9KWw",
@@ -284,6 +285,39 @@ def test_an_install_without_the_writer_password_refuses_to_start(tmp_path: Path)
 
     assert rendered.returncode != 0
     assert "set CLICKHOUSE_DETECTION_WRITER_PASSWORD" in rendered.stderr
+
+
+API_READER_ACCOUNT_FILE: Final = "/etc/clickhouse-server/users.d/api-reader.xml"
+
+
+def test_the_api_reads_as_its_own_bounded_account_and_the_scheduler_does_not(
+    layout: str, tmp_path: Path
+) -> None:
+    """F20, NFR14, AC91: the API's reads are bounded per user on the server, and the
+    scheduler's alert and detection sweeps stay outside that bound, on `nexovue_reader`."""
+    services = _render(layout, tmp_path, profiles=("monitoring",))
+
+    clickhouse = services["clickhouse"]
+    assert clickhouse["environment"]["CLICKHOUSE_API_READER_PASSWORD"] == "api-reader-secret"
+    assert API_READER_ACCOUNT_FILE in {volume["target"] for volume in clickhouse["volumes"]}
+    readers = {
+        name: service["environment"]["CLICKHOUSE_DSN"]
+        for name, service in services.items()
+        if "CLICKHOUSE_DSN" in (service.get("environment") or {})
+    }
+    assert "//nexovue_api_reader:api-reader-secret@" in readers["api"]
+    holders = {name for name, dsn in readers.items() if "nexovue_api_reader" in dsn}
+    assert holders == {"api"}, f"{layout}: {sorted(holders)} read as the API's account"
+    assert "//nexovue_reader:reader-secret@" in readers["scheduler-light"]
+
+
+def test_an_install_without_the_api_reader_password_refuses_to_start(tmp_path: Path) -> None:
+    values = {k: v for k, v in SETTINGS.items() if k != "CLICKHOUSE_API_READER_PASSWORD"}
+
+    rendered = _compose_config("self-hosted", tmp_path, values)
+
+    assert rendered.returncode != 0
+    assert "set CLICKHOUSE_API_READER_PASSWORD" in rendered.stderr
 
 
 def _queues_of(argv: list[str], region: str) -> list[str]:

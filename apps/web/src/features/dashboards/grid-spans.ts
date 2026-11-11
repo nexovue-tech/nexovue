@@ -1,6 +1,6 @@
 import type { StoredPanel } from "./api";
 import { layoutRows } from "./layout-rows";
-import { TIME_KINDS } from "./panel-words";
+import { TABLE_KINDS, TIME_KINDS } from "./panel-words";
 
 /**
  * Each panel's grid classes at `lg` and at `xl`, from `layoutRows` (FR49), so the read view
@@ -45,7 +45,11 @@ export function gridSpans(panels: readonly StoredPanel[]): Record<string, string
   const shaped = panels.map((panel) => ({
     id: panel.id,
     width: panel.width,
-    shape: TIME_KINDS.has(panel.kind) ? ("time" as const) : ("text" as const),
+    shape: TIME_KINDS.has(panel.kind)
+      ? ("time" as const)
+      : TABLE_KINDS.has(panel.kind)
+        ? ("table" as const)
+        : ("text" as const),
   }));
   const classes: Record<string, string[]> = {};
   for (const size of GRID_SIZES) {

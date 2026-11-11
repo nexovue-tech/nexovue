@@ -70,6 +70,9 @@ services:
       # The read-only account (users.d/reader.xml). A development default only:
       # both deployment files demand it.
       CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:-nexovue_reader_dev}
+      # The API's own read-only account, bounded per user (users.d/api-reader.xml). A
+      # development default only: both deployment files demand it.
+      CLICKHOUSE_API_READER_PASSWORD: ${CLICKHOUSE_API_READER_PASSWORD:-nexovue_api_reader_dev}
       # The account that can only read and delete (users.d/eraser.xml), for the
       # nightly erasure. A development default only: both deployment files demand it.
       CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:-nexovue_eraser_dev}
@@ -98,6 +101,7 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ../clickhouse/users.d/reader.xml:/etc/clickhouse-server/users.d/reader.xml:ro
+      - ../clickhouse/users.d/api-reader.xml:/etc/clickhouse-server/users.d/api-reader.xml:ro
       - ../clickhouse/users.d/eraser.xml:/etc/clickhouse-server/users.d/eraser.xml:ro
       - ../clickhouse/users.d/detection-writer.xml:/etc/clickhouse-server/users.d/detection-writer.xml:ro
       # One file, not the directory: config.d already holds the image's own

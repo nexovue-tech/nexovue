@@ -9,7 +9,9 @@ AC123 (control and invisible characters and NUL), AC124 (link credentials, more 
 links, hosts only), AC141 (`default_range`'s list held to the console's).
 
 Step 2 knew three kinds: `project_trend`, `service_trend` and `note` (plan, Step 2).
-Step 4 adds `top_services_trend` and `node_trend` (T4.1, T4.2).
+Step 4 adds `top_services_trend` and `node_trend` (T4.1, T4.2). Step 5 adds every other
+kind but `metric_series` and `slo_budget` (T5.1a to T5.2), with the measures, the check
+signals and the table rows of the spec's table, and the install's own limits (T5.6c).
 """
 
 from __future__ import annotations
@@ -40,6 +42,10 @@ DEFAULT_RANGES: Final = ("15m", "1h", "6h", "24h", "7d", "30d", None)
 ORDERS: Final = ("worst", "slowest")
 COUNTS: Final = (1, 2, 3, 4, 5)
 A_HOST: Final = {"host": "web-01", "container": "", "reporter": "", "reporter_instance": ""}
+MEASURES: Final = ("requests_per_minute", "error_rate", "p50_ms", "p95_ms", "p99_ms")
+PROJECT_MEASURES: Final = (*MEASURES, "service_count")
+CHECK_SIGNALS: Final = ("uptime", "duration")
+ROWS: Final = (1, 10, 20)
 
 
 def _panel(panel_id: str = "p_01", **changes: Any) -> dict[str, Any]:
@@ -201,12 +207,32 @@ def test_ac4_a_document_over_64_kib_is_refused_naming_the_size() -> None:
         definition.parse_document(document)
 
 
-def test_ac4_a_worst_case_over_the_scan_cap_is_refused_naming_count_and_panels(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Step 2's kinds cost at most one scan a panel, so 30 panels cannot reach 41. The rule
-    is proved at a lowered cap: four services against a cap of three."""
-    monkeypatch.setattr(compiling, "MAX_SCANS_PER_READ", 3)
+def test_ac4_a_worst_case_of_41_scans_is_refused_naming_count_and_panels() -> None:
+    """A compared number costs two scans, so 21 of them on 21 services ask for 42 and 30
+    panels can pass the cap of 40 (spec, FR6). The refusal names the count, the cap and
+    the panels past it, in layout order."""
+    panels = [
+        _panel(
+            f"p_{index}",
+            kind="service_number",
+            height="small",
+            settings={"service": f"svc-{index}", "measure": "p95_ms", "compare": True},
+        )
+        for index in range(20)
+    ]
+    panels.append(_panel("p_last", settings={"service": "svc-last", "signal": "rate"}))
+    parsed = _accepted(_document(panels=panels))
+
+    with pytest.raises(InvalidRequestError) as refusal:
+        compiling.compile_for_save(parsed.definition)
+
+    assert "41 reads" in refusal.value.detail
+    assert "40" in refusal.value.detail
+    assert refusal.value.extensions["panels_to_remove"] == ["p_last"]
+
+
+def test_ac4_a_lowered_cap_is_the_installs_own() -> None:
+    """A self-hosted install's lower scan cap refuses as the code's does (T5.6c)."""
     panels = [
         _panel(f"p_{index}", settings={"service": f"svc-{index}", "signal": "rate"})
         for index in range(4)
@@ -214,10 +240,9 @@ def test_ac4_a_worst_case_over_the_scan_cap_is_refused_naming_count_and_panels(
     parsed = _accepted(_document(panels=panels))
 
     with pytest.raises(InvalidRequestError) as refusal:
-        compiling.compile_for_save(parsed.definition)
+        compiling.compile_for_save(parsed.definition, max_scans=3)
 
     assert "4 reads" in refusal.value.detail
-    assert "3" in refusal.value.detail
     assert refusal.value.extensions["panels_to_remove"] == ["p_3"]
 
 
@@ -555,3 +580,224 @@ def test_a_stored_step_4_chart_reads_back_as_itself() -> None:
     stored = _document(panels=[_top(), _node()])["definition"]
     kinds = [panel.kind for panel in definition.parse_stored(stored).panels]
     assert kinds == ["top_services_trend", "node_trend"]
+
+
+# ----------------------------------------------------------------- Step 5's kinds
+
+A_STATEMENT: Final = {
+    "query_hash": "-6789",
+    "server_address": "db-1",
+    "server_port": 5432,
+    "label": "Orders by customer",
+}
+
+# One valid panel of each Step 5 kind, the settings the spec's table allows.
+STEP_5: Final[dict[str, dict[str, Any]]] = {
+    "endpoint_trend": {
+        "service": "checkout",
+        "span_kind": "SERVER",
+        "endpoint": "GET /orders",
+        "signal": "latency",
+    },
+    "top_nodes_trend": {"metric": "system.cpu.utilization", "count": 5},
+    "check_trend": {"check": "Login", "signal": "uptime"},
+    "statement_trend": A_STATEMENT,
+    "project_number": {"measure": "service_count", "compare": False},
+    "service_number": {"service": "checkout", "measure": "p95_ms", "compare": True},
+    "open_findings": {"service": None},
+    "services_table": {"order": "worst", "rows": 10},
+    "endpoints_table": {"service": {"picker": True}, "order": "slowest", "rows": 10},
+    "dependencies_table": {"failing_only": True, "rows": 20},
+    "error_groups_table": {"service": None, "rows": 10},
+    "database_statements_table": {"rows": 5},
+    "web_vitals_table": {"device_class": None},
+}
+NUMBERS: Final = ("project_number", "service_number", "open_findings")
+CHARTS: Final = ("endpoint_trend", "top_nodes_trend", "check_trend", "statement_trend")
+TABLES: Final = tuple(kind for kind in STEP_5 if kind.endswith("_table"))
+
+
+def _of(kind: str, height: str = "medium", **settings: Any) -> dict[str, Any]:
+    return _panel(f"p_{kind}", kind=kind, height=height, settings=STEP_5[kind] | settings)
+
+
+@pytest.mark.parametrize("kind", STEP_5)
+def test_every_step_5_kind_is_accepted_and_reads_back_as_itself(kind: str) -> None:
+    document = _document(panels=[_of(kind)], service_picker=True)
+    _accepted(document)
+
+    [panel] = definition.parse_stored(document["definition"]).panels
+    assert panel.kind == kind
+
+
+@pytest.mark.parametrize("kind", (*CHARTS, *TABLES))
+def test_ac67_a_step_5_chart_or_table_saved_small_is_refused(kind: str) -> None:
+    assert "cannot be small" in _refused(
+        _document(panels=[_of(kind, height="small")], service_picker=True)
+    )
+
+
+@pytest.mark.parametrize("kind", NUMBERS)
+@pytest.mark.parametrize("height", HEIGHTS)
+def test_a_number_takes_any_height(kind: str, height: str) -> None:
+    _accepted(_document(panels=[_of(kind, height=height)]))
+
+
+@pytest.mark.parametrize("measure", PROJECT_MEASURES)
+def test_every_project_measure_is_accepted(measure: str) -> None:
+    _accepted(_document(panels=[_of("project_number", measure=measure, compare=True)]))
+
+
+@pytest.mark.parametrize("measure", MEASURES)
+def test_every_service_measure_is_accepted(measure: str) -> None:
+    _accepted(_document(panels=[_of("service_number", measure=measure)]))
+
+
+@pytest.mark.parametrize("signal", CHECK_SIGNALS)
+def test_every_check_signal_is_accepted(signal: str) -> None:
+    _accepted(_document(panels=[_of("check_trend", signal=signal)]))
+
+
+@pytest.mark.parametrize("rows", ROWS)
+@pytest.mark.parametrize("kind", ("services_table", "dependencies_table", "error_groups_table"))
+def test_every_table_row_count_is_accepted(kind: str, rows: int) -> None:
+    _accepted(_document(panels=[_of(kind, rows=rows)]))
+
+
+@pytest.mark.parametrize(
+    ("kind", "settings"),
+    [
+        ("service_number", {"measure": "service_count"}),
+        ("project_number", {"measure": "p90_ms"}),
+        ("project_number", {"compare": "maybe"}),
+        ("check_trend", {"signal": "rate"}),
+        ("check_trend", {"check": ""}),
+        ("check_trend", {"check": "x" * 121}),
+        ("endpoint_trend", {"span_kind": "CLIENT"}),
+        ("endpoint_trend", {"signal": "uptime"}),
+        ("top_nodes_trend", {"count": 6}),
+        ("top_nodes_trend", {"metric": "orders_processed"}),
+        ("statement_trend", {"server_port": 70_000}),
+        ("statement_trend", {"label": "bad\u202eone"}),
+        ("services_table", {"rows": 0}),
+        ("services_table", {"rows": 21}),
+        ("services_table", {"order": "busiest"}),
+        ("dependencies_table", {"failing_only": "sometimes"}),
+        ("web_vitals_table", {"device_class": "x" * 256}),
+        ("open_findings", {"service": ""}),
+        ("database_statements_table", {"server": "db-1"}),
+    ],
+    ids=[
+        "service-count-on-a-service",
+        "unknown-measure",
+        "compare-not-bool",
+        "check-signal",
+        "check-empty",
+        "check-too-long",
+        "span-kind",
+        "endpoint-signal",
+        "top-nodes-6",
+        "top-nodes-metric",
+        "port",
+        "statement-label-escape",
+        "rows-0",
+        "rows-21",
+        "order",
+        "failing-only",
+        "device-too-long",
+        "service-empty",
+        "extra-field",
+    ],
+)
+def test_ac4_a_step_5_setting_outside_the_table_is_refused(
+    kind: str, settings: dict[str, Any]
+) -> None:
+    _refused(_document(panels=[_of(kind, **settings)]))
+
+
+@pytest.mark.parametrize("kind", ("service_number", "endpoint_trend", "endpoints_table"))
+def test_a_step_5_picker_reference_needs_the_picker_on(kind: str) -> None:
+    panel = _of(kind, service={"picker": True})
+
+    _accepted(_document(panels=[panel], service_picker=True))
+    assert "picker" in _refused(_document(panels=[panel], service_picker=False))
+
+
+def test_a_compared_number_counts_two_scans_and_a_plain_one_counts_one() -> None:
+    panels = [
+        _of("project_number", compare=True) | {"id": "p_compared"},
+        _of("project_number", compare=False, measure="error_rate") | {"id": "p_plain"},
+        _of("service_number") | {"id": "p_service"},
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    # The two project numbers share the window's read; the comparison is the second scan.
+    assert compiled.worst_case_scans == 4
+    assert compiling.ScanKey(reader=compiling.PROJECT_TOTALS, previous=True) in compiled.scans
+
+
+def test_tables_of_one_ranking_share_a_scan_whatever_their_row_count() -> None:
+    panels = [
+        _of("services_table", rows=5) | {"id": "p_five"},
+        _of("services_table", rows=20) | {"id": "p_twenty"},
+        _of("services_table", order="slowest") | {"id": "p_slow"},
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    assert compiled.worst_case_scans == 2
+
+
+def test_open_findings_and_notes_cost_no_scan() -> None:
+    panels = [
+        _of("open_findings"),
+        _panel("p_note", kind="note", settings={"text": "hi"}),
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    assert compiled.worst_case_scans == 0
+
+
+def test_a_check_is_one_scan_per_name_until_the_read_resolves_it() -> None:
+    panels = [
+        _of("check_trend") | {"id": "p_up"},
+        _of("check_trend", signal="duration") | {"id": "p_time"},
+        _of("check_trend", check="Checkout") | {"id": "p_other"},
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    assert compiled.worst_case_scans == 2
+    assert compiling.resolve_check(compiled.scans[0], "c-1") == compiling.ScanKey(
+        reader=compiling.CHECK_TREND, check_id="c-1"
+    )
+
+
+def test_every_kind_naming_a_service_lists_it_for_showing_this_service() -> None:
+    panels = [
+        _of("endpoint_trend", service="payments") | {"id": "p_1"},
+        _of("service_number", service="cart") | {"id": "p_2"},
+        _of("error_groups_table", service="checkout") | {"id": "p_3"},
+        _of("endpoints_table") | {"id": "p_4"},
+    ]
+    compiled = compiling.compile_definition(
+        _accepted(_document(panels=panels, service_picker=True)).definition
+    )
+
+    assert compiled.service_names == ["cart", "checkout", "payments"]
+    assert compiled.uses_picker is True
+
+
+def test_every_kind_in_the_spec_s_table_is_known_but_the_two_later_ones() -> None:
+    """FR6's list, less `metric_series` (plan Step 8) and `slo_budget` (Step 10)."""
+    known = {panel.model_fields["kind"].annotation.__args__[0] for panel in _known_panels()}
+    assert known == {
+        "project_trend",
+        "service_trend",
+        "top_services_trend",
+        "node_trend",
+        "note",
+        *STEP_5,
+    }
+
+
+def _known_panels() -> list[Any]:
+    return list(definition.KnownPanel.__args__)

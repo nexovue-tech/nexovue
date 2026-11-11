@@ -199,3 +199,57 @@ describe("a dragged window, rounded out (FR53)", () => {
     });
   });
 });
+
+describe("Step 5's charts", () => {
+  it("names a top-nodes chart's lines by their node, each in its own colour, off zero", () => {
+    const node = { host: "web-1", container: "", reporter: "", reporter_instance: "" };
+    const chart = timeChart(
+      panel("top_nodes_trend", { metric: "system.cpu.utilization", count: 2 }),
+      {
+        ...reading([
+          { label: "system.cpu.utilization", node, points: [[T0, 0.5]] },
+          {
+            label: "system.cpu.utilization",
+            node: { ...node, host: "", container: "api‮" },
+            points: [[T0, 0.25]],
+          },
+        ]),
+        kind: "top_nodes_trend",
+      },
+    );
+
+    expect(chart.lines.map((line) => line.name)).toEqual(["web-1", "api[U+202E]"]);
+    expect(chart.distinctColours).toBe(true);
+    expect(chart.yRange).toBe("fit");
+    expect(chart.format(0.5)).toBe("50.0%");
+  });
+
+  it("draws a check's uptime in percent, a gap where no run was, never a zero", () => {
+    const chart = timeChart(panel("check_trend", { check: "Login", signal: "uptime" }), {
+      ...reading([
+        {
+          label: "uptime_percent",
+          points: [
+            [T0, 100],
+            [T2, 75],
+          ],
+        },
+      ]),
+      kind: "check_trend",
+    });
+
+    expect(chart.lines.map((line) => line.name)).toEqual(["Uptime"]);
+    expect(chart.values[0]).toEqual([100, 75]);
+    expect(chart.format(75)).toBe("75.0%");
+  });
+
+  it("draws a statement's mean time as a duration", () => {
+    const chart = timeChart(panel("statement_trend", { query_hash: "h1" }), {
+      ...reading([{ label: "mean_ms", points: [[T0, 40]] }]),
+      kind: "statement_trend",
+    });
+
+    expect(chart.lines.map((line) => line.name)).toEqual(["Mean time"]);
+    expect(chart.format(40)).toBe("40ms");
+  });
+});

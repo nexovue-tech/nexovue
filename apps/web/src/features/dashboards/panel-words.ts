@@ -11,11 +11,52 @@ import type { PanelResult, Signal, StoredPanel } from "./api";
  * name an action follow the reader's role: a viewer is never told to remove panels (FR65).
  */
 
-export const TIME_KINDS = new Set([
+export const TIME_KINDS: ReadonlySet<string> = new Set([
   "project_trend",
   "service_trend",
   "top_services_trend",
   "node_trend",
+  "top_nodes_trend",
+  "endpoint_trend",
+  "check_trend",
+  "statement_trend",
+]);
+
+/** One number, compared or not, and the open-findings count drawn from the context. */
+export const NUMBER_KINDS: ReadonlySet<string> = new Set([
+  "project_number",
+  "service_number",
+  "open_findings",
+]);
+
+/** Ranked tables: their height follows their rows, so none is saved `small` (FR5). */
+export const TABLE_KINDS: ReadonlySet<string> = new Set([
+  "services_table",
+  "endpoints_table",
+  "dependencies_table",
+  "error_groups_table",
+  "database_statements_table",
+  "web_vitals_table",
+]);
+
+/** Every kind this console draws; a stored panel of any other reads `unknown_kind` (FR8). */
+export const KNOWN_KINDS: ReadonlySet<string> = new Set([
+  ...TIME_KINDS,
+  ...NUMBER_KINDS,
+  ...TABLE_KINDS,
+  "note",
+]);
+
+/**
+ * Kinds that draw every finding and release in the project, since they have no service:
+ * they say so, so nobody reads a checkout finding on a disk chart as a claim about that
+ * disk (FR18, AC132).
+ */
+export const PROJECT_MARKED_KINDS: ReadonlySet<string> = new Set([
+  "node_trend",
+  "top_nodes_trend",
+  "check_trend",
+  "statement_trend",
 ]);
 
 /** A node as the infrastructure screen names it: its container, its host, or its reporter. */
@@ -62,6 +103,54 @@ export function serviceOf(panel: StoredPanel): string | undefined {
   return typeof service === "string" ? service : undefined;
 }
 
+/** The words for a number's measure, as Overview names its four totals. */
+export const MEASURE_NAMES: Record<string, string> = {
+  requests_per_minute: "Requests/min",
+  error_rate: "Failure share",
+  p50_ms: "p50 (est.)",
+  p95_ms: "p95 (est.)",
+  p99_ms: "p99 (est.)",
+  service_count: "Services reporting",
+};
+
+const TABLE_NAMES: Record<string, (panel: StoredPanel) => string> = {
+  services_table: (panel) =>
+    panel.settings.order === "slowest" ? "Slowest services" : "Worst services",
+  endpoints_table: (panel) =>
+    panel.settings.order === "slowest" ? "Slowest endpoints" : "Worst endpoints",
+  dependencies_table: (panel) =>
+    panel.settings.failing_only === true ? "Failing dependencies" : "Busiest dependencies",
+  error_groups_table: () => "Most frequent errors",
+  database_statements_table: () => "Slowest statements",
+  web_vitals_table: (panel) =>
+    typeof panel.settings.device_class === "string"
+      ? `Core Web Vitals · ${visibleEscapes(panel.settings.device_class)}`
+      : "Core Web Vitals",
+};
+
+/** Kinds whose service is a setting, the picker, or (where optional) none. */
+const SERVICE_KINDS: ReadonlySet<string> = new Set([
+  "service_trend",
+  "endpoint_trend",
+  "service_number",
+  "open_findings",
+  "endpoints_table",
+  "error_groups_table",
+]);
+
+/** The service a panel shows, as its heading names it: escaped, or "Picked service". */
+function headingService(panel: StoredPanel): string | undefined {
+  const service = panel.settings.service;
+  if (typeof service === "string") return visibleEscapes(service);
+  if (typeof service === "object" && service !== null) return "Picked service";
+  return undefined;
+}
+
+function stringSetting(panel: StoredPanel, name: string): string {
+  const value = panel.settings[name];
+  return typeof value === "string" ? value : "";
+}
+
 /** A generated title always says what is shown, with the service first (FR35). */
 export function panelTitle(panel: StoredPanel): { service?: string; text: string } {
   const signal = signalOf(panel);
@@ -73,6 +162,45 @@ export function panelTitle(panel: StoredPanel): { service?: string; text: string
       text: what,
     };
   }
+  const own = panel.title ? visibleEscapes(panel.title) : undefined;
+  const service = SERVICE_KINDS.has(panel.kind) ? headingService(panel) : undefined;
+  const withService = (text: string) => ({
+    ...(service === undefined ? {} : { service }),
+    text: own ?? text,
+  });
+  switch (panel.kind) {
+    case "endpoint_trend":
+      return withService(`${visibleEscapes(stringSetting(panel, "endpoint"))} · ${what}`);
+    case "top_nodes_trend": {
+      const count = Number(panel.settings.count) || 0;
+      return {
+        text:
+          own ??
+          `Top ${count} ${count === 1 ? "machine" : "machines"} · ${visibleEscapes(stringSetting(panel, "metric"))}`,
+      };
+    }
+    case "check_trend": {
+      const shown = panel.settings.signal === "duration" ? "Duration" : "Uptime";
+      return { text: own ?? `${visibleEscapes(stringSetting(panel, "check"))} · ${shown}` };
+    }
+    case "statement_trend": {
+      const label = stringSetting(panel, "label");
+      return {
+        text:
+          own ??
+          (label
+            ? visibleEscapes(label)
+            : `Statement ${visibleEscapes(stringSetting(panel, "query_hash"))}`),
+      };
+    }
+    case "project_number":
+    case "service_number":
+      return withService(MEASURE_NAMES[stringSetting(panel, "measure")] ?? "Number");
+    case "open_findings":
+      return withService("Open findings");
+  }
+  const table = TABLE_NAMES[panel.kind];
+  if (table) return withService(table(panel));
   if (panel.kind === "top_services_trend") {
     const count = Number(panel.settings.count) || 0;
     const order = panel.settings.order === "slowest" ? "Slowest" : "Worst";
@@ -91,7 +219,7 @@ export function panelTitle(panel: StoredPanel): { service?: string; text: string
         : `${node ? nodeName(node) : "A machine"} · ${visibleEscapes(metric)}`,
     };
   }
-  if (!TIME_KINDS.has(panel.kind) && panel.kind !== "note") {
+  if (!KNOWN_KINDS.has(panel.kind)) {
     return { text: panel.title ? visibleEscapes(panel.title) : "Panel" };
   }
   return { text: what };
@@ -104,6 +232,64 @@ export interface WordsContext {
   /** Panels past the scan cap, for the editor's "Remove N panels". */
   overLimit: number;
   now?: number;
+  /** Whether the reader may rename a check: "Rename one" is said only to them (FR65). */
+  canConfigureChecks?: boolean;
+  /** The read's window start, to tell a quiet service from one that sent nothing (AC99). */
+  windowStart?: string;
+}
+
+/** "Last seen 3 hours ago.", or nothing when there is no record of when. */
+function lastSeen(at: string | null, now: number | undefined): string {
+  return at === null ? "" : ` Last seen ${formatRelativeTime(at, now)}.`;
+}
+
+/** What an `empty` panel says, by kind (design, *Words by kind*). */
+function emptyWords(
+  result: Extract<PanelResult, { state: "empty" }>,
+  panel: StoredPanel,
+  context: WordsContext,
+): string {
+  switch (panel.kind) {
+    case "top_services_trend":
+    case "services_table":
+    case "endpoints_table":
+      return "No services reported in this window.";
+    case "node_trend": {
+      const node = nodeOf(panel);
+      return `${node ? nodeName(node) : "This machine"} has not reported in this window.`;
+    }
+    case "top_nodes_trend":
+      return "No machine has reported this metric in this window.";
+    case "check_trend":
+      return "This check has not run in this window.";
+    case "statement_trend":
+    case "database_statements_table":
+      return "No statement reported in this window.";
+    case "web_vitals_table":
+      return "No browser readings in this window.";
+    case "dependencies_table":
+      return panel.settings.failing_only === true
+        ? "No dependency failed in this window."
+        : "No dependencies seen in this window.";
+    case "error_groups_table": {
+      const service = serviceOf(panel);
+      // Good news only when the service was seen in the window (AC99).
+      const seenInWindow =
+        result.last_seen_at !== null &&
+        context.windowStart !== undefined &&
+        Date.parse(result.last_seen_at) >= Date.parse(context.windowStart);
+      if (service === undefined || result.last_seen_at === null || seenInWindow) {
+        return "No errors in this window.";
+      }
+      return `${visibleEscapes(service)} sent nothing in this window.${lastSeen(result.last_seen_at, context.now)}`;
+    }
+    case "service_trend":
+    case "endpoint_trend":
+    case "service_number":
+      return `No requests in this window.${lastSeen(result.last_seen_at, context.now)}`;
+    default:
+      return "Nothing reported in this window.";
+  }
 }
 
 /** The sentence a panel shows in place of a line. Undefined when it draws one. */
@@ -116,17 +302,22 @@ export function stateWords(
     case "ok":
       return undefined;
     case "empty":
-      if (panel.kind === "top_services_trend") return "No services reported in this window.";
-      if (panel.kind === "node_trend") {
-        const node = nodeOf(panel);
-        return `${node ? nodeName(node) : "This machine"} has not reported in this window.`;
-      }
-      if (panel.kind !== "service_trend") return "Nothing reported in this window.";
-      return result.last_seen_at === null
-        ? "No requests in this window."
-        : `No requests in this window. Last seen ${formatRelativeTime(result.last_seen_at, context.now)}.`;
+      return emptyWords(result, panel, context);
     case "not_in_project":
+      if (panel.kind === "check_trend") {
+        return `No check named ${visibleEscapes(stringSetting(panel, "check"))} in ${visibleEscapes(context.projectName)}.`;
+      }
       return `No record of ${serviceOf(panel) ? visibleEscapes(serviceOf(panel) ?? "") : "this service"} in ${visibleEscapes(context.projectName)}.`;
+    case "ambiguous": {
+      const named = `Two checks in ${visibleEscapes(context.projectName)} are named ${visibleEscapes(stringSetting(panel, "check"))}`;
+      return context.canConfigureChecks
+        ? `${named}. Rename one.`
+        : `${named}, so this panel cannot tell which to read.`;
+    }
+    case "window_too_wide":
+      return `This ${TABLE_KINDS.has(panel.kind) ? "table" : "chart"} can show at most ${result.limit_days} days.`;
+    case "paused_by_operator":
+      return "Dashboards paused by your administrator.";
     case "needs_service":
       return "Choose a service to fill this dashboard.";
     case "over_limit":
@@ -151,6 +342,7 @@ export function unread(result: PanelResult): boolean {
     result.state === "timed_out" ||
     result.state === "refused" ||
     result.state === "over_limit" ||
+    result.state === "ambiguous" ||
     result.state === "unknown_kind"
   );
 }

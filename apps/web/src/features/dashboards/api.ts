@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import type { ReleaseMark } from "@/shared/deploy-markers";
 import type { DetectionStatus } from "@/shared/detection/headline";
 import type { WindowChoice } from "@/shared/selection";
 import { resolveChoice, windowCacheKey } from "@/shared/selection";
@@ -103,6 +104,19 @@ export interface ContextFinding {
   closed_at: string | null;
 }
 
+/** An alert incident open during the window whose rule names a service (FR67). */
+export interface ContextIncident {
+  id: string;
+  service_name: string;
+  rule_name: string;
+  severity: "critical" | "warning";
+  opened_at: string;
+  resolved_at: string | null;
+}
+
+/** F28's coverage of a service: whether it reports deploys, versions, both or neither. */
+export type Coverage = "deploys_and_versions" | "deploys_only" | "versions_only" | "none";
+
 export interface DashboardContext {
   project: {
     id: string;
@@ -119,6 +133,13 @@ export interface DashboardContext {
   findings: ContextFinding[];
   findings_truncated: boolean;
   open_findings: { total: number; by_service: Record<string, number> };
+  /** F28's marks: a `reported` deploy is signed by CI; a `seen` version is not a deploy (AC122). */
+  markers: ReleaseMark[];
+  markers_truncated: boolean;
+  markers_cap: number;
+  coverage: Record<string, Coverage>;
+  incidents: ContextIncident[];
+  incidents_truncated: boolean;
 }
 
 export interface Series {
@@ -129,8 +150,31 @@ export interface Series {
   label: string;
   /** A top-N chart's line: the service it is, drawn as a link to that service (FR35). */
   service?: string | null;
+  /** A top-nodes chart's line: the node it is. */
+  node?: NodeName | null;
   points: [string, number][];
 }
+
+export interface NodeName {
+  host: string;
+  container: string;
+  reporter: string;
+  reporter_instance: string;
+}
+
+/**
+ * A number panel's value, and the previous window's when compared. `previous` is null
+ * unless the data covers that window: "Not enough history to compare" (AC73).
+ */
+export interface NumberReading {
+  measure: string;
+  value: number;
+  previous?: number | null;
+  previous_coverage?: number | null;
+}
+
+/** A table row as its own screen's route returns it; each table kind reads its own fields. */
+export type TableRow = Record<string, unknown>;
 
 /** One panel's state. A `failed` panel carries no series, so it cannot be drawn as zeros (BR5). */
 export type PanelResult =
@@ -144,11 +188,21 @@ export type PanelResult =
       /** The newest bucket of a live window, still filling: off the line, "so far" (FR66). */
       incomplete_from?: string | null;
       series: Series[];
+      number?: NumberReading | null;
+      rows?: TableRow[] | null;
     }
   | { state: "empty"; kind: string; read_at: string; last_seen_at: string | null }
   | { state: "refused"; kind: string; retry_after_seconds: number }
+  | { state: "window_too_wide"; kind: string; limit_days: number }
   | {
-      state: "not_in_project" | "needs_service" | "over_limit" | "timed_out" | "failed";
+      state:
+        | "not_in_project"
+        | "needs_service"
+        | "over_limit"
+        | "timed_out"
+        | "failed"
+        | "ambiguous"
+        | "paused_by_operator";
       kind: string;
     }
   | { state: "unknown_kind"; kind: "unknown_kind" };
@@ -284,6 +338,50 @@ export function useNodeChoices(projectId: string | undefined, choice: WindowChoi
       });
     },
     select: (response) => response.nodes,
+  });
+}
+
+/** The displayed project's checks, by name, for a check chart's real values (FR23). */
+export function useCheckChoices(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["dashboard-check-choices", projectId] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ checks: { name: string }[] }>("checks", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+    // Names, once each: two checks of one name are one choice, which reads `ambiguous`.
+    select: (response) => [...new Set(response.checks.map((check) => check.name))].sort(),
+  });
+}
+
+/** A statement as the database screen keys it, for a statement chart's real values (FR23). */
+export interface StatementChoice {
+  query_hash: string;
+  namespace: string;
+  server: { address: string; port: number };
+}
+
+const STATEMENT_CHOICES_LIMIT = 100;
+
+export function useStatementChoices(projectId: string | undefined, choice: WindowChoice) {
+  return useQuery({
+    queryKey: ["dashboard-statement-choices", projectId, windowCacheKey(choice)] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) => {
+      const window = resolveChoice(choice);
+      return apiClient.get<{ statements: StatementChoice[] }>("dbstats/statements", {
+        searchParams: {
+          project_id: projectId,
+          from: window.from,
+          to: window.to,
+          limit: STATEMENT_CHOICES_LIMIT,
+        },
+        signal,
+      });
+    },
+    select: (response) => response.statements,
   });
 }
 

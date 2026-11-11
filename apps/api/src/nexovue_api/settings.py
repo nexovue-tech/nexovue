@@ -213,6 +213,21 @@ class Settings(BaseSettings):
     clickhouse_pool_size: Annotated[int, Field(ge=1, le=100)] = 8
     clickhouse_max_result_rows: Annotated[int, Field(gt=0)] = 100_000
 
+    # --- dashboards (F20, T5.6c; `dashboards/limits.py`) ---------------------
+    # The operator's off switch: false runs no dashboard scan, every scan panel reads
+    # "Dashboards paused by your administrator", and alerts keep running (FR69).
+    dashboard_scans_enabled: bool = True
+    # A self-hosted install may tune these; unset is the code's value, and the hosted
+    # service keeps the code's values, which are product policy. `dashboards/limits.py`
+    # refuses, at start, a set that would let one dashboard outspend a person's quota.
+    dashboard_max_panels: Annotated[int, Field(ge=1)] | None = None
+    dashboard_max_scans_per_read: Annotated[int, Field(ge=1)] | None = None
+    dashboard_refresh_floor_seconds: Literal[30, 60, 300] | None = None
+    dashboard_scans_at_once: Annotated[int, Field(ge=1)] | None = None
+    # Raw readers' widest window, in days: one node or one check, then every other.
+    dashboard_single_series_raw_window_days: Annotated[int, Field(ge=1)] | None = None
+    dashboard_raw_window_days: Annotated[int, Field(ge=1)] | None = None
+
     # --- sessions -----------------------------------------------------------
     session_ttl_seconds: Annotated[int, Field(gt=0)] = 60 * 60 * 24 * 7
 

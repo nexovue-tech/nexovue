@@ -16,13 +16,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from nexovue_platform.deployment import SELF_HOSTED
+from starlette.requests import HTTPConnection
 
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayEditDashboards
 from nexovue_api.dashboards import service
 from nexovue_api.dashboards.definition import DashboardDocument
+from nexovue_api.dashboards.limits import DashboardLimits
 from nexovue_api.dashboards.ranges import RangeId
 from nexovue_api.dashboards.schemas import (
     DashboardContext,
@@ -41,6 +43,15 @@ FromTime = Annotated[datetime | None, Query(alias="from")]
 ToTime = Annotated[datetime | None, Query(alias="to")]
 
 
+def get_dashboard_limits(connection: HTTPConnection) -> DashboardLimits:
+    """The install's limits, checked once when the app was built (`main.create_app`)."""
+    limits: DashboardLimits = connection.app.state.dashboard_limits
+    return limits
+
+
+Limits = Annotated[DashboardLimits, Depends(get_dashboard_limits)]
+
+
 @router.get("", summary="The organization's dashboards, from stored columns only")
 async def list_dashboards(identity: CurrentIdentity, db: DbSession) -> DashboardListResponse:
     return await service.list_dashboards(db, org_id=identity.org_id)
@@ -48,10 +59,10 @@ async def list_dashboards(identity: CurrentIdentity, db: DbSession) -> Dashboard
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Save a new dashboard")
 async def create_dashboard(
-    identity: MayEditDashboards, db: DbSession, document: DashboardDocument
+    identity: MayEditDashboards, db: DbSession, limits: Limits, document: DashboardDocument
 ) -> DashboardResponse:
     return await service.create_dashboard(
-        db, identity=identity, document=document, now=datetime.now(UTC)
+        db, identity=identity, document=document, now=datetime.now(UTC), limits=limits
     )
 
 
@@ -69,10 +80,19 @@ async def get_dashboard(
 
 @router.put("/{dashboard_id}", summary="Save over a dashboard, from the version it was read at")
 async def replace_dashboard(
-    identity: MayEditDashboards, db: DbSession, dashboard_id: uuid.UUID, body: ReplaceDashboard
+    identity: MayEditDashboards,
+    db: DbSession,
+    limits: Limits,
+    dashboard_id: uuid.UUID,
+    body: ReplaceDashboard,
 ) -> DashboardResponse:
     return await service.replace_dashboard(
-        db, identity=identity, dashboard_id=dashboard_id, body=body, now=datetime.now(UTC)
+        db,
+        identity=identity,
+        dashboard_id=dashboard_id,
+        body=body,
+        now=datetime.now(UTC),
+        limits=limits,
     )
 
 

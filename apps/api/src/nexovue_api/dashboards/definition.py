@@ -16,8 +16,10 @@ unique index or deceive a reader (FR61, BR10). Descriptions and notes may hold a
 which the console only ever shows as text with such characters made visible; only NUL
 is refused there, because Postgres cannot store it.
 
-Step 2 knew three kinds; Step 4 adds `top_services_trend` and `node_trend` (plan, T4.1,
-T4.2). Every value marked as a cap is the spec's *guess* until plan T5.7 measures it.
+Step 2 knew three kinds; Step 4 added `top_services_trend` and `node_trend` (plan, T4.1,
+T4.2); Step 5 adds the rest of the spec's list but `metric_series` and `slo_budget` (FR6;
+plan T5.1a to T5.2). Every value marked as a cap is the spec's *guess* until plan T5.7
+measures it.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from pydantic import (
 
 from nexovue_api.dashboards.ranges import RangeId
 from nexovue_api.data.postgres.models import (
+    CHECK_NAME_MAX_LENGTH,
     DASHBOARD_DESCRIPTION_MAX_LENGTH,
     DASHBOARD_TITLE_MAX_LENGTH,
 )
@@ -156,6 +159,17 @@ Signal = Literal["rate", "errors", "latency"]
 Order = Literal["worst", "slowest"]
 # A top-N chart's lines: more than five cannot be told apart by colour and dash (FR6).
 TopCount = Annotated[int, Field(ge=1, le=5)]
+# A table's rows: a page a person reads without scrolling inside a panel (FR6).
+MAX_TABLE_ROWS: Final = 20
+TableRows = Annotated[int, Field(ge=1, le=MAX_TABLE_ROWS)]
+CheckSignal = Literal["uptime", "duration"]
+# The spec's measures (FR6); `service_count` is the project's alone.
+ServiceMeasure = Literal["requests_per_minute", "error_rate", "p50_ms", "p95_ms", "p99_ms"]
+ProjectMeasure = Literal[
+    "requests_per_minute", "error_rate", "p50_ms", "p95_ms", "p99_ms", "service_count"
+]
+# The rollup keeps an HTTP route and a queue handler of one name apart (`services/queries.py`).
+SpanKind = Literal["SERVER", "CONSUMER"]
 Width = Literal[3, 4, 6, 8, 12]
 Height = Literal["small", "medium", "large"]
 RefreshSeconds = Literal[30, 60, 300]
@@ -226,6 +240,99 @@ class NodeTrendSettings(_Strict):
     metric: InfrastructureMetric
 
 
+class TopNodesTrendSettings(_Strict):
+    """The nodes highest on one metric, chosen in the store at read time (FR6, AC26)."""
+
+    metric: InfrastructureMetric
+    count: TopCount
+
+
+class EndpointTrendSettings(_Strict):
+    """One endpoint, as the services screen names it: its service, kind and span name."""
+
+    service: ServiceRef
+    span_kind: SpanKind
+    endpoint: ServiceName
+    signal: Signal
+
+
+CheckName = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=CHECK_NAME_MAX_LENGTH),
+    AfterValidator(_refuse_nul),
+]
+
+
+class CheckTrendSettings(_Strict):
+    """A check by its name, resolved in the displayed project at read time (D5), so one
+    dashboard works on staging and production and a file holds no id (FR42)."""
+
+    check: CheckName
+    signal: CheckSignal
+
+
+# A TCP port, as the database screen keys a server.
+Port = Annotated[int, Field(ge=0, le=65_535)]
+
+
+class StatementTrendSettings(_Strict):
+    """One statement by its hash and server, since no statement text is kept
+    (`dbstats/queries.py`), with a label a person may give it."""
+
+    query_hash: ServiceName
+    server_address: NodePart
+    server_port: Port
+    label: Label | None
+
+
+class ProjectNumberSettings(_Strict):
+    measure: ProjectMeasure
+    compare: bool
+
+
+class ServiceNumberSettings(_Strict):
+    service: ServiceRef
+    measure: ServiceMeasure
+    compare: bool
+
+
+class OpenFindingsSettings(_Strict):
+    """No service counts the whole project's open findings."""
+
+    service: ServiceRef | None
+
+
+class ServicesTableSettings(_Strict):
+    order: Order
+    rows: TableRows
+
+
+class EndpointsTableSettings(_Strict):
+    service: ServiceRef | None
+    order: Order
+    rows: TableRows
+
+
+class DependenciesTableSettings(_Strict):
+    failing_only: bool
+    rows: TableRows
+
+
+class ErrorGroupsTableSettings(_Strict):
+    service: ServiceRef | None
+    rows: TableRows
+
+
+class DatabaseStatementsTableSettings(_Strict):
+    rows: TableRows
+
+
+class WebVitalsTableSettings(_Strict):
+    """A device class as the browser SDK names it, bound and never spliced."""
+
+    device_class: ServiceName | None
+
+
 class NoteSettings(_Strict):
     text: NoteText
 
@@ -244,6 +351,16 @@ class _TimePanel(_Panel):
     def _not_small(self) -> _TimePanel:
         if self.height == SMALL:
             raise ValueError("a chart cannot be small; choose medium or large")
+        return self
+
+
+class _TablePanel(_Panel):
+    """A ranked table: `small` is for numbers and notes only (FR5)."""
+
+    @model_validator(mode="after")
+    def _not_small(self) -> _TablePanel:
+        if self.height == SMALL:
+            raise ValueError("a table cannot be small; choose medium or large")
         return self
 
 
@@ -267,17 +384,110 @@ class NodeTrendPanel(_TimePanel):
     settings: NodeTrendSettings
 
 
+class TopNodesTrendPanel(_TimePanel):
+    kind: Literal["top_nodes_trend"]
+    settings: TopNodesTrendSettings
+
+
+class EndpointTrendPanel(_TimePanel):
+    kind: Literal["endpoint_trend"]
+    settings: EndpointTrendSettings
+
+
+class CheckTrendPanel(_TimePanel):
+    kind: Literal["check_trend"]
+    settings: CheckTrendSettings
+
+
+class StatementTrendPanel(_TimePanel):
+    kind: Literal["statement_trend"]
+    settings: StatementTrendSettings
+
+
+class ProjectNumberPanel(_Panel):
+    kind: Literal["project_number"]
+    settings: ProjectNumberSettings
+
+
+class ServiceNumberPanel(_Panel):
+    kind: Literal["service_number"]
+    settings: ServiceNumberSettings
+
+
+class OpenFindingsPanel(_Panel):
+    """Drawn from the panel context, with no scan, so it survives a ClickHouse outage."""
+
+    kind: Literal["open_findings"]
+    settings: OpenFindingsSettings
+
+
+class ServicesTablePanel(_TablePanel):
+    kind: Literal["services_table"]
+    settings: ServicesTableSettings
+
+
+class EndpointsTablePanel(_TablePanel):
+    kind: Literal["endpoints_table"]
+    settings: EndpointsTableSettings
+
+
+class DependenciesTablePanel(_TablePanel):
+    kind: Literal["dependencies_table"]
+    settings: DependenciesTableSettings
+
+
+class ErrorGroupsTablePanel(_TablePanel):
+    kind: Literal["error_groups_table"]
+    settings: ErrorGroupsTableSettings
+
+
+class DatabaseStatementsTablePanel(_TablePanel):
+    kind: Literal["database_statements_table"]
+    settings: DatabaseStatementsTableSettings
+
+
+class WebVitalsTablePanel(_TablePanel):
+    kind: Literal["web_vitals_table"]
+    settings: WebVitalsTableSettings
+
+
 class NotePanel(_Panel):
     kind: Literal["note"]
     settings: NoteSettings
 
 
 KnownPanel = (
-    ProjectTrendPanel | ServiceTrendPanel | TopServicesTrendPanel | NodeTrendPanel | NotePanel
+    ProjectTrendPanel
+    | ServiceTrendPanel
+    | TopServicesTrendPanel
+    | NodeTrendPanel
+    | TopNodesTrendPanel
+    | EndpointTrendPanel
+    | CheckTrendPanel
+    | StatementTrendPanel
+    | ProjectNumberPanel
+    | ServiceNumberPanel
+    | OpenFindingsPanel
+    | ServicesTablePanel
+    | EndpointsTablePanel
+    | DependenciesTablePanel
+    | ErrorGroupsTablePanel
+    | DatabaseStatementsTablePanel
+    | WebVitalsTablePanel
+    | NotePanel
 )
 Panel = Annotated[KnownPanel, Field(discriminator="kind")]
 TIME_KINDS: Final = frozenset(
-    {"project_trend", "service_trend", "top_services_trend", "node_trend"}
+    {
+        "project_trend",
+        "service_trend",
+        "top_services_trend",
+        "node_trend",
+        "top_nodes_trend",
+        "endpoint_trend",
+        "check_trend",
+        "statement_trend",
+    }
 )
 
 
@@ -316,9 +526,16 @@ class DashboardDocument(_Strict):
     definition: Definition
 
 
+def service_of(panel: Panel | UnknownPanel) -> ServiceRef | None:
+    """The service a panel names, the picker, or None for a kind with no service."""
+    settings = getattr(panel, "settings", None)
+    service: ServiceRef | None = getattr(settings, "service", None)
+    return service
+
+
 def uses_picker(panel: Panel | UnknownPanel) -> bool:
     """Whether a panel reads the service the dashboard's picker holds."""
-    return isinstance(panel, ServiceTrendPanel) and isinstance(panel.settings.service, Picker)
+    return isinstance(service_of(panel), Picker)
 
 
 def document_bytes(document: dict[str, Any]) -> int:

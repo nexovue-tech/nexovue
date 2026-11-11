@@ -44,6 +44,7 @@ from test_findings_cases_live import Team, _team, db  # noqa: F401
 
 from nexovue_api.dashboardpanels import scans, service, shared_reads
 from nexovue_api.dashboardpanels.caps import DASHBOARD_SCANS_PER_PROCESS
+from nexovue_api.dashboardpanels.scans import ScanContext
 from nexovue_api.dashboardpanels.shared_reads import (
     TIMEOUT_EXCEEDED,
     Answer,
@@ -51,6 +52,7 @@ from nexovue_api.dashboardpanels.shared_reads import (
     SharedReads,
 )
 from nexovue_api.dashboards.compile import PROJECT_TREND, ScanKey
+from nexovue_api.dashboards.limits import CODE_LIMITS
 from nexovue_api.data.clickhouse.base import TenantScopedRepository, server_error_code
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.settings import API_PREFIX
@@ -101,6 +103,7 @@ def slow_reader(monkeypatch: pytest.MonkeyPatch, stopped_with: list[int | None])
         scan: ScanKey,
         window_start: datetime,
         window_end: datetime,
+        context: ScanContext,
     ) -> Answer:
         started.append(time.monotonic())
         try:
@@ -246,7 +249,7 @@ async def test_ac18_a_client_that_drops_starts_nothing_more_and_frees_every_plac
     )
     # A hosted install holds one organization to 3 of the 5 places, so at most three
     # start, and the rest wait for a place or a permit; none may start once it has gone.
-    assert 1 <= len(slow_reader) <= service.PANEL_SCANS_AT_ONCE
+    assert 1 <= len(slow_reader) <= CODE_LIMITS.scans_at_once
     assert all(start < left_at for start in slow_reader), "a scan started after the client left"
     assert ended_after <= 6 + CANCEL_MARGIN_SECONDS
     reads = app.state.dashboard_reads

@@ -119,7 +119,7 @@ write_choices() {
 # `setup` creates and sets at every start (F3). Only these can be created after the install: every
 # other secret is written into a store, a key or the Kafka log once, and a new value would lock
 # that data away.
-ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD POSTGRES_INSIGHT_PASSWORD"
+ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_API_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD POSTGRES_INSIGHT_PASSWORD"
 # Sealing keys added after an install was created. A key that has sealed nothing yet locks nothing
 # away, so an upgrade may add one; replacing one that exists would (F22: tracker connections;
 # F3: AI provider keys).

@@ -42,11 +42,11 @@ import { LinksEditor } from "./LinksEditor";
 import { NotePanel } from "./NotePanel";
 import { PanelWords } from "./PanelFrame";
 import { PanelPicker } from "./PanelPicker";
+import { PanelReading } from "./PanelReading";
 import type { ActionKey } from "./PanelToolbar";
 import { PanelToolbar } from "./PanelToolbar";
-import { stateWords, TIME_KINDS } from "./panel-words";
+import { KNOWN_KINDS, stateWords } from "./panel-words";
 import { SideSheet } from "./SideSheet";
-import { TimePanel } from "./TimePanel";
 
 /**
  * The builder (F20, Step 3): `/dashboards/new` and `/dashboards/$dashboardId/edit`.
@@ -605,6 +605,10 @@ function refreshOf(value: string): 30 | 60 | 300 {
   return value === "30" ? 30 : value === "300" ? 300 : 60;
 }
 
+/** Open findings are counted from the page's own context, which the builder does not read. */
+export const OPEN_FINDINGS_IN_BUILDER =
+  "Counts this project's open findings when the dashboard is open. It reads nothing.";
+
 function BuilderPanelBody({
   panel,
   reading,
@@ -621,10 +625,13 @@ function BuilderPanelBody({
   if (panel.kind === "note") {
     return <NotePanel text={typeof panel.settings.text === "string" ? panel.settings.text : ""} />;
   }
-  if (!TIME_KINDS.has(panel.kind)) {
+  if (!KNOWN_KINDS.has(panel.kind)) {
     return (
       <PanelWords words="This panel type is no longer available. Remove it, or edit it to choose what it shows." />
     );
+  }
+  if (panel.kind === "open_findings") {
+    return <PanelWords words={OPEN_FINDINGS_IN_BUILDER} />;
   }
   if (reading === undefined) {
     if (readingPending) {
@@ -640,7 +647,7 @@ function BuilderPanelBody({
   }
   if (reading.state === "ok") {
     return (
-      <TimePanel
+      <PanelReading
         panel={panel}
         reading={reading}
         zone={zone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}

@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.dashboards import queries
-from nexovue_api.dashboards.compile import compile_for_save
 from nexovue_api.dashboards.definition import (
     DashboardDocument,
     canonical_json,
@@ -33,9 +32,11 @@ from nexovue_api.dashboards.definition import (
     link_hosts,
     parse_stored,
 )
+from nexovue_api.dashboards.limits import CODE_LIMITS, DashboardLimits, compile_within
 from nexovue_api.dashboards.ranges import RangeId, window_for
 from nexovue_api.dashboards.schemas import (
     ContextFinding,
+    ContextIncident,
     ContextProject,
     DashboardContext,
     DashboardListResponse,
@@ -54,6 +55,7 @@ from nexovue_api.detection import service as detection
 from nexovue_api.errors import problems
 from nexovue_api.errors.exceptions import ConflictError, InternalError, NotFoundError
 from nexovue_api.projects import queries as project_queries
+from nexovue_api.releases import service as releases
 from nexovue_api.usage import queries as usage_queries
 
 # FR9: protection, never an upsell. Deleted dashboards count towards the second, so
@@ -66,6 +68,8 @@ VERSIONS_KEPT_FOR: Final = timedelta(days=30)
 VERSIONS_CEILING: Final = 200
 # FR37: "last opened" is true to within an hour, and costs at most one write an hour.
 LAST_OPENED_EVERY: Final = timedelta(hours=1)
+# FR67: alert incidents the strip lists, at most (*guess*), with the cap stated.
+INCIDENTS_CAP: Final = 50
 
 NO_SUCH_DASHBOARD: Final = "This dashboard does not exist or is no longer available."
 NO_SUCH_PROJECT: Final = "This link is for a project you cannot open."
@@ -150,10 +154,15 @@ def templates() -> DashboardTemplatesResponse:
 
 
 async def create_dashboard(
-    db: AsyncSession, *, identity: Identity, document: DashboardDocument, now: datetime
+    db: AsyncSession,
+    *,
+    identity: Identity,
+    document: DashboardDocument,
+    now: datetime,
+    limits: DashboardLimits = CODE_LIMITS,
 ) -> DashboardResponse:
     check_size(document)
-    compiled = compile_for_save(document.definition)
+    compiled = compile_within(document.definition, limits)
     await queries.hold_the_organizations_dashboards(db, org_id=identity.org_id)
     counted = await queries.counts(db, org_id=identity.org_id)
     if counted.live >= LIVE_DASHBOARDS_CAP:
@@ -200,6 +209,7 @@ async def replace_dashboard(
     dashboard_id: uuid.UUID,
     body: ReplaceDashboard,
     now: datetime,
+    limits: DashboardLimits = CODE_LIMITS,
 ) -> DashboardResponse:
     """Save over a dashboard, only from the version it was read at (FR19)."""
     check_size(body)
@@ -217,7 +227,7 @@ async def replace_dashboard(
             saved_at=dashboard.updated_at.isoformat(),
             version=dashboard.version,
         )
-    compiled = compile_for_save(body.definition)
+    compiled = compile_within(body.definition, limits)
     definition = body.definition.model_dump(mode="json")
     title_or_definition_changed = dashboard.title != body.title or canonical_json(
         dashboard.definition
@@ -333,12 +343,31 @@ async def context(
     last_seen_at = await queries.project_last_seen(
         db, org_id=identity.org_id, project_id=project.id
     )
+    markers = await releases.markers_in_window(
+        db,
+        org_id=identity.org_id,
+        project_id=project.id,
+        start=window_start,
+        end=window_end,
+        service=None,
+    )
+    coverage = await releases.coverage_at(
+        db, org_id=identity.org_id, project_id=project.id, services=None, at=window_end
+    )
+    incidents = await queries.service_incidents_in_window(
+        db,
+        org_id=identity.org_id,
+        project_id=project.id,
+        start=window_start,
+        end=window_end,
+        limit=INCIDENTS_CAP + 1,
+    )
     return DashboardContext(
         project=ContextProject(
             id=project.id,
             name=project.name,
             timezone=project.timezone,
-            retention=None if self_hosted else await _retention(db, identity=identity, now=now),
+            retention=None if self_hosted else await plan_retention(db, identity=identity, now=now),
         ),
         window_start=window_start,
         window_end=window_end,
@@ -364,10 +393,26 @@ async def context(
                 db, org_id=identity.org_id, project_id=project.id
             ),
         ),
+        markers=markers.markers,
+        markers_truncated=markers.truncated,
+        markers_cap=markers.cap,
+        coverage={name: found.value for name, found in coverage.items()},
+        incidents=[
+            ContextIncident(
+                id=incident.id,
+                service_name=incident.service_name,
+                rule_name=incident.rule_name,
+                severity=incident.severity,
+                opened_at=incident.opened_at,
+                resolved_at=incident.resolved_at,
+            )
+            for incident in incidents[:INCIDENTS_CAP]
+        ],
+        incidents_truncated=len(incidents) > INCIDENTS_CAP,
     )
 
 
-async def _retention(db: AsyncSession, *, identity: Identity, now: datetime) -> PlanRetention:
+async def plan_retention(db: AsyncSession, *, identity: Identity, now: datetime) -> PlanRetention:
     """What the organization's plan in force keeps, so "Your plan keeps 30 days" is true."""
     in_force = await usage_queries.plan_in_force(
         db, org_id=identity.org_id, paid_plan=identity.organization.plan, at=now

@@ -462,6 +462,92 @@ describe("Step 4's kinds (T4.1, T4.2)", () => {
   });
 });
 
+describe("Step 5's kinds", () => {
+  /** A checkbox inside its own label, as the sheet's checkboxes are. */
+  const tick = (container: Element, label: string) =>
+    act(() =>
+      [...container.querySelectorAll("label")]
+        .find((each) => text(each) === label)
+        ?.querySelector<HTMLInputElement>("input[type=checkbox]")
+        ?.click(),
+    );
+  const choose = (container: Element, kind: string) =>
+    act(() =>
+      [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+        .find((radio) => radio.value === kind)
+        ?.click(),
+    );
+
+  it("offers every kind the spec lists but the two later ones (FR6)", async () => {
+    const container = await mount();
+    const offered = [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")].map(
+      (radio) => radio.value,
+    );
+
+    expect(offered.sort()).toEqual(
+      [
+        "project_trend",
+        "service_trend",
+        "top_services_trend",
+        "endpoint_trend",
+        "node_trend",
+        "top_nodes_trend",
+        "check_trend",
+        "statement_trend",
+        "project_number",
+        "service_number",
+        "open_findings",
+        "services_table",
+        "endpoints_table",
+        "dependencies_table",
+        "error_groups_table",
+        "database_statements_table",
+        "web_vitals_table",
+        "note",
+      ].sort(),
+    );
+  });
+
+  it("makes a compared service number, a project-wide errors table and a check by its name", async () => {
+    stubApi({
+      "GET /services": services("checkout"),
+      "GET /checks": json({ checks: [{ name: `Log${RTL_OVERRIDE}in` }], available_locations: [] }),
+    });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+
+    choose(container, "service_number");
+    await waitFor(() => container.querySelectorAll("select option").length > 1, "the services");
+    act(() => typeInto(labelled(container, "Service"), "checkout"));
+    act(() => typeInto(labelled(container, "Shows"), "error_rate"));
+    tick(container, "Compare with the window before (two reads)");
+    act(() => button(container, "Add to dashboard")?.click());
+
+    choose(container, "error_groups_table");
+    tick(container, "The whole project");
+    act(() => button(container, "Add to dashboard")?.click());
+
+    choose(container, "check_trend");
+    await waitFor(
+      () =>
+        [...container.querySelectorAll("option")].some(
+          (each) => each.textContent === "Log[U+202E]in",
+        ),
+      "the checks",
+    );
+    const check = labelled<HTMLSelectElement>(container, "Check");
+    expect(check.options[1]?.textContent).toBe("Log[U+202E]in");
+    act(() => typeInto(check, check.options[1]?.value ?? ""));
+    act(() => button(container, "Add to dashboard")?.click());
+
+    expect(kept.map((panel) => [panel.kind, panel.settings])).toEqual([
+      ["service_number", { service: "checkout", measure: "error_rate", compare: true }],
+      ["error_groups_table", { service: null, rows: 10 }],
+      ["check_trend", { check: `Log${RTL_OVERRIDE}in`, signal: "uptime" }],
+    ]);
+  });
+});
+
 describe("the sheet and the preview's width (AC112)", () => {
   it("scales with the window, and fills the screen below lg", async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

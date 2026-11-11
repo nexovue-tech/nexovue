@@ -566,7 +566,7 @@ screen: at the floor of 30 s, 80 ≤ 90. `LARGEST_SCREEN_FANOUT` stays as it is:
 
 ### Protecting ClickHouse across batches
 
-`PANEL_SCANS_AT_ONCE` holds one batch. Two wall displays under one login reach all 8 connections. So one `asyncio.Semaphore` per API process covers all dashboard scans, `DASHBOARD_SCANS_PER_PROCESS = 5` of 8 (*guess*), and a smaller one for raw readers, `RAW_DASHBOARD_SCANS_PER_PROCESS = 2` (*guess*). A wait is bounded by 5 s, then `refused`, with a wait time. A leader's task holds its place until its statement ends, however its requester fares, so no load goes uncounted.
+`SCANS_AT_ONCE` (`dashboards/limits.py`, 4) holds one batch. Two wall displays under one login reach all 8 connections. So one `asyncio.Semaphore` per API process covers all dashboard scans, `DASHBOARD_SCANS_PER_PROCESS = 5` of 8 (*guess*), and a smaller one for raw readers, `RAW_DASHBOARD_SCANS_PER_PROCESS = 2` (*guess*). A wait is bounded by 5 s, then `refused`, with a wait time. A leader's task holds its place until its statement ends, however its requester fares, so no load goes uncounted.
 
 **A share per organization.** Without one, one organization's displays can hold all 2 raw places and all 5 scan places for up to 15 s each, and another's panels are refused, wrongly, during its incident. An organization's in-flight limit of 32 is far above these caps, so it never helps. Inside each semaphore, a counter holds one organization to 3 of 5 and 1 of 2 (*guesses*). It applies where more than one organization can exist: `NEXOVUE_DEPLOYMENT=hosted` (`deployment.py`) or `SIGNUP_ENABLED`. Elsewhere, the share is the whole cap, so a self-hosted install loses nothing.
 

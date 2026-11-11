@@ -1,5 +1,5 @@
 import type { DashboardDocument, Definition, PanelHeight, StoredPanel } from "./api";
-import { panelTitle, TIME_KINDS } from "./panel-words";
+import { panelTitle, TABLE_KINDS, TIME_KINDS } from "./panel-words";
 
 /**
  * The builder's draft (F20, T3.2): a pure reducer over the dashboard document, so every
@@ -79,7 +79,8 @@ export function newPanelId(panels: readonly StoredPanel[]): string {
 }
 
 export function heightsFor(panel: Pick<StoredPanel, "kind">): readonly PanelHeight[] {
-  return TIME_KINDS.has(panel.kind) ? TIME_HEIGHTS : HEIGHTS;
+  // `small` is for numbers and notes only (FR5).
+  return TIME_KINDS.has(panel.kind) || TABLE_KINDS.has(panel.kind) ? TIME_HEIGHTS : HEIGHTS;
 }
 
 export function canMove(panels: readonly StoredPanel[], id: string, by: Step): boolean {
@@ -200,21 +201,67 @@ export function isDirty(document: DashboardDocument, stored: DashboardDocument):
 export function worstCaseReads(definition: Definition): number {
   const keys = new Set<string>();
   for (const panel of definition.panels) {
-    if (panel.kind === "project_trend") keys.add("project");
-    if (panel.kind === "service_trend") {
-      const service = panel.settings.service;
-      keys.add(`service:${typeof service === "string" ? service : PICKED_SERVICE}`);
-    }
-    // One read answers every signal of a ranking and count (`compile.py`).
-    if (panel.kind === "top_services_trend") {
-      keys.add(`top:${String(panel.settings.order)}:${String(panel.settings.count)}`);
-    }
-    // One read per node and metric.
-    if (panel.kind === "node_trend") {
-      keys.add(`node:${JSON.stringify(panel.settings.node)}:${String(panel.settings.metric)}`);
-    }
+    for (const key of readsOf(panel)) keys.add(key);
   }
   return keys.size;
+}
+
+/** The service a panel's read is for: named, the picker as one service apart, or none. */
+function serviceKey(panel: StoredPanel): string {
+  const service = panel.settings.service;
+  if (typeof service === "string") return service;
+  return service === null || service === undefined ? "" : PICKED_SERVICE;
+}
+
+/**
+ * The reads one panel asks for, keyed as `compile.py` keys them, so equal reads count
+ * once: one per service for its rate, errors and latency; one per ranking whatever the
+ * row count; one per check name; and a compared number's second read (FR7).
+ */
+function readsOf(panel: StoredPanel): string[] {
+  const setting = (name: string) => JSON.stringify(panel.settings[name] ?? null);
+  const service = serviceKey(panel);
+  switch (panel.kind) {
+    case "project_trend":
+      return ["project"];
+    case "service_trend":
+      return [`service:${service}`];
+    case "top_services_trend":
+      return [`top:${setting("order")}:${setting("count")}`];
+    case "node_trend":
+      return [`node:${setting("node")}:${setting("metric")}`];
+    case "top_nodes_trend":
+      return [`top-nodes:${setting("metric")}:${setting("count")}`];
+    case "endpoint_trend":
+      return [`endpoint:${service}:${setting("span_kind")}:${setting("endpoint")}`];
+    case "check_trend":
+      return [`check:${setting("check")}`];
+    case "statement_trend":
+      return [
+        `statement:${setting("query_hash")}:${setting("server_address")}:${setting("server_port")}`,
+      ];
+    case "project_number":
+      return panel.settings.compare === true ? ["totals", "totals:previous"] : ["totals"];
+    case "service_number": {
+      const read = `service-totals:${service}`;
+      return panel.settings.compare === true ? [read, `${read}:previous`] : [read];
+    }
+    case "services_table":
+      return [`services:${setting("order")}`];
+    case "endpoints_table":
+      return [`endpoints:${service}:${setting("order")}`];
+    case "dependencies_table":
+      return [`dependencies:${setting("failing_only")}`];
+    case "error_groups_table":
+      return [`errors:${service}`];
+    case "database_statements_table":
+      return ["statements"];
+    case "web_vitals_table":
+      return [`vitals:${setting("device_class")}`];
+    default:
+      // A note and open findings read nothing; an unknown kind is never read.
+      return [];
+  }
 }
 
 /** How a panel is named to a person: its service first, as its heading reads (FR35). */

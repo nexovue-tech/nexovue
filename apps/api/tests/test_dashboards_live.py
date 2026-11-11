@@ -12,6 +12,12 @@ type), AC96 (lists read columns, never a definition), AC125 (a save changing not
 makes no version; 20 quick saves keep the earlier one), FR9 (the caps), and T2.14's two
 findings reads past 200.
 
+Step 5 (T5.4): with ClickHouse unreachable, the context answers with F28's markers, each
+with its `basis` and `state` (a signed deploy `reported`, a version only seen in traffic
+`seen`, AC122), each service's deploy coverage (AC132), findings and alert incidents
+naming a service in the window, newest first, past their caps said so (AC32, AC33's data
+halves, AC61, AC117).
+
 ClickHouse is absent from every route here but the batch: the tenant repository is
 F22's stub, which fails if a read runs before the request's commit.
 """
@@ -40,7 +46,11 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     Dashboard,
     DashboardVersion,
+    DeployEvent,
     Finding,
+    Incident,
+    Release,
+    ReleasePeriod,
     ServiceLastSeen,
 )
 from nexovue_api.deps import get_app_settings, get_resources
@@ -811,3 +821,186 @@ async def test_both_findings_reads_hold_past_200(db: AsyncSession, acme: Team) -
     oldest = [finding["started_at"] for finding in timeline["findings"]]
     assert oldest == sorted(oldest)
     assert oldest[0] < newest[-1]
+
+
+# ------------------------------------------------------------------ T5.4
+
+
+async def _release(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    *,
+    service: str,
+    version: str,
+    at: datetime,
+    reported: bool,
+) -> None:
+    release = Release(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        service_name=service,
+        version=version,
+        first_seen_at=None if reported else at,
+        last_seen_at=None if reported else at,
+        first_reported_at=at if reported else None,
+        last_reported_at=at if reported else None,
+        report_count=1 if reported else 0,
+        last_state="finished" if reported else None,
+    )
+    db.add(release)
+    await db.flush()
+    if reported:
+        db.add(
+            DeployEvent(
+                org_id=team.org_id,
+                project_id=team.project_id,
+                version=version,
+                service_name=service,
+                deployed_at=at,
+                source="ci",
+                delivery_id=f"{service}-{version}-{uuid.uuid4()}",
+                event_metadata={},
+                state="finished",
+                release_id=release.id,
+            )
+        )
+    db.add(
+        ReleasePeriod(
+            org_id=team.org_id,
+            release_id=release.id,
+            project_id=team.project_id,
+            service_name=service,
+            started_at=at,
+            start_basis="reported" if reported else "seen",
+            already_running=False,
+        )
+    )
+    await db.flush()
+
+
+def _incident(
+    team: Team, *, subject: str, opened_at: datetime, about: str | None = None
+) -> Incident:
+    return Incident(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        rule_id=None,
+        rule_name=f"Rule on {subject}",
+        condition_kind="slo_burn" if about else "service_error_rate",
+        subject_key=subject,
+        subject_label=subject,
+        severity="critical",
+        opened_at=opened_at,
+        about_key=about,
+    )
+
+
+async def test_t5_4_the_context_answers_marks_coverage_and_incidents_with_clickhouse_away(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    now = datetime.now(UTC).replace(microsecond=0)
+    await _release(
+        db, acme, service="checkout", version="v2.1", at=now - timedelta(minutes=20), reported=True
+    )
+    await _release(
+        db, acme, service="checkout", version="v2.2", at=now - timedelta(minutes=10), reported=False
+    )
+    await _release(
+        db, acme, service="checkout", version="v1.0", at=now - timedelta(days=2), reported=True
+    )
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="cart",
+            last_seen_at=now,
+        )
+    )
+    await _finding(db, acme, started_at=now - timedelta(minutes=5))
+    db.add_all(
+        [
+            _incident(acme, subject="service:checkout", opened_at=now - timedelta(minutes=15)),
+            _incident(
+                acme,
+                subject="slo:1:checkout",
+                about="service:payment",
+                opened_at=now - timedelta(minutes=30),
+            ),
+            # Not about a service: a check's, and an error group's, are not listed.
+            _incident(acme, subject="check:1", opened_at=now - timedelta(minutes=5)),
+            _incident(acme, subject="error:abc", opened_at=now - timedelta(minutes=5)),
+            # Before the window, and resolved before it began.
+            _incident(acme, subject="service:old", opened_at=now - timedelta(days=2)),
+        ]
+    )
+    await db.flush()
+    await db.execute(
+        update(Incident)
+        .where(Incident.org_id == acme.org_id, Incident.subject_key == "service:old")
+        .values(resolved_at=now - timedelta(days=1))
+    )
+    client, _ = _client(db, acme, acme.viewer)
+    app = client._transport.app  # type: ignore[attr-defined]
+
+    async def unreachable() -> Any:
+        return await clickhouse_connect.get_async_client(
+            host="127.0.0.1", port=UNREACHABLE_CLICKHOUSE_PORT, connect_timeout=1
+        )
+
+    from nexovue_api.auth.dependencies import get_tenant_repository
+
+    app.dependency_overrides.pop(get_tenant_repository)
+    app.dependency_overrides[get_resources] = lambda: SimpleNamespace(
+        clickhouse=ClickHouseConnection(unreachable)
+    )
+    async with client:
+        answer = await client.get(
+            f"{API_PREFIX}/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h"
+        )
+
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    marks = [(mark["version"], mark["basis"], mark["state"]) for mark in body["markers"]]
+    assert marks == [("v2.2", "seen", None), ("v2.1", "reported", "finished")]
+    assert body["markers_truncated"] is False
+    assert body["markers_cap"] == 500
+    assert body["coverage"]["checkout"] == "deploys_and_versions"
+    assert body["coverage"]["cart"] == "none"
+    assert [
+        (incident["service_name"], incident["rule_name"]) for incident in body["incidents"]
+    ] == [
+        ("checkout", "Rule on service:checkout"),
+        ("payment", "Rule on slo:1:checkout"),
+    ]
+    assert body["incidents_truncated"] is False
+    assert [finding["service_name"] for finding in body["findings"]] == ["checkout"]
+
+
+async def test_fr67_past_fifty_incidents_the_newest_are_listed_and_the_cap_said(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    now = datetime.now(UTC).replace(microsecond=0)
+    db.add_all(
+        _incident(
+            acme, subject=f"service:svc-{index:02d}", opened_at=now - timedelta(minutes=index)
+        )
+        for index in range(1, 52)
+    )
+    await db.flush()
+
+    answer = await _call(
+        db,
+        acme,
+        acme.viewer,
+        "GET",
+        f"/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h",
+    )
+
+    body = answer.json()
+    assert len(body["incidents"]) == dashboards.INCIDENTS_CAP == 50
+    assert body["incidents"][0]["service_name"] == "svc-01"
+    assert body["incidents_truncated"] is True

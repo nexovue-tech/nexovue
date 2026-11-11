@@ -100,12 +100,18 @@ WITH_ERRORS_CLAUSE: Final = "HAVING error_count > 0"
 
 # One service's row and the whole ranking are the same read: the detail screen shows
 # exactly the numbers its row on the overview shows, so they cannot disagree.
+#
+# `first_minute` is when the service's data starts inside the window: a dashboard's
+# compared number reads it to say "Not enough history to compare" rather than draw an
+# arrow against a window the service only partly covered (F20, T5.3). It changes no
+# other column, and the screens' rows do not carry it.
 _SERVICES_TEMPLATE: Final = f"""
 SELECT
     service_name,
     sum(request_count) AS request_count,
     sum(error_count) AS error_count,
-    {_LATENCY_MS}
+    {_LATENCY_MS},
+    min(minute) AS first_minute
 {_ENDPOINT_STATS_IN_WINDOW}
   {_ONE_SERVICE_PLACEHOLDER}
   {_SPAN_KIND_PLACEHOLDER}
@@ -173,6 +179,26 @@ SELECT
     {_LATENCY_MS}
 {_ENDPOINT_STATS_IN_WINDOW}
   AND service_name IN (SELECT service_name FROM ({_SERVICES_TEMPLATE}))
+GROUP BY service_name, bucket
+ORDER BY service_name, bucket
+"""
+
+
+# One endpoint's history, for a dashboard's `endpoint_trend` panel (F20, T5.1a): the
+# trend statement's body bound to one service and one endpoint, which the rollup keys
+# by span kind and span name, so a panel equals that endpoint's row over the window
+# (AC14).
+ENDPOINT_TREND_SQL: Final = f"""
+SELECT
+    service_name,
+    toStartOfInterval(minute, INTERVAL {{bucket_seconds:UInt32}} SECOND) AS bucket,
+    sum(request_count) AS request_count,
+    sum(error_count) AS error_count,
+    {_LATENCY_MS}
+{_ENDPOINT_STATS_IN_WINDOW}
+  {ONE_SERVICE_CLAUSE}
+  {SPAN_KIND_CLAUSE}
+  AND span_name = {{span_name:String}}
 GROUP BY service_name, bucket
 ORDER BY service_name, bucket
 """
@@ -260,12 +286,16 @@ def endpoints_sql(
 #
 # It also cannot be summed from that list for a duller reason: the list is
 # capped, so its total is the total of the first hundred services.
+#
+# `first_minute`, as in the services statement: where the project's data starts inside
+# the window, for a dashboard's compared number (F20, T5.3).
 OVERVIEW_SQL: Final = f"""
 SELECT
     uniqExact(service_name) AS service_count,
     sum(request_count) AS request_count,
     sum(error_count) AS error_count,
-    {_LATENCY_MS}
+    {_LATENCY_MS},
+    min(minute) AS first_minute
 {_ENDPOINT_STATS_IN_WINDOW}
 """
 

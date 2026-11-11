@@ -37,6 +37,7 @@ from nexovue_api.connections import test_router as connection_tests_router
 from nexovue_api.dashboardpanels import router as dashboard_panels_router
 from nexovue_api.dashboardpanels.service import PanelReads
 from nexovue_api.dashboards import router as dashboards_router
+from nexovue_api.dashboards.limits import DashboardLimits
 from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.detection import router as detection_router
@@ -110,8 +111,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # F20: the dashboard batch's process caps and kept answers, in memory and per
     # process like the limiter's counts. A share per organization only where more than
     # one can exist (D26).
+    # Its limits are checked here, so an install whose tuned values break the quota's
+    # arithmetic refuses to start (T5.6c).
+    app.state.dashboard_limits = DashboardLimits.from_settings(settings)
     app.state.dashboard_reads = PanelReads.for_install(
-        shared_by_organizations=settings.is_hosted or settings.signup_enabled
+        shared_by_organizations=settings.is_hosted or settings.signup_enabled,
+        limits=app.state.dashboard_limits,
+        hosted=settings.is_hosted,
     )
 
     install_middleware(app, settings)

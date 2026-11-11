@@ -223,6 +223,50 @@ async def node_trend(
     ]
 
 
+# The most lines a top-nodes chart draws, as a top-services chart (F20, FR6).
+MAX_TOP_NODES: Final = 5
+
+
+async def top_nodes_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    metric_name: str,
+    count: int,
+    from_time: datetime,
+    to_time: datetime,
+) -> tuple[int, list[tuple[NodeKey, list[NodeTrendPoint]]]]:
+    """The `count` nodes highest on one metric, chosen in the store, each with its own
+    line: the bucket width, then each node and its points (F20, T5.1b)."""
+    if metric_name not in conventions.INFRASTRUCTURE_METRIC_NAMES:
+        raise ValueError(f"{metric_name!r} is not an infrastructure metric")
+    if not 1 <= count <= MAX_TOP_NODES:
+        raise ValueError(f"a top-nodes chart draws 1 to {MAX_TOP_NODES} lines, not {count}")
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.TOP_NODES_TREND_SQL,
+        _read_parameters(project_id, from_time, to_time)
+        | {"metric_names": [metric_name], "bucket_seconds": bucket_seconds, "node_count": count},
+    )
+    by_node: dict[NodeKey, list[NodeTrendPoint]] = defaultdict(list)
+    for row in rows:
+        by_node[_node_key(row)].append(
+            NodeTrendPoint(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                value=float(row["mean_value"]),
+            )
+        )
+    return bucket_seconds, sorted(
+        by_node.items(),
+        key=lambda entry: (
+            entry[0].host,
+            entry[0].container,
+            entry[0].reporter,
+            entry[0].reporter_instance,
+        ),
+    )
+
+
 async def list_nodes(
     repository: TenantScopedRepository,
     *,

@@ -18,7 +18,8 @@ TEST_ENVIRONMENT: Final[dict[str, str]] = {
     "ENV": "development",
     "LOG_LEVEL": "warn",
     "POSTGRES_DSN": "postgresql://nexovue:secret@localhost:5432/nexovue",
-    "CLICKHOUSE_DSN": "clickhouse://nexovue_reader:secret@localhost:8123/nexovue",
+    # The API's own bounded read account (deploy/clickhouse/users.d/api-reader.xml).
+    "CLICKHOUSE_DSN": "clickhouse://nexovue_api_reader:secret@localhost:8123/nexovue",
     # The suites exercise the hosted product — billing, the operator console; the
     # self-hosted install is test_deployment_mode.py's.
     "NEXOVUE_DEPLOYMENT": "hosted",

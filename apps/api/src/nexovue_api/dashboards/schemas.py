@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 
 from nexovue_api.dashboards.definition import DashboardDocument
 from nexovue_api.detection.schemas import ProjectDetectionStatus
+from nexovue_api.releases.schemas import Marker
 
 
 class DashboardSummary(BaseModel):
@@ -97,6 +98,18 @@ class ContextFinding(BaseModel):
     closed_at: datetime | None
 
 
+class ContextIncident(BaseModel):
+    """An alert incident open during the window whose rule names a service (FR67). Listed
+    in the strip, never shaded (D52)."""
+
+    id: uuid.UUID
+    service_name: str
+    rule_name: str
+    severity: str
+    opened_at: datetime
+    resolved_at: datetime | None
+
+
 class OpenFindings(BaseModel):
     total: int
     by_service: dict[str, int]
@@ -105,7 +118,12 @@ class OpenFindings(BaseModel):
 class DashboardContext(BaseModel):
     """The Postgres half of a dashboard page (D24): it answers whatever ClickHouse does.
 
-    Markers, coverage and alert incidents join it when F28 has merged (plan T5.4).
+    Markers are F28's own (`releases.service.markers_in_window`, D14), each with its
+    `basis`: a `reported` deploy is signed by the customer's CI, a `seen` version came
+    from telemetry, which a stolen ingest key can plant, so the console never calls it a
+    deploy (AC122). `coverage` is each service's F28 coverage at the window's end, so a
+    chart with no marks can say "We receive no deploy information for this service"
+    rather than read as nothing shipped (AC132).
     """
 
     project: ContextProject
@@ -117,3 +135,10 @@ class DashboardContext(BaseModel):
     findings: list[ContextFinding]
     findings_truncated: bool
     open_findings: OpenFindings
+    markers: list[Marker]
+    # More marks than `markers_cap` fell in the window; these are the newest (F28 FR35).
+    markers_truncated: bool
+    markers_cap: int
+    coverage: dict[str, str]
+    incidents: list[ContextIncident]
+    incidents_truncated: bool

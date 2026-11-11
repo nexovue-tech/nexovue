@@ -102,6 +102,35 @@ async def top_services_trend(
     return _trend_response(rows, bucket_seconds, from_time, to_time)
 
 
+async def endpoint_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str,
+    span_kind: str,
+    endpoint: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> ServiceTrendResponse:
+    """One endpoint's history across the window: its service's trend, narrowed in the
+    store to that endpoint's rows (F20, `endpoint_trend`), with the same row-to-model
+    step, so its counts sum to the endpoint's row over the window (AC14)."""
+    if span_kind not in SPAN_KINDS:
+        raise ValueError(f"unknown span kind {span_kind!r}")
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.ENDPOINT_TREND_SQL,
+        _window_parameters(project_id, from_time, to_time)
+        | {
+            "bucket_seconds": bucket_seconds,
+            "service_name": service_name,
+            "span_kind": span_kind,
+            "span_name": endpoint,
+        },
+    )
+    return _trend_response(rows, bucket_seconds, from_time, to_time)
+
+
 def _trend_response(
     rows: list[dict[str, Any]], bucket_seconds: int, from_time: datetime, to_time: datetime
 ) -> ServiceTrendResponse:
@@ -166,6 +195,24 @@ async def project_overview(
 
 
 @dataclass(frozen=True, slots=True)
+class CoveredTotals:
+    """The project's totals, and where its data starts inside the window: None when
+    nothing reported in it (F20, a compared number's coverage)."""
+
+    totals: ProjectTotals
+    first_minute: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class CoveredService:
+    """One service's row over the window, or None when it was silent there, and where
+    its data starts inside the window."""
+
+    service: ServiceHealth | None
+    first_minute: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectTrend:
     """The project's RED across the window, one point per bucket."""
 
@@ -189,6 +236,25 @@ async def project_totals(
         queries.OVERVIEW_SQL, _window_parameters(project_id, from_time, to_time)
     )
     return _to_totals(totals_row, rollup.window_minutes(from_time, to_time))
+
+
+async def covered_project_totals(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> CoveredTotals:
+    """`project_totals`' statement and row-to-model step, with where the data starts:
+    a dashboard's project number and its compared window (F20, T5.2, T5.3)."""
+    row = await repository.query_one(
+        queries.OVERVIEW_SQL, _window_parameters(project_id, from_time, to_time)
+    )
+    totals = _to_totals(row, rollup.window_minutes(from_time, to_time))
+    # An aggregate over no rows still answers one row, of zeros: no service, no start.
+    if row is None or totals.service_count == 0:
+        return CoveredTotals(totals=totals, first_minute=None)
+    return CoveredTotals(totals=totals, first_minute=row["first_minute"])
 
 
 async def project_trend(
@@ -325,6 +391,29 @@ async def get_service(
         window_start=from_time,
         window_end=to_time,
         service=found[0] if found else None,
+    )
+
+
+async def service_totals(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> CoveredService:
+    """`get_service`'s statement and row-to-model step, with where the data starts: a
+    dashboard's service number and its compared window (F20, T5.2, T5.3)."""
+    rows = await repository.query(
+        queries.services_sql(one_service=True),
+        _window_parameters(project_id, from_time, to_time)
+        | {"limit": ONE_SERVICE_LIMIT, "service_name": service_name},
+    )
+    if not rows:
+        return CoveredService(service=None, first_minute=None)
+    minutes = rollup.window_minutes(from_time, to_time)
+    return CoveredService(
+        service=_to_service(rows[0], minutes), first_minute=rows[0]["first_minute"]
     )
 
 

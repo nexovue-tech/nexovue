@@ -54,8 +54,12 @@ MIN_SECONDS_TO_START: Final = 1.0
 
 # ClickHouse's error codes (`src/Common/ErrorCodes.cpp`), mapped ahead of the broad
 # catch: a server-side refusal is a refusal, and its own timeout is a timeout (AC91, AC92).
+# The API's account (`users.d/api-reader.xml`) answers 202 past its concurrent reads and
+# 241 past its memory, which reads `failed`; `server_error_code` reads the code off the
+# driver's error (seen on 26.3 in `test_clickhouse_reader_live.py`).
 TIMEOUT_EXCEEDED: Final = 159
 TOO_MANY_SIMULTANEOUS_QUERIES: Final = 202
+MEMORY_LIMIT_EXCEEDED: Final = 241
 
 Source = Literal["kept", "joined", "read"]
 
@@ -288,6 +292,8 @@ def _state_of(error: BaseException) -> Outcome:
         return TimedOutRead()
     if code == TOO_MANY_SIMULTANEOUS_QUERIES:
         return RefusedRead(retry_after_seconds=SHARED_READ_STATEMENT_SECONDS)
+    # Anything else is `failed`, MEMORY_LIMIT_EXCEEDED included: the account's memory is
+    # spent, a retry at once would fail alike, and the next refresh reads again.
     return FailedRead()
 
 

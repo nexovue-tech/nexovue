@@ -131,6 +131,20 @@ DASHBOARD_STATEMENTS: Final = (
     ("nexovue_api.services.queries", "TREND_SQL"),
     ("nexovue_api.services.queries", "TOP_SERVICES_TREND_SQL"),
     ("nexovue_api.infrastructure.queries", "NODE_TREND_SQL"),
+    # Step 5's own statements (T5.1a to T5.1d).
+    ("nexovue_api.services.queries", "ENDPOINT_TREND_SQL"),
+    ("nexovue_api.infrastructure.queries", "TOP_NODES_TREND_SQL"),
+    ("nexovue_api.synthetics.queries", "CHECK_TREND_SQL"),
+    ("nexovue_api.dbstats.queries", "STATEMENT_TREND_SQL"),
+    # The statements Step 5's readers reuse, each read for its predicates (T5.2): the
+    # templates are what every narrowed form is spliced from.
+    ("nexovue_api.services.queries", "OVERVIEW_SQL"),
+    ("nexovue_api.services.queries", "_SERVICES_TEMPLATE"),
+    ("nexovue_api.services.queries", "_ENDPOINTS_TEMPLATE"),
+    ("nexovue_api.servicemap.queries", "SERVICE_EDGES_SQL"),
+    ("nexovue_api.rum.queries", "VITAL_SUMMARY_SQL"),
+    ("nexovue_api.errorgroups.queries", "_ERROR_GROUPS_TEMPLATE"),
+    ("nexovue_api.dbstats.queries", "SLOW_STATEMENTS_SQL"),
 )
 
 # ADR-023: the one module that may write telemetry. Every other module in either

@@ -2,10 +2,13 @@
 
 A model per state, so a `failed` panel cannot carry values and a drawing mistake
 cannot paint zeros (BR5, AC20). Times are spelled as every telemetry screen spells them
-(`wire.IsoTimestamp`). Notes are not here: the console draws them from the
-definition, so they survive any ClickHouse failure. The states that later kinds need
-(`ambiguous`, `series_changed`, `window_too_wide`, `paused_by_operator` and the rest)
-arrive with those kinds.
+(`wire.IsoTimestamp`). Notes and open findings are not here: the console draws them
+from the definition and the panel context, so they survive any ClickHouse failure.
+`series_changed` and `too_many_series` arrive with metric series (plan Step 8).
+
+**One `ok` shape for every kind**, since the state is the discriminator: a chart fills
+`series`, a number `number`, and a table `rows`, each row the model its own screen
+returns, so a table cell and the screen's cell are one row-to-model step (BR3).
 """
 
 from __future__ import annotations
@@ -18,7 +21,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nexovue_api.dashboards.definition import MAX_PANELS, Definition, PanelId, ServiceName
 from nexovue_api.dashboards.ranges import RangeId
+from nexovue_api.dbstats.schemas import StatementCost
+from nexovue_api.errorgroups.schemas import ErrorGroupSummary
+from nexovue_api.rum.schemas import WebVitalSummary
+from nexovue_api.servicemap.schemas import ServiceEdge
+from nexovue_api.services.schemas import EndpointHealth, ServiceHealth
 from nexovue_api.wire import IsoTimestamp
+
+
+class NodeName(BaseModel):
+    """A top-nodes line's node, as the infrastructure screen names one."""
+
+    host: str
+    container: str
+    reporter: str
+    reporter_instance: str
 
 
 class Series(BaseModel):
@@ -28,7 +45,34 @@ class Series(BaseModel):
 
     label: str
     service: str | None = None
+    node: NodeName | None = None
     points: list[tuple[IsoTimestamp, float]]
+
+
+class NumberReading(BaseModel):
+    """A number panel's value, and the previous window's when it is compared (T5.3).
+
+    `previous` is null unless the previous window is covered, from its start, by at least
+    `COMPARE_MIN_COVERAGE`: a service ten minutes old has no earlier hour to compare
+    with, and "Not enough history to compare" says so rather than an arrow (AC73).
+    `previous_coverage` is the share of that window its data covers, null when nothing
+    reported in it.
+    """
+
+    measure: str
+    value: float
+    previous: float | None = None
+    previous_coverage: float | None = None
+
+
+TableRow = (
+    ServiceHealth
+    | EndpointHealth
+    | ServiceEdge
+    | ErrorGroupSummary
+    | StatementCost
+    | WebVitalSummary
+)
 
 
 class OkPanel(BaseModel):
@@ -43,7 +87,10 @@ class OkPanel(BaseModel):
     # whole bucket and would read as a collapse. The console leaves it off the line and
     # shows it as "so far" (FR66, AC114). Null on a fixed window, or when it is whole.
     incomplete_from: IsoTimestamp | None = None
-    series: list[Series]
+    series: list[Series] = []
+    number: NumberReading | None = None
+    # A table's rows, already cut to the panel's own count, in the store's order.
+    rows: list[TableRow] | None = None
 
 
 class EmptyPanel(BaseModel):
@@ -94,6 +141,29 @@ class FailedPanel(BaseModel):
     kind: str
 
 
+class AmbiguousPanel(BaseModel):
+    """Two checks in the displayed project share the panel's check name, so it cannot
+    tell which to read, and reads neither (FR16, AC22)."""
+
+    state: Literal["ambiguous"] = "ambiguous"
+    kind: str
+
+
+class WindowTooWidePanel(BaseModel):
+    """A raw panel over a window wider than its reader may read; no scan ran (FR17)."""
+
+    state: Literal["window_too_wide"] = "window_too_wide"
+    kind: str
+    limit_days: int
+
+
+class PausedByOperatorPanel(BaseModel):
+    """The operator turned dashboard scans off; no scan ran (FR69, AC116)."""
+
+    state: Literal["paused_by_operator"] = "paused_by_operator"
+    kind: str
+
+
 class UnknownKindPanel(BaseModel):
     """A stored panel this code no longer knows; the rest of the page draws (FR8)."""
 
@@ -110,6 +180,9 @@ PanelResult = Annotated[
     | RefusedPanel
     | TimedOutPanel
     | FailedPanel
+    | AmbiguousPanel
+    | WindowTooWidePanel
+    | PausedByOperatorPanel
     | UnknownKindPanel,
     Field(discriminator="state"),
 ]

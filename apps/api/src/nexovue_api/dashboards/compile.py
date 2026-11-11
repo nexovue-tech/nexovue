@@ -1,16 +1,26 @@
 """How each panel becomes a read, and what a definition costs at worst (F20, design section 4).
 
-Each panel kind maps its settings to at most one `ScanKey`: a frozen value naming a
-reader and its arguments. Panels whose keys are equal share one scan, so a service's
-rate, errors and latency are one read (FR11). `dashboardpanels/scans.py` holds the
-reader for each key; this module reads no store, so saving can count a definition's
-worst case without importing anything that reads ClickHouse (FR7, D31).
+Each panel kind maps its settings to at most two `ScanKey`s: a frozen value naming a
+reader and its arguments, and for a compared number a second one over the previous
+window. Panels whose keys are equal share one scan, so a service's rate, errors and
+latency are one read (FR11). `dashboardpanels/scans.py` holds the reader for each key;
+this module reads no store, so saving can count a definition's worst case without
+importing anything that reads ClickHouse (FR7, D31).
 
 **The picked service.** A panel naming the dashboard's picker compiles to a key with
 `picked=True`. At save, every such key counts as one service apart from any named one,
 which is the worst case: *Service health*'s three picker trends are one scan, and a
 named `checkout` beside them is a second (spec, *The templates*). At read time
 `resolve` puts the picked name in, so a picked `checkout` and a named one share a scan.
+
+**A check by name.** A `check_trend` key names the check; the read resolves it to one
+`check_id` in the displayed project before any scan, and the scan's key carries that
+id, so one name on two projects can never share a read.
+
+**Tables read their kind's fullest page.** A table key holds no row count: the store
+returns the first `MAX_TABLE_ROWS` of its ranking, and each panel shows its own first
+rows of it. The ranking is the store's, so a panel's first five are the route's own
+five, and two tables of one ranking share one scan.
 """
 
 from __future__ import annotations
@@ -19,15 +29,29 @@ from dataclasses import dataclass, replace
 from typing import Final
 
 from nexovue_api.dashboards.definition import (
+    CheckTrendPanel,
+    DatabaseStatementsTablePanel,
     Definition,
+    DependenciesTablePanel,
+    EndpointsTablePanel,
+    EndpointTrendPanel,
+    ErrorGroupsTablePanel,
     KnownPanel,
+    NodeRef,
     NodeTrendPanel,
     Picker,
+    ProjectNumberPanel,
     ProjectTrendPanel,
+    ServiceNumberPanel,
+    ServicesTablePanel,
     ServiceTrendPanel,
+    StatementTrendPanel,
     StoredDefinition,
+    TopNodesTrendPanel,
     TopServicesTrendPanel,
     UnknownPanel,
+    WebVitalsTablePanel,
+    service_of,
     uses_picker,
 )
 from nexovue_api.errors.exceptions import InvalidRequestError
@@ -38,6 +62,18 @@ PROJECT_TREND: Final = "project_trend"
 SERVICE_TREND: Final = "service_trend"
 TOP_SERVICES_TREND: Final = "top_services_trend"
 NODE_TREND: Final = "node_trend"
+TOP_NODES_TREND: Final = "top_nodes_trend"
+ENDPOINT_TREND: Final = "endpoint_trend"
+CHECK_TREND: Final = "check_trend"
+STATEMENT_TREND: Final = "statement_trend"
+PROJECT_TOTALS: Final = "project_totals"
+SERVICE_TOTALS: Final = "service_totals"
+SERVICES_RANKED: Final = "services_ranked"
+ENDPOINTS_RANKED: Final = "endpoints_ranked"
+DEPENDENCIES: Final = "dependencies"
+ERROR_GROUPS: Final = "error_groups"
+SLOW_STATEMENTS: Final = "slow_statements"
+WEB_VITALS: Final = "web_vitals"
 
 AnyPanel = KnownPanel | UnknownPanel
 
@@ -53,6 +89,15 @@ class NodeIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class StatementIdentity:
+    """A database statement as the database screen keys it: hash, server and port."""
+
+    query_hash: str
+    server_address: str
+    server_port: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScanKey:
     """What makes two panels want the same read: the reader and its arguments. The
     project and window are the request's, added when the read is shared."""
@@ -61,21 +106,38 @@ class ScanKey:
     service: str | None = None
     # The dashboard's picker, before `resolve` puts the picked service in.
     picked: bool = False
-    # A top-N chart's ranking and how many lines it keeps. Its signal is not here: one
-    # read answers rate, errors and latency alike.
+    # A ranking's order, and a top-N chart's count. A top-N chart's signal is not here:
+    # one read answers rate, errors and latency alike.
     order: str | None = None
     count: int | None = None
-    # A node chart's node and metric: one scan per node and metric (FR6).
+    # A node chart's node, and a node or top-nodes chart's metric (FR6).
     node: NodeIdentity | None = None
     metric: str | None = None
+    # An endpoint chart's endpoint: its span kind and span name.
+    span_kind: str | None = None
+    endpoint: str | None = None
+    # A check chart's check by name at save, and by id once a read has resolved it.
+    check: str | None = None
+    check_id: str | None = None
+    statement: StatementIdentity | None = None
+    failing_only: bool | None = None
+    device_class: str | None = None
+    # The window before the read's own, of the same length: a compared number (T5.3).
+    previous: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class CompiledPanel:
     panel_id: str
     kind: str
-    # None for a panel with no reader: a note, or a kind this code cannot read.
+    # None for a panel with no reader: a note, open findings, or an unknown kind.
     scan: ScanKey | None
+    # A compared number's read of the previous window.
+    compare: ScanKey | None = None
+
+    @property
+    def keys(self) -> tuple[ScanKey, ...]:
+        return tuple(key for key in (self.scan, self.compare) if key is not None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,44 +155,91 @@ class CompiledDefinition:
         return len(self.scans)
 
 
+def _for_service(reader: str, panel: AnyPanel) -> ScanKey:
+    """One service's read: the named service, the picker, or with none the project's."""
+    service = service_of(panel)
+    if isinstance(service, Picker):
+        return ScanKey(reader=reader, picked=True)
+    return ScanKey(reader=reader, service=service)
+
+
+def _node(node: NodeRef) -> NodeIdentity:
+    return NodeIdentity(
+        host=node.host,
+        container=node.container,
+        reporter=node.reporter,
+        reporter_instance=node.reporter_instance,
+    )
+
+
 def scan_of(panel: AnyPanel) -> ScanKey | None:
-    """The one read a panel needs, if any."""
-    if isinstance(panel, ProjectTrendPanel):
-        return ScanKey(reader=PROJECT_TREND)
-    if isinstance(panel, ServiceTrendPanel):
-        service = panel.settings.service
-        if isinstance(service, Picker):
-            return ScanKey(reader=SERVICE_TREND, picked=True)
-        return ScanKey(reader=SERVICE_TREND, service=service)
-    if isinstance(panel, TopServicesTrendPanel):
-        return ScanKey(
-            reader=TOP_SERVICES_TREND, order=panel.settings.order, count=panel.settings.count
-        )
-    if isinstance(panel, NodeTrendPanel):
-        node = panel.settings.node
-        return ScanKey(
-            reader=NODE_TREND,
-            node=NodeIdentity(
-                host=node.host,
-                container=node.container,
-                reporter=node.reporter,
-                reporter_instance=node.reporter_instance,
-            ),
-            metric=panel.settings.metric,
-        )
+    """The one read a panel needs over its own window, if any."""
+    match panel:
+        case ProjectTrendPanel():
+            return ScanKey(reader=PROJECT_TREND)
+        case ServiceTrendPanel():
+            return _for_service(SERVICE_TREND, panel)
+        case TopServicesTrendPanel(settings=settings):
+            return ScanKey(reader=TOP_SERVICES_TREND, order=settings.order, count=settings.count)
+        case NodeTrendPanel(settings=settings):
+            return ScanKey(reader=NODE_TREND, node=_node(settings.node), metric=settings.metric)
+        case TopNodesTrendPanel(settings=settings):
+            return ScanKey(reader=TOP_NODES_TREND, metric=settings.metric, count=settings.count)
+        case EndpointTrendPanel(settings=settings):
+            return replace(
+                _for_service(ENDPOINT_TREND, panel),
+                span_kind=settings.span_kind,
+                endpoint=settings.endpoint,
+            )
+        case CheckTrendPanel(settings=settings):
+            return ScanKey(reader=CHECK_TREND, check=settings.check)
+        case StatementTrendPanel(settings=settings):
+            return ScanKey(
+                reader=STATEMENT_TREND,
+                statement=StatementIdentity(
+                    query_hash=settings.query_hash,
+                    server_address=settings.server_address,
+                    server_port=settings.server_port,
+                ),
+            )
+        case ProjectNumberPanel():
+            return ScanKey(reader=PROJECT_TOTALS)
+        case ServiceNumberPanel():
+            return _for_service(SERVICE_TOTALS, panel)
+        case ServicesTablePanel(settings=settings):
+            return ScanKey(reader=SERVICES_RANKED, order=settings.order)
+        case EndpointsTablePanel(settings=settings):
+            return replace(_for_service(ENDPOINTS_RANKED, panel), order=settings.order)
+        case DependenciesTablePanel(settings=settings):
+            return ScanKey(reader=DEPENDENCIES, failing_only=settings.failing_only)
+        case ErrorGroupsTablePanel():
+            return _for_service(ERROR_GROUPS, panel)
+        case DatabaseStatementsTablePanel():
+            return ScanKey(reader=SLOW_STATEMENTS)
+        case WebVitalsTablePanel(settings=settings):
+            return ScanKey(reader=WEB_VITALS, device_class=settings.device_class)
     return None
 
 
-def compile_definition(definition: Definition | StoredDefinition) -> CompiledDefinition:
-    panels = tuple(
-        CompiledPanel(panel_id=panel.id, kind=panel.kind, scan=scan_of(panel))
-        for panel in definition.panels
+def compare_of(panel: AnyPanel, scan: ScanKey | None) -> ScanKey | None:
+    """A compared number's second read: the same key over the previous window."""
+    if scan is None or not isinstance(panel, ProjectNumberPanel | ServiceNumberPanel):
+        return None
+    return replace(scan, previous=True) if panel.settings.compare else None
+
+
+def compile_panel(panel: AnyPanel) -> CompiledPanel:
+    scan = scan_of(panel)
+    return CompiledPanel(
+        panel_id=panel.id, kind=panel.kind, scan=scan, compare=compare_of(panel, scan)
     )
-    scans = tuple(dict.fromkeys(panel.scan for panel in panels if panel.scan is not None))
+
+
+def compile_definition(definition: Definition | StoredDefinition) -> CompiledDefinition:
+    panels = tuple(compile_panel(panel) for panel in definition.panels)
+    scans = tuple(dict.fromkeys(key for panel in panels for key in panel.keys))
     named = {
-        panel.settings.service
-        for panel in definition.panels
-        if isinstance(panel, ServiceTrendPanel) and isinstance(panel.settings.service, str)
+        service for panel in definition.panels if isinstance(service := service_of(panel), str)
     }
     return CompiledDefinition(
         panels=panels,
@@ -141,25 +250,26 @@ def compile_definition(definition: Definition | StoredDefinition) -> CompiledDef
     )
 
 
-def compile_for_save(definition: Definition) -> CompiledDefinition:
+def compile_for_save(
+    definition: Definition, *, max_scans: int = MAX_SCANS_PER_READ
+) -> CompiledDefinition:
     """The compiled definition, or a refusal naming the count and the panels past the cap.
 
     The same check for a save, a draft, a file and a template, with no path around it.
+    `max_scans` is the install's own cap (`dashboards/limits.py`).
     """
     compiled = compile_definition(definition)
-    if compiled.worst_case_scans <= MAX_SCANS_PER_READ:
+    if compiled.worst_case_scans <= max_scans:
         return compiled
-    allowed = set(compiled.scans[:MAX_SCANS_PER_READ])
+    allowed = set(compiled.scans[:max_scans])
     past = [
-        panel.panel_id
-        for panel in compiled.panels
-        if panel.scan is not None and panel.scan not in allowed
+        panel.panel_id for panel in compiled.panels if any(key not in allowed for key in panel.keys)
     ]
     raise InvalidRequestError(
         f"This dashboard would need {compiled.worst_case_scans} reads, and one page may make "
-        f"{MAX_SCANS_PER_READ}. Remove panels or use the picker.",
+        f"{max_scans}. Remove panels or use the picker.",
         scans=compiled.worst_case_scans,
-        max_scans=MAX_SCANS_PER_READ,
+        max_scans=max_scans,
         panels_to_remove=past,
     )
 
@@ -171,3 +281,8 @@ def resolve(scan: ScanKey | None, *, picked: str | None) -> ScanKey | None:
     if picked is None:
         return None
     return replace(scan, service=picked, picked=False)
+
+
+def resolve_check(scan: ScanKey, check_id: str) -> ScanKey:
+    """A check chart's key once its name is one check in the displayed project."""
+    return replace(scan, check=None, check_id=check_id)

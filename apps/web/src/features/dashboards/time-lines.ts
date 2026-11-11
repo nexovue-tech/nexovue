@@ -7,7 +7,7 @@ import { formatCount, formatPercent } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 
-import type { PanelHeight, StoredPanel } from "./api";
+import type { NodeName, PanelHeight, StoredPanel } from "./api";
 import type { OkResult } from "./kept-readings";
 
 /**
@@ -28,6 +28,9 @@ const READING_NAMES: Record<string, string> = {
   p50_ms: "p50",
   p95_ms: "p95",
   p99_ms: "p99",
+  uptime_percent: "Uptime",
+  mean_duration_ms: "Duration",
+  mean_ms: "Mean time",
 };
 
 /** Latency merges one quantile state and is an estimate on every rollup panel (D44, AC113). */
@@ -39,7 +42,13 @@ const TONES: Record<string, SeriesToken | "critical"> = {
   p50_ms: 2,
   p95_ms: 2,
   p99_ms: 2,
+  uptime_percent: 1,
+  mean_duration_ms: 2,
+  mean_ms: 2,
 };
+
+/** Kinds whose lines are one node's or one ranking's each, told apart by colour and dash. */
+const NODE_KINDS = new Set(["node_trend", "top_nodes_trend"]);
 
 /** A node's readings by what the metric measures: a share, CPU cores, or bytes. */
 function nodeFormat(metric: string): (value: number) => string {
@@ -51,9 +60,21 @@ function nodeFormat(metric: string): (value: number) => string {
 }
 
 function readingFormat(reading: string): (value: number) => string {
-  if (reading === "error_rate") return (value) => `${value.toFixed(1)}%`;
-  if (ESTIMATED_READINGS.has(reading)) return (value) => formatDuration(value);
+  if (reading === "error_rate" || reading === "uptime_percent") {
+    return (value) => `${value.toFixed(1)}%`;
+  }
+  if (ESTIMATED_READINGS.has(reading) || reading === "mean_duration_ms" || reading === "mean_ms") {
+    return (value) => formatDuration(value);
+  }
   return (value) => formatRatePerMinute(value);
+}
+
+/** A top-nodes line's name: its container, its host, or the service that reported it. */
+function nodeLineName(node: NodeName | null | undefined): string {
+  if (!node) return "";
+  if (node.container) return visibleEscapes(node.container);
+  if (node.host) return visibleEscapes(node.host);
+  return `reported by ${visibleEscapes(node.reporter)}`;
 }
 
 /** One drawn line: what it is called, the service it links to, and its readings. */
@@ -99,15 +120,18 @@ export function timeChart(panel: StoredPanel, reading: OkResult): TimeChart {
   const [first] = reading.series;
   const reading0 = first?.label ?? "";
   const topN = panel.kind === "top_services_trend";
-  const node = panel.kind === "node_trend";
+  const topNodes = panel.kind === "top_nodes_trend";
+  const node = NODE_KINDS.has(panel.kind);
 
   return {
     lines: reading.series.map((series) => ({
       name: topN
         ? visibleEscapes(series.service ?? "")
-        : node
-          ? series.label
-          : (READING_NAMES[series.label] ?? series.label),
+        : topNodes
+          ? nodeLineName(series.node)
+          : node
+            ? series.label
+            : (READING_NAMES[series.label] ?? series.label),
       ...(topN && series.service !== undefined && series.service !== null
         ? { service: series.service }
         : {}),
@@ -125,7 +149,7 @@ export function timeChart(panel: StoredPanel, reading: OkResult): TimeChart {
     bucketSeconds: reading.bucket_seconds,
     format: node ? nodeFormat(reading0) : readingFormat(reading0),
     tone: node ? 2 : (TONES[reading0] ?? 1),
-    distinctColours: topN,
+    distinctColours: topN || topNodes,
     // A node's reading is a level, not a count: read off zero (design, *Chart upgrades*).
     yRange: node ? "fit" : "zero",
     height: chartHeight(panel.height),

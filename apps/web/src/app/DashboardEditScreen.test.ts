@@ -114,6 +114,12 @@ const context: DashboardContext = {
   last_seen_at: null,
   findings: [],
   findings_truncated: false,
+  markers: [],
+  markers_truncated: false,
+  markers_cap: 500,
+  coverage: {},
+  incidents: [],
+  incidents_truncated: false,
   open_findings: { total: 0, by_service: {} },
 };
 

@@ -32,10 +32,14 @@ from nexovue_api.dashboards import queries as dashboard_queries
 from nexovue_api.dashboards import ranges
 from nexovue_api.dashboards import service as dashboards
 from nexovue_api.dashboards.definition import Definition
+from nexovue_api.dashboards.limits import DashboardLimits
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.deploys import service as deploys
+from nexovue_api.deploys.service import EMPTY_DEPLOY_HISTORY
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.ratelimit.charge import Refused
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
+from nexovue_api.releases import service as releases
 from nexovue_api.services import queries as service_queries
 from nexovue_api.wire import to_iso_millis
 
@@ -163,11 +167,13 @@ class _Batch:
         *,
         last_seen: dict[str, datetime] | None = None,
         last_viewed_at: datetime | None = None,
+        limits: DashboardLimits | None = None,
+        checks: dict[str, list[str]] | None = None,
     ) -> None:
         self.dashboard = SimpleNamespace(
             id=DASHBOARD, org_id=ORG, definition=definition, last_viewed_at=last_viewed_at
         )
-        self.reads = PanelReads.for_install(shared_by_organizations=False)
+        self.reads = PanelReads.for_install(shared_by_organizations=False, limits=limits)
         self.session = _Session()
         seen = last_seen if last_seen is not None else {"checkout": NOW, "payment": NOW}
 
@@ -180,9 +186,24 @@ class _Batch:
         async def last_seen_of(*_: Any, services: list[str], **__: Any) -> dict[str, datetime]:
             return {name: seen[name] for name in services if name in seen}
 
+        async def checks_named(*_: Any, names: list[str], **__: Any) -> dict[str, list[str]]:
+            known = checks or {}
+            return {name: known[name] for name in names if name in known}
+
         monkeypatch.setattr(dashboards, "readable_dashboard", readable_dashboard)
         monkeypatch.setattr(dashboards, "readable_project", readable_project)
         monkeypatch.setattr(dashboard_queries, "last_seen_of", last_seen_of)
+        monkeypatch.setattr(dashboard_queries, "checks_named", checks_named)
+
+        async def no_deploys(*_: Any, **__: Any) -> Any:
+            return EMPTY_DEPLOY_HISTORY
+
+        async def no_coverage(*_: Any, **__: Any) -> Any:
+            return None
+
+        # An errors table's rows carry the deploys and coverage Postgres holds.
+        monkeypatch.setattr(deploys, "history_for_window", no_deploys)
+        monkeypatch.setattr(releases, "coverage_book", no_coverage)
 
     async def read(
         self,
@@ -220,6 +241,35 @@ class _Batch:
             disconnected=gone,
             correlation_id="corr-1",
             now=now,
+        )
+        return answer.model_dump(mode="json")
+
+    async def read_window(self, repository: Any, *, days: int) -> dict[str, Any]:
+        """A fixed window of `days`, ending an hour before the clock this suite pins."""
+
+        async def present() -> bool:
+            return False
+
+        end = NOW.replace(second=0) - timedelta(hours=1)
+        answer = await service.read_panels(
+            cast(Any, self.session),
+            identity=_identity(),
+            repository=cast(TenantScopedRepository, repository),
+            reads=self.reads,
+            charge=_Charge(),
+            asked=BatchRequest(
+                dashboard_id=DASHBOARD,
+                project_id=PROJECT,
+                range_id=None,
+                from_time=end - timedelta(days=days),
+                to_time=end,
+                service=None,
+                panel_ids=None,
+            ),
+            arrived_at=None,
+            disconnected=present,
+            correlation_id="corr-w",
+            now=NOW,
         )
         return answer.model_dump(mode="json")
 
@@ -454,13 +504,13 @@ async def test_a_picked_service_and_a_named_one_share_a_scan(
 async def test_ac79_past_a_lowered_cap_panels_read_over_limit_with_no_retry_promise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(service, "MAX_SCANS_PER_READ", 2)
     batch = _Batch(
         monkeypatch,
         _definition(
             *(_panel(f"p_{index}", service=f"svc-{index}", signal="rate") for index in range(3))
         ),
         last_seen={f"svc-{index}": NOW for index in range(3)},
+        limits=DashboardLimits(max_scans_per_read=2),
     )
     repository = _Repository()
 
@@ -759,12 +809,9 @@ async def test_a_preview_names_no_saved_dashboard_and_stamps_nothing(
 async def test_fr7_a_draft_past_the_scan_cap_is_refused_before_any_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The same check a save makes, with no path around it (FR7): here with the cap
-    lowered to 2, since Step 3's kinds cost at most one scan a panel."""
-    from nexovue_api.dashboards import compile as compile_module
-
-    monkeypatch.setattr(compile_module, "MAX_SCANS_PER_READ", 2)
-    batch = _Batch(monkeypatch, _definition())
+    """The same check a save makes, with no path around it (FR7): here at the install's
+    own lowered cap of 2 (T5.6c)."""
+    batch = _Batch(monkeypatch, _definition(), limits=DashboardLimits(max_scans_per_read=2))
     repository, charge = _Repository(), _Charge()
 
     with pytest.raises(InvalidRequestError) as refused:
@@ -833,12 +880,11 @@ def test_an_answer_a_panel_cannot_draw_fails_that_panel_alone() -> None:
     panel = _stored_panel("project_trend", {"signal": "rate"})
     key = scan_of(panel)
     assert key is not None, "a project trend panel reads one scan"
-    plan = service._Plan(panels=[], scans=(key,), over_limit=frozenset())
+    entry = service._Entry(panel, cast(Any, SimpleNamespace(scan=key)), scan=key)
+    plan = service._Plan(entries=[entry], scans=(key,), over_limit=frozenset(), window=(NOW, NOW))
     outcomes = {key: _served(NodeLine(bucket_seconds=60, points=[]))}
 
-    result = service._result(
-        panel, cast(Any, SimpleNamespace(scan=key)), key, plan, outcomes, {}, None
-    )
+    result = service._result(entry, plan, outcomes, {}, None)
 
     assert result is not None and result.state == "failed"
 
@@ -851,3 +897,401 @@ def test_only_a_bucket_that_has_not_ended_is_marked_filling() -> None:
     assert service._filling(newest, 60, datetime(2026, 11, 9, 10, 4, tzinfo=UTC)) is None
     # A fixed window marks nothing.
     assert service._filling(newest, 60, None) is None
+
+
+# ------------------------------------------------------------ Step 5's kinds offline
+
+WINDOW_START: Final = datetime(2026, 11, 8, 9, 1, tzinfo=UTC)  # "1h" at NOW, rounded up
+PREVIOUS_START: Final = WINDOW_START - timedelta(hours=1)
+
+
+class _Store:
+    """Answers any statement by name, through `query` and `query_one` alike, and records
+    each statement with its parameters."""
+
+    def __init__(self, answers: dict[str, Any]) -> None:
+        self.answers = answers
+        self.statements: list[tuple[str, dict[str, Any]]] = []
+
+    def bounded_by(self, seconds: int) -> _Store:
+        return self
+
+    async def query(self, sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+        self.statements.append((sql, parameters))
+        answer = self.answers.get(sql, [])
+        rows: list[dict[str, Any]] = answer(parameters) if callable(answer) else answer
+        return rows
+
+    async def query_one(self, sql: str, parameters: dict[str, Any]) -> dict[str, Any] | None:
+        rows = await self.query(sql, parameters)
+        return rows[0] if rows else None
+
+    def ran(self, sql: str) -> list[dict[str, Any]]:
+        return [parameters for statement, parameters in self.statements if statement == sql]
+
+
+def _totals(*, first_minute: datetime, services: int = 3) -> dict[str, Any]:
+    return {
+        "service_count": services,
+        "request_count": 6_000,
+        "error_count": 60,
+        "latency_ms": [10.0, 40.0, 90.0],
+        "first_minute": first_minute.replace(tzinfo=None),
+    }
+
+
+def _project_number(**settings: Any) -> dict[str, Any]:
+    panel = _panel(
+        "p_number", "project_number", **({"measure": "p95_ms", "compare": True} | settings)
+    )
+    return panel | {"height": "small"}
+
+
+def _overview_by_window(previous_first: datetime | None) -> Any:
+    """The window's totals, and the previous window's starting at `previous_first`, or
+    nothing reported there at all."""
+
+    def answer(parameters: dict[str, Any]) -> list[dict[str, Any]]:
+        if parameters["from_time"] == WINDOW_START:
+            return [_totals(first_minute=WINDOW_START) | {"latency_ms": [10.0, 60.0, 90.0]}]
+        if previous_first is None:
+            return [_totals(first_minute=PREVIOUS_START, services=0)]
+        return [_totals(first_minute=previous_first)]
+
+    return answer
+
+
+async def test_t5_3_a_covered_previous_window_compares(monkeypatch: pytest.MonkeyPatch) -> None:
+    batch = _Batch(monkeypatch, _definition(_project_number()))
+    store = _Store({service_queries.OVERVIEW_SQL: _overview_by_window(PREVIOUS_START)})
+
+    number = (await batch.read(cast(Any, store)))["panels"]["p_number"]
+
+    assert number["state"] == "ok"
+    assert number["number"] == {
+        "measure": "p95_ms",
+        "value": 60.0,
+        "previous": 40.0,
+        "previous_coverage": 1.0,
+    }
+    # Two scans: the window's, and the hour before it.
+    assert [read["from_time"] for read in store.ran(service_queries.OVERVIEW_SQL)] == [
+        WINDOW_START,
+        PREVIOUS_START,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("previous_first", "coverage"),
+    [(None, None), (PREVIOUS_START + timedelta(minutes=30), 0.5)],
+    ids=["no-earlier-window", "half-covered"],
+)
+async def test_ac73_a_partly_covered_previous_window_gives_no_comparison(
+    monkeypatch: pytest.MonkeyPatch, previous_first: datetime | None, coverage: float | None
+) -> None:
+    """A service ten minutes old has no earlier hour; a half-covered one is not enough
+    history either. The number still reads, and the console says "Not enough history to
+    compare" with no arrow, because `previous` is null."""
+    batch = _Batch(monkeypatch, _definition(_project_number()))
+    store = _Store({service_queries.OVERVIEW_SQL: _overview_by_window(previous_first)})
+
+    number = (await batch.read(cast(Any, store)))["panels"]["p_number"]["number"]
+
+    assert number["value"] == 60.0
+    assert number["previous"] is None
+    assert number["previous_coverage"] == coverage
+
+
+async def test_a_project_number_over_a_window_with_no_service_reads_empty_never_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(_project_number(compare=False)))
+    store = _Store({service_queries.OVERVIEW_SQL: [_totals(first_minute=WINDOW_START, services=0)]})
+
+    number = (await batch.read(cast(Any, store)))["panels"]["p_number"]
+
+    assert number["state"] == "empty"
+    assert "number" not in number
+
+
+async def test_a_service_number_tells_no_record_from_a_quiet_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _panel("p_known", "service_number", service="checkout", measure="p95_ms", compare=False)
+            | {"height": "small"},
+            _panel("p_unknown", "service_number", service="ghost", measure="p95_ms", compare=False)
+            | {"height": "small"},
+        ),
+        last_seen={"checkout": NOW - timedelta(hours=3)},
+    )
+
+    answer = await batch.read(cast(Any, _Store({})))
+
+    assert answer["panels"]["p_known"]["state"] == "empty"
+    assert answer["panels"]["p_known"]["last_seen_at"] is not None
+    assert answer["panels"]["p_unknown"] == {"state": "not_in_project", "kind": "service_number"}
+
+
+async def test_a_table_shows_its_own_first_rows_of_one_shared_ranking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ranked = [
+        {
+            "service_name": f"svc-{index}",
+            "request_count": 100 - index,
+            "error_count": 20 - index,
+            "latency_ms": [1.0, 2.0, 3.0],
+            "first_minute": WINDOW_START.replace(tzinfo=None),
+        }
+        for index in range(20)
+    ]
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _panel("p_five", "services_table", order="worst", rows=5),
+            _panel("p_all", "services_table", order="worst", rows=20),
+        ),
+    )
+    store = _Store({service_queries.services_sql(one_service=False): ranked})
+
+    answer = await batch.read(cast(Any, store))
+
+    assert len(store.statements) == 1
+    assert store.statements[0][1]["limit"] == 20
+    five = answer["panels"]["p_five"]["rows"]
+    assert [row["service_name"] for row in five] == [f"svc-{index}" for index in range(5)]
+    assert len(answer["panels"]["p_all"]["rows"]) == 20
+
+
+async def test_ac99_a_service_errors_table_with_nothing_says_when_the_service_was_seen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The console says "No errors in this window" only when the service was seen in it,
+    and "checkout sent nothing in this window" otherwise: both from `last_seen_at`."""
+    seen = NOW - timedelta(minutes=5)
+    batch = _Batch(
+        monkeypatch,
+        _definition(_panel("p_errors", "error_groups_table", service="checkout", rows=10)),
+        last_seen={"checkout": seen},
+    )
+
+    panel = (await batch.read(cast(Any, _Store({}))))["panels"]["p_errors"]
+
+    assert panel["state"] == "empty"
+    assert panel["last_seen_at"] == to_iso_millis(seen)
+
+
+def _check_rows(parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    start = int(WINDOW_START.timestamp()) * 1_000_000_000
+    return [
+        {
+            "check_id": parameters["check_id"],
+            "bucket_nanos": start + minute * 60_000_000_000,
+            "runs": runs,
+            "successful_runs": ok,
+            "duration_points": ok,
+            "mean_seconds": 0.25,
+        }
+        for minute, (runs, ok) in enumerate([(4, 4), (4, 3), (0, 0), (4, 0)])
+    ]
+
+
+async def test_ac22_a_check_not_in_the_project_reads_not_in_project_and_runs_no_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _panel("p_missing", "check_trend", check="Login", signal="uptime"),
+            _panel("p_twice", "check_trend", check="Checkout", signal="uptime"),
+        ),
+        checks={"Checkout": ["c-1", "c-2"]},
+    )
+    store = _Store({})
+
+    answer = await batch.read(cast(Any, store))
+
+    assert answer["panels"]["p_missing"] == {"state": "not_in_project", "kind": "check_trend"}
+    assert answer["panels"]["p_twice"] == {"state": "ambiguous", "kind": "check_trend"}
+    assert store.statements == []
+
+
+async def test_ac95_a_check_runs_one_statement_bound_to_the_id_its_name_resolved_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexovue_api.synthetics import queries as synthetics_queries
+
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _panel("p_up", "check_trend", check="Login", signal="uptime"),
+            _panel("p_time", "check_trend", check="Login", signal="duration"),
+        ),
+        checks={"Login": ["c-9"]},
+    )
+    store = _Store({synthetics_queries.CHECK_TREND_SQL: _check_rows})
+
+    answer = await batch.read(cast(Any, store))
+
+    assert [parameters["check_id"] for _, parameters in store.statements] == ["c-9"]
+    uptime = answer["panels"]["p_up"]["series"][0]
+    assert uptime["label"] == "uptime_percent"
+    # A bucket with no run is a gap, never a zero; one whose runs all failed is 0%.
+    assert [value for _, value in uptime["points"]] == [100.0, 75.0, 0.0]
+    duration = answer["panels"]["p_time"]["series"][0]
+    # Only buckets with a successful timed run have a duration.
+    assert [value for _, value in duration["points"]] == [250.0, 250.0]
+
+
+@pytest.mark.parametrize(
+    ("kind", "settings", "limit"),
+    [
+        (
+            "statement_trend",
+            {"query_hash": "1", "server_address": "db", "server_port": 5432, "label": None},
+            7,
+        ),
+        ("check_trend", {"check": "Login", "signal": "uptime"}, 30),
+    ],
+    ids=["seven-days", "thirty-days"],
+)
+async def test_ac23_a_raw_panel_over_its_window_reads_window_too_wide_and_runs_no_scan(
+    monkeypatch: pytest.MonkeyPatch, kind: str, settings: dict[str, Any], limit: int
+) -> None:
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _panel("p_raw", kind, **settings), _panel("p_rollup", "project_trend", signal="rate")
+        ),
+        checks={"Login": ["c-9"]},
+    )
+    store = _Store({service_queries.OVERVIEW_TREND_SQL: [_row(minute) for minute in range(3)]})
+
+    wide = await batch.read_window(cast(Any, store), days=limit + 1)
+    fits = await batch.read_window(cast(Any, _Store({})), days=limit)
+
+    assert wide["panels"]["p_raw"] == {
+        "state": "window_too_wide",
+        "kind": kind,
+        "limit_days": limit,
+    }
+    assert wide["panels"]["p_rollup"]["state"] == "ok"
+    assert [sql for sql, _ in store.statements] == [service_queries.OVERVIEW_TREND_SQL]
+    assert fits["panels"]["p_raw"]["state"] == "empty"
+
+
+async def test_fr17_a_plan_keeping_less_than_the_safety_limit_lowers_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The limit is the lesser of the reader's and the plan's raw retention (FR17)."""
+    from nexovue_api.dashboards.schemas import PlanRetention
+
+    batch = _Batch(
+        monkeypatch,
+        _definition(_panel("p_raw", "check_trend", check="Login", signal="uptime")),
+        checks={"Login": ["c-9"]},
+    )
+    batch.reads = PanelReads.for_install(shared_by_organizations=True, hosted=True)
+
+    async def plan_retention(*_: Any, **__: Any) -> PlanRetention:
+        return PlanRetention(raw_days=3, derived_days=30)
+
+    monkeypatch.setattr(dashboards, "plan_retention", plan_retention)
+
+    answer = await batch.read_window(cast(Any, _Store({})), days=4)
+
+    assert answer["panels"]["p_raw"] == {
+        "state": "window_too_wide",
+        "kind": "check_trend",
+        "limit_days": 3,
+    }
+
+
+async def test_ac116_with_scans_off_every_scan_panel_is_paused_and_nothing_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _panel("p_chart", "project_trend", signal="rate"),
+            _project_number(),
+            _panel("p_note", "note", text="Check the queue first."),
+            _panel("p_open", "open_findings", service=None) | {"height": "small"},
+        ),
+        limits=DashboardLimits(scans_enabled=False),
+    )
+    store, charge = _Store({}), _Charge()
+
+    answer = await batch.read(cast(Any, store), charge=charge)
+
+    assert answer["panels"] == {
+        "p_chart": {"state": "paused_by_operator", "kind": "project_trend"},
+        "p_number": {"state": "paused_by_operator", "kind": "project_number"},
+    }
+    assert store.statements == []
+    assert charge.claims == 0
+
+
+def _settings(**values: Any) -> Any:
+    from environment import TEST_ENVIRONMENT
+
+    from nexovue_api.settings import Settings
+
+    return Settings.model_validate(
+        {name.lower(): value for name, value in TEST_ENVIRONMENT.items()} | values
+    )
+
+
+def test_t5_6c_the_code_s_limits_fit_the_quota_and_hosted_keeps_them() -> None:
+    from nexovue_api.dashboards.limits import CODE_LIMITS, DashboardLimitsError
+
+    hosted = _settings(nexovue_deployment="hosted")
+    assert DashboardLimits.from_settings(hosted) == CODE_LIMITS
+
+    tuned = _settings(nexovue_deployment="hosted", dashboard_scans_at_once=2)
+    with pytest.raises(DashboardLimitsError, match="DASHBOARD_SCANS_AT_ONCE"):
+        DashboardLimits.from_settings(tuned)
+
+
+@pytest.mark.parametrize(
+    ("tuned", "refusal"),
+    [
+        ({"dashboard_max_scans_per_read": 46}, "reads a minute"),
+        ({"dashboard_max_scans_per_read": 80, "dashboard_refresh_floor_seconds": 60}, None),
+        (
+            {"dashboard_max_scans_per_read": 91, "dashboard_refresh_floor_seconds": 60},
+            "reads a minute",
+        ),
+        ({"dashboard_scans_at_once": 9}, "CLICKHOUSE_POOL_SIZE"),
+        ({"dashboard_max_panels": 31}, "at most 30"),
+        ({"dashboard_max_panels": 12, "dashboard_raw_window_days": 3}, None),
+    ],
+    ids=["scans-at-floor", "scans-at-slower-floor", "past-it", "connections", "panels", "lower"],
+)
+def test_t5_6c_a_self_hosted_set_that_breaks_the_quota_is_refused_at_start(
+    tuned: dict[str, Any], refusal: str | None
+) -> None:
+    """At the 30 s floor, 45 scans is 90 a minute, one person's share at two processes;
+    46 is past it. A slower floor admits more."""
+    from nexovue_api.dashboards.limits import DashboardLimitsError
+
+    settings = _settings(nexovue_deployment="self-hosted", **tuned)
+    if refusal is None:
+        DashboardLimits.from_settings(settings)
+        return
+    with pytest.raises(DashboardLimitsError, match=refusal):
+        DashboardLimits.from_settings(settings)
+
+
+def test_t5_6c_a_save_meets_the_install_s_panel_cap_and_refresh_floor() -> None:
+    from nexovue_api.dashboards.limits import compile_within
+
+    definition = Definition.model_validate(_three_scans())
+    with pytest.raises(InvalidRequestError, match="holds 3 panels"):
+        compile_within(definition, DashboardLimits(max_panels=3))
+    with pytest.raises(InvalidRequestError, match="every 300 seconds"):
+        compile_within(definition, DashboardLimits(refresh_floor_seconds=300))
+    assert compile_within(definition, DashboardLimits()).worst_case_scans == 3

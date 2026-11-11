@@ -253,3 +253,36 @@ describe("what the live region says (AC37)", () => {
     );
   });
 });
+
+describe("what Step 5's kinds cost at worst, as `compile.py` counts them (FR7)", () => {
+  const of = (id: string, kind: string, settings: Record<string, unknown>) =>
+    panel(id, { kind, settings });
+
+  it("counts a compared number twice, and a plain one of the same read once", () => {
+    const definition = documentWith(
+      of("p_1", "project_number", { measure: "p95_ms", compare: true }),
+      of("p_2", "project_number", { measure: "error_rate", compare: false }),
+      of("p_3", "service_number", { service: "checkout", measure: "p95_ms", compare: true }),
+    ).definition;
+    // The window's totals and the one before; checkout's and the one before.
+    expect(worstCaseReads(definition)).toBe(4);
+  });
+
+  it("counts tables per ranking whatever their rows, and checks per name", () => {
+    const definition = documentWith(
+      of("p_1", "services_table", { order: "worst", rows: 5 }),
+      of("p_2", "services_table", { order: "worst", rows: 20 }),
+      of("p_3", "endpoints_table", { service: null, order: "worst", rows: 10 }),
+      of("p_4", "endpoints_table", { service: { picker: true }, order: "worst", rows: 10 }),
+      of("p_5", "check_trend", { check: "Login", signal: "uptime" }),
+      of("p_6", "check_trend", { check: "Login", signal: "duration" }),
+      of("p_7", "error_groups_table", { service: null, rows: 10 }),
+    ).definition;
+    expect(worstCaseReads(definition)).toBe(5);
+  });
+
+  it("counts nothing for open findings or a note, which read no store", () => {
+    const definition = documentWith(of("p_1", "open_findings", { service: null }), NOTE).definition;
+    expect(worstCaseReads(definition)).toBe(0);
+  });
+});

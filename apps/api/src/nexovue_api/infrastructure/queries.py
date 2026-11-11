@@ -236,6 +236,36 @@ GROUP BY bucket_nanos
 ORDER BY bucket_nanos
 """
 
+# The nodes highest on one metric, each with its own line, for a dashboard's
+# `top_nodes_trend` panel (F20, T5.1b). **The ranking is the store's**: the inner
+# statement takes each node's mean over the window and keeps the first `node_count`, so
+# trimming afterwards can never choose which nodes are drawn, and each line is
+# `NODE_TREND_SQL`'s mean per bucket for that node (AC14, AC26). Both reads name the
+# tenant and project inside `_READINGS`, so another project's busier machines can never
+# be chosen. The count is `node_count` rather than `limit`, for the reason given at
+# `NODE_READINGS_SQL`.
+TOP_NODES_TREND_SQL: Final = f"""
+SELECT
+    host,
+    container,
+    reporter,
+    reporter_instance,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    avg(value) AS mean_value
+FROM ({_ONE_ROW_PER_READING.format(readings=_READINGS)}
+)
+WHERE (host, container, reporter, reporter_instance) IN (
+    SELECT host, container, reporter, reporter_instance
+    FROM ({_ONE_ROW_PER_READING.format(readings=_READINGS)}
+    )
+    GROUP BY host, container, reporter, reporter_instance
+    ORDER BY avg(value) DESC, host, container, reporter, reporter_instance
+    LIMIT {{node_count:UInt32}}
+)
+GROUP BY host, container, reporter, reporter_instance, bucket_nanos
+ORDER BY host, container, reporter, reporter_instance, bucket_nanos
+"""
+
 # What has arrived at all, which is what the screen's empty state needs: a
 # project with no rows here has no collector sending host metrics, and that is a
 # different problem from a host that has gone quiet.
