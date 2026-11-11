@@ -222,6 +222,10 @@ services:
       # holds the same.
       CONNECTION_SECRET_KEY: ${DEV_CONNECTION_SECRET_KEY:-Wm3n0P1oYHk2s1Yx7c5lQ0mJd8h6rT4vB9eA2uFgK0s=}
       CONNECTION_SECRET_PREVIOUS_KEYS: ${DEV_CONNECTION_SECRET_PREVIOUS_KEYS:-}
+      # Seals AI provider keys (F3); `scheduler-insight` holds the same. Empty by default, so
+      # `/settings/ai` says AI is unavailable until a developer sets DEV_AI_SECRET_KEY.
+      AI_SECRET_KEY: ${DEV_AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${DEV_AI_SECRET_PREVIOUS_KEYS:-}
       PROBE_LOCATIONS: local
       # Where a browser lands: the **app**, never this API. Verification links,
       # password resets and the return from a payment all point at a screen,
@@ -659,7 +663,7 @@ services:
       LOG_FORMAT: console
       SCHEDULER_ROLE: insight
       POSTGRES_DSN: ${DEV_INSIGHT_POSTGRES_DSN:-postgresql+asyncpg://nexovue_insight:nexovue_insight_dev@postgres:5432/nexovue}
-      # Empty in development until a key is sealed with it (plan Step 4); production needs one.
+      # The API's key (DEV_AI_SECRET_KEY), empty unless a developer sets one; production needs one.
       AI_SECRET_KEY: ${DEV_AI_SECRET_KEY:-}
       AI_SECRET_PREVIOUS_KEYS: ${DEV_AI_SECRET_PREVIOUS_KEYS:-}
       AI_PRIVATE_ENDPOINTS: ${DEV_AI_PRIVATE_ENDPOINTS:-}

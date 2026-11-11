@@ -179,6 +179,15 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "failing_since": "2026-11-08 14:02 UTC",
             "link": "https://app.nexovue.com/settings/connections",
         },
+        # F3 AC102: an owner told their AI connection changed, with hosts and no key.
+        Message.AI_CONNECTION_CHANGED: {
+            "organization": "Acme Inc",
+            "what": "An admin changed the address AI wording sends facts to.",
+            "old_host": "https://api.anthropic.com",
+            "new_host": "https://gateway.example.com",
+            "until": "an owner agrees again",
+            "link": "https://app.nexovue.com/settings/ai",
+        },
         Message.CONNECTION_EXPIRING: {
             "tracker": "Jira",
             "expires_on": "23 Nov 2026",

@@ -241,6 +241,15 @@ POLICY_OF: Final = {
     "nexovue_api/connections/router.py:change_place": "MayManageConnections",
     "nexovue_api/connections/router.py:map_service_repository": "MayManageConnections",
     "nexovue_api/connections/router.py:unmap_service_repository": "MayManageConnections",
+    # F3 (FR23 to FR32; AC32): the AI connection, its test, switch and opt-outs are an owner's
+    # or an admin's; agreeing to send facts is the owner's alone.
+    "nexovue_api/ai/router.py:save_connection": "MayManageAI",
+    "nexovue_api/ai/router.py:delete_connection": "MayManageAI",
+    "nexovue_api/ai/router.py:start_check": "MayManageAI",
+    "nexovue_api/ai/router.py:switch": "MayManageAI",
+    "nexovue_api/ai/router.py:opt_out": "MayManageAI",
+    "nexovue_api/ai/router.py:opt_in": "MayManageAI",
+    "nexovue_api/ai/router.py:consent": "MayConsentAIDisclosure",
     "nexovue_api/connections/test_router.py:test_connection": "MayManageConnections",
     "nexovue_api/checksecrets/router.py:write_secret": "MayManageCheckSecrets",
     "nexovue_api/checksecrets/router.py:delete_secret": "MayManageCheckSecrets",

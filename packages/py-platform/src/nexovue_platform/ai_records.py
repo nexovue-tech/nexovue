@@ -22,7 +22,9 @@ OFF_REASONS: Final = ("person", "consent_ended")
 RUN_PURPOSES: Final = ("explain", "check", "chat", "fix")
 
 # How a run ended (design, *Failure handling*). `started` is written before the call, so a
-# killed child leaves a row the sweep turns into `died`.
+# killed child leaves a row the sweep turns into `died`. `not_found` (a model or path the
+# provider does not know) and `bad_request` (a 400) joined in migration 0071, so a failed
+# connection test can say "model not found" apart from a bad key (spec, *Error cases*).
 RUN_OUTCOMES: Final = (
     "started",
     "done",
@@ -34,6 +36,8 @@ RUN_OUTCOMES: Final = (
     "too_long",
     "invalid",
     "died",
+    "not_found",
+    "bad_request",
 )
 
 # A connection's call time limit, in seconds (design, *Data and migration impact*).

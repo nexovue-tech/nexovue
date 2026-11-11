@@ -175,6 +175,22 @@ CONNECTION_PUBLIC_REPOSITORY_ALLOWED: Final = "connection.public_repository_allo
 CONNECTION_PUBLIC_REPOSITORY_WITHDRAWN: Final = "connection.public_repository_withdrawn"
 SERVICE_REPOSITORY_CHANGED: Final = "service_repository.changed"
 FINDING_FALSE_ALARM: Final = "finding.false_alarm"
+# F3 (design, *Audit*). An AI connection can send an organization's facts out, so each act
+# is recorded with the changed fields' names, never their values; the connection's acts and
+# consent also name the old and new scheme and host, never a path, which may hold a secret,
+# so a customer can learn after a takeover which address received their data (AC72).
+AI_CONNECTION_CHANGED: Final = "ai.connection_changed"
+AI_CONNECTION_DELETED: Final = "ai.connection_deleted"
+AI_CONNECTION_TESTED: Final = "ai.connection_tested"
+AI_DISCLOSURE_AGREED: Final = "ai.disclosure_agreed"
+AI_CONSENT_ENDED: Final = "ai.consent_ended"
+AI_KEY_REPLACED: Final = "ai.key_replaced"
+AI_TURNED_ON: Final = "ai.turned_on"
+AI_TURNED_OFF: Final = "ai.turned_off"
+AI_LIMIT_CHANGED: Final = "ai.limit_changed"
+AI_PROJECT_OPTED_OUT: Final = "ai.project_opted_out"
+AI_PROJECT_OPTED_IN: Final = "ai.project_opted_in"
+AI_CONNECTION_TARGET: Final = "ai_connection"
 # F3. A person's judgement of an explanation, and a rule an organization stopped from
 # naming causes, or started again (FR20, FR54). The reason is a closed-list word.
 FINDING_EXPLANATION_RATED: Final = "finding.explanation_rated"
@@ -1168,6 +1184,28 @@ def record_service_repository_changed(
         action=SERVICE_REPOSITORY_CHANGED,
         target=_target(PROJECT_TARGET, project_id),
         detail={"service": service_name, "place_id": None if place_id is None else str(place_id)},
+    )
+
+
+def record_ai_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    action: str,
+    target_id: uuid.UUID,
+    detail: dict[str, Any] | None = None,
+    target_kind: str = AI_CONNECTION_TARGET,
+) -> None:
+    """An act on the organization's AI connection, switch or opt-outs (F3). `detail` holds
+    field names, hosts and closed words only, never a key or a URL's path."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(target_kind, target_id),
+        detail=detail,
     )
 
 

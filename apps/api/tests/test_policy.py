@@ -34,6 +34,8 @@ FR1 = {
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
     Action.MANAGE_CONNECTIONS: ADMINISTRATORS,
+    # F3: the AI provider, its key, test, limit, switch and opt-outs (foundation FD8).
+    Action.MANAGE_AI: ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: ADMINISTRATORS,
@@ -48,6 +50,8 @@ FR1 = {
     Action.READ_AUDIT: ADMINISTRATORS,
     Action.MANAGE_OWNERS: OWNERS,
     Action.GRANT_SUPPORT: OWNERS,
+    # F3 FR26, AC32: sending facts to a provider is the owner's own act.
+    Action.CONSENT_AI_DISCLOSURE: OWNERS,
     Action.COMMIT_SPEND: OWNERS,
     Action.END_ORGANIZATION: OWNERS,
 }

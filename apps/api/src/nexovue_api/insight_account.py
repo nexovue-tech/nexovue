@@ -27,7 +27,7 @@ from typing import Final
 
 from sqlalchemy import TextClause, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 
 INSIGHT_ACCOUNT: Final = "nexovue_insight"
 PASSWORD_VARIABLE: Final = "POSTGRES_INSIGHT_PASSWORD"
@@ -59,8 +59,9 @@ INSIGHT_GRANTS: Final = (
     "wording_generation, wording_changed_at) ON finding_explanations TO nexovue_insight",
     "GRANT UPDATE (wording, wording_state, wording_reason, wording_changed_at, "
     "wording_from_version) ON finding_explanations TO nexovue_insight",
-    # Everything but who consented, when, and the prices; it may record a test's result.
-    "GRANT SELECT (id, org_id, wire_format, base_url, model, region_label, key_id, "
+    # Everything but who consented, when, and the prices; it may record a test's result. The
+    # sealed key, which it opens with `AI_SECRET_KEY` for the address it is bound to.
+    "GRANT SELECT (id, org_id, wire_format, base_url, model, region_label, key_id, sealed_key, "
     "call_seconds, monthly_token_limit, enabled, off_reason, checked_at, checked_ok, "
     "checked_fingerprint, consented_base_url, consented_fingerprint, consented_schema) "
     "ON ai_connections TO nexovue_insight",
@@ -135,6 +136,11 @@ _TAKE_EVERYTHING: Final = (
     *(f"REVOKE EXECUTE ON FUNCTION {signature} FROM PUBLIC" for signature in INSIGHT_FUNCTIONS),
 )
 _DATABASE: Final = text("SELECT current_database(), current_user")
+# Beat's leader lock is an advisory lock: an account still holding this function could take
+# it. Asked only where the account exists, since the function errors on an unknown role.
+_BEAT_LOCK_EXPOSED: Final = text(
+    "SELECT has_function_privilege(:account, 'pg_try_advisory_lock(bigint)', 'EXECUTE')"
+)
 
 Say = Callable[[str], None]
 
@@ -277,3 +283,14 @@ def _reason(error: DBAPIError) -> str:
     """Postgres's own one line, never the statement, which may hold the password."""
     original = getattr(error, "orig", None)
     return str(original).splitlines()[0] if original is not None else type(error).__name__
+
+
+async def account_exists(session: AsyncSession) -> bool:
+    """Whether setup has made the AI account on this server (F3, AC71)."""
+    return await session.scalar(_ROLE_EXISTS, {"account": INSIGHT_ACCOUNT}) is not None
+
+
+async def beat_lock_exposed(session: AsyncSession) -> bool:
+    """Whether the AI account may still take beat's leader lock. Ask only once
+    `account_exists` holds."""
+    return bool(await session.scalar(_BEAT_LOCK_EXPOSED, {"account": INSIGHT_ACCOUNT}))

@@ -1,8 +1,8 @@
 # The AI container (`scheduler-insight`)
 
 F3's AI role: it words a finding's facts through an organization's own provider. Plan Step 3
-built the fence only; it runs idle, with no provider code. Steps 4 and 5 add the connection
-test, the wording job, their metrics and the rest of this runbook.
+built the fence; Step 4 added the connection test, the one task it runs today. Step 5 adds the
+wording job, its metrics and the rest of this runbook.
 
 ## What it can reach
 
@@ -57,6 +57,23 @@ REVOKE EXECUTE ON FUNCTION pg_try_advisory_lock(bigint) FROM PUBLIC;  -- and eve
   migration's lock on the tables it read. Postgres warns about an old transaction in
   `pg_stat_activity`; `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename =
   'nexovue_insight' AND xact_start < now() - interval '5 minutes'` ends it.
+
+## Allowing a local model (`AI_PRIVATE_ENDPOINTS`)
+
+A connection may reach a private address only if it is listed here, by address and port:
+`AI_PRIVATE_ENDPOINTS=192.168.1.20:11434` in `nexovue.env`, comma-separated for more, a range as
+`192.168.1.0/24:11434`, an IPv6 address as `[fd00::7]:11434`. Set it on `scheduler-insight`
+(`nexovue install` after editing). The scheduler refuses to start on an entry with no port, one
+not wholly private, loopback or link-local, or a range wider than /16 (IPv4) or /48 (IPv6); the
+error names the entry. Loopback (`localhost`, `127.0.0.1`) is never reachable from a container:
+bind the model server to the host's private address instead. A connection test against an
+address not listed fails with "The address was refused".
+
+## The connection test failed with "The saved key could not be opened"
+
+The key is sealed under `AI_SECRET_KEY`, for the connection's address. After a rotation, keep the
+old key in `AI_SECRET_PREVIOUS_KEYS` until `just keys-status` shows nothing under it
+(`docs/operations/key-rotation.md`). If the old key is gone, an admin saves the key again.
 
 ## Running with no AI container
 

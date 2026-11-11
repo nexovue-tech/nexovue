@@ -48,6 +48,8 @@ const GUARDED = [
   "features/alerts/ChannelDetailScreen.tsx",
   // F20: a dashboard's draft, which nothing writes until Save.
   "features/dashboards/DashboardEditScreen.tsx",
+  // F3: an AI provider's address, model, key and limit, which nothing writes until Save.
+  "features/aisettings/AISettingsScreen.tsx",
 ];
 
 /** Submitted immediately, with no draft behind them. */

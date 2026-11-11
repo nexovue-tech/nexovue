@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
+from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
     DEPLOY_WEBHOOK_PURPOSE,
@@ -30,6 +31,7 @@ from nexovue_platform.checks.sealing import (
     ConfiguredKeys,
     Keyring,
     SealedBox,
+    SealError,
     channel_secret_owner,
     check_secret_owner,
     decode_key,
@@ -60,11 +62,14 @@ ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://"
 OLD_CHECK, NEW_CHECK = generate_key(), generate_key()
 OLD_CREDENTIAL, NEW_CREDENTIAL = generate_key(), generate_key()
 OLD_CONNECTION, NEW_CONNECTION = generate_key(), generate_key()
+OLD_AI, NEW_AI = generate_key(), generate_key()
 ROTATED: Final = keys.Keys(
     check=ConfiguredKeys(NEW_CHECK, previous=OLD_CHECK),
     credential=ConfiguredKeys(NEW_CREDENTIAL, previous=OLD_CREDENTIAL),
     connection=ConfiguredKeys(NEW_CONNECTION, previous=OLD_CONNECTION),
+    ai=ConfiguredKeys(NEW_AI, previous=OLD_AI),
 )
+AI_BASE_URL: Final = "https://api.anthropic.example/"
 # F22: each of a connection's three sealed columns, by its purpose (AC35).
 CONNECTION_COLUMNS: Final = {
     "sealed_credential": CONNECTION_CREDENTIAL_PURPOSE,
@@ -98,6 +103,7 @@ class _Tenant:
     channel_id: uuid.UUID
     connection_id: uuid.UUID
     deploy_secret_id: uuid.UUID
+    ai_connection_id: uuid.UUID
 
 
 def _box(key: str, purpose: str) -> SealedBox:
@@ -205,6 +211,22 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
                 ),
             },
         )
+        # F3 T4.6: a provider key under the `ai` ring, bound to its address.
+        ai_connection = uuid.uuid4()
+        await connection.execute(
+            text(
+                "INSERT INTO ai_connections (id, org_id, wire_format, base_url, model, sealed_key) "
+                "VALUES (:id, :org, 'anthropic_messages', :url, 'claude-haiku', :sealed)"
+            ),
+            {
+                "id": ai_connection,
+                "org": org,
+                "url": AI_BASE_URL,
+                "sealed": _box(OLD_AI, AI_CONNECTION_PURPOSE).seal(
+                    PLAINTEXT, owner=key_owner(str(org), str(ai_connection), AI_BASE_URL)
+                ),
+            },
+        )
     try:
         yield _Tenant(
             org_id=org,
@@ -213,6 +235,7 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
             channel_id=channel,
             connection_id=connection_id,
             deploy_secret_id=deploy_secret,
+            ai_connection_id=ai_connection,
         )
     finally:
         async with engine.begin() as connection:
@@ -316,6 +339,30 @@ async def test_reseal_carries_each_connection_secret_to_the_new_key(
         assert _box(NEW_CONNECTION, purpose).open(sealed, owner=owner) == PLAINTEXT, column
 
 
+async def test_reseal_carries_an_ai_provider_key_and_it_opens_only_for_its_address(
+    engine: AsyncEngine, tenant: _Tenant
+) -> None:
+    """F3 AC34: a provider key moves with a rotation of `AI_SECRET_KEY`, and is bound to its
+    organization, connection and address, so it will not open for another address."""
+    async with engine.connect() as connection:
+        await keys.survey(connection, ROTATED, reseal=True)
+        sealed = bytes(
+            (
+                await connection.execute(
+                    text("SELECT sealed_key FROM ai_connections WHERE id = :id"),
+                    {"id": tenant.ai_connection_id},
+                )
+            ).scalar_one()
+        )
+
+    box = _box(NEW_AI, AI_CONNECTION_PURPOSE)
+    org, row = str(tenant.org_id), str(tenant.ai_connection_id)
+    assert sealed_key_id(sealed) == key_id(decode_key(NEW_AI))
+    assert box.open(sealed, owner=key_owner(org, row, AI_BASE_URL)) == PLAINTEXT
+    with pytest.raises(SealError):
+        box.open(sealed, owner=key_owner(org, row, "https://attacker.example/"))
+
+
 async def test_every_sealed_column_in_the_database_is_one_reseal_knows(
     engine: AsyncEngine,
 ) -> None:
@@ -336,6 +383,7 @@ async def test_every_sealed_column_in_the_database_is_one_reseal_knows(
 
     listed = {column.name for column in keys.SEALED_COLUMNS}
     assert {f"connections.{column}" for column in CONNECTION_COLUMNS} <= found
+    assert "ai_connections.sealed_key" in found
     assert found - listed == set(), "sealed columns `keys reseal` would leave behind"
 
 

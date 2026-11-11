@@ -42,6 +42,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-038 — A burn does not repeat news, decided at the claim and released when its reason ends](ADR-038-a-burn-does-not-repeat-news.md) — with the F19 design, 2026-11-02; filed 2026-11-09 with F19 Step 5
 - [ADR-039 — An explanation is a frozen evidence record, with code choosing the cause](ADR-039-an-explanation-is-a-frozen-evidence-record-with-code-choosing-the-cause.md) — with the F3 design, 2026-11-02; filed 2026-11-09 with F3 Step 1
 - [ADR-040 — AI runs in its own role, with its own account and network](ADR-040-ai-runs-in-its-own-role-with-its-own-account-and-network.md) — with the F3 design, 2026-11-02; filed 2026-11-11 with F3 Step 3
+- [ADR-047 — One provider interface, three wire formats, no SDK](ADR-047-one-provider-interface-three-wire-formats-no-sdk.md) — with the F3 design, 2026-11-02; filed 2026-11-11 with F3 Step 4
 
 ## Earlier decisions, 0001–0112
 

@@ -1,8 +1,9 @@
 # Key rotation
 
 Replacing `CHECK_SECRET_KEY` (check and alert-channel secrets), `CREDENTIAL_ENCRYPTION_KEY`
-(two-factor secrets) or `CONNECTION_SECRET_KEY` (tracker connections: a GitHub App's private key,
-its webhook secret, and a setup's one-hour manifest code) without losing what each sealed. Do it on a schedule, and at once if a key may
+(two-factor secrets), `CONNECTION_SECRET_KEY` (tracker connections: a GitHub App's private key,
+its webhook secret, and a setup's one-hour manifest code) or `AI_SECRET_KEY` (an organization's AI
+provider key, `ai_connections.sealed_key`, F3) without losing what each sealed. Do it on a schedule, and at once if a key may
 have leaked.
 
 ## Current verified behavior
@@ -37,11 +38,20 @@ run the same commands inside the API container:
    - `CONNECTION_SECRET_KEY=<new>`
    - `CONNECTION_SECRET_PREVIOUS_KEYS=<old>`
 
+   For the AI key, set it in the API and `scheduler-insight`, the only two that hold it:
+   - `AI_SECRET_KEY=<new>`
+   - `AI_SECRET_PREVIOUS_KEYS=<old>`
+
+   An AI provider key is also bound to its connection's address, so the re-seal keeps that
+   binding; a key that cannot be opened (the old key dropped too soon) makes the connection test
+   fail with "Save the key again".
+
    On the dev stack these are `DEV_CHECK_SECRET_KEY`, `DEV_CHECK_SECRET_PREVIOUS_KEYS`,
    `DEV_CREDENTIAL_ENCRYPTION_KEY`, `DEV_CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`,
-   `DEV_CONNECTION_SECRET_KEY` and `DEV_CONNECTION_SECRET_PREVIOUS_KEYS`.
-3. **Restart** the API, `scheduler-beat`, `scheduler-light`, `scheduler-deliveries` and, where it
-   runs, `scheduler-connections`. New values
+   `DEV_CONNECTION_SECRET_KEY`, `DEV_CONNECTION_SECRET_PREVIOUS_KEYS`, `DEV_AI_SECRET_KEY` and
+   `DEV_AI_SECRET_PREVIOUS_KEYS`.
+3. **Restart** the API, `scheduler-beat`, `scheduler-light`, `scheduler-deliveries` and, where they
+   run, `scheduler-connections` and `scheduler-insight`. New values
    are now sealed with the new key, and old values still open.
 4. **`just keys-status`.** Every existing value shows as `previous`.
 5. **`just keys-reseal`.** Each value is re-sealed with the new key. The run says how many it moved

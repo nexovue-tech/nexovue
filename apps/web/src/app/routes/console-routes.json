@@ -34,6 +34,7 @@
   "/services",
   "/services/$name",
   "/settings/account",
+  "/settings/ai",
   "/settings/api-keys",
   "/settings/api-tokens",
   "/settings/audit",

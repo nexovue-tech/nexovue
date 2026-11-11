@@ -38,6 +38,9 @@ class Action(StrEnum):
     # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
     # disconnect GitHub or Jira. They hold repository access, so not day-to-day work.
     MANAGE_CONNECTIONS = "manage_connections"
+    # An organization's AI provider (F3, foundation FD8): the connection, its key and test,
+    # the limit, the switch and project opt-outs. It can send facts out, so not day-to-day.
+    MANAGE_AI = "manage_ai"
     MANAGE_CHECK_SECRETS = "manage_check_secrets"
     CONFIGURE_PROJECTS = "configure_projects"
     # Anomaly detection's sensitivity, mutes and new normals, and every *anomaly
@@ -60,6 +63,9 @@ class Action(StrEnum):
     READ_AUDIT = "read_audit"
     # Letting nexovue support view the console as a person (F31, BR14).
     GRANT_SUPPORT = "grant_support"
+    # Agreeing to send telemetry facts to an AI provider (F3 FR26): the account holder's
+    # own act, like the bill and support access.
+    CONSENT_AI_DISCLOSURE = "consent_ai_disclosure"
     COMMIT_SPEND = "commit_spend"
     END_ORGANIZATION = "end_organization"
 
@@ -79,6 +85,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.REQUEST_EXPLANATION: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
+    Action.MANAGE_AI: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: _ADMINISTRATORS,
@@ -96,6 +103,8 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.MANAGE_OWNERS: _OWNERS,
     # Consent to be viewed as is the account holder's, like the bill.
     Action.GRANT_SUPPORT: _OWNERS,
+    # An admin who could agree could send the organization's facts anywhere (F3 AC32).
+    Action.CONSENT_AI_DISCLOSURE: _OWNERS,
 }
 
 

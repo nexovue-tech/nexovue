@@ -23,6 +23,7 @@ const ADMINISTER: Action[] = [
   ...WORK,
   "manage_channels",
   "manage_connections",
+  "manage_ai",
   "manage_check_secrets",
   "configure_projects",
   "configure_detection",
@@ -35,7 +36,14 @@ const ADMINISTER: Action[] = [
 ];
 
 export const PERMISSIONS_OF: Record<TestRole, Action[]> = {
-  owner: [...ADMINISTER, "manage_owners", "grant_support", "commit_spend", "end_organization"],
+  owner: [
+    ...ADMINISTER,
+    "manage_owners",
+    "grant_support",
+    "consent_ai_disclosure",
+    "commit_spend",
+    "end_organization",
+  ],
   admin: ADMINISTER,
   member: WORK,
   viewer: [],

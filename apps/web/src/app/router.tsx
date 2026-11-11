@@ -56,6 +56,10 @@ const SampleExplanationScreen = lazyRouteComponent(
   () => import("@/features/findings/SampleExplanationScreen"),
   "SampleExplanationScreen",
 );
+const AISettingsScreen = lazyRouteComponent(
+  () => import("@/features/aisettings/AISettingsScreen"),
+  "AISettingsScreen",
+);
 const ExplanationSettingsScreen = lazyRouteComponent(
   () => import("@/features/explanationsettings/ExplanationSettingsScreen"),
   "ExplanationSettingsScreen",
@@ -675,6 +679,13 @@ const settingsSupportRoute = createRoute({
   ),
 });
 
+// F3 FR23 to FR32: an organization's AI provider, its test, consent, switch and usage.
+const settingsAIRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/ai",
+  component: AISettingsScreen,
+});
+
 // F3 FR54: rating and rule counts, and a rule stopped from naming causes.
 const settingsExplanationsRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -922,6 +933,7 @@ const routeTree = rootRoute.addChildren([
     settingsApiTokensRoute,
     settingsAuditRoute,
     settingsSupportRoute,
+    settingsAIRoute,
     settingsExplanationsRoute,
     settingsChannelsRoute,
     settingsChannelRoute,

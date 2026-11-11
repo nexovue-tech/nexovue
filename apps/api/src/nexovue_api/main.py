@@ -15,6 +15,7 @@ from fastapi import APIRouter, FastAPI
 from nexovue_platform.telemetry.logging import configure_logging
 
 from nexovue_api.admin import router as admin_router
+from nexovue_api.ai import router as ai_router
 from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.apitokens import router as apitokens_router
@@ -169,6 +170,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(connections_router.router)
     versioned.include_router(connections_router.service_repositories_router)
     versioned.include_router(connection_tests_router.router)
+    versioned.include_router(ai_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(releases_router.router)

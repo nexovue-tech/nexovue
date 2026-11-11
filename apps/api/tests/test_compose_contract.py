@@ -541,8 +541,8 @@ def test_only_the_api_and_the_insight_role_hold_the_ai_key(layout: str, tmp_path
         if SETTINGS["AI_SECRET_KEY"] in json.dumps(service.get("environment") or {})
     }
 
-    assert INSIGHT_ROLE in holders
-    assert holders <= {"api", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
+    # The API seals with it (F3 T4.6); the AI role opens with it; nothing else holds it.
+    assert holders == {"api", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
 
 
 def test_only_setup_and_the_insight_role_hold_its_password(layout: str, tmp_path: Path) -> None:
@@ -581,6 +581,8 @@ def test_the_insight_role_can_be_left_out_by_one_setting(tmp_path: Path) -> None
     services = _render("self-hosted", tmp_path, SCHEDULER_INSIGHT_REPLICAS="0")
 
     assert services[INSIGHT_ROLE]["deploy"]["replicas"] == 0
+    # The API reads the same setting, so `/settings/ai` says no AI container runs.
+    assert str(services["api"]["environment"]["SCHEDULER_INSIGHT_REPLICAS"]) == "0"
 
 
 def test_an_install_without_the_ai_settings_still_renders(tmp_path: Path) -> None:

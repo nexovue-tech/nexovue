@@ -118,6 +118,12 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "turned public. nexovue refuses new issues there, and syncing an issue there, "
         "unless an admin allows it:\n\n{link}",
     ),
+    Message.AI_CONNECTION_CHANGED: (
+        "The AI connection for {organization} changed",
+        "{what}\n\nAddress before: {old_host}\nAddress now: {new_host}\n\n"
+        "AI wording is off until {until}. If you did not expect this, check who changed "
+        "it in the audit log:\n\n{link}",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

@@ -39,6 +39,9 @@ KNOWN_VARIABLES = (
     "CONNECTION_SECRET_KEY",
     "CONNECTION_SECRET_PREVIOUS_KEYS",
     "NEXOVUE_CONNECTIONS",
+    "AI_SECRET_KEY",
+    "AI_SECRET_PREVIOUS_KEYS",
+    "SCHEDULER_INSIGHT_REPLICAS",
     "SHOW_HELD_CAUSES",
 )
 
@@ -193,6 +196,26 @@ def test_connections_follow_the_install_s_setting(
     _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "NEXOVUE_CONNECTIONS": value})
 
     assert get_settings().connections_enabled is on
+
+
+def test_production_starts_without_the_ai_key_and_reads_the_ai_container_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 AC71, AC103: AI is optional, so a missing `AI_SECRET_KEY` stops nothing here (the
+    screen says AI is unavailable); `SCHEDULER_INSIGHT_REPLICAS=0` says no AI container runs."""
+    _apply(
+        monkeypatch,
+        {
+            **COMPLETE_ENVIRONMENT,
+            "ENV": "production",
+            "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+            **DEPLOYED_KEYS,
+            "SCHEDULER_INSIGHT_REPLICAS": "0",
+        },
+    )
+
+    settings = get_settings()
+    assert settings.ai_keys.current == "" and settings.scheduler_insight_replicas == 0
 
 
 def test_development_starts_without_the_encryption_keys(monkeypatch: pytest.MonkeyPatch) -> None:

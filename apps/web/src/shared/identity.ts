@@ -20,6 +20,7 @@ export type Action =
   | "request_explanation"
   | "manage_channels"
   | "manage_connections"
+  | "manage_ai"
   | "manage_check_secrets"
   | "configure_projects"
   | "configure_detection"
@@ -30,6 +31,7 @@ export type Action =
   | "manage_members"
   | "manage_owners"
   | "grant_support"
+  | "consent_ai_disclosure"
   | "read_audit"
   | "commit_spend"
   | "end_organization";

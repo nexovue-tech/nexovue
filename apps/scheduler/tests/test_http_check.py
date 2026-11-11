@@ -13,7 +13,13 @@ from typing import Any, Final
 import pycurl
 import pytest
 
-from nexovue_scheduler.probes.http_check import _phases, _total
+from nexovue_scheduler.probes.http_check import (
+    HEADER_REFUSAL,
+    PreparedRequest,
+    _phases,
+    _total,
+    perform,
+)
 from nexovue_scheduler.probes.result import PHASE_ORDER
 
 # Real offsets from an HTTPS request to example.com, in libcurl's own form:
@@ -103,3 +109,32 @@ def test_a_successful_request_uses_the_measured_total() -> None:
     """The fallback must not displace the real measurement when there is one."""
     curl = FakeCurl(HTTPS_OFFSETS)
     assert _total(curl, _phases(curl)) == pytest.approx(HTTPS_OFFSETS[pycurl.TOTAL_TIME])
+
+
+# ------------------------------------------------- F3: what `perform` refuses to send
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Authorization", "Bearer sk-1\r\nX-Injected: 1")],
+        [("X-Api-Key", "sk-1\n")],
+        [("X-Name\r\nInjected", "1")],
+        [("Authorization", "Bearer sk\x00")],
+    ],
+)
+def test_a_header_holding_a_control_character_is_never_sent(
+    headers: list[tuple[str, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F3 AC34: a line break in a key could end its header and start another. `perform`
+    refuses before libcurl is even built, so nothing reaches any address."""
+
+    def no_curl() -> None:
+        raise AssertionError("a request with a control character reached libcurl")
+
+    monkeypatch.setattr(pycurl, "Curl", no_curl)
+    exchange = perform(PreparedRequest(method="POST", url="https://example.com", headers=headers))
+
+    assert exchange.error == HEADER_REFUSAL
+    assert exchange.status_code is None
+    assert set(exchange.phases) == set(PHASE_ORDER)

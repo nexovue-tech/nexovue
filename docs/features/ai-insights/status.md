@@ -2,11 +2,14 @@
 
 ## Lifecycle status
 
+**Step 4 built 2026-11-11, awaiting commit** (worktree `wt/f3s4`, from `wt/f3s3`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. migration 0071 sits on 0070 for now; the coordinator re-chains.
 **Step 3 built 2026-11-11, awaiting commit** (worktree `wt/f3s3`, from `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070 needs F22 Step 6's 0068 and 0069 on the branch first.
 **Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
+
+Step 4 awaits the founder's review of the diff and open decisions 9 to 11, then commit after Step 3 (migration chain 0070, then 0071). Then the founder's first real call per format with a free-tier key (`tools/ai-eval/real_call.py`), which is what puts a format on the screen.
 
 Step 3 awaits the founder's review of the diff, then commit after F22 Step 6 (migration chain). Then the coordinator's first run of `just insight-fence`. Open decision 7 is the founder's.
 
@@ -14,6 +17,39 @@ Step 2 is committed (`55703b4`). Step 2b is the founder's after Phase 2 (foundat
 
 
 ## Completed
+
+### Step 4, built 2026-11-11 (worktree `wt/f3s4`)
+
+**What a person sees.** `/settings/ai`, under "This organization". Everyone reads whether AI wording is on. An owner or admin sees what is missing, each step linked: a provider connection (format, base URL, model, region as typed, a write-only key, time per call, monthly token limit, optional prices), a test that runs on the AI container, the exact request for the newest finding's facts (or a labelled sample) with its stand-in names, the owner's consent, the switch, per-project opt-out, the month's tokens with an estimate, and each run with "View what was sent". **No format is offered yet**: each appears once a dated real call is recorded (AC77), and none has run here, so on this build the form says so and cannot be saved. **Nothing is sent to a provider except a test.**
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T4.1 | `AIRequest` (trusted parts only), `AIResponse` with one closed outcome, `HttpCall`; three wire formats as pure `build` and `parse`; the constant check request; `explain_request` over a stored `model_input` (`PROMPT_VERSION` `explain-1`), the sendable-field list held to `ModelFacts`, a labelled sample; FR23's rules shared by the API and the AI role; both fingerprints; the key's owner; the dated real-call record | `nexovue_platform/ai/` |
+| T4.2 | `PrivateEndpoints` (address or range, with port; loopback, link-local, reserved, multicast, unspecified refused even when listed; wider than /16 or /48 refused); the guard's `private_endpoints` and `public_allowed`; `user_agent`; a header with a control character never sent (a tab still is); `AI_PRIVATE_ENDPOINTS` parsed at boot | `probes/addresses.py`, `probes/http_check.py`, `scheduler/settings.py` |
+| T4.3 | The transport (no redirects; `http` only to a listed address; closed failure words); the connection test as a task: run row before the call, tokens to the month with no reservation, the result on the connection only for the values it tested, the person's result through migration 0070's function | `insight/transport.py`, `check.py`, `store.py`, `registry.py` |
+| T4.4 | `MANAGE_AI` (owner, admin), `CONSENT_AI_DISCLOSURE` (owner) | `permissions.py`, `policy.py`, `test_policy.py`, `identity.ts`, `identity.test-util.ts`, `MembersScreen.test.ts` |
+| T4.5 | `/ai/connection` (read, save, delete), `/connection/check` and its result, `/preview`, `/consent`, `/switch`, `/project-opt-outs`, `/usage`, `/runs`, `/runs/{id}/sent`; audit names with old and new hosts; owners emailed after commit (`Message.AI_CONNECTION_CHANGED`) | `nexovue_api/ai/`, `audit/service.py`, `main.py`, email templates |
+| T4.6 | `ai_connections.sealed_key` under the `ai` ring, bound to organization, connection and address; `SEALED_COLUMNS`; the AI account's grant; the API reads `AI_SECRET_KEY` and `SCHEDULER_INSIGHT_REPLICAS`; Compose gives the API both | migration `0071`, `keys.py`, `models.py`, `insight_account.py`, `settings.py`, `nexovue.yaml`, `docker-compose.yaml`, `key-rotation.md` |
+| T4.7 | The screen in every role and state, the rail entry, the route, the unsaved-changes guard | `features/aisettings/`, `router.tsx`, `settings-nav.ts`, `console-routes.json` |
+| T4.10 | One real call through a format and the record line it earns; the screen offers only recorded formats | `tools/ai-eval/real_call.py`, `real_calls.py` |
+
+Migration **0071** (down revision `0070` for now; F5 Step 1 may take 0074 to 0075 and F20 Step 5 0076 to 0077, so the coordinator re-chains), roll forward only. **ADR-047** filed (one provider interface, three wire formats, no SDK). `docs/operations/ai.md` gains allowing a local model and an unreadable key.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **`ai_runs.outcome` gains `not_found` and `bad_request`** (migration 0071), so a failed test says "model not found" apart from a refused key (spec, *Error cases*). The check's own reasons are a closed list too (`jobs.CHECK_REASONS`), never a provider's words.
+- **Plain `http` is saved only to a private address written as an address** (`http://192.168.1.20:11434`); a name over `http` is refused on save, because the API cannot know what it resolves to. At call time `http` reaches only a listed address. `localhost` and loopback are refused with spec's words.
+- **The test's call limit is the connection's, capped at 45 s**, so a test answers inside the screen's 60-second wait.
+- **The test is refused with 409 when `SCHEDULER_INSIGHT_REPLICAS=0`**, rather than queued for no one.
+- **`AIRequest` holds trusted parts only** until `untrusted.py` (T5.1); run ids live on the run row, not in the request, so the request is only what is sent.
+- **`insight/store.py` exists from this step** (run rows, metering); reservations are T5.3's.
+- **A run is "not consented" when no `ai.disclosure_agreed` audit row names its host at or before it**, read from `audit_log`, which the AI account cannot write. Tests are marked not applicable.
+- **A support view reads on or off only** on `GET /ai/connection`: a base URL's path can carry a customer's secret.
+- **`test_sealed_columns_listed.py` not created**: `test_keys_live.py` already reads every `sealed_*` column from the catalog (F22's) and now names this one, with a rotation case.
+- **Private-endpoint cases live in `test_ai_private_endpoints.py`**: `test_connect_guard.py`'s module stops on live DNS (`nip.io`), which this machine cannot resolve, so cases added there would never run here.
+- **The admin's consent view copies the page's link, not the owners' names**: `GET /ai/connection` returns no owner list (open decision 11).
 
 ### Step 3, built 2026-11-11 (worktree `wt/f3s3`)
 
@@ -147,6 +183,9 @@ ADR-039 (an explanation is a frozen evidence record, with code choosing the caus
 
 ## Next action
 
+Founder: review Step 4's diff and open decisions 9 to 11; commit after Step 3. Then, with a free-tier key, `AI_EVAL_KEY=... uv run python tools/ai-eval/real_call.py --format openai_chat ...` once per format that has an account, and add the printed line to `real_calls.py` in a reviewed change: that is what offers a format on `/settings/ai`. Step 5 next.
+
+Earlier (Step 3):
 Founder: review Step 3's diff and open decision 7; commit after F22 Step 6. Coordinator: first run of `just insight-fence` by hand (expect fixes to the harness), which ticks T3.4, T3.10 and T3.11 and settles ADR-040's owed evidence. Then Step 4.
 
 Earlier:
@@ -154,6 +193,12 @@ The founder reviews Step 2's diff; then commit. The founder's checks after Phase
 
 
 ## Open decisions
+
+**From Step 4, 2026-11-11:**
+
+9. **The dev stack has no `AI_SECRET_KEY`** (`DEV_AI_SECRET_KEY` defaults empty on `api` and `scheduler-insight`), so `/settings/ai` on `just dev` says "AI is not available: AI_SECRET_KEY is not set" until a developer sets one in `.env`. A committed dev literal, as `DEV_CONNECTION_SECRET_KEY` has, needs a `.gitleaksignore` fingerprint, which names the commit, so it is a follow-up commit. **Recommendation:** commit a dev literal on both services, then add its `.gitleaksignore` line in the next commit, as F22's key was.
+10. **Mute and project deletion do not yet stop queued wording** (plan T4.5 points to T5.11). No wording run exists before Step 5, so nothing can be sent meanwhile; the opt-out route already does it. **Recommendation:** keep it in T5.11, with the `word` job's own re-check.
+11. **The admin's consent view shows no owners' names** (design, *Consent*: "with owner names and `CopyButton`"); it says "Waiting for an owner" and copies the page's link. **Recommendation:** add the active owners' display names to `GET /ai/connection` for `MANAGE_AI` in the hardening pass; it is a read, no new risk.
 
 **From Step 3, 2026-11-11:**
 
@@ -472,6 +517,13 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Risks
 
+**Added by Step 4 (2026-11-11):**
+
+- **The address guard's promise widened** (ADR-047): a private address was reachable only in development; now an operator's listed addresses and ports open one for an AI connection. Loopback, link-local and ranges wider than /16 stay refused, and `public_allowed` keeps `http` off the internet.
+- **Every probe now refuses a header holding a control character** (a tab still passes), where libcurl sent it before. A check whose saved header held a line break now fails with "A header holds a control character and was not sent", which is the safe answer, but it is a change in what an existing check does.
+- **Until a real call is recorded, the settings screen cannot save a connection**, because it offers no format (AC77). The founder's first real call is what opens it.
+- **Every field name in the three formats was read from documentation, not from a response.** A provider that differs fails as `invalid` or `bad_request`, never silently, and the real call shows it.
+
 **Added by Step 2 (2026-11-09):**
 
 - **The follow-up changes a path every people-read alert takes** (`_TAKEN`, `compose_batch`, the drop of an unwritable row). AC78's golden fixture holds every earlier kind's bytes on six channel kinds; a later change to an alert's words must rewrite it deliberately (`NEXOVUE_WRITE_OUTBOX_GOLDEN=1`).
@@ -500,6 +552,38 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 - **Oracle's free allowance is 2 Arm CPUs and 12 GB,** below the 16 GB minimum, and the bed's demo needs more. Measuring there needs a paid shape, which returns to the founder at deployment.
 
 ## Validation
+
+### Step 4, 2026-11-11
+
+Own container `f3s4-pg` (Postgres 18, `pgvector/pgvector:0.8.6-pg18-trixie`, port 25432, network `f3s4-net`), migrated with Alembic from a scratch copy whose 0070 pointed at 0067 (F22's 0068 and 0069 are not on this branch), then 0071. No ClickHouse was needed. Every behaviour test was seen failing first, or failing on a saved copy with its behaviour removed, then passing:
+
+| Test | Seen failing by | Then |
+|---|---|---|
+| `test_ai_wire_formats.py` (97) | Saved copy without Claude's 200 refusal, the Bedrock model's path encoding, the `..` and query checks, the reported-model pattern: 6 failed | 97 passed |
+| `test_ai_private_endpoints.py` (26) | Saved copy without the private and excluded check in `allows` and without the width limit: 3 failed | 26 passed |
+| `test_http_check.py` (+4) | Control-character refusal removed: 4 failed | 9 passed |
+| `test_insight_check_live.py` (11), as `nexovue_insight` | Saved copy following redirects, without the call-time FR23 check, opening the key for a fixed address, recording a result without the model in its guard: 7 failed | 11 passed |
+| `test_ai_settings_live.py` (37) | First run: 4 failed on real faults (aliases read from the escaped body; a viewer's shape; an audit time compared with the pinned clock). Saved copy without key erasure, price clearing, the consent fingerprint check, the opt-out's pending-to-off, the unavailable refusal: 5 failed; the beat-lock flag hard-wired off: failed | 37 passed |
+| `test_keys_live.py` (7) | `ai_connections.sealed_key` left out of `SEALED_COLUMNS`: 3 failed | 7 passed |
+| `test_insight_grants_live.py` (8) | Grant without `sealed_key`: failed | 8 passed |
+| `test_ai_vocabulary.py` (6) | The outcome list checked against 0070's copy: failed | 6 passed |
+| `test_policy.py` (102) | `MANAGE_AI` to members, consent to admins: 2 failed | 102 passed |
+| `test_authorization_coverage.py` | The seven AI write routes unplaced: failed, naming each | passed |
+| `test_compose_contract.py` (92) | The API's `AI_SECRET_KEY` and `SCHEDULER_INSIGHT_REPLICAS` removed: 6 failed | 92 passed |
+| `test_settings.py` (+1) | Production requiring `AI_SECRET_KEY`: failed | 33 passed |
+| `AISettingsScreen.test.ts` (19) | Saved copy without the member sentence, the erase confirmation, the 60-second words, the owner-only consent: 5 failed | 19 passed |
+| `tools/ai-eval/test_real_call.py` (3) | First run: failed on a real fault (a call with estimated counts earned a record) | 3 passed |
+
+Final run, one process: this step's suites with `test_insight_role.py`, `test_insight_account_live.py`, `test_detection_has_no_ai.py`, `test_scheduler_settings.py`, `test_deletion_live.py`, `test_migration_rules.py`, `test_notifications_console.py`, `test_roles.py`, the three tenancy-structure suites, `test_auth_routes.py`, `test_ratelimit_coverage.py`, `test_install_secrets.py`, `test_model_facts.py`: **3,199 passed**. `uv run mypy .`: no issues in 957 files. `ruff check .`, `ruff format --check .`: clean. Biome on the touched web folders: clean. `pnpm -r --if-present run typecheck`: done. Whole web suite: **170 files, 2,078 tests passed** (`status-interpretation.test.ts` among them). `verify-tokens.js`: clean.
+
+**Not run, and why:**
+
+- **No real provider was called.** Each format's dated real call (AC77, T4.10) needs the founder's free-tier key (foundation item 4): not yet run. Claude's and Bedrock's own formats have no free tier and stay hidden until someone with an account runs them.
+- **T4.9, Bedrock's AWS signing through `perform`:** not run; needs an AWS account and a scoped key.
+- **`test_connect_guard.py`'s module** stops on live DNS (`nip.io` does not resolve here); it was not changed.
+- **The Playwright checks at 390 and 1920 pixels (AC90), the customer page `docs/product/setup/ai.md` (T4.8), design QA and every browser or phone check:** deferred to the feature's hardening pass by the founder's rule of 2026-11-11.
+- **AC71's "account missing" screen case live:** renaming the role inside a test would disturb a running dev stack's AI container; the words are tested on the screen, and the read is one catalog query.
+- `just check`, `just stack`, `just insight-fence` and other features' live suites: not run, by instruction.
 
 ### Step 3, 2026-11-11
 
@@ -611,6 +695,8 @@ This is the specification. On approval it amends: `phase-2-foundation.md` (the d
 
 ## Documentation impact
 
+**Step 4 (2026-11-11):** `docs/operations/ai.md` (allowing a local model, an unreadable key), `docs/operations/key-rotation.md` (`AI_SECRET_KEY`), ADR-047 and the decisions index, `phase-2-tracker.md`. `docs/product/setup/ai.md` is deferred to the hardening pass.
+
 **Step 2 (2026-11-09):** `docs/product/setup/alerts/webhooks.md` (no `explained` event on a webhook), `setup/alerts/channels.md` (the follow-up, its limits and switch, frequent deployers, pages with no finding, held until the bar is met), `setup/deploys.md` (what deploys add to a finding, the 7-day clock), `docs/features/alerts/spec.md` (amended: the `explained` kind), F19's `status.md` (AC58 done), `phase-2-tracker.md`. Before Step 2: none changed. Listed in `design.md`, *Specification impact*, and in the plan's tasks. New customer and operator documents are `docs/product/setup/ai.md` and `docs/operations/ai.md`, written during Steps 4 and 5.
 
 ## Cross-feature reconciliation, 2026-11-02
@@ -629,7 +715,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-11 (Step 3 built, awaiting commit; Step 2 committed 2026-11-09)
+2026-11-11 (Step 4 built, awaiting commit; Step 3 built, awaiting commit; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

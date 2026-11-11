@@ -307,6 +307,13 @@ services:
       # Whether tracker connections run on this install (AC118): the same setting that
       # starts `scheduler-connections` (`deploy/nexovue`) and that beat reads.
       NEXOVUE_CONNECTIONS: ${NEXOVUE_CONNECTIONS:-yes}
+      # F3. Seals an organization's AI provider key; held here and by `scheduler-insight`
+      # alone (FD10). `:-`, never `:?`: without it AI is unavailable and nothing else stops
+      # (AC71). The replica count is the AI role's own, so `/settings/ai` can say when no AI
+      # container runs (AC103).
+      AI_SECRET_KEY: ${AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${AI_SECRET_PREVIOUS_KEYS:-}
+      SCHEDULER_INSIGHT_REPLICAS: ${SCHEDULER_INSIGHT_REPLICAS:-1}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # What the console hands a customer to export to: the edge's ingest name.

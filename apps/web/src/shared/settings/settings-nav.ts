@@ -16,6 +16,7 @@ export type SettingsPath =
   | "/settings/audit"
   | "/settings/support"
   | "/settings/channels"
+  | "/settings/ai"
   | "/settings/explanations"
   | "/settings/connections"
   | "/settings/projects"
@@ -120,6 +121,23 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
           "webhook",
           "email",
           "on-call",
+        ],
+      },
+      {
+        // F3: open to everyone, since its first sentence answers "is AI on here?"; owners
+        // and admins set it up there (design, *AI settings*).
+        path: "/settings/ai",
+        title: "AI wording",
+        keywords: [
+          "ai",
+          "model",
+          "provider",
+          "ollama",
+          "claude",
+          "openai",
+          "bedrock",
+          "limit",
+          "tokens",
         ],
       },
       {

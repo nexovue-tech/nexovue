@@ -69,6 +69,9 @@ class Message(Enum):
     # F22 Step 6 (FR42): a repository the connection reaches turned public. Names the
     # repository by its strict key; nothing an issue says.
     CONNECTION_REPOSITORY_PUBLIC = "connection_repository_public"
+    # F3 (AC102, A67). An organization's AI connection changed in a way an owner must
+    # know: its model, or a change that ended their consent. Old and new host, never a key.
+    AI_CONNECTION_CHANGED = "ai_connection_changed"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

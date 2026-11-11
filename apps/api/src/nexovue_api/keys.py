@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
 
+from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
     DEPLOY_WEBHOOK_PURPOSE,
@@ -72,6 +73,8 @@ class Keys:
     credential: ConfiguredKeys
     # F22: tracker connections' keys, held only by the API and `scheduler-connections`.
     connection: ConfiguredKeys
+    # F3: AI providers' keys, held only by the API and `scheduler-insight` (FD10).
+    ai: ConfiguredKeys
 
     @classmethod
     def from_environment(cls) -> Keys:
@@ -87,6 +90,10 @@ class Keys:
             connection=ConfiguredKeys(
                 os.environ.get("CONNECTION_SECRET_KEY", ""),
                 os.environ.get("CONNECTION_SECRET_PREVIOUS_KEYS", ""),
+            ),
+            ai=ConfiguredKeys(
+                os.environ.get("AI_SECRET_KEY", ""),
+                os.environ.get("AI_SECRET_PREVIOUS_KEYS", ""),
             ),
         )
 
@@ -189,6 +196,20 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
             "WHERE id = :pk AND sealed_secret = :old"
         ),
         owner=lambda row: deploy_webhook_owner(str(row.project_id), str(row.pk)),
+    ),
+    # F3 T4.6: a provider key, bound to its organization, connection and address (AC34).
+    SealedColumn(
+        name="ai_connections.sealed_key",
+        purpose=AI_CONNECTION_PURPOSE,
+        keys=lambda keys: keys.ai,
+        page=text(
+            "SELECT id AS pk, org_id, base_url, sealed_key AS sealed FROM ai_connections "
+            "WHERE sealed_key IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE ai_connections SET sealed_key = :new WHERE id = :pk AND sealed_key = :old"
+        ),
+        owner=lambda row: key_owner(str(row.org_id), str(row.pk), row.base_url),
     ),
 )
 

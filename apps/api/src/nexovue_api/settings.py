@@ -253,6 +253,16 @@ class Settings(BaseSettings):
     # AC118): the setting `deploy/nexovue` uses to start `scheduler-connections`,
     # which the scheduler reads too. On unless set to `no`.
     connections_enabled: bool = Field(default=True, validation_alias="NEXOVUE_CONNECTIONS")
+
+    # --- AI wording (F3) ---------------------------------------------------------
+    # Seals an organization's provider key, and re-seals it on a rotation. Held here and by
+    # `scheduler-insight` alone (FD10). Not required even in production: AI is optional, so
+    # a missing key makes `/settings/ai` say AI is unavailable and stops nothing (AC71).
+    ai_secret_key: str = ""
+    ai_secret_previous_keys: str = ""
+    # How many AI containers the install runs (`SCHEDULER_INSIGHT_REPLICAS`, design *The
+    # role*): 0 is the documented way to run with none, and the screen then says so (AC103).
+    scheduler_insight_replicas: int = Field(default=1, ge=0)
     # F3 A60: show likely causes before the founder's bar is met, so Steps 1 and 2 can be
     # judged on a development install. Production refuses to start with it (AC92).
     show_held_causes: bool = Field(default=False, validation_alias=SHOW_HELD_CAUSES_VARIABLE)
@@ -509,6 +519,11 @@ class Settings(BaseSettings):
     def connection_keys(self) -> ConfiguredKeys:
         """Tracker connections' keyring (F22). `scheduler-connections` holds the same."""
         return ConfiguredKeys(self.connection_secret_key, self.connection_secret_previous_keys)
+
+    @property
+    def ai_keys(self) -> ConfiguredKeys:
+        """AI providers' keyring (F3). `scheduler-insight` holds the same, to open."""
+        return ConfiguredKeys(self.ai_secret_key, self.ai_secret_previous_keys)
 
     @property
     def credential_keys(self) -> ConfiguredKeys:

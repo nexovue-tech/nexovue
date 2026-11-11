@@ -27,6 +27,8 @@ from pydantic import Field, PostgresDsn, ValidationError, field_validator, model
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
 
+from nexovue_scheduler.probes.addresses import PrivateEndpoints
+
 Environment = Literal["development", "staging", "production"]
 # Which keys this process may hold (F3's mechanism, F22 D80): `full` is every role but
 # the narrow ones; `connections` is `scheduler-connections`, which holds the tracker key
@@ -194,7 +196,8 @@ class Settings(BaseSettings):
     ai_secret_key: str = ""
     ai_secret_previous_keys: str = ""
     # The private addresses, with ports, an operator lets a provider connection reach
-    # (FR32, A23). Read as written until the connect-time guard parses it (plan T4.2).
+    # (FR32, A23): `10.0.0.5:11434,192.168.1.0/24:8000`. A malformed or too-wide entry stops
+    # the process (AC37); the connect-time guard reads the parsed form (`ai_endpoints`).
     ai_private_endpoints: str = ""
 
     # Where this process answers /healthz, /readyz and /metrics (`health.py`).
@@ -232,6 +235,12 @@ class Settings(BaseSettings):
     def _causes_held_in_production(self) -> Settings:
         refuse_held_causes_in_production(env=self.env, show_held_causes=self.show_held_causes)
         return self
+
+    @field_validator("ai_private_endpoints")
+    @classmethod
+    def _endpoints_parse(cls, value: str) -> str:
+        PrivateEndpoints.parse(value)
+        return value
 
     @field_validator("connections_enabled", mode="before")
     @classmethod
@@ -295,6 +304,11 @@ class Settings(BaseSettings):
     def ai_secret_keys(self) -> ConfiguredKeys:
         """Provider keys' keyring (F3). The API holds the same, to seal."""
         return ConfiguredKeys(self.ai_secret_key, self.ai_secret_previous_keys)
+
+    @property
+    def ai_endpoints(self) -> PrivateEndpoints:
+        """`AI_PRIVATE_ENDPOINTS`, parsed (it was checked at boot)."""
+        return PrivateEndpoints.parse(self.ai_private_endpoints)
 
     @property
     def email(self) -> EmailSettings | None:

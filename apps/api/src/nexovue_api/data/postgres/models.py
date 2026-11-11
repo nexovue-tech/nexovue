@@ -2018,9 +2018,9 @@ class AIConnection(Base):
     """An organization's AI provider (F3 FR30 to FR33, design *Data and migration impact*).
 
     The `scheduler-insight` account reads it through column grants and may change only the
-    check's three columns (`setup.INSIGHT_GRANTS`). The sealed key joins in plan Step 4,
-    with the `ai` ring that seals it (T4.6). Turning it on needs a limit and an owner's
-    consent to this very address, which the database holds too.
+    check's three columns (`insight_account.INSIGHT_GRANTS`). The key is sealed under the
+    `ai` ring (`keys.SEALED_COLUMNS`), bound to this address (migration 0071). Turning it on
+    needs a limit and an owner's consent to this very address, which the database holds too.
     """
 
     __tablename__ = "ai_connections"
@@ -2033,6 +2033,8 @@ class AIConnection(Base):
     base_url: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(Text, nullable=False)
     region_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Under `AI_SECRET_KEY`, purpose `ai-connection`; empty for a local server with none.
+    sealed_key: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # New on each saved key; a re-seal keeps it (design, *The two fingerprints*).
     key_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     call_seconds: Mapped[int] = mapped_column(

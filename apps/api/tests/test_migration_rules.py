@@ -38,6 +38,7 @@ ENV: Final = VERSIONS.parent / "env.py"
 # 0058 holds F19's exclusions, people's reasons for leaving time out of a figure.
 # 0067 holds F3's ratings of an explanation and the rules an organization stopped.
 # 0070 holds where an organization's facts were sent (`ai_runs`) and an owner's consent.
+# 0071 holds an organization's sealed provider key.
 ROLL_FORWARD_ONLY: Final = (
     "0020",
     "0022",
@@ -54,6 +55,7 @@ ROLL_FORWARD_ONLY: Final = (
     "0058",
     "0067",
     "0070",
+    "0071",
 )
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"

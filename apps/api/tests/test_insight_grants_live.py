@@ -77,6 +77,8 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "model",
         "region_label",
         "key_id",
+        # F3 Step 4: the sealed key, which the connection test and the wording job open.
+        "sealed_key",
         "call_seconds",
         "monthly_token_limit",
         "enabled",
