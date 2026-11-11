@@ -169,8 +169,8 @@ export function readAgainWait(
   { zone, now = Date.now() }: { zone?: string; now?: number } = {},
 ): string | null {
   if (nextReadAt === null || Date.parse(nextReadAt) <= now) return null;
-  const read = readAt === null ? "" : `Read at ${formatZonedTime(readAt, { zone })}. `;
-  return `${read}You can read again at ${formatZonedTime(nextReadAt, { zone })}`;
+  const read = readAt === null ? "" : `Read at ${formatZonedTime(readAt, { zone, now })}. `;
+  return `${read}You can read again at ${formatZonedTime(nextReadAt, { zone, now })}`;
 }
 
 /** A refused read-again's next time, from the 409's problem (AC80). */

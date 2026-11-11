@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/shared/api-client";
 
@@ -168,6 +168,16 @@ describe("the setup step (FR45, AC84)", () => {
 });
 
 describe("times, in the project's zone, named (AC68, AC80, AC88)", () => {
+  // A time on another day carries its date, so these read as of NOW's day, not the day the
+  // suite runs: written on 9 November, they failed on every later day.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("changes with the project's zone and carries its name", () => {
     const value = explanation();
     expect(readLine(value, "Asia/Kolkata")).toMatch(/19:38 (IST|Kolkata time)/);
