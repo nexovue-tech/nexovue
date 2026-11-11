@@ -33,6 +33,7 @@ from nexovue_api.data.postgres.models import (
     ApiKey,
     AuditLogEntry,
     Check,
+    FindingExplanation,
     Integration,
     NotificationChannel,
     Organization,
@@ -124,11 +125,25 @@ class Tenant:
         # and a test that wants the refusal adds one.
         self.checks: list[Check] = []
         self.integrations: list[Integration] = []
+        # F3's explanations, reduced to what deleting a project changes: whose they are and
+        # whether wording waits for a run. Empty by default; a test that needs one adds it.
+        self.explanations: list[FindingExplanation] = []
 
         # The days the ingest meter recorded for each project — `usage_daily`
         # reduced to the one column the project list reads. Empty by default,
         # which is a project nothing has ever reported for.
         self.metered_days: dict[uuid.UUID, list[date]] = {}
+
+    def add_explanation(self, project: Project, wording_state: str) -> FindingExplanation:
+        explanation = FindingExplanation(
+            org_id=self.organization.id,
+            project_id=project.id,
+            finding_id=uuid.uuid4(),
+            wording_state=wording_state,
+        )
+        explanation.wording_changed_at = None
+        self.explanations.append(explanation)
+        return explanation
 
     def record_arrival(self, project: Project, day: date) -> None:
         """One day the meter counted something for this project."""
@@ -278,6 +293,8 @@ class FakeControlPlane:
         if statement.entity_description["name"] in {"Incident", "AlertRule"}:
             # Alert rows are not modelled here; test_alert_defaults_live proves them.
             return _Changed(0)
+        if statement.entity_description["name"] == "FindingExplanation":
+            return _Changed(self._stop_queued_wording(statement, values))
         doors = {
             "ApiKey": "api_keys",
             "SiteKey": "site_keys",
@@ -293,6 +310,30 @@ class FakeControlPlane:
                     door.revoked_at = revoked_at
                     changed += 1
         return _Changed(changed)
+
+    def _stop_queued_wording(self, statement: Any, values: set[Any]) -> int:
+        """F3's `stop_queued_wording` without a service: the tenant's and project's rows whose
+        wording still waits move to the new state, stamped. The service form, a subquery
+        over findings, is not modelled, and is refused rather than answered wrongly."""
+        params = statement.compile().params
+        assert set(params) == {
+            "org_id_1",
+            "project_id_1",
+            "wording_state_1",
+            "wording_state",
+            "wording_changed_at",
+        }, f"the fake models only the project-wide form, not {sorted(params)}"
+        changed = 0
+        for tenant in self._tenants_binding(values):
+            for row in tenant.explanations:
+                if (
+                    row.project_id == params["project_id_1"]
+                    and row.wording_state == params["wording_state_1"]
+                ):
+                    row.wording_state = params["wording_state"]
+                    row.wording_changed_at = params["wording_changed_at"]
+                    changed += 1
+        return changed
 
     # -- what the tests read ------------------------------------------------
 
@@ -573,6 +614,30 @@ async def test_deleting_a_project_leaves_another_projects_keys_alone(
     )
 
     assert other_key.revoked_at is None
+
+
+async def test_deleting_a_project_turns_off_its_queued_wording_and_nothing_else(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant
+) -> None:
+    """F3 FR28, AC39: wording queued for a deleted project's findings is turned off in the
+    same transaction, so a queued run sends nothing. Wording already done, another project's
+    and another organization's are left as they are."""
+    queued = acme.add_explanation(acme.project, "pending")
+    done = acme.add_explanation(acme.project, "done")
+    other_project = acme.add_explanation(acme.second_project, "pending")
+    other_tenant = globex.add_explanation(globex.project, "pending")
+
+    closed = await service.delete(
+        _store(db),
+        org_id=acme.organization.id,
+        actor_user_id=acme.user.id,
+        project_id=acme.project.id,
+    )
+
+    assert (queued.wording_state, queued.wording_changed_at) == ("off", closed.deleted_at)
+    assert (done.wording_state, done.wording_changed_at) == ("done", None)
+    assert other_project.wording_state == "pending"
+    assert other_tenant.wording_state == "pending"
 
 
 async def test_deleting_says_plainly_that_the_telemetry_is_still_there(

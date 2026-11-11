@@ -215,6 +215,36 @@ CROSS_TENANT_STATEMENTS: Final = (
     ),
     _across(
         "metrics",
+        "_F3_READINGS",
+        "install-wide gauges, counts only: findings with no explanation, failed and cut "
+        "reads, AI connections on, the month's tokens (F3 design, *Observability*)",
+    ),
+    _across(
+        "metrics",
+        "_AI_ON",
+        "an EXISTS only: whether any AI connection is on, so beat schedules the AI sweep and "
+        "a missing scheduler-insight pages (F3 T5.5, T5.10)",
+    ),
+    _across(
+        "metrics",
+        "_AI_RUNS_RECENT",
+        "an install-wide gauge: AI runs by purpose and outcome, counts only (F3 T5.10)",
+    ),
+    # F3's AI sweep, run as `nexovue_insight` (plan T5.5).
+    _across(
+        "insight.store",
+        "_DIED_RUNS",
+        f"{_SWEEP}: runs a killed child left `started`; each write that follows binds the "
+        "run's own `org_id` (F3 AC54)",
+    ),
+    _across(
+        "insight.store",
+        "_EXPIRED",
+        f"{_SWEEP}: wording left `pending` past its job's life, each row by its own id and "
+        "its runs by its own `org_id` (F3 AC81)",
+    ),
+    _across(
+        "metrics",
         "_CONNECTIONS_ACTIVE",
         "an install-wide gauge, an EXISTS only: whether any tracker connection is live, so "
         "a missing scheduler-connections pages (F22 AC123, design *Observability*)",

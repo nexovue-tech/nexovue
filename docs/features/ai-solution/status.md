@@ -594,7 +594,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-11 (Step 1 committed)
+2026-11-21 (the fix routes moved to their own router; founder decision below)
 
 ## Founder approval, 2026-11-02
 
@@ -683,3 +683,11 @@ F5 stays approved. The design had asked not to be approved before the GitHub tri
 - **Scope sentence** gained the words on imports and the AI asking (founder's to approve, foundation decision 2).
 
 **Not done:** no persona review; no web research on parsers was run for this change (the choice rests on ADR-019 and the plainness of import lines; the bed measures resolution); nothing run.
+
+## Founder decision 2026-11-21: the fix routes on their own router
+
+**What happened.** F3 Step 5 made `findings/explanations.py` import AI code (`nexovue_platform.ai.limits`, `nexovue_platform.ai.validate.recheck`, `nexovue_api.ai.service`). `findings/router.py` served both F3's explanation routes and F5's `GET /findings/{id}/fixes`, so T1.5's walk (`test_fix_facts_hold_no_ai.py`, the import half of AC33, BR12) fails with 45 import chains into AI code. **Found while applying the decision (2026-11-21):** all 45 run through `fix_read.py`, not the router: `fix_read.py` imports `parse_signals` from `findings/service.py`, which imports `explanations.py`. Moving the routes is still needed (the router imports `explanations.py` directly), but alone it did not make the walk pass, so `parse_signals`, `SIGNAL_UNITS` and `_STORED_SIGNALS` moved from `service.py` to `findings/signals.py`, which imports no AI code; `service.py`, `fix_read.py` and `test_findings.py` import them from there (the same decision's implementation, coordinator, 2026-11-21). The walk then passes at full strength.
+
+**What was decided (option A).** F5's fix routes have their own router, `apps/api/src/nexovue_api/findings/fixes/router.py`, mounted in `main.py` beside the findings router, in the repository's shape for a second router under one package (`ai/preview/router.py`, `slos/readings/router.py`); a file named `router.py` stays visible to every structural gate, including the rate-limit coverage test, which reads only files of that name. AC33's walk starts from that module at full strength, and `test_fix_routes.py` proves the fix routes are on it and none is on `findings/router.py`. The URL, behaviour, `CurrentIdentity` gate (not on the read surface) and responses are unchanged. Plan T1.3 and T1.5 name the new module; the later tasks that add fix routes (T2b.7, T3.9, T3.16, T5.2) name it too.
+
+**To do when T2b.7 is built.** T2b.7 (and T4.7) restore aliases in what F5 reads back. F5's code does not reach F3's alias restoring today: `fix_read.py` imports no part of `explanations.py`, and the platform's `fixes/prose.py` uses `nexovue_platform.evidence.aliases.restore`. F3's text-to-segments restorer, `_restored` in `findings/explanations.py`, sits in a module that imports AI code; if F5 needs it, move it then to a module that imports none, beside `restore` in `nexovue_platform/evidence/aliases.py`, rather than importing `explanations.py` from F5's read. Not moved now.

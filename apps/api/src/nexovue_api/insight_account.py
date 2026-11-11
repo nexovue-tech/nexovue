@@ -68,8 +68,9 @@ INSIGHT_GRANTS: Final = (
     "GRANT UPDATE (checked_at, checked_ok, checked_fingerprint) "
     "ON ai_connections TO nexovue_insight",
     "GRANT SELECT ON ai_project_opt_outs TO nexovue_insight",
-    # So a run can re-check that its project still exists before it spends.
-    "GRANT SELECT (id, deleted_at) ON projects TO nexovue_insight",
+    # So a run can re-check that its project still exists before it spends, bound by
+    # organization like every other statement.
+    "GRANT SELECT (id, org_id, deleted_at) ON projects TO nexovue_insight",
     # A run's address and purpose stay as written; only its ending may change (AC72).
     "GRANT SELECT, INSERT ON ai_runs TO nexovue_insight",
     "GRANT UPDATE (input_tokens, output_tokens, tokens_estimated, outcome, finished_at) "

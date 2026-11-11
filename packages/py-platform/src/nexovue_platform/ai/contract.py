@@ -2,8 +2,8 @@
 
 `AIRequest` has no field for temperature, tool choice or top-p, on purpose: several current
 Claude models refuse them, and the shared interface must work for every format. F3's own
-request holds trusted parts only; `Untrusted` parts arrive with `untrusted.py` (plan T5.1),
-for F4 and F5.
+request holds trusted parts only (BR8); `Untrusted` parts (`untrusted.py`) are for F4 and F5,
+and `trusted_only` says which a request is.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final, Literal, Protocol
+
+from nexovue_platform.ai.untrusted import Untrusted
 
 Purpose = Literal["explain", "check", "chat", "fix"]
 
@@ -62,7 +64,7 @@ class AIRequest:
     """One model call, in no provider's words."""
 
     instructions: str
-    parts: tuple[Trusted, ...]
+    parts: tuple[Trusted | Untrusted, ...]
     # A small JSON schema the answer must fit. Used where a format supports it and never
     # relied on: nexovue validates every answer itself (FD3).
     response_schema: Mapping[str, Any]
@@ -74,11 +76,18 @@ class AIRequest:
     def __post_init__(self) -> None:
         if self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be at least 1")
-        if not all(isinstance(part, Trusted) for part in self.parts):
-            raise TypeError("F3's request holds trusted parts only")
+        if not all(isinstance(part, Trusted | Untrusted) for part in self.parts):
+            raise TypeError("a request part is Trusted or Untrusted")
+
+    @property
+    def trusted_only(self) -> bool:
+        """True when nothing in it came from outside nexovue's code (F3's case, BR8)."""
+        return all(isinstance(part, Trusted) for part in self.parts)
 
     def user_text(self) -> str:
-        return "\n\n".join(part.text for part in self.parts)
+        return "\n\n".join(
+            part.text if isinstance(part, Trusted) else part.render() for part in self.parts
+        )
 
 
 @dataclass(frozen=True, slots=True)

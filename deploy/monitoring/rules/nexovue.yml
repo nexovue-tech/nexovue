@@ -147,6 +147,42 @@ groups:
         annotations:
           summary: "jobs on {{ $labels.queue }} have waited {{ $value }}s for a worker"
 
+      # F3 (design, *Observability*). Facts are read for every finding, AI or not: a finding
+      # with none 15 minutes on means the evidence job is down or far behind.
+      - alert: NexovueEvidenceBehind
+        expr: max(nexovue_scheduler_oldest_ready_job_seconds{queue="evidence"}) > 600
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "finding facts have waited {{ $value }}s to be read"
+
+      - alert: NexovueFindingsUnexplained
+        expr: max(nexovue_scheduler_findings_unexplained) > 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value }} findings over 15 minutes old have no facts read"
+
+      # F3. `scheduler-insight` may be left out (`SCHEDULER_INSIGHT_REPLICAS=0`), so both pages
+      # wait for beat to say an AI connection is on; wording then waits, and facts do not.
+      - alert: NexovueInsightMissing
+        expr: |
+          max(nexovue_scheduler_ai_connections_enabled) > 0
+          unless on() (up{job="scheduler-insight"} == 1)
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "AI wording is on and no scheduler-insight is running"
+
+      - alert: NexovueInsightBehind
+        expr: |
+          max(nexovue_scheduler_oldest_ready_job_seconds{queue="insight"}) > 1800
+          and on() max(nexovue_scheduler_ai_connections_enabled) > 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "AI wording jobs have waited {{ $value }}s for scheduler-insight"
+
       - alert: NexovueAlertsUndelivered
         expr: max(nexovue_scheduler_oldest_alert_waiting_seconds) > 300
         for: 5m

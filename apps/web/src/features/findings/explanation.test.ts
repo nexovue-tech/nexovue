@@ -1,21 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/shared/api-client";
-
+import type { LookNextEntry } from "@/shared/evidence-links";
 import type { ExplanationFact, FindingExplanation } from "./api";
 import { explanationRefetchMs } from "./api";
+
 import {
   basisLabel,
   changeAnnouncement,
+  citedFact,
   headerLine,
   listedFacts,
+  olderWordsNote,
+  orderLookNext,
   plainText,
   readAgainWait,
   readLine,
+  refusedRunUntil,
   refusedUntil,
+  runsLine,
   setupStep,
   staleLine,
+  WORDING_WORDS,
   WORDS,
+  wordingLabel,
+  wordingStatus,
+  writeOffered,
 } from "./explanation";
 
 /**
@@ -240,5 +250,117 @@ describe("a page left open (AC69)", () => {
       60_000,
     );
     expect(explanationRefetchMs({ state: "closed", started_at: STARTED }, opened)).toBe(false);
+  });
+});
+
+describe("AI wording's words (F3 T5.8; spec, *States*; FR19, FR41)", () => {
+  const words = {
+    model: "llama3.1:8b",
+    from_version: 1,
+    from_read_at: "2026-11-09T14:01:00Z",
+    claims: [],
+    picks: [],
+  };
+
+  it("says each state in its own words, and a failed run's reason only to those who manage AI", () => {
+    const say = (overrides: Partial<FindingExplanation>, manageAi = false) =>
+      wordingStatus(explanation(overrides), { manageAi });
+    expect(say({ wording_state: "off" })).toBeNull();
+    expect(say({ wording_state: "done" })).toBeNull();
+    expect(say({ wording_state: "held" })).toBeNull();
+    expect(say({ wording_state: "pending" })).toBe("Writing this in plainer words");
+    expect(say({ wording_state: "pending", wording_stalled: true })).toBe(
+      "Plainer wording is not available right now",
+    );
+    expect(say({ wording_state: "abstained" })).toBe("Nothing to add to the facts above");
+    const failed = { wording_state: "failed" as const, wording_reason: "bad_key" as const };
+    expect(say(failed)).toBe("Plainer wording failed this time");
+    expect(say(failed, true)).toBe(
+      "Plainer wording failed this time: the provider refused the key. Save the key again in AI settings",
+    );
+    expect(say({ wording_state: "over_limit", wording_paused_until: "2026-12-01" })).toBe(
+      "Plainer wording is paused until 1 Dec",
+    );
+  });
+
+  it("labels the words with the configured model and says when they are from an earlier reading", () => {
+    expect(wordingLabel("llama3.1:8b")).toBe(
+      "Written by AI (llama3.1:8b); its numbers and names were matched to the facts, its meaning was not checked",
+    );
+    expect(olderWordsNote(explanation({ wording: words }), "UTC")).toBeNull();
+    expect(olderWordsNote(explanation({ version: 2, wording: words }), "UTC")).toMatch(
+      /^Written from the reading at .*14:01.*, before the facts changed$/,
+    );
+  });
+
+  it("names a cited fact by its number in the latest list, or none when it is gone (AC89)", () => {
+    const shown = explanation({
+      facts: [fact(), fact({ id: "edge", number: 2, kind: "dependency" })],
+    });
+    expect(citedFact(shown, "edge")?.number).toBe(2);
+    expect(citedFact(shown, "deploy:gone")).toBeNull();
+    expect(WORDING_WORDS.earlierFact).toBe("a fact from that earlier reading");
+  });
+
+  it("offers a run only with AI on, and says how many are left and when the cap lifts (FR41, AC58)", () => {
+    expect(writeOffered(explanation({ ai_on: false }))).toBe(false);
+    expect(writeOffered(explanation({ ai_on: true }))).toBe(true);
+    expect(writeOffered(explanation({ ai_on: true, state: "reading", version: null }))).toBe(false);
+    const options = { zone: "UTC", now: NOW };
+    expect(
+      runsLine(explanation({ runs_left: 2, runs_reset_at: "2026-11-09T18:30:00Z" }), options),
+    ).toEqual({
+      disabled: false,
+      line: expect.stringMatching(/^Can ask again 2 more times before 18:30/),
+    });
+    expect(
+      runsLine(explanation({ runs_left: 0, next_run_at: "2026-11-09T18:30:00Z" }), options),
+    ).toEqual({
+      disabled: true,
+      line: expect.stringMatching(
+        /^Reached the limit of 3 in 24 hours, including automatic ones\. Try after 18:30/,
+      ),
+    });
+    expect(runsLine(explanation({ wording_state: "pending" }), options).disabled).toBe(true);
+    expect(
+      runsLine(explanation({ wording_state: "pending", wording_stalled: true }), options).disabled,
+    ).toBe(false);
+  });
+
+  it("reads a refused click's next time from its 409, never its words", () => {
+    const refused = new ApiError("At the cap", 409, { correlationId: "c", traceId: "t" } as never, {
+      type: "about:blank",
+      title: "Conflict",
+      status: 409,
+      detail: "x",
+      next_run_at: "2026-11-09T18:30:00Z",
+    });
+    expect(refusedRunUntil(refused)).toBe("2026-11-09T18:30:00Z");
+    expect(refusedRunUntil(new Error("x"))).toBeNull();
+  });
+
+  it("moves picked Look next links first and adds nothing (AC82)", () => {
+    const entry = (label: string): LookNextEntry => ({
+      kind: "link",
+      label,
+      to: "/traces",
+      search: {},
+    });
+    const entries = ["Traces", "Logs", "Errors", "Deploys", "Infrastructure (whole project)"].map(
+      entry,
+    );
+
+    const ordered = orderLookNext(entries, ["deploys", "logs", "deploys"]);
+
+    expect(ordered.map((each) => each.label)).toEqual([
+      "Deploys",
+      "Logs",
+      "Traces",
+      "Errors",
+      "Infrastructure (whole project)",
+    ]);
+    expect(orderLookNext(entries, []).map((each) => each.label)).toEqual(
+      entries.map((each) => each.label),
+    );
   });
 });

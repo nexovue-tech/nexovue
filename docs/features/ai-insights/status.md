@@ -2,12 +2,15 @@
 
 ## Lifecycle status
 
+**Step 5 built 2026-11-11, awaiting commit** (worktree `wt/f3s5`, on `feature/phase-2` 9ad0188): wording, checked by code, with a limit that stops new runs (plan T5.1 to T5.11). Built and tested against fake providers only. T5.8 waits for its Playwright check (hardening pass); T5.9 is not built (it needs `just insight-fence` and Playwright). Migration 0072, after 0071 (re-chained at commit). No ADR.
 **Step 4 built and committed 2026-11-11** (on `feature/phase-2`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. Migration 0071, after 0070.
 **Step 3 built and committed 2026-11-11** (on `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070, after F22 Step 6's 0069.
 **Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
+
+Step 5 awaits the founder's review of the diff, then commit (migration 0072 re-chained by the coordinator). Open decisions 7 and 9, 11 to 14 are the founder's. Wording has never met a real provider: that waits for the founder's free-tier key (foundation item 4).
 
 Open decisions 9 to 11 await the founder. Next: the founder's first real call per format with a free-tier key (`tools/ai-eval/real_call.py`), which is what puts a format on the screen.
 
@@ -17,6 +20,43 @@ Step 2 is committed (`55703b4`). Step 2b is the founder's after Phase 2 (foundat
 
 
 ## Completed
+
+### Step 5, built 2026-11-11 (worktree `wt/f3s5`)
+
+**What a person sees.** With AI on for a project (connection tested, limited, consented, switched on), a new finding's facts get plainer words under them, in *In plainer words*: each claim a sentence whose names come back as names, with "Fact N" citations that open the list and move to their fact, labelled "Written by AI ({model}); its numbers and names were matched to the facts, its meaning was not checked". A model's picks move their "Look next" links first. Every state has its words: "Writing this in plainer words", "Plainer wording is not available right now" past 10 minutes, "Nothing to add to the facts above", "Plainer wording failed this time" (with the reason for an owner or admin, and a link to AI settings), "Plainer wording is paused until 1 Dec". Members see "Write in plainer words" with "Can ask again 2 more times before 18:30 IST", or "Reached the limit of 3 in 24 hours, including automatic ones. Try after {time}". Words from an earlier reading say "Written from the reading at {time}, before the facts changed", and a citation of a fact no longer listed is plain text. A token never reads words. **While causes are held (FR50, production), no run starts and the slot says nothing**; the non-production override lets the founder judge the words. **No provider has been called:** every run here went to a fake provider.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T5.1 | FR37's checks in order, a failing claim removed, none left and no abstention `invalid`; a read-time check passing stored words whole or not at all; untrusted text for F4 and F5 (stripped, capped, JSON-encoded, fenced by a per-call random tag), and `AIRequest.trusted_only`; the limits' arithmetic | `nexovue_platform/ai/validate.py`, `untrusted.py`, `limits.py`, `contract.py` |
+| T5.2 | The wording decision, pure and AI-free (`off`, `held`, `abstained`, `pending`, or carried with its version); gather writes it in the version's insert and adds the word job by name with the version's id and generation 1 | `evidence/wording.py`, `gather.py`, `reads.py`; `word_explanation_request` in `nexovue_platform/evidence` |
+| T5.3 | The run cap, the input limit and the month's reservation in one transaction under a row lock on the finding's first version, with the run row; settle moves actual tokens to used | `insight/store.py` |
+| T5.4 | The `word` task: stale, off and abstained checks before spending; the key opened for this address; one call; retry on invalid, 5xx and 429 (`Retry-After`, within the job's life); words over `pending` of the job's generation; `failed`, reason `error`, before any uncaught error is raised, bodyless | `insight/word.py`, `transport.py` (`Retry-After`), migration 0072, `insight_account.py` |
+| T5.5 | The sweep: killed runs `died` with their reservation moved to used, wording past its job's life `failed`/`expired`, both on a matching generation; beat every 5 minutes on `insight`, only while a connection is on; `ai_runs` and `ai_usage_monthly` expire at 13 months | `insight/sweep.py`, `beat.py`, `jobs/expiry.py`, `ai_records.EXPIRED` |
+| T5.6 | The canary: markers in service, endpoint, title, version, exception type and message, span and log attributes, log body, deploy metadata, callee, rule, check and project names, through the real gather and `word` to a fake provider; the controls | `test_insight_canary.py` |
+| T5.7 | The read: words checked again against `wording_from_version`, names restored from that version, citations as evidence ids, picks as Look next kinds, the display state, `runs_left`, `runs_reset_at`, `next_run_at`, reasons for `MANAGE_AI` only, `off` and no words while AI is off for the project; `POST .../refresh` (409s: AI off, causes held, under way, the cap); `bad_wording` offered and taken only where words were shown | `findings/explanations.py`, `explanation_queries.py`, `schemas.py`, `router.py`, `ai/service.py`, `audit/service.py` |
+| T5.8 | The wording block, citations, the button, picks, every state | `ExplanationSection.tsx`, `explanation.ts`, `api.ts` |
+| T5.10 | Readings on beat's leader (unexplained findings, failed and cut reads, connections on, runs by outcome, the month's tokens); four alerts and their promtool cases; the scrape job; the runbook | `metrics.py`, `deploy/monitoring/`, `docs/operations/ai.md` |
+| T5.11 | The service mute sets `held`, project deletion `off`, the opt-out `off`, through one query, in their own transactions | `detection/service.py`, `projects/service.py`, `ai/queries.py`, `explanation_queries.py` |
+
+Migration **0072** (down revision `0071`; the coordinator re-chains): `finding_explanations.wording_reason` gains `not_found`, `bad_request`, `error`; replaced `NOT VALID` then validated; its downgrade refuses while a row holds a new reason. Up, down, up run on `f3s5-pg`. **No ADR:** nothing settled here is material beyond ADR-039, ADR-040 and ADR-047 and the design.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **The label is always the configured model's name.** FR19 allows the provider's reported name if it fits a pattern, but AC51 says a marker in the provider's `model` field must not reach the label, and a marker can fit the pattern. The reported name is kept nowhere (open decision 12).
+- **A job run twice waits on the first:** inside the cap's lock, a `started` run of the same generation makes a second copy stop (`stale`), so it neither double-spends nor writes `run_cap` over the first's result (AC56). A worker *process* that dies mid-call therefore leaves its retry `stale`, and the sweep then marks the run `died`.
+- **The reservation statements live in `insight/store.py`,** not `limits.py` as the design put them: the scheduler's tenancy structure test reads the scheduler's statements; `limits.py` keeps the arithmetic both the API and the AI role use.
+- **A run's `started_at` is the job's clock,** so the run cap and the sweep read one time.
+- **`wording_reason` gains `not_found`, `bad_request`** (as 0071 did for runs, so an admin reads "model not found" apart from a refused key) **and `error`** for a fault in nexovue's own task (AC54).
+- **The AI account's `projects` grant gains `org_id`,** so `word`'s project re-check binds the organization like every other statement.
+- **Words are carried** onto a new version only from `pending`, `done`, `failed` and `over_limit`; `off` and `held` versions carry none.
+- **"A fact that may be a cause"** (FR34) is a new fact of kind `deploy`, `dependency`, `other_finding` or `traffic` (`CAUSE_CAPABLE_KINDS`); error groups only support.
+- **Severity reaches the limit through `model_input.finding.severity`,** since the AI account cannot read `findings`; anything but `critical` gets the warning share.
+- **`word` checks consent again** (base URL, fingerprint, schema) before it spends, and an address failing FR23 at call time writes `off`.
+- **The AI alerts are tickets, not pages:** AI is optional, and facts and alerts never wait on it.
+- **The AI sweep is scheduled only while a connection is on,** so an install without the AI container queues nothing for it.
+- **A model's answer in one Markdown code fence is unwrapped;** nothing else is repaired.
 
 ### Step 4, built 2026-11-11 (worktree `wt/f3s4`)
 
@@ -183,6 +223,9 @@ ADR-039 (an explanation is a frozen evidence record, with code choosing the caus
 
 ## Next action
 
+Founder: review Step 5's diff and open decisions 12 to 14; commit after Step 4's chain (0072 on 0071). With a free-tier key, the real-call record (Step 4's next action) is also what lets wording run against a real model; then judge Step 5 as the plan says (read the words beside the facts; pull the key, stop the container, set a tiny limit). Coordinator: `just insight-fence` (Step 3), then T5.9's install-layout arm and the Playwright spec, in the hardening pass.
+
+Earlier (Step 4):
 Founder: review Step 4's diff and open decisions 9 to 11; commit after Step 3. Then, with a free-tier key, `AI_EVAL_KEY=... uv run python tools/ai-eval/real_call.py --format openai_chat ...` once per format that has an account, and add the printed line to `real_calls.py` in a reviewed change: that is what offers a format on `/settings/ai`. Step 5 next.
 
 Earlier (Step 3):
@@ -194,10 +237,18 @@ The founder reviews Step 2's diff; then commit. The founder's checks after Phase
 
 ## Open decisions
 
+**From Step 5, 2026-11-11:**
+
+12. **The wording label's model name** (FR19 against AC51 and AC96). FR19 allows the provider's reported name when it fits a strict pattern; AC51 says a marker in the provider's `model` field must not reach the label, and a marker can fit the pattern. Built: the configured name always. **Recommendation:** keep the configured name, and amend FR19; on a gateway the reported name is the only way to know which model answered, so if the founder wants it, show it apart from the label ("the provider said it used {name}"), never in it.
+13. **FR26's quiet line is not built** ("AI wording turned off at {time}: {reason}. Settings", for an admin, when something other than a person turned AI off). The API returns `off` with no reason or time; the time lives only in the audit row. **Recommendation:** add it in the hardening pass, reading the latest `ai.turned_off` audit row whose `by` is not a person; it is a read, no new risk.
+14. **A superseded version left `pending` reads `failed`, reason `expired`, an hour later** (`?version=n` only; the page shows the latest, which has its own job). **Recommendation:** accept; the alternative (gather marking the older row) writes a state no run decided.
+
+Decision 10 (mute and project deletion stopping queued wording) is built: T5.11. Decision 7 (the watchdog) stays the founder's and is **not built**. Its natural place, if approved, is beat's leader beside `metrics.read_queues`, as the install account: the AI sweep runs as `nexovue_insight`, which must never hold `pg_terminate_backend` over other sessions (`insight/sweep.py` says so).
+
 **From Step 4, 2026-11-11:**
 
 9. **The dev stack has no `AI_SECRET_KEY`** (`DEV_AI_SECRET_KEY` defaults empty on `api` and `scheduler-insight`), so `/settings/ai` on `just dev` says "AI is not available: AI_SECRET_KEY is not set" until a developer sets one in `.env`. A committed dev literal, as `DEV_CONNECTION_SECRET_KEY` has, needs a `.gitleaksignore` fingerprint, which names the commit, so it is a follow-up commit. **Recommendation:** commit a dev literal on both services, then add its `.gitleaksignore` line in the next commit, as F22's key was.
-10. **Mute and project deletion do not yet stop queued wording** (plan T4.5 points to T5.11). No wording run exists before Step 5, so nothing can be sent meanwhile; the opt-out route already does it. **Recommendation:** keep it in T5.11, with the `word` job's own re-check.
+10. **Built in Step 5 (T5.11), 2026-11-11.** **Mute and project deletion did not yet stop queued wording** (plan T4.5 points to T5.11). No wording run exists before Step 5, so nothing can be sent meanwhile; the opt-out route already does it. **Recommendation:** keep it in T5.11, with the `word` job's own re-check.
 11. **The admin's consent view shows no owners' names** (design, *Consent*: "with owner names and `CopyButton`"); it says "Waiting for an owner" and copies the page's link. **Recommendation:** add the active owners' display names to `GET /ai/connection` for `MANAGE_AI` in the hardening pass; it is a read, no new risk.
 
 **From Step 3, 2026-11-11:**
@@ -517,6 +568,14 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Risks
 
+**Added by Step 5 (2026-11-11):**
+
+- **No real provider has written words.** Every answer was a fake provider's. A real model may fail the checks often (the word lists are crude, and numbers must match within one decimal place); the bed measures that (Step 6).
+- **The checks test form, not truth.** A false sentence in allowed words passes, and the label says so.
+- **A provider's billing is not nexovue's metering.** A killed call is counted at its full reservation (overstated); a call that never reached the provider and timed out is counted at its estimated input.
+- **The mute race stays** (design, accepted): a gather in flight can write `pending` just after a mute, costing at most one run under the cap.
+- **The AI account can still write words for any organization;** they show only if they pass the read-time check against that version's input.
+
 **Added by Step 4 (2026-11-11):**
 
 - **The address guard's promise widened** (ADR-047): a private address was reachable only in development; now an operator's listed addresses and ports open one for an AI connection. Loopback, link-local and ranges wider than /16 stay refused, and `public_allowed` keeps `http` off the internet.
@@ -552,6 +611,37 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 - **Oracle's free allowance is 2 Arm CPUs and 12 GB,** below the 16 GB minimum, and the bed's demo needs more. Measuring there needs a paid shape, which returns to the founder at deployment.
 
 ## Validation
+
+### Step 5, 2026-11-11
+
+Own containers `f3s5-pg` (Postgres 18, `pgvector/pgvector:0.8.6-pg18-trixie`, port 25432) and `f3s5-ch` (ClickHouse 26.3, HTTP 28123, native 29000, network `f3s5-net`), migrated with the `setup` step (0072 included; up, down, up) and the Go setup (40 ClickHouse migrations). Every `word`, sweep and canary case ran **as `nexovue_insight`**, through the real `setup` grants. No real provider was called. Every test below was seen failing on a saved copy with its behaviour removed, then passing:
+
+| Test | Seen failing by | Then |
+|---|---|---|
+| test_ai_validate.py (52) | Saved copy whose check_claim passes any claim with known evidence ids (every later FR37 rule skipped): 23 failed | 52 passed |
+| test_evidence_vocabulary.py (8) | 0072's frozen list without `error`: failed | 8 passed |
+| test_findings_wording_live.py (13) | Saved copies serving words while AI is off, skipping the read-time check, without the cap and FR50 refusals, without the mute's and the deletion's stop: 9 failed; the rating reading `bad_wording` from the row rather than from what was shown (the Step 2 rule): 1 failed | 13 passed |
+| test_insight_word_live.py (38), as `nexovue_insight` | Saved copies without the run-under-way check and the cap, without the project re-check, never retrying, the sweep not moving a died run's reservation, the error path not writing `failed`: 9 failed. (Dropping the generation from the words' write alone fails nothing: the job's first read already stops on a newer generation.) | 38 passed |
+| test_insight_limits_live.py (3), as `nexovue_insight` | Saved copy whose reservation ignores the ceiling: 3 failed; every severity given the critical share: 2 failed | 3 passed |
+| test_evidence_wording.py (18) | Saved copy with every version material, no `held`, and runs while causes are held: 9 failed | 18 passed |
+| test_evidence_gather_live.py (+3, 17) | Saved copy writing every version `off` with no job, as before Step 5: 2 failed (the held-causes case wants that very result; it was seen failing as the decision's `off` case in `test_evidence_wording.py`) | 17 passed |
+| test_insight_canary.py (2), as `nexovue_insight` | Saved copy of gather storing the evidence items in `model_input` beside the facts: 1 failed ("the service reached the provider"); the control case is its own proof of sight | 2 passed |
+| test_scheduler_postgres_tenancy_structure.py (14) | Before the five cross-tenant statements were named: failed, naming each | 14 passed |
+| test_scheduler_metrics_live.py (+1), test_beat_schedule.py (+1) | Saved copies counting a finding unexplained at once and no connection on, and scheduling the AI sweep with no connection on: 2 failed | 25 passed |
+| deploy/monitoring/tests/nexovue_test.yml (+4 groups), promtool | Rules copy with NexovueInsightMissing not checking `up` and the evidence wait at 6000 s: FAILED | SUCCESS |
+| FindingScreen.test.ts (+5, 61), explanation.test.ts (+6, 27) | Saved copies hiding the words, making every citation plain text, dropping the Write button, ignoring picks, and never saying a stalled run: 7 failed | 88 passed |
+| test_insight_grants_live.py (8) | The grant without `projects.org_id`: failed (and `word`'s project re-check then fails as `nexovue_insight`) | 8 passed |
+
+**Final runs.** One batch, `-n 4`: the step's suites with `test_ai_settings_live.py`, `test_ai_vocabulary.py`, `test_authorization_coverage.py`, `test_compose_contract.py`, `test_cross_service_contracts.py`, `test_deletion_live.py`, `test_findings_actions_live.py`, `test_findings_api_live.py`, `test_findings_explanation_live.py`, `test_insight_grants_live.py`, `test_keys_live.py`, `test_migration_rules.py`, `test_policy.py`, `test_postgres_tenancy_structure.py`, `test_projects_live.py`, `test_ratelimit_coverage.py`, `test_roles.py`, `test_scheduler_postgres_tenancy_structure.py`, `test_setup_schema.py`, `test_tenant_chokepoint_structure.py`, and the scheduler's `test_beat_schedule.py`, `test_connections_have_no_ai.py`, `test_detection_has_no_ai.py`, `test_detection_project_job_live.py`, `test_detection_unmoved_live.py`, `test_evidence_*`, `test_insight_*` (not the fence's), `test_jobs_live.py`, `test_scheduler_metrics_live.py`, `test_scheduler_settings.py`, and the platform's `test_ai_validate.py`, `test_ai_wire_formats.py`, `test_model_facts.py`: **3,623 passed, 1 failed**: `test_detection_unmoved_live.py` hit ClickHouse's 10-second limit while the machine was killing processes for memory; alone it passed (2 of 2). The AI suites again after the last edit: 43 passed. `uv run mypy .`: no issues in 986 files. `ruff check .`, `ruff format --check .`: clean. Biome on `apps/web/src/features/findings`: clean. `pnpm -r --if-present run typecheck`: done. Whole web suite: **173 files, 2,138 tests passed**. `promtool check rules`, `test rules`, `check config`: success.
+
+**Not run, and why:**
+
+- **No real provider.** Every wording run, retry and refusal was a fake provider on this machine. A real model's words need the founder's free-tier key (foundation item 4): not yet run.
+- **T5.9:** `test_ai_off_changes_nothing_live.py` (the install layout under `just insight-fence`) and `tools/e2e/tests/non-ai-screens.spec.ts` with `just e2e-insight-stopped` (Playwright): not built. Both need what this build could not run, and a test may not be written unseen-failing.
+- **AC17's Playwright check at 390 and 1920 pixels, browser and phone checks, design QA, the founder's judging:** deferred to the hardening pass by the founder's rule of 2026-11-11.
+- **AC97 (the bed's time to first explanation, 100 findings at once):** Step 6 and Oracle.
+- **"View what was sent" after an instructions change ("Cannot be reproduced")** is Step 4's test; here a real word run's rebuild was seen to match.
+- `just check`, `just insight-fence`, other features' live suites: not run, by instruction.
 
 ### Step 4, 2026-11-11
 
@@ -695,6 +785,8 @@ This is the specification. On approval it amends: `phase-2-foundation.md` (the d
 
 ## Documentation impact
 
+**Step 5 (2026-11-11):** `docs/operations/ai.md` (how a wording run goes, "not available right now", the four alerts and the readings, running with no AI container), `deploy/monitoring/` (rules, cases, scrape job), `phase-2-tracker.md`. `docs/product/setup/ai.md` stays deferred to the hardening pass.
+
 **Step 4 (2026-11-11):** `docs/operations/ai.md` (allowing a local model, an unreadable key), `docs/operations/key-rotation.md` (`AI_SECRET_KEY`), ADR-047 and the decisions index, `phase-2-tracker.md`. `docs/product/setup/ai.md` is deferred to the hardening pass.
 
 **Step 2 (2026-11-09):** `docs/product/setup/alerts/webhooks.md` (no `explained` event on a webhook), `setup/alerts/channels.md` (the follow-up, its limits and switch, frequent deployers, pages with no finding, held until the bar is met), `setup/deploys.md` (what deploys add to a finding, the 7-day clock), `docs/features/alerts/spec.md` (amended: the `explained` kind), F19's `status.md` (AC58 done), `phase-2-tracker.md`. Before Step 2: none changed. Listed in `design.md`, *Specification impact*, and in the plan's tasks. New customer and operator documents are `docs/product/setup/ai.md` and `docs/operations/ai.md`, written during Steps 4 and 5.
@@ -715,7 +807,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-11 (Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
+2026-11-11 (Step 5 built, awaiting commit; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

@@ -39,9 +39,13 @@ TASK_MODULES: Final = (
 TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
     "all": TASK_MODULES,
     "connections": ("nexovue_scheduler.connections.tasks",),
-    # F3: the AI role, on its own account and network: the connection test (Step 4); the
-    # wording job joins in Step 5. `all` never loads these.
-    "insight": ("nexovue_scheduler.insight.check",),
+    # F3: the AI role, on its own account and network: the connection test (Step 4), the
+    # wording job and its sweep (Step 5). `all` never loads these.
+    "insight": (
+        "nexovue_scheduler.insight.check",
+        "nexovue_scheduler.insight.word",
+        "nexovue_scheduler.insight.sweep",
+    ),
 }
 # The module a worker's forkserver imports before any child exists, per task set.
 PRELOAD_OF: Final[dict[str, str]] = {

@@ -16,6 +16,7 @@ from typing import Any, cast
 
 from nexovue_platform.checks.task import CheckDefinition
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
+from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
@@ -32,6 +33,7 @@ from nexovue_scheduler.beat import (
     FILE_SWEEP_ENTRY,
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
+    INSIGHT_SWEEP_ENTRY,
     RELEASE_SWEEP_ENTRY,
     Beat,
     _start_offset,
@@ -252,6 +254,24 @@ def test_releases_are_swept_every_minute_on_their_own_capped_queue() -> None:
     assert sweep.interval_seconds == 60
     assert sweep.request.expires_seconds == 60
     assert SWEEP_RELEASES_TASK in registry.registered()
+
+
+def test_the_ai_sweep_runs_every_five_minutes_on_the_ai_role_s_own_queue() -> None:
+    """F3 T5.5 (AC54, AC81): the sweep runs as the AI account, so it goes on `insight`,
+    which only `scheduler-insight` claims, and only while an AI connection is on, so an
+    install without that container queues nothing for it. Only that role's task set can
+    run it, and the full set, which holds every other key, cannot."""
+    beat = _scheduler()
+    assert INSIGHT_SWEEP_ENTRY not in beat._sweep_entries()
+    beat.ai_on = True
+    sweep = beat._sweep_entries()[INSIGHT_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_INSIGHT_TASK
+    assert sweep.request.queue == INSIGHT_QUEUE
+    assert sweep.interval_seconds == 300
+    assert sweep.request.expires_seconds == 300
+    assert SWEEP_INSIGHT_TASK in registry.registered(registry.TASK_SETS["insight"])
+    assert not any("insight" in module for module in registry.TASK_SETS["all"])
 
 
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:

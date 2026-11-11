@@ -1887,8 +1887,9 @@ class FindingExplanation(Base):
     A gather writes a new version only when what is known changed (FR43): identities and
     conclusions, never moved counts. `evidence` holds names and numbers and never a log
     body or error text (A47); `model_input` holds only what a model may be sent, and
-    `aliases` the real names behind it, apart (A19). The wording columns stay `off`
-    until AI wording exists (plan Step 5).
+    `aliases` the real names behind it, apart (A19). The evidence job decides the
+    wording state; `scheduler-insight` writes words over `pending` of a matching
+    `wording_generation` only, and the API checks them again when it reads (A48).
     """
 
     __tablename__ = "finding_explanations"

@@ -1,5 +1,6 @@
 import { ApiError, isConflict } from "@/shared/api-client";
-import { formatZonedTime } from "@/shared/format/zoned";
+import type { LookNextEntry } from "@/shared/evidence-links";
+import { formatCalendarDay, formatZonedTime } from "@/shared/format/zoned";
 
 import type {
   ExplanationBasis,
@@ -9,7 +10,9 @@ import type {
   ExplanationSegment,
   FindingDetail,
   FindingExplanation,
+  LookNextKind,
   RatingReason,
+  WordingReason,
 } from "./api";
 
 /**
@@ -246,4 +249,148 @@ export function ratingLine(rating: ExplanationRating): string {
     ? "you said it was useful"
     : `you said: ${RATING_WORDS.reasons[rating.reason ?? "not_useful"]}`;
   return `${RATING_WORDS.thanks} ${said[0].toUpperCase()}${said.slice(1)}.`;
+}
+
+// ------------------------------------------------------------- AI wording (Step 5)
+
+/** The wording slot's words (design, *Words, recorded once*; spec, *States*). */
+export const WORDING_WORDS = {
+  heading: "In plainer words",
+  pending: "Writing this in plainer words",
+  stalled: "Plainer wording is not available right now",
+  abstained: "Nothing to add to the facts above",
+  failed: "Plainer wording failed this time",
+  write: "Write in plainer words",
+  earlierFact: "a fact from that earlier reading",
+  settings: "AI settings",
+} as const;
+
+/** FR19's label, with the configured model's name. */
+export function wordingLabel(model: string): string {
+  return `Written by AI (${model}); its numbers and names were matched to the facts, its meaning was not checked`;
+}
+
+/** What an admin reads for a failed run (spec, *States*: "The reason"), never a provider's words. */
+export const WORDING_REASON_WORDS: Record<WordingReason, string> = {
+  died: "the run stopped before it finished",
+  expired: "the AI container did not take the run in time",
+  run_cap: "this finding reached 3 runs in 24 hours",
+  too_long: "the facts were too long to send",
+  bad_key: "the provider refused the key. Save the key again in AI settings",
+  unavailable: "the provider did not answer",
+  limited: "the provider asked nexovue to wait",
+  refused: "the provider refused to answer",
+  invalid: "the answer did not pass nexovue's checks",
+  not_found: "the provider does not know the model",
+  bad_request: "the provider refused the request",
+  error: "nexovue could not finish the run",
+};
+
+/** The slot's one status line for this state, or null when the words speak for themselves. */
+export function wordingStatus(
+  explanation: FindingExplanation,
+  { manageAi }: { manageAi: boolean },
+): string | null {
+  switch (explanation.wording_state) {
+    case "pending":
+      return explanation.wording_stalled ? WORDING_WORDS.stalled : WORDING_WORDS.pending;
+    case "abstained":
+      return WORDING_WORDS.abstained;
+    case "failed": {
+      const reason = explanation.wording_reason ?? null;
+      return manageAi && reason !== null
+        ? `${WORDING_WORDS.failed}: ${WORDING_REASON_WORDS[reason]}`
+        : WORDING_WORDS.failed;
+    }
+    case "over_limit": {
+      const until = explanation.wording_paused_until ?? null;
+      return until === null
+        ? "Plainer wording is paused until next month"
+        : `Plainer wording is paused until ${formatCalendarDay(until)}`;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * FR19, AC89: words from an earlier version say so, with that reading's time; and a
+ * citation of a fact not in the latest list is plain text, never a link.
+ */
+export function olderWordsNote(explanation: FindingExplanation, zone?: string): string | null {
+  const words = explanation.wording;
+  if (words === null || words.from_version === explanation.version) return null;
+  return `Written from the reading at ${formatZonedTime(words.from_read_at, { zone })}, before the facts changed`;
+}
+
+/** The latest list's fact a citation names, or null: "a fact from that earlier reading". */
+export function citedFact(
+  explanation: FindingExplanation,
+  evidenceId: string,
+): ExplanationFact | null {
+  return listedFacts(explanation.facts).find((fact) => fact.id === evidenceId) ?? null;
+}
+
+/** "Write in plainer words": shown with AI on, to those who may ask (FR41). */
+export function writeOffered(explanation: FindingExplanation): boolean {
+  return explanation.state === "read" && explanation.ai_on === true && explanation.version !== null;
+}
+
+/** Why the button is disabled, or how many asks are left (FR41, AC58). */
+export function runsLine(
+  explanation: FindingExplanation,
+  { refusedAt, zone, now = Date.now() }: { refusedAt?: string | null; zone?: string; now?: number },
+): { disabled: boolean; line: string | null } {
+  const capped = refusedAt ?? explanation.next_run_at ?? null;
+  if (capped !== null && Date.parse(capped) > now) {
+    return {
+      disabled: true,
+      line: `Reached the limit of 3 in 24 hours, including automatic ones. Try after ${formatZonedTime(capped, { zone, now })}`,
+    };
+  }
+  if (explanation.wording_state === "pending" && !explanation.wording_stalled) {
+    return { disabled: true, line: null };
+  }
+  const left = explanation.runs_left ?? null;
+  const reset = explanation.runs_reset_at ?? null;
+  if (left === null || reset === null) return { disabled: false, line: null };
+  const times = left === 1 ? "1 more time" : `${left} more times`;
+  return {
+    disabled: false,
+    line: `Can ask again ${times} before ${formatZonedTime(reset, { zone, now })}`,
+  };
+}
+
+/** A refused click's `next_run_at`, from the 409's problem (AC58), shown inline. */
+export function refusedRunUntil(error: unknown): string | null {
+  if (!isConflict(error) || !(error instanceof ApiError)) return null;
+  const next = error.problem?.next_run_at;
+  return typeof next === "string" ? next : null;
+}
+
+const LOOK_NEXT_LABELS: Record<LookNextKind, string> = {
+  traces: "Traces",
+  logs: "Logs",
+  errors: "Errors",
+  deploys: "Deploys",
+  infrastructure: "Infrastructure (whole project)",
+};
+
+/**
+ * FR36, AC82: a model's picks move their "Look next" links first, in the order picked,
+ * and add nothing: a pick with no such link is ignored, and every link stays.
+ */
+export function orderLookNext(
+  entries: readonly LookNextEntry[],
+  picks: readonly LookNextKind[],
+): LookNextEntry[] {
+  const first: LookNextEntry[] = [];
+  for (const pick of picks) {
+    const label = LOOK_NEXT_LABELS[pick];
+    const entry = entries.find(
+      (each) => each.label === label || each.label.startsWith(`Raw ${pick}`),
+    );
+    if (entry !== undefined && !first.includes(entry)) first.push(entry);
+  }
+  return [...first, ...entries.filter((entry) => !first.includes(entry))];
 }

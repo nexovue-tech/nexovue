@@ -43,6 +43,7 @@ from nexovue_platform.checks.task import (
 )
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.deployment import HOSTED
+from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -112,6 +113,13 @@ CONNECTIONS_SWEEP_ENTRY: Final = "sweep:connections"
 # capped queue (D31), so a slow read never takes an alert sweep's slot.
 RELEASE_SWEEP_SECONDS: Final = 60
 RELEASE_SWEEP_ENTRY: Final = "sweep:releases"
+
+# F3: the AI role's sweep, run by `scheduler-insight` as its own account: runs a killed
+# child left `started`, and wording left `pending` past its job (design, every 5 minutes, a
+# guess). Scheduled only while an AI connection is on, so an install without the AI
+# container, or with AI off, queues nothing for it; the page reads `off` then anyway.
+INSIGHT_SWEEP_SECONDS: Final = 300
+INSIGHT_SWEEP_ENTRY: Final = "sweep:insight"
 
 # A payment's grace period is days long; an hour late ending it costs nothing.
 GRACE_SWEEP_SECONDS: Final = 3600
@@ -199,6 +207,8 @@ class Beat:
         self._refresh_due_at = 0.0
         # Whether a tracker connection is live, read with the schedule (F22 T4.5).
         self.connections_live = False
+        # F3: whether any AI connection is on, read with the schedule; the AI sweep runs then.
+        self.ai_on = False
 
         # What the heartbeat reports. Counters rather than gauges, because the
         # question that matters is "is it still moving", and a number that has
@@ -336,6 +346,7 @@ class Beat:
                 self.connections_live = await metrics.connections_live(
                     connection, enabled=self._settings.connections_enabled
                 )
+                self.ai_on = await metrics.ai_connections_on(connection)
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
             # the entries we already hold are still correct, and dropping them
@@ -443,6 +454,8 @@ class Beat:
             CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
             RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
         }
+        if self.ai_on:
+            wanted[INSIGHT_SWEEP_ENTRY] = (SWEEP_INSIGHT_TASK, INSIGHT_SWEEP_SECONDS, INSIGHT_QUEUE)
         if self.connections_live:
             wanted[CONNECTIONS_SWEEP_ENTRY] = (
                 SWEEP_CONNECTIONS_TASK,

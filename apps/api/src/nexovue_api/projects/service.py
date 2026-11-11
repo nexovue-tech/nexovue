@@ -39,6 +39,7 @@ from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Reader
 from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
+from nexovue_api.findings import explanation_queries
 from nexovue_api.projects import config, queries
 from nexovue_api.projects.schemas import (
     MaskingConfigResponse,
@@ -187,6 +188,11 @@ async def delete(
     deleted_at = datetime.now(UTC)
     project.deleted_at = deleted_at
     await alert_queries.close_project(session, org_id=org_id, project_id=project_id, at=deleted_at)
+    # F3: wording waiting for a run is turned off with the project, so a queued run of one of
+    # its findings sends nothing (FR28, AC39); the job also re-checks before it spends.
+    await explanation_queries.stop_queued_wording(
+        session, org_id=org_id, project_id=project_id, state="off", at=deleted_at
+    )
     closed = ProjectDeleted(
         project_id=project.id,
         deleted_at=deleted_at,

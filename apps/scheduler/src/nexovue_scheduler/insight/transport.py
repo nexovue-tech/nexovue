@@ -18,6 +18,8 @@ this network.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Final, Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -41,6 +43,8 @@ class Answer:
     status: int | None
     body: bytes
     failure: TransportFailure | None = None
+    # A 429's `Retry-After`, in seconds from now, when the provider gave one that reads.
+    retry_after_seconds: float | None = None
 
     @property
     def reached(self) -> bool:
@@ -77,7 +81,26 @@ def send(call: HttpCall, *, timeout_seconds: int, private_endpoints: PrivateEndp
         return Answer(None, b"", _failure_of(exchange.error))
     if exchange.body_truncated:
         return Answer(exchange.status_code, b"", "too_large")
-    return Answer(exchange.status_code, exchange.body)
+    return Answer(
+        exchange.status_code, exchange.body, retry_after_seconds=retry_after(exchange.headers)
+    )
+
+
+def retry_after(headers: list[tuple[str, str]], now: datetime | None = None) -> float | None:
+    """`Retry-After` as seconds from now: a number of seconds, or an HTTP date. Anything
+    else is None, and the job waits its own default."""
+    value = next((v for name, v in headers if name.lower() == "retry-after"), None)
+    if value is None:
+        return None
+    if value.strip().isdigit():
+        return float(value.strip())
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        return None
+    return max(0.0, (when - (now or datetime.now(UTC))).total_seconds())
 
 
 def _failure_of(error: str) -> TransportFailure:

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Final
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,7 @@ from nexovue_api.data.postgres.models import (
     Project,
     User,
 )
+from nexovue_api.findings import explanation_queries
 
 RUN_LIST_LIMIT: Final = 100
 
@@ -151,16 +152,19 @@ async def opt_out(
         .values(org_id=org_id, project_id=project_id, created_by=person_id, created_at=now)
         .on_conflict_do_nothing()
     )
-    await session.execute(
-        update(FindingExplanation)
-        .where(
-            FindingExplanation.org_id == org_id,
-            FindingExplanation.project_id == project_id,
-            FindingExplanation.wording_state == "pending",
-        )
-        .values(wording_state="off", wording_changed_at=now)
+    await explanation_queries.stop_queued_wording(
+        session, org_id=org_id, project_id=project_id, state="off", at=now
     )
     return bool(getattr(added, "rowcount", 0))
+
+
+async def opted_out(session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID) -> bool:
+    found = await session.scalar(
+        select(func.count())
+        .select_from(AIProjectOptOut)
+        .where(AIProjectOptOut.org_id == org_id, AIProjectOptOut.project_id == project_id)
+    )
+    return bool(found)
 
 
 async def opt_in(session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID) -> bool:

@@ -91,7 +91,8 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "consented_schema",
     },
     ("ai_connections", "UPDATE"): {"checked_at", "checked_ok", "checked_fingerprint"},
-    ("projects", "SELECT"): {"id", "deleted_at"},
+    # F3 Step 5: `org_id` too, so the wording job's re-check binds the organization (NFR5).
+    ("projects", "SELECT"): {"id", "org_id", "deleted_at"},
     ("ai_runs", "UPDATE"): {
         "input_tokens",
         "output_tokens",

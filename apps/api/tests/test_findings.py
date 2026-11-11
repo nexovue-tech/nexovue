@@ -19,14 +19,13 @@ from nexovue_api.data.postgres.models import Finding as FindingRow
 from nexovue_api.findings import schemas
 from nexovue_api.findings import service as findings_service
 from nexovue_api.findings.service import (
-    SIGNAL_UNITS,
     band_edge,
     false_finding_rate,
-    parse_signals,
     to_finding,
     trend_values,
     view_state,
 )
+from nexovue_api.findings.signals import SIGNAL_UNITS, parse_signals
 
 STARTED: datetime = datetime(2026, 10, 30, 14, 2, tzinfo=UTC)
 SLOWER: dict[str, Any] = {

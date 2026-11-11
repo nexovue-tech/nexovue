@@ -8,7 +8,7 @@ OpenAPI document names them; `test_findings.py` holds the two equal.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from nexovue_platform.connections import MAX_PASTED_ADDRESS_LENGTH
@@ -654,6 +654,53 @@ class ExplanationRating(BaseModel):
 
 
 WordingState = Literal["off", "pending", "done", "failed", "over_limit", "abstained", "held"]
+# Why wording failed, as an admin reads it: the shared closed list, mapped again on read (A48).
+WordingReason = Literal[
+    "died",
+    "expired",
+    "run_cap",
+    "too_long",
+    "bad_key",
+    "unavailable",
+    "limited",
+    "refused",
+    "invalid",
+    "not_found",
+    "bad_request",
+    "error",
+]
+ClaimType = Literal["restates_fact", "timing", "explains_term"]
+# The "Look next" links a model's picks may move first; they add nothing (FR36, AC82).
+LookNextKind = Literal["traces", "logs", "errors", "deploys", "infrastructure"]
+
+
+class WordingClaim(BaseModel):
+    """One checked claim, its stand-ins restored as names: text the page renders as text."""
+
+    type: ClaimType
+    segments: list[ExplanationSegment]
+    # The facts it rests on, by their evidence ids (FR19): the page links each to its fact,
+    # or says "a fact from that earlier reading" when the latest list no longer holds it.
+    evidence_ids: list[str]
+
+
+class ExplanationWording(BaseModel):
+    """Words that passed the read-time check against `from_version`'s input (A48)."""
+
+    # The configured model's name, matched to FR23's pattern (FR19, AC96).
+    model: str
+    from_version: int
+    # When `from_version` read its facts: "Written from the reading at {time}" (FR19).
+    from_read_at: datetime
+    claims: list[WordingClaim]
+    picks: list[LookNextKind]
+
+
+class RefreshAccepted(BaseModel):
+    """`POST .../explanation/refresh`: the run is queued (design, *API*)."""
+
+    queued: bool
+    runs_left: int
 
 
 class FindingExplanation(BaseModel):
@@ -676,7 +723,22 @@ class FindingExplanation(BaseModel):
     shared_cause_count: int
     # Wording (plan Step 5): a token never reads the words (BR10, A68).
     wording_state: WordingState
-    wording: None = None
+    # A person's read only, and only while AI wording is on for the project (BR10, AC106).
+    wording: ExplanationWording | None = None
+    # Why it failed: for those who manage AI only (spec, *States*).
+    wording_reason: WordingReason | None = None
+    # Pending for over 10 minutes: "Plainer wording is not available right now".
+    wording_stalled: bool = False
+    # Over the limit: "Plainer wording is paused until {date}".
+    wording_paused_until: date | None = None
+    # Whether "Write in plainer words" applies here, and how many more a person may ask for
+    # in 24 hours, counting automatic runs (FR41). None for a token.
+    ai_on: bool = False
+    runs_left: int | None = None
+    # When the oldest run counted now leaves the 24 hours: "Can ask again 2 more times
+    # before {time}" (FR41). At the cap, `next_run_at` is the same moment.
+    runs_reset_at: datetime | None = None
+    next_run_at: datetime | None = None
     # When a person may next ask for the facts to be read again (FR41).
     next_read_at: datetime | None
     # FR20: the reasons a "No" may give for this version, and this person's own

@@ -190,6 +190,8 @@ AI_TURNED_OFF: Final = "ai.turned_off"
 AI_LIMIT_CHANGED: Final = "ai.limit_changed"
 AI_PROJECT_OPTED_OUT: Final = "ai.project_opted_out"
 AI_PROJECT_OPTED_IN: Final = "ai.project_opted_in"
+# A person asked for fresh wording of a finding (design, *API*): a run that spends tokens.
+AI_EXPLANATION_REQUESTED: Final = "ai.explanation_requested"
 AI_CONNECTION_TARGET: Final = "ai_connection"
 # F3. A person's judgement of an explanation, and a rule an organization stopped from
 # naming causes, or started again (FR20, FR54). The reason is a closed-list word.

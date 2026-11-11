@@ -320,3 +320,82 @@ tests:
       - eval_time: 10m
         alertname: NexovueConnectionsMissing
         exp_alerts: []
+
+  # F3 (plan T5.10).
+  - name: facts waiting past ten minutes and findings with none open a ticket
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_oldest_ready_job_seconds{job="scheduler-beat", queue="evidence"}'
+        values: "60+60x15"
+      - series: 'nexovue_scheduler_findings_unexplained{job="scheduler-beat"}'
+        values: "0 0 1x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NexovueEvidenceBehind
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueEvidenceBehind
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "finding facts have waited 960s to be read"
+      - eval_time: 3m
+        alertname: NexovueFindingsUnexplained
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: NexovueFindingsUnexplained
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "1 findings over 15 minutes old have no facts read"
+
+  - name: AI on with no scheduler-insight opens a ticket; AI off is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x15"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NexovueInsightMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueInsightMissing
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "AI wording is on and no scheduler-insight is running"
+
+  - name: no AI connection on and no scheduler-insight is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "0x15"
+      - series: 'nexovue_scheduler_oldest_ready_job_seconds{job="scheduler-beat", queue="insight"}'
+        values: "3600x15"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NexovueInsightMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueInsightBehind
+        exp_alerts: []
+
+  - name: AI wording jobs waiting past thirty minutes open a ticket while AI is on
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x15"
+      - series: 'up{job="scheduler-insight", instance="i"}'
+        values: "1x15"
+      - series: 'nexovue_scheduler_oldest_ready_job_seconds{job="scheduler-beat", queue="insight"}'
+        values: "1900x15"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueInsightMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NexovueInsightBehind
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "AI wording jobs have waited 1900s for scheduler-insight"

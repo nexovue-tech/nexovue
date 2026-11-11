@@ -35,7 +35,7 @@ from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.findings import explanation_queries, fix_facts
 from nexovue_api.findings.fix_schemas import FindingFixes, FixBrief
 from nexovue_api.findings.queries import find_finding
-from nexovue_api.findings.service import parse_signals
+from nexovue_api.findings.signals import parse_signals
 from nexovue_api.settings import Settings
 
 NOT_FOUND: Final = "No such finding."

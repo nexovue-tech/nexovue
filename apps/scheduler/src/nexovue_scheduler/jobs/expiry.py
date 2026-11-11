@@ -1,6 +1,7 @@
 """The expiry sweep: deletes what Redis used to forget on its own (ADR-020), what
 detection keeps only for a while (`detection/retention.py`), the evidence job's hour
-(`evidence/retention.py`), and what reliability
+(`evidence/retention.py`), AI runs and monthly usage past 13 months
+(`nexovue_platform.ai_records`), and what reliability
 targets keep: a deleted target past restoring, and figures past 400 days
 (`slos/retention.py`).
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Final
 
+from nexovue_platform import ai_records
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -47,6 +49,7 @@ _EXPIRED: Final = (
     ("rate_limit_windows", "key, window_start", "window_start < now() - interval '1 hour'"),
     *retention.EXPIRED,
     *evidence_retention.EXPIRED,
+    *ai_records.EXPIRED,
     *slo_retention.EXPIRED,
 )
 

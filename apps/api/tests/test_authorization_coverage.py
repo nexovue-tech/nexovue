@@ -187,6 +187,9 @@ POLICY_OF: Final = {
     "nexovue_api/findings/router.py:remove_issue": "MayOperateCases",
     # F3 A20, FR41: reading a finding's facts again; members and up, never a token.
     "nexovue_api/findings/router.py:read_explanation_again": "MayRequestExplanation",
+    # F3 Step 5: asking for plainer words spends tokens, so a person with the same right
+    # as reading again, never a viewer or a token (FR41, AC23).
+    "nexovue_api/findings/router.py:refresh_explanation_wording": "MayRequestExplanation",
     # F3 Step 2: rating an explanation is every working role's, as operating alerts is
     # (FR20); stopping a rule changes what detection's explanations say (FR54, A64).
     "nexovue_api/findings/router.py:rate_explanation": "MayOperateAlerts",

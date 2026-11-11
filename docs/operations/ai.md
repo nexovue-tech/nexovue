@@ -78,3 +78,46 @@ old key in `AI_SECRET_PREVIOUS_KEYS` until `just keys-status` shows nothing unde
 ## Running with no AI container
 
 `SCHEDULER_INSIGHT_REPLICAS=0` in `nexovue.env`, then `nexovue install`. Nothing else changes.
+`/settings/ai` says the container is not running and will not switch AI on. Where AI was
+already on, turn it off there too: otherwise its wording waits ("not available right now") and
+`NexovueInsightMissing` opens a ticket. Beat schedules the AI sweep only while a connection is on.
+
+## How a wording run goes (F3 Step 5)
+
+The evidence job, on `scheduler-light`, decides each new version's wording with no AI code:
+`off` (AI off, project opted out, hosted, or causes still held in production), `held` (muted or
+flapping), `abstained` (only absences), or `pending`, which adds a `word` job to the `insight`
+queue with the version's id and a generation. `scheduler-insight` runs it as `nexovue_insight`:
+it re-reads the connection, consent, opt-out and project, takes the run cap (3 per finding in
+24 hours) and a reservation of its input estimate plus 800 output tokens from the month's limit
+(80% for warning findings, all of it for critical ones), records an `ai_runs` row, then makes one
+call. A 5xx, a 429 (waiting `Retry-After`) or an answer failing the checks gets one more attempt.
+The words are checked by code when written and again when the API reads them; nothing a
+provider says is kept anywhere else.
+
+## A finding's wording says "Plainer wording is not available right now"
+
+It has been `pending` for over 10 minutes: `scheduler-insight` is stopped, far behind, or the
+job expired. Check `up{job="scheduler-insight"}` and the `insight` queue's oldest job
+(`nexovue_scheduler_oldest_ready_job_seconds{queue="insight"}`). A person may ask again at once.
+Once the container runs, the AI sweep (every 5 minutes) marks what was left `failed`, reason
+`expired`, and a run whose child was killed `died`, with its reservation counted as used
+(overstated on purpose).
+
+## Alerts
+
+- `NexovueFindingsUnexplained`: open findings over 15 minutes old with no facts read. The
+  evidence job is down or far behind (`queue="evidence"`); AI plays no part in it.
+- `NexovueEvidenceBehind`: facts have waited over 10 minutes to be read.
+- `NexovueInsightMissing`: an AI connection is on and no `scheduler-insight` answers a scrape.
+  Start it, or turn AI off in `/settings/ai`. Facts and alerts are unaffected.
+- `NexovueInsightBehind`: wording jobs have waited over 30 minutes while AI is on.
+
+Beat also reports, with no tenant label: `nexovue_scheduler_ai_runs_recent{purpose,outcome}`,
+`nexovue_scheduler_ai_tokens_month`, `nexovue_scheduler_ai_connections_enabled`,
+`nexovue_scheduler_evidence_reads_failed_recent` and `nexovue_scheduler_evidence_truncated_recent`.
+
+## Not yet run against a real provider
+
+Every wording path is tested against a fake provider on this machine. No format has completed a
+real call yet (`nexovue_platform/ai/real_calls.py`), so the settings screen offers none.

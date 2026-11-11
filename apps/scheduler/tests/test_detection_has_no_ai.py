@@ -96,6 +96,8 @@ def test_no_evidence_module_imports_an_ai_module_even_through_others() -> None:
     included before they exist, so gather decides every wording state without them."""
     modules = [*_modules(EVIDENCE), *_modules(EVIDENCE_CONTRACT)]
     assert f"{EVIDENCE}.gather" in modules and f"{EVIDENCE_CONTRACT}.model_facts" in modules
+    # Step 5: the wording decision is the evidence job's own, so it is walked too (T5.2).
+    assert f"{EVIDENCE}.wording" in modules
     reached = ai_imports_reachable_from(modules)
     assert reached == [], "the evidence job reaches AI code:\n" + "\n".join(reached)
 

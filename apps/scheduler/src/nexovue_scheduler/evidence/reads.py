@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
 
+from nexovue_platform.ai_records import CALL_SECONDS_DEFAULT
 from nexovue_platform.evidence import DEPLOY_LOOKBACK
 from nexovue_platform.releases import DEPLOYS_AND_VERSIONS, DEPLOYS_ONLY, VERSIONS_ONLY
 from sqlalchemy import bindparam, text
@@ -60,7 +61,7 @@ _FINDING: Final = text(
 )
 _LATEST_VERSION: Final = text(
     """
-    SELECT version, fingerprint, aliases, wording_state, wording_reason, wording,
+    SELECT version, fingerprint, aliases, likely_cause, wording_state, wording_reason, wording,
            wording_from_version
     FROM finding_explanations
     WHERE org_id = :org_id AND finding_id = :finding_id
@@ -99,6 +100,20 @@ _CHECK_CHANGES: Final = text(
       AND changes.changed_at >= :start AND changes.changed_at < :end
     ORDER BY changes.changed_at DESC
     LIMIT :limit
+    """
+)
+# What the wording decision needs of the organization's AI settings (plan T5.2): whether its
+# connection is on, how long a call may take, and whether this project is kept out. The
+# connection's address and key are never read here.
+_WORDING_SETTINGS: Final = text(
+    """
+    SELECT
+        (SELECT enabled FROM ai_connections WHERE org_id = :org_id) AS enabled,
+        (SELECT call_seconds FROM ai_connections WHERE org_id = :org_id) AS call_seconds,
+        EXISTS (
+            SELECT 1 FROM ai_project_opt_outs
+            WHERE org_id = :org_id AND project_id = :project_id
+        ) AS opted_out
     """
 )
 # The rules this organization stopped from naming a cause (FR54, plan T2.12).
@@ -164,6 +179,27 @@ async def latest_version(
     return (
         await connection.execute(_LATEST_VERSION, {"org_id": org_id, "finding_id": finding_id})
     ).first()
+
+
+@dataclass(frozen=True, slots=True)
+class WordingSettings:
+    enabled: bool
+    call_seconds: int
+    opted_out: bool
+
+
+async def wording_settings(
+    connection: AsyncConnection, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> WordingSettings:
+    """The organization's switch, its call limit and this project's opt-out (FR28, FR33)."""
+    row = (
+        await connection.execute(_WORDING_SETTINGS, {"org_id": org_id, "project_id": project_id})
+    ).one()
+    return WordingSettings(
+        enabled=bool(row.enabled),
+        call_seconds=int(row.call_seconds or CALL_SECONDS_DEFAULT),
+        opted_out=bool(row.opted_out),
+    )
 
 
 async def stopped_rules(connection: AsyncConnection, *, org_id: uuid.UUID) -> frozenset[str]:

@@ -191,6 +191,22 @@ def _test_current(row: AIConnection) -> bool:
     return bool(row.checked_ok) and row.checked_fingerprint == _check_fingerprint(row)
 
 
+async def wording_connection(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, deployment: str
+) -> AIConnection | None:
+    """The connection, when AI wording is on for this project now: offered here, switched
+    on, consent still covering its values, and the project not opted out (FR28, FR31). A
+    finding page serves no stored words otherwise (AC106)."""
+    if deployment == HOSTED:
+        return None
+    row = await queries.connection_of(session, org_id=org_id)
+    if row is None or not row.enabled or not _consent_current(row):
+        return None
+    if await queries.opted_out(session, org_id=org_id, project_id=project_id):
+        return None
+    return row
+
+
 def _missing(row: AIConnection | None, availability: Availability) -> list[Missing]:
     missing: list[Missing] = []
     if row is None:

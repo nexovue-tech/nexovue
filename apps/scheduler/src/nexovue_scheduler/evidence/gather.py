@@ -18,8 +18,12 @@
 
 A rule the organization stopped (FR54) names no cause: its facts stay.
 
-No AI code is imported here, directly or not (AC5). In Step 1 AI wording does not
-exist, so every version is written `off`; Step 5 adds the wording decision.
+8. A new version's wording is decided in its own transaction (`wording.decide`): `off`,
+   `held`, `abstained`, `pending` or carried, and a `pending` one adds the word job, by name,
+   to the AI role's queue, with the version's id and generation.
+
+No AI code is imported here, directly or not (AC5): the job decides, and only
+`scheduler-insight` calls a provider.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
-from nexovue_platform.deployment import SELF_HOSTED, Deployment
+from nexovue_platform.deployment import SELF_HOSTED, Deployment, ai_available
 from nexovue_platform.evidence import (
     GATHER_EVIDENCE_TASK,
     LOCK_RETRY_SECONDS,
@@ -43,13 +47,14 @@ from nexovue_platform.evidence import (
     RETRY_READ_DELAY_SECONDS,
     ReadReason,
     gather_evidence_request,
+    word_explanation_request,
 )
 from nexovue_platform.evidence.aliases import AliasBook
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from nexovue_scheduler.evidence import explained, inputs, reads, rules, sentences
+from nexovue_scheduler.evidence import explained, inputs, reads, rules, sentences, wording
 from nexovue_scheduler.evidence.rules import Facts, FindingInput
 from nexovue_scheduler.evidence.store import (
     EvidenceReader,
@@ -70,14 +75,17 @@ _INSERT_VERSION: Final = text(
     """
     INSERT INTO finding_explanations (
         org_id, project_id, finding_id, version, read_at, fingerprint, reads_failed,
-        evidence, aliases, likely_cause, summary, model_input, wording_state
+        evidence, aliases, likely_cause, summary, model_input, wording_state, wording_reason,
+        wording, wording_from_version, wording_generation, wording_changed_at
     )
     VALUES (
         :org_id, :project_id, :finding_id, :version, :read_at, :fingerprint, :reads_failed,
         CAST(:evidence AS jsonb), CAST(:aliases AS jsonb), CAST(:likely_cause AS jsonb),
-        CAST(:summary AS jsonb), CAST(:model_input AS jsonb), :wording_state
+        CAST(:summary AS jsonb), CAST(:model_input AS jsonb), :wording_state, :wording_reason,
+        CAST(:wording AS jsonb), :wording_from_version, :wording_generation, :read_at
     )
     ON CONFLICT (finding_id, version) DO NOTHING
+    RETURNING id
     """
 )
 # The hour's error-group read, reused inside its minute (A62).
@@ -109,8 +117,8 @@ _KINDS_OF_READ: Final = {
 }
 # The finding's window runs from its start to its close, or to now (design, *Links*).
 _MINUTE: Final = timedelta(minutes=1)
-# In Step 1 there is no AI wording (plan Step 5), so every version is written `off`.
-WORDING_OFF: Final = "off"
+# A version written `pending` is its first move there (design, *Wording states*).
+_FIRST_GENERATION: Final = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +194,9 @@ async def _gather_locked(
         latest = await reads.latest_version(connection, org_id=org_id, finding_id=finding_id)
         previous_items = await _previous_items(connection, org_id, finding_id) if latest else []
         stopped = await reads.stopped_rules(connection, org_id=org_id)
+        settings = await reads.wording_settings(
+            connection, org_id=org_id, project_id=row.project_id
+        )
         facts = await read_facts(connection, store, row, deployment=deployment, now=now, cache=lock)
         await connection.rollback()
     cause = rules.decide(facts, stopped_rules=stopped)
@@ -219,8 +230,29 @@ async def _gather_locked(
                 await explained.write(connection, org_id=org_id, finding_id=finding_id, now=now)
         return Gathered(version=None, reads_failed=record.reads_failed, likely_rule=_rule(cause))
     version = 1 if latest is None else latest.version + 1
+    decided = wording.decide(
+        items=items,
+        likely_cause=None if cause is None else cause.as_json(),
+        previous=None
+        if latest is None
+        else wording.Previous(
+            items=previous_items,
+            likely_cause=latest.likely_cause,
+            state=latest.wording_state,
+            reason=latest.wording_reason,
+            words=latest.wording,
+            from_version=latest.wording_from_version,
+        ),
+        muted_or_flapping=row.muted or row.flapping,
+        settings=wording.Settings(
+            ai_on=ai_available(deployment) and settings.enabled,
+            opted_out=settings.opted_out,
+            show_held_causes=show_held_causes,
+            call_seconds=settings.call_seconds,
+        ),
+    )
     async with engine.begin() as connection:
-        await connection.execute(
+        written = await connection.scalar(
             _INSERT_VERSION,
             {
                 "org_id": org_id,
@@ -235,9 +267,24 @@ async def _gather_locked(
                 "likely_cause": None if cause is None else json.dumps(cause.as_json()),
                 "summary": json.dumps(record.summary),
                 "model_input": json.dumps(model_input.as_json()),
-                "wording_state": WORDING_OFF,
+                "wording_state": decided.state,
+                "wording_reason": decided.reason,
+                "wording": None if decided.words is None else json.dumps(decided.words),
+                "wording_from_version": decided.from_version,
+                "wording_generation": _FIRST_GENERATION if decided.run else 0,
             },
         )
+        if written is not None and decided.run:
+            await queue.enqueue(
+                connection,
+                word_explanation_request(
+                    explanation_id=written,
+                    org_id=org_id,
+                    generation=_FIRST_GENERATION,
+                    requested_by=None,
+                    call_seconds=settings.call_seconds,
+                ),
+            )
         if retry:
             await queue.enqueue(
                 connection,

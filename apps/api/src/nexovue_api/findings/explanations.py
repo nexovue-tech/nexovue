@@ -7,28 +7,47 @@ production refuses to start with. Held, the API names no cause, no card line and
 shared count, and says it is held, so the header reads "The facts that line up with
 this are below".
 
-**A token reads the facts and never the words** (BR10, A68). Wording does not exist
-before plan Step 5; the field is null for everyone and the state comes from the row.
+**A token reads the facts and never the words** (BR10, A68): its `wording` is null and only
+the state is given.
+
+**Nothing the AI account wrote is believed** (A48, AC65). Stored words are checked again,
+whole, against the `model_input` of the version they were checked against when written, and
+their stand-ins restored from that version's names, as segments the page renders as text. A
+word outside its closed list never reaches the page. While AI wording is off for the
+project, stored words are kept and not served, and the state reads `off` (AC106).
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Final, Literal
 
+from nexovue_platform.ai.limits import RUN_CAP_WINDOW, first_of_next_month, month_of
+from nexovue_platform.ai.limits import next_run_at as cap_lifts_at
+from nexovue_platform.ai.limits import runs_left as runs_left_of
+from nexovue_platform.ai.validate import recheck
+from nexovue_platform.deployment import Deployment
 from nexovue_platform.evidence import (
     BAD_WORDING,
+    CAUSE_BAR_RECORDED,
     CAUSE_RULES,
     NOT_USEFUL,
     PERSON,
     RATING_REASONS,
     READ_AGAIN_EVERY,
+    WORDING_REASONS,
+    WORDING_STALLED_AFTER,
     WRONG_CAUSE,
     cause_released,
+    name_segment,
+    word_explanation_request,
 )
+from nexovue_platform.evidence.aliases import AliasBook
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.ai import service as ai_service
 from nexovue_api.audit import service as audit
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import explanation_queries as queries
@@ -40,12 +59,15 @@ from nexovue_api.findings.schemas import (
     ExplanationFeedbackRequest,
     ExplanationRating,
     ExplanationSegment,
+    ExplanationWording,
     FindingExplanation,
     RatingReason,
     ReadAgainAccepted,
+    RefreshAccepted,
     RuleCount,
     RuleCountsResponse,
     StoppedRule,
+    WordingClaim,
 )
 
 NOT_FOUND: Final = "No such finding."
@@ -84,6 +106,21 @@ _LINKED_RECORDS: Final[dict[str, tuple[Literal["finding", "check", "incident"], 
 }
 # Where a fact's own moment is, per kind.
 _MOMENT_KEYS: Final = ("at", "first_seen", "started_at", "opened_at")
+# Step 5's refusals of "Write in plainer words" (design, *API*): 409s shown inline.
+AI_WORDING_OFF: Final = "AI wording is off for this finding's project."
+CAUSES_HELD: Final = "Plainer wording waits until causes may be shown."
+NO_FACTS_YET: Final = "The facts have not been read yet."
+WORDING_UNDER_WAY: Final = "Plainer wording is already being written."
+RUN_CAP_REACHED: Final = "Reached the limit of 3 in 24 hours, including automatic ones."
+_STAND_IN: Final = re.compile(r"\b(?:service|version|error|check)_[0-9]+\b")
+# A model's pick, by the next check's kind, to the "Look next" link it moves first.
+_LOOK_NEXT_OF: Final = {
+    "open_traces": "traces",
+    "open_logs": "logs",
+    "open_errors": "errors",
+    "open_deploys": "deploys",
+    "open_infrastructure": "infrastructure",
+}
 
 
 async def get_explanation(
@@ -96,10 +133,13 @@ async def get_explanation(
     show_held_causes: bool,
     now: datetime,
     person_id: uuid.UUID | None = None,
+    deployment: Deployment = "self-hosted",
+    may_manage_ai: bool = False,
 ) -> FindingExplanation:
     """The latest version, or `?version=n`. A token scoped to another project gets the
     same 404 as a finding that does not exist (AC23). `person_id` is the signed-in
-    person, whose own rating is carried (AC83); a token has none."""
+    person, whose own rating is carried (AC83); a token has none. `may_manage_ai` shows a
+    failed run's reason."""
     finding = await find_finding(session, org_id=org_id, finding_id=finding_id)
     if finding is None or (project_scope is not None and finding.project_id != project_scope):
         raise NotFoundError(NOT_FOUND)
@@ -138,12 +178,24 @@ async def get_explanation(
             session, org_id=org_id, project_id=row.project_id, evidence_id=cause.evidence_id
         )
         previous = await _previous_cause(session, org_id, finding_id, row, cause.evidence_id)
-    reasons = rating_reasons(cause_stated=cause is not None, wording_shown=_wording_shown(row))
     mine = None
     if person_id is not None:
         mine = await _carried_rating(
             session, org_id, finding_id, person_id, row, show_held_causes=show_held_causes
         )
+    wording = await _wording_view(
+        session,
+        row=row,
+        org_id=org_id,
+        finding_id=finding_id,
+        is_person=person_id is not None,
+        may_manage_ai=may_manage_ai,
+        deployment=deployment,
+        now=now,
+    )
+    # "The AI wording is poor" only where this version's own words were shown (AC75).
+    shown = wording.get("wording") is not None and wording["wording_state"] == "done"
+    reasons = rating_reasons(cause_stated=cause is not None, wording_shown=shown)
     return FindingExplanation(
         finding_id=finding_id,
         state="read",
@@ -156,10 +208,10 @@ async def get_explanation(
         cause_held=stored_cause is not None and not released,
         previous_cause=previous,
         shared_cause_count=shared,
-        wording_state=row.wording_state if row.wording_state in _WORDING_STATES else "failed",
         next_read_at=next_read_at,
         rating_reasons=reasons if person_id is not None else [],
         my_rating=mine,
+        **wording,
     )
 
 
@@ -351,9 +403,26 @@ async def _carried_rating(
     return None
 
 
-def _wording_shown(row: Any) -> bool:
-    """Checked words were stored for this version, so a person saw them (plan Step 5)."""
-    return row.wording_state == "done" and row.wording is not None
+async def _wording_shown(
+    session: AsyncSession,
+    *,
+    row: Any,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    deployment: Deployment,
+) -> bool:
+    """Words were shown for this version: written, AI on for the project, and passing the
+    read-time check, exactly as the page serves them (AC75, AC106)."""
+    if row.wording_state != "done" or row.wording is None:
+        return False
+    on = await ai_service.wording_connection(
+        session, org_id=org_id, project_id=row.project_id, deployment=deployment
+    )
+    return (
+        on is not None
+        and (await _checked_words(session, org_id=org_id, finding_id=finding_id, row=row))
+        is not None
+    )
 
 
 def _stated_cause_id(stored: dict[str, Any] | None, *, show_held_causes: bool) -> str | None:
@@ -372,6 +441,7 @@ async def rate(
     request: ExplanationFeedbackRequest,
     show_held_causes: bool,
     now: datetime,
+    deployment: Deployment = "self-hosted",
 ) -> ExplanationRating:
     """FR20: one rating per person per version, a reason only on "No", and only a
     reason that fits what was shown (AC75). Audited."""
@@ -390,7 +460,9 @@ async def rate(
     stated = _stated_cause_id(row.likely_cause, show_held_causes=show_held_causes) is not None
     if request.reason == WRONG_CAUSE and not stated:
         raise InvalidRequestError(NO_CAUSE_STATED)
-    if request.reason == BAD_WORDING and not _wording_shown(row):
+    if request.reason == BAD_WORDING and not await _wording_shown(
+        session, row=row, org_id=org_id, finding_id=finding_id, deployment=deployment
+    ):
         raise InvalidRequestError(NO_WORDING_SHOWN)
     await queries.save_rating(
         session,
@@ -497,3 +569,192 @@ def card_line(
     ):
         return None
     return _segments(summary.get("card")) or None
+
+
+# ---------------------------------------------------------- AI wording (Step 5)
+
+
+async def _wording_view(
+    session: AsyncSession,
+    *,
+    row: Any,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    is_person: bool,
+    may_manage_ai: bool,
+    deployment: Deployment,
+    now: datetime,
+) -> dict[str, Any]:
+    """The wording fields of one version, as the page shows them (spec, *States*)."""
+    on = (
+        await ai_service.wording_connection(
+            session, org_id=org_id, project_id=row.project_id, deployment=deployment
+        )
+        is not None
+    )
+    state = row.wording_state if row.wording_state in _WORDING_STATES else "failed"
+    reason = row.wording_reason if row.wording_reason in WORDING_REASONS else None
+    if not on:
+        # Kept with their version, never served while off (AC106).
+        return {"wording_state": "off", "ai_on": False}
+    words = None
+    if row.wording is not None and state in ("done", "pending", "failed", "over_limit"):
+        words = await _checked_words(session, org_id=org_id, finding_id=finding_id, row=row)
+        if words is None and state == "done":
+            # Words that fail the read-time check show as failed (A48, AC65).
+            state, reason = "failed", "invalid"
+    view: dict[str, Any] = {
+        "wording_state": state,
+        "wording_stalled": state == "pending"
+        and row.wording_changed_at is not None
+        and row.wording_changed_at < now - WORDING_STALLED_AFTER,
+        "wording_paused_until": first_of_next_month(month_of(now))
+        if state == "over_limit"
+        else None,
+        "wording_reason": reason if may_manage_ai and state == "failed" else None,
+        "ai_on": True,
+    }
+    if not is_person:
+        return view
+    started = await queries.decided_run_starts(
+        session, org_id=org_id, finding_id=finding_id, since=now - RUN_CAP_WINDOW
+    )
+    return view | {
+        "wording": words,
+        "runs_left": runs_left_of(len(started)),
+        "runs_reset_at": min(started) + RUN_CAP_WINDOW if started else None,
+        "next_run_at": cap_lifts_at(started),
+    }
+
+
+async def _checked_words(
+    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, row: Any
+) -> ExplanationWording | None:
+    """Stored words, checked again against the version they were written from and restored
+    with that version's names; None when they do not pass whole (A48, AC73)."""
+    source = row
+    if row.wording_from_version is not None and row.wording_from_version != row.version:
+        source = await queries.version(
+            session, org_id=org_id, finding_id=finding_id, number=row.wording_from_version
+        )
+    if source is None or row.wording_from_version is None or source.model_input is None:
+        return None
+    checked = recheck(row.wording, source.model_input)
+    if checked is None:
+        return None
+    book = AliasBook(source.aliases)
+    offered = {
+        str(check.get("id")): str(check.get("kind"))
+        for check in source.model_input.get("next_checks") or []
+        if isinstance(check, dict)
+    }
+    picks = [
+        _LOOK_NEXT_OF[offered[pick]] for pick in checked.picks if offered.get(pick) in _LOOK_NEXT_OF
+    ]
+    return ExplanationWording(
+        model=row.wording["model"],
+        from_version=source.version,
+        from_read_at=source.read_at,
+        claims=[
+            WordingClaim(
+                type=claim.type,
+                segments=_restored(claim.text, book),
+                evidence_ids=[
+                    evidence
+                    for fact_id in claim.evidence_ids
+                    if (evidence := book.evidence_of(fact_id)) is not None
+                ],
+            )
+            for claim in checked.claims
+        ],
+        picks=picks,
+    )
+
+
+def _restored(text: str, book: AliasBook) -> list[ExplanationSegment]:
+    """A claim as segments: its own words as text, each stand-in as the name it stands for.
+    Restoring can never build a link: a name is only ever a name (design, *Validation*)."""
+    segments: list[ExplanationSegment] = []
+    at = 0
+    for found in _STAND_IN.finditer(text):
+        if found.start() > at:
+            segments.append(ExplanationSegment(text=text[at : found.start()]))
+        name = book.name_of(found.group())
+        if name is None:
+            segments.append(ExplanationSegment(text=found.group()))
+        else:
+            segments.append(ExplanationSegment(name=name_segment(name)["name"]))
+        at = found.end()
+    if at < len(text):
+        segments.append(ExplanationSegment(text=text[at:]))
+    return segments
+
+
+async def refresh(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    person_id: uuid.UUID,
+    deployment: Deployment,
+    show_held_causes: bool,
+    now: datetime,
+) -> RefreshAccepted:
+    """ "Write in plainer words" (FR41, AC57): the latest version moves to `pending` with a new
+    generation, and the word job is added in the same transaction, with no re-read. Refused
+    with 409 while AI wording is off, while causes are held (FR50), while a recent run is
+    under way, and at the cap, with when the next is allowed (AC58). Audited."""
+    finding = await find_finding(session, org_id=org_id, finding_id=finding_id)
+    if finding is None:
+        raise NotFoundError(NOT_FOUND)
+    latest = await queries.lock_latest(session, org_id=org_id, finding_id=finding_id)
+    if latest is None:
+        raise ConflictError(NO_FACTS_YET)
+    connection = await ai_service.wording_connection(
+        session, org_id=org_id, project_id=latest.project_id, deployment=deployment
+    )
+    if connection is None:
+        raise ConflictError(AI_WORDING_OFF)
+    if not _causes_allow_wording(latest.likely_cause, show_held_causes=show_held_causes):
+        raise ConflictError(CAUSES_HELD)
+    if (
+        latest.wording_state == "pending"
+        and latest.wording_changed_at is not None
+        and latest.wording_changed_at >= now - WORDING_STALLED_AFTER
+    ):
+        raise ConflictError(WORDING_UNDER_WAY)
+    started = await queries.decided_run_starts(
+        session, org_id=org_id, finding_id=finding_id, since=now - RUN_CAP_WINDOW
+    )
+    lifts = cap_lifts_at(started)
+    if lifts is not None:
+        raise ConflictError(RUN_CAP_REACHED, next_run_at=lifts.isoformat())
+    generation = await queries.ask_for_wording(session, row=latest, at=now)
+    await queries.queue_wording(
+        session,
+        word_explanation_request(
+            explanation_id=latest.id,
+            org_id=org_id,
+            generation=generation,
+            requested_by=person_id,
+            call_seconds=connection.call_seconds,
+        ),
+    )
+    audit.record_ai_event(
+        session,
+        org_id=org_id,
+        actor_user_id=person_id,
+        action=audit.AI_EXPLANATION_REQUESTED,
+        target_id=finding_id,
+        target_kind=audit.FINDING_TARGET,
+        detail={"version": latest.version},
+    )
+    await session.commit()
+    return RefreshAccepted(queued=True, runs_left=runs_left_of(len(started)))
+
+
+def _causes_allow_wording(stored: dict[str, Any] | None, *, show_held_causes: bool) -> bool:
+    """FR50, A85: no run while causes are held, nor for a cause whose rule is not released."""
+    if not (CAUSE_BAR_RECORDED or show_held_causes):
+        return False
+    return stored is None or cause_released(stored.get("rule"), override=show_held_causes)

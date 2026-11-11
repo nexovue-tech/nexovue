@@ -928,6 +928,41 @@ export type WordingState =
   | "abstained"
   | "held";
 
+/** Why wording failed, for those who manage AI only (spec, *States*). */
+export type WordingReason =
+  | "died"
+  | "expired"
+  | "run_cap"
+  | "too_long"
+  | "bad_key"
+  | "unavailable"
+  | "limited"
+  | "refused"
+  | "invalid"
+  | "not_found"
+  | "bad_request"
+  | "error";
+
+/** A "Look next" link a model's pick moves first; it adds nothing (FR36, AC82). */
+export type LookNextKind = "traces" | "logs" | "errors" | "deploys" | "infrastructure";
+
+/** One checked claim: stand-ins restored as names, rendered as text (FR19, AC19). */
+export interface WordingClaim {
+  type: "restates_fact" | "timing" | "explains_term";
+  segments: ExplanationSegment[];
+  /** The facts it rests on, by evidence id: a link to each, or plain text if gone (AC89). */
+  evidence_ids: string[];
+}
+
+/** Words that passed the API's read-time check against `from_version` (A48, AC65). */
+export interface ExplanationWording {
+  model: string;
+  from_version: number;
+  from_read_at: string;
+  claims: WordingClaim[];
+  picks: LookNextKind[];
+}
+
 /** `GET /findings/{id}/explanation`. Postgres only, so the page polls it. */
 export interface FindingExplanation {
   finding_id: string;
@@ -942,7 +977,18 @@ export interface FindingExplanation {
   previous_cause: ExplanationSegment[] | null;
   shared_cause_count: number;
   wording_state: WordingState;
-  wording: null;
+  /** A person's read only, while AI wording is on (BR10, AC106). */
+  wording: ExplanationWording | null;
+  /** For those who manage AI, when wording failed. */
+  wording_reason?: WordingReason | null;
+  /** Pending for over 10 minutes: "not available right now" (spec, *States*). */
+  wording_stalled?: boolean;
+  wording_paused_until?: string | null;
+  /** Whether "Write in plainer words" applies, and how many runs are left (FR41). */
+  ai_on?: boolean;
+  runs_left?: number | null;
+  runs_reset_at?: string | null;
+  next_run_at?: string | null;
   next_read_at: string | null;
   /** FR20: the reasons a "No" may give here; empty for a token. */
   rating_reasons?: RatingReason[];
@@ -992,6 +1038,26 @@ export function useReadAgain(findingId: string) {
     mutationFn: () =>
       apiClient.post<ReadAgainAccepted>(
         `findings/${encodeURIComponent(findingId)}/explanation/read-again`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: explanationQueryKey(findingId) });
+    },
+  });
+}
+
+export interface RefreshAccepted {
+  queued: boolean;
+  runs_left: number;
+}
+
+/** FR41: "Write in plainer words". A 409 carries `next_run_at` at the cap, shown inline. */
+export function useRefreshWording(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "refresh-wording", findingId],
+    mutationFn: () =>
+      apiClient.post<RefreshAccepted>(
+        `findings/${encodeURIComponent(findingId)}/explanation/refresh`,
       ),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: explanationQueryKey(findingId) });

@@ -30,6 +30,8 @@ VERSIONS = Path(nexovue_api.__file__).parents[2] / "migrations/versions"
 MIGRATION = VERSIONS / "0066_finding_explanations.py"
 # Step 2's: ratings' reasons and the rules an organization may stop (FR20, FR54).
 STEP_2_MIGRATION = VERSIONS / "0067_explained_ratings_and_stopped_rules.py"
+# Step 5's: the wording reasons, widened (T5.4).
+STEP_5_MIGRATION = VERSIONS / "0072_wording_reasons.py"
 
 
 def _migration(path: Path = MIGRATION) -> ModuleType:
@@ -45,11 +47,22 @@ def _words(frozen: str) -> tuple[str, ...]:
 
 
 @pytest.mark.parametrize(
-    ("frozen", "shared"),
-    [("_WORDING_STATES", evidence.WORDING_STATES), ("_WORDING_REASONS", evidence.WORDING_REASONS)],
+    ("migration", "frozen", "shared"),
+    [
+        (MIGRATION, "_WORDING_STATES", evidence.WORDING_STATES),
+        (STEP_5_MIGRATION, "_WORDING_REASONS", evidence.WORDING_REASONS),
+    ],
 )
-def test_the_migration_froze_exactly_the_shared_words(frozen: str, shared: tuple[str, ...]) -> None:
-    assert _words(getattr(_migration(), frozen)) == shared
+def test_the_newest_migration_froze_exactly_the_shared_words(
+    migration: Path, frozen: str, shared: tuple[str, ...]
+) -> None:
+    assert _words(getattr(_migration(migration), frozen)) == shared
+
+
+def test_step_5_kept_every_earlier_reason_in_its_order() -> None:
+    earlier = _words(_migration().__dict__["_WORDING_REASONS"])
+    assert _words(_migration(STEP_5_MIGRATION).__dict__["_EARLIER_WORDING_REASONS"]) == earlier
+    assert evidence.WORDING_REASONS[: len(earlier)] == earlier
 
 
 @pytest.mark.parametrize(

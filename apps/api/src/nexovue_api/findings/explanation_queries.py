@@ -12,12 +12,13 @@ from datetime import datetime
 from typing import Any
 
 from nexovue_platform.evidence import GATHER_EVIDENCE_TASK, ReadReason, gather_evidence_request
-from nexovue_platform.jobs import ENQUEUE_UNLESS_WAITING, WAKE
+from nexovue_platform.jobs import ENQUEUE, ENQUEUE_UNLESS_WAITING, WAKE, JobRequest
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    AIRun,
     ExplanationStoppedRule,
     Finding,
     FindingExplanation,
@@ -310,3 +311,69 @@ async def resume_rule(session: AsyncSession, *, org_id: uuid.UUID, rule: str) ->
         .returning(ExplanationStoppedRule.rule)
     )
     return resumed.first() is not None
+
+
+# ------------------------------------------------------------ AI wording (Step 5)
+
+
+async def decided_run_starts(
+    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, since: datetime
+) -> list[datetime]:
+    """When each decided run of this finding started inside the cap's window: first attempts
+    only, so an invalid answer and its retry are one (FR34, AC58)."""
+    rows = await session.scalars(
+        select(AIRun.started_at).where(
+            AIRun.org_id == org_id,
+            AIRun.subject_id == finding_id,
+            AIRun.purpose == "explain",
+            AIRun.attempt == 1,
+            AIRun.started_at > since,
+        )
+    )
+    return list(rows)
+
+
+async def stop_queued_wording(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    state: str,
+    at: datetime,
+    service_name: str | None = None,
+) -> int:
+    """Wording waiting for a run, turned `off` (opt-out, project deleted) or `held` (a muted
+    service) in the caller's transaction, so a queued job finds nothing to do and spends
+    nothing (FR28, AC39, AC81). The generation is left as it is: the job then sees a state
+    that is no longer `pending`."""
+    statement = update(FindingExplanation).where(
+        FindingExplanation.org_id == org_id,
+        FindingExplanation.project_id == project_id,
+        FindingExplanation.wording_state == "pending",
+    )
+    if service_name is not None:
+        of_service = select(Finding.id).where(
+            Finding.org_id == org_id,
+            Finding.project_id == project_id,
+            Finding.service_name == service_name,
+        )
+        statement = statement.where(FindingExplanation.finding_id.in_(of_service))
+    changed = await session.execute(statement.values(wording_state=state, wording_changed_at=at))
+    return int(getattr(changed, "rowcount", 0))
+
+
+async def ask_for_wording(session: AsyncSession, *, row: FindingExplanation, at: datetime) -> int:
+    """A click: the locked latest version moves to `pending` with a new generation, its
+    words staying visible until replaced (design, *Wording states*). Returns the generation."""
+    row.wording_state = "pending"
+    row.wording_reason = None
+    row.wording_generation = row.wording_generation + 1
+    row.wording_changed_at = at
+    await session.flush()
+    return row.wording_generation
+
+
+async def queue_wording(session: AsyncSession, request: JobRequest) -> None:
+    """The word job, in the click's transaction, waking the AI role when it commits."""
+    await session.execute(text(ENQUEUE), request.parameters())
+    await session.execute(text(WAKE), request.wake_parameters())

@@ -15,12 +15,14 @@ from typing import Final
 
 from nexovue_platform.import_walk import ai_imports_reachable_from, package_modules
 
-# Rung 1's additions and the brief, the route that serves them, and F5's shared package.
+# Rung 1's additions and the brief, the router that serves them, and F5's shared package.
+# The fix routes have their own router so this walk stays AI-free beside F3's wording,
+# whose service in `findings/router.py` imports AI code (founder, 2026-11-21).
 RUNG_ONE_AND_TWO: Final = (
     "nexovue_api.findings.fix_facts",
     "nexovue_api.findings.fix_read",
     "nexovue_api.findings.fix_schemas",
-    "nexovue_api.findings.router",
+    "nexovue_api.findings.fixes.router",
 )
 FIXES_PACKAGE: Final = "nexovue_platform.fixes"
 # The MCP server, built on the `mcp` SDK: an AI module of this repository.

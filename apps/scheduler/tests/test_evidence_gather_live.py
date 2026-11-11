@@ -24,12 +24,15 @@ from alert_fixtures import AlertTenant, add_finding, drop_tenant, make_tenant, p
 from clickhouse_cleanup import delete_after_run
 from detection_history import CLICKHOUSE_DSN, READER_DSN
 from live import require_stack
+from nexovue_platform.ai.connection import consent_fingerprint
 from nexovue_platform.evidence import (
     GATHER_EXPIRES_SECONDS,
     GATHER_HARD_LIMIT_SECONDS,
     GATHER_MAX_ATTEMPTS,
+    INSIGHT_QUEUE,
     LOCK_RETRY_SECONDS,
     MAX_EVIDENCE_ITEMS,
+    WORD_EXPLANATION_TASK,
 )
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -462,6 +465,156 @@ async def test_a_real_finding_s_model_input_holds_aliases_and_no_name(
     assert row.model_input is not None and row.model_input["finding"]["subject"] == "service_1"
     assert SERVICE not in sent and "v-name-marker-8" not in sent
     assert row.aliases["names"]["service_1"] == SERVICE
+
+
+# ------------------------------------------------- the wording decision (Step 5)
+
+# A reserved name: nothing answers there, and no real provider is ever called.
+PROVIDER_URL = "https://provider.example/v1"
+
+
+async def ai_on(engine: AsyncEngine, tenant: AlertTenant, *, call_seconds: int = 45) -> None:
+    """An organization's connection, switched on after the whole flow (BR4). Its consent is
+    real, so the stack's own AI role, where one runs, retries an unreachable address rather
+    than turning the row `off` under this test."""
+    fingerprint = consent_fingerprint(
+        wire_format="openai_chat", base_url=PROVIDER_URL, region=None, key_id=None
+    )
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO ai_connections (
+                    org_id, wire_format, base_url, model, call_seconds, monthly_token_limit,
+                    enabled, consented_at, consented_base_url, consented_fingerprint,
+                    consented_schema
+                ) VALUES (
+                    :org, 'openai_chat', :url, 'm', :seconds, 100000, true, now(), :url,
+                    :fingerprint, 1
+                )
+                """
+            ),
+            {
+                "org": tenant.org_id,
+                "seconds": call_seconds,
+                "url": PROVIDER_URL,
+                "fingerprint": fingerprint,
+            },
+        )
+
+
+async def word_jobs(engine: AsyncEngine, tenant: AlertTenant) -> list[Any]:
+    async with engine.connect() as connection:
+        return list(
+            await connection.execute(
+                text(
+                    "SELECT queue, kwargs, hard_limit_seconds FROM jobs "
+                    "WHERE org_id = :org AND task = :task ORDER BY created_at"
+                ),
+                {"org": tenant.org_id, "task": WORD_EXPLANATION_TASK},
+            )
+        )
+
+
+async def wordings(engine: AsyncEngine, tenant: AlertTenant, finding_id: uuid.UUID) -> list[Any]:
+    async with engine.connect() as connection:
+        return list(
+            await connection.execute(
+                text(
+                    "SELECT id, version, wording_state, wording_generation FROM "
+                    "finding_explanations WHERE org_id = :org AND finding_id = :id ORDER BY version"
+                ),
+                {"org": tenant.org_id, "id": finding_id},
+            )
+        )
+
+
+async def gather_as_released(
+    engine: AsyncEngine,
+    store: EvidenceStore | None,
+    tenant: AlertTenant,
+    finding_id: uuid.UUID,
+    *,
+    show_held_causes: bool = True,
+    now: datetime = NOW,
+    deployment: str = "self-hosted",
+) -> Any:
+    return await gather(
+        engine,
+        store,
+        finding_id=finding_id,
+        org_id=tenant.org_id,
+        reason="opened",
+        deployment=deployment,  # type: ignore[arg-type]
+        now=now,
+        show_held_causes=show_held_causes,
+    )
+
+
+async def test_with_ai_on_a_new_version_waits_for_words_and_adds_one_job_by_name(
+    engine: AsyncEngine, acme: AlertTenant, telemetry: EvidenceStore
+) -> None:
+    """T5.2, AC60: the gather decides `pending`, the first generation, and adds the word job
+    in its own transaction, ids only, on the AI role's queue, limited by the connection."""
+    await ai_on(engine, acme, call_seconds=45)
+    found = await open_finding(engine, acme)
+    await signed_deploy(engine, acme, at=START - timedelta(minutes=4))
+
+    await gather_as_released(engine, None, acme, found)
+
+    [row] = await wordings(engine, acme, found)
+    assert (row.wording_state, row.wording_generation) == ("pending", 1)
+    [job] = await word_jobs(engine, acme)
+    assert job.queue == INSIGHT_QUEUE and job.hard_limit_seconds == 45 + 40
+    assert job.kwargs == {
+        "explanation_id": str(row.id),
+        "org_id": str(acme.org_id),
+        "generation": 1,
+        "requested_by": None,
+    }
+
+    # AC56: a version that changes only absences is not material, but over `pending` it
+    # gets its own job, so it never stays pending once the older job stops.
+    await gather_as_released(engine, telemetry, acme, found, now=NOW + timedelta(minutes=1))
+
+    rows = await wordings(engine, acme, found)
+    assert [(r.version, r.wording_state) for r in rows] == [(1, "pending"), (2, "pending")]
+    jobs = await word_jobs(engine, acme)
+    assert [job.kwargs["explanation_id"] for job in jobs] == [str(r.id) for r in rows]
+
+
+async def test_while_causes_are_held_or_on_the_hosted_service_no_wording_job_is_added(
+    engine: AsyncEngine, acme: AlertTenant
+) -> None:
+    """AC92, FR31: `off`, and no job."""
+    await ai_on(engine, acme)
+    found = await open_finding(engine, acme)
+    await signed_deploy(engine, acme, at=START - timedelta(minutes=4))
+
+    await gather_as_released(engine, None, acme, found, show_held_causes=False)
+    other = await open_finding(engine, acme, service="payments")
+    await gather_as_released(engine, None, acme, other, deployment="hosted")
+
+    assert [r.wording_state for r in await wordings(engine, acme, found)] == ["off"]
+    assert [r.wording_state for r in await wordings(engine, acme, other)] == ["off"]
+    assert await word_jobs(engine, acme) == []
+
+
+async def test_a_muted_finding_is_held_and_a_finding_with_only_absences_abstains(
+    engine: AsyncEngine, acme: AlertTenant
+) -> None:
+    """FR33, FR35: no job for either."""
+    await ai_on(engine, acme)
+    muted = await open_finding(engine, acme, muted=True)
+    await signed_deploy(engine, acme, at=START - timedelta(minutes=4))
+    empty = await open_finding(engine, acme, service="payments")
+
+    await gather_as_released(engine, None, acme, muted)
+    await gather_as_released(engine, None, acme, empty)
+
+    assert [r.wording_state for r in await wordings(engine, acme, muted)] == ["held"]
+    assert [r.wording_state for r in await wordings(engine, acme, empty)] == ["abstained"]
+    assert await word_jobs(engine, acme) == []
 
 
 def test_the_job_is_registered_under_its_contract_name() -> None:

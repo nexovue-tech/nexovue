@@ -32,7 +32,6 @@ from nexovue_platform.detection import (
     signal_reading,
 )
 from nexovue_platform.telemetry.logging import get_logger
-from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -67,12 +66,11 @@ from nexovue_api.findings.schemas import (
     SignalName,
     SignalPoint,
     SignalSeries,
-    SignalUnit,
-    StoredSignal,
     TimelineEvent,
     TimelineEventForMember,
     TimelineResponse,
 )
+from nexovue_api.findings.signals import SIGNAL_UNITS, parse_signals
 from nexovue_api.releases import queries as release_queries
 from nexovue_api.releases import service as release_service
 
@@ -115,11 +113,6 @@ DAYS_PER_WEEK: Final = 7
 # minutes with gaps, while bounding what the statement scans.
 TREND_LOOKBACK: Final = timedelta(hours=3)
 
-SIGNAL_UNITS: Final[dict[SignalName, SignalUnit]] = {
-    "slower": "ms",
-    "failing": "%",
-    "traffic": "rpm",
-}
 PERCENT: Final = 100
 
 # The stored states a feed request reads; None reads both.
@@ -128,8 +121,6 @@ _STORED_STATE: Final[dict[FeedState, str | None]] = {
     "closed": "closed",
     "all": None,
 }
-
-_STORED_SIGNALS: Final = TypeAdapter(list[StoredSignal])
 
 
 # A case filter's refusals (F22 FR22, BR14, AC110): a token is no person, and a
@@ -991,21 +982,6 @@ def view_state(stored_state: str, acknowledged_at: datetime | None) -> FindingSt
     if stored_state == "closed":
         return "closed"
     return "acknowledged" if acknowledged_at is not None else "open"
-
-
-def parse_signals(raw: Any) -> list[FindingSignal]:
-    """`findings.signals`, leading signal first, each with its unit.
-
-    The column's default, `{}`, is a finding whose signals are not written yet.
-    Anything else that is not the stored list is a defect in the writer, and
-    raises rather than showing a finding with its evidence silently missing.
-    """
-    if raw == {}:
-        return []
-    return [
-        FindingSignal(**stored.model_dump(), unit=SIGNAL_UNITS[stored.signal])
-        for stored in _STORED_SIGNALS.validate_python(raw)
-    ]
 
 
 def trend_values(signal: SignalName, readings: Sequence[dict[str, Any]]) -> list[float]:

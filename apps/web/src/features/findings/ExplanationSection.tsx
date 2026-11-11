@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -15,26 +16,36 @@ import type {
   ExplanationSegment,
   FindingDetail,
   FindingExplanation,
+  LookNextKind,
   RatingReason,
 } from "./api";
-import { useRateExplanation, useReadAgain } from "./api";
+import { useRateExplanation, useReadAgain, useRefreshWording } from "./api";
 import type { HeaderLine } from "./explanation";
 import {
   basisLabel,
   carriedNote,
   changeAnnouncement,
+  citedFact,
   FIRST_FACTS,
   listedFacts,
+  olderWordsNote,
+  orderLookNext,
   RATING_WORDS,
   ratingLine,
   readAgainWait,
   readLine,
+  refusedRunUntil,
   refusedUntil,
+  runsLine,
   SECTION_HEADING,
   STILL_READING_AFTER_MS,
   setupStep,
   staleLine,
+  WORDING_WORDS,
   WORDS,
+  wordingLabel,
+  wordingStatus,
+  writeOffered,
 } from "./explanation";
 
 const LINK = "font-medium text-brand-text text-sm underline-offset-2 hover:underline";
@@ -140,7 +151,7 @@ export function ExplanationSection({
       <div className="flex flex-col gap-3">
         {sample ? null : (
           <div className="order-first md:order-none">
-            <LookNext finding={finding} />
+            <LookNext finding={finding} picks={explanation?.wording?.picks ?? []} />
           </div>
         )}
         <Body
@@ -171,6 +182,9 @@ function Body({
   zone?: string;
   sample: boolean;
 }) {
+  // Held here so a citation in the words can open the whole list and move to its fact.
+  const [allFacts, setAllFacts] = useState(false);
+  const [cited, setCited] = useState<number | null>(null);
   const failed = error != null;
   // A failed refetch keeps what is held: `isError` is true then too (design, *stale*).
   if (explanation === undefined) {
@@ -207,11 +221,28 @@ function Body({
       explanation.likely_cause.rule.includes("deploy") ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>{WORDS.signedTimingOnly}</p>
       ) : null}
-      <Facts facts={listedFacts(explanation.facts)} finding={finding} zone={zone} links={!sample} />
+      <Facts
+        facts={listedFacts(explanation.facts)}
+        finding={finding}
+        zone={zone}
+        links={!sample}
+        all={allFacts}
+        onShowAll={() => setAllFacts(true)}
+        cited={cited}
+      />
       <SetupStep explanation={explanation} />
       {sample ? null : (
         <>
           <ReadAgain finding={finding} explanation={explanation} zone={zone} />
+          <Wording
+            finding={finding}
+            explanation={explanation}
+            zone={zone}
+            onCite={(number) => {
+              setAllFacts(true);
+              setCited(number);
+            }}
+          />
           <Rating finding={finding} explanation={explanation} />
         </>
       )}
@@ -235,28 +266,41 @@ function Facts({
   finding,
   zone,
   links,
+  all,
+  onShowAll,
+  cited,
 }: {
   facts: ExplanationFact[];
   finding: FindingDetail;
   zone?: string;
   links: boolean;
+  all: boolean;
+  onShowAll: () => void;
+  /** A fact a citation in the words moved to (AC83): focused, and so highlighted. */
+  cited: number | null;
 }) {
-  const [all, setAll] = useState(false);
   const firstHidden = useRef<HTMLLIElement | null>(null);
+  const list = useRef<HTMLOListElement | null>(null);
+  const [showing, setShowing] = useState(false);
   useEffect(() => {
-    if (all) firstHidden.current?.focus();
-  }, [all]);
+    if (showing) firstHidden.current?.focus();
+  }, [showing]);
+  useEffect(() => {
+    if (cited === null) return;
+    list.current?.querySelector<HTMLLIElement>(`[data-fact="${cited}"]`)?.focus();
+  }, [cited]);
   if (facts.length === 0) return null;
   const shown = all ? facts : facts.slice(0, FIRST_FACTS);
   return (
     <div id="explanation-facts" className="flex flex-col gap-2">
-      <ol className="flex flex-col gap-2">
+      <ol ref={list} className="flex flex-col gap-2">
         {shown.map((fact, index) => (
           <li
             key={fact.id}
+            data-fact={fact.number}
             ref={index === FIRST_FACTS ? firstHidden : undefined}
-            tabIndex={index === FIRST_FACTS ? -1 : undefined}
-            className="grid gap-x-4 gap-y-1 text-sm md:grid-cols-[2rem_minmax(0,1fr)_14rem_minmax(0,14rem)]"
+            tabIndex={-1}
+            className="grid gap-x-4 gap-y-1 rounded-sm text-sm focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1 focus:bg-brand-surface md:grid-cols-[2rem_minmax(0,1fr)_14rem_minmax(0,14rem)]"
           >
             <span className="font-mono text-ink-dim">{fact.number}</span>
             <span className="min-w-0 text-ink [overflow-wrap:anywhere]">
@@ -278,7 +322,14 @@ function Facts({
         ))}
       </ol>
       {!all && facts.length > FIRST_FACTS ? (
-        <button type="button" className={`${LINK} ${TAP} self-start`} onClick={() => setAll(true)}>
+        <button
+          type="button"
+          className={`${LINK} ${TAP} self-start`}
+          onClick={() => {
+            onShowAll();
+            setShowing(true);
+          }}
+        >
           Show all {facts.length} facts
         </button>
       ) : null}
@@ -334,6 +385,152 @@ function ReadAgain({
   );
 }
 
+/**
+ * *In plainer words* (FR19, FR41; spec, *States*): only with AI on. Facts always sit above
+ * it (AC18). The words are segments rendered as text (AC19), labelled with the configured
+ * model, each claim citing its facts by number; a fact gone from the latest list is plain
+ * text (AC89). Words from an earlier reading say so.
+ */
+function Wording({
+  finding,
+  explanation,
+  zone,
+  onCite,
+}: {
+  finding: FindingDetail;
+  explanation: FindingExplanation;
+  zone?: string;
+  onCite: (number: number) => void;
+}) {
+  const manageAi = useCan("manage_ai");
+  if (explanation.wording_state === "off") return null;
+  const words = explanation.wording;
+  const status = wordingStatus(explanation, { manageAi });
+  const older = olderWordsNote(explanation, zone);
+  return (
+    <div className="flex flex-col gap-2" data-testid="explanation-wording">
+      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        {WORDING_WORDS.heading}
+      </h3>
+      {words !== null ? (
+        <>
+          <p className={`text-ink-dim text-xs ${PROSE}`}>{wordingLabel(words.model)}</p>
+          {older ? <p className={`text-ink-dim text-xs ${PROSE}`}>{older}</p> : null}
+          <ul className={`flex flex-col gap-1 text-ink text-sm ${PROSE}`}>
+            {words.claims.map((claim, index) => (
+              // A claim has no identity of its own: its place in the checked answer is it.
+              <li key={claimKey(claim.evidence_ids, index)} className="[overflow-wrap:anywhere]">
+                <Segments segments={claim.segments} zone={zone} />{" "}
+                <Citations
+                  explanation={explanation}
+                  evidenceIds={claim.evidence_ids}
+                  onCite={onCite}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {status ? (
+        <p className={`text-ink-dim text-sm ${PROSE}`}>
+          {status}
+          {manageAi &&
+          (explanation.wording_state === "failed" || explanation.wording_stalled === true) ? (
+            <>
+              {" "}
+              <Link to="/settings/ai" className={LINK}>
+                {WORDING_WORDS.settings}
+              </Link>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+      <WriteInPlainerWords finding={finding} explanation={explanation} zone={zone} />
+    </div>
+  );
+}
+
+function Citations({
+  explanation,
+  evidenceIds,
+  onCite,
+}: {
+  explanation: FindingExplanation;
+  evidenceIds: readonly string[];
+  onCite: (number: number) => void;
+}) {
+  return (
+    <span className="text-ink-dim">
+      {evidenceIds.map((evidenceId, index) => {
+        const fact = citedFact(explanation, evidenceId);
+        const separator = index > 0 ? " · " : "";
+        if (fact === null) {
+          return (
+            <span key={evidenceId}>
+              {separator}
+              {WORDING_WORDS.earlierFact}
+            </span>
+          );
+        }
+        return (
+          <span key={evidenceId}>
+            {separator}
+            <button
+              type="button"
+              className={`${LINK} inline-flex min-h-6 items-center`}
+              aria-label={`Fact ${fact.number}: ${plainLabel(fact)}`}
+              onClick={() => onCite(fact.number)}
+            >
+              Fact {fact.number}
+            </button>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function claimKey(evidenceIds: readonly string[], index: number): string {
+  return `${index}:${evidenceIds.join(",")}`;
+}
+
+function plainLabel(fact: ExplanationFact): string {
+  return fact.sentence.map((segment) => segment.name ?? segment.text ?? "").join("");
+}
+
+/** FR41: a run on the latest facts, with AI on, for those who may ask; never a viewer. */
+function WriteInPlainerWords({
+  finding,
+  explanation,
+  zone,
+}: {
+  finding: FindingDetail;
+  explanation: FindingExplanation;
+  zone?: string;
+}) {
+  const may = useCan("request_explanation");
+  const refresh = useRefreshWording(finding.id);
+  if (!may || !writeOffered(explanation)) return null;
+  const { disabled, line } = runsLine(explanation, {
+    refusedAt: refusedRunUntil(refresh.error),
+    zone,
+  });
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <Button
+        variant="secondary"
+        pending={refresh.isPending}
+        pendingLabel="Asking"
+        disabled={disabled}
+        onClick={() => refresh.mutate()}
+      >
+        {WORDING_WORDS.write}
+      </Button>
+      {line ? <span className="text-ink-dim text-sm">{line}</span> : null}
+    </div>
+  );
+}
+
 function FactLinkCell({ fact, finding }: { fact: ExplanationFact; finding: FindingDetail }) {
   const entry = factLink(fact, windowSource(finding));
   if (entry === null) return <span />;
@@ -342,14 +539,17 @@ function FactLinkCell({ fact, finding }: { fact: ExplanationFact; finding: Findi
 
 /**
  * FR42: always here, built from the finding, in every state (AC66), each link at the
- * finding's window in the address (FR16, AC21).
+ * finding's window in the address (FR16, AC21). A model's picks only move links first.
  */
-function LookNext({ finding }: { finding: FindingDetail }) {
-  const entries = lookNext({
-    ...windowSource(finding),
-    service_name: finding.scope === "service" ? finding.service_name : null,
-    signals: finding.signals,
-  });
+function LookNext({ finding, picks }: { finding: FindingDetail; picks: readonly LookNextKind[] }) {
+  const entries = orderLookNext(
+    lookNext({
+      ...windowSource(finding),
+      service_name: finding.scope === "service" ? finding.service_name : null,
+      signals: finding.signals,
+    }),
+    picks,
+  );
   return (
     <LookNextLinks entries={entries} projectId={finding.project_id} headingId="finding-look-next" />
   );

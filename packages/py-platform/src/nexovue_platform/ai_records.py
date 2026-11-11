@@ -44,3 +44,12 @@ RUN_OUTCOMES: Final = (
 CALL_SECONDS_MIN: Final = 30
 CALL_SECONDS_MAX: Final = 300
 CALL_SECONDS_DEFAULT: Final = 100
+
+# What the AI tables keep only for a while (design, *Retention*: 13 months, a guess), read by
+# the scheduler's expiry sweep: (table, the columns that name a row, what makes it lapsed).
+# A run row holds no content (FD9); a year and a month lets an admin compare a month with
+# the same month a year before.
+EXPIRED: Final = (
+    ("ai_runs", "id", "started_at < now() - interval '13 months'"),
+    ("ai_usage_monthly", "org_id, month", "month < now() - interval '13 months'"),
+)

@@ -26,9 +26,18 @@ EVIDENCE_QUEUE: Final = "evidence"
 # At most this many gathers at once in one worker, under the shared floor (NFR2, A56).
 EVIDENCE_CONCURRENCY: Final = 2
 GATHER_EVIDENCE_TASK: Final = "nexovue_scheduler.evidence.gather"
-# The word job's names, here so gather can enqueue it without importing AI code (A37).
+# The word job's names, here so gather and the API can enqueue it, and beat schedule the
+# AI role's sweep, without importing AI code (A37).
 INSIGHT_QUEUE: Final = "insight"
 WORD_EXPLANATION_TASK: Final = "nexovue_scheduler.insight.word"
+SWEEP_INSIGHT_TASK: Final = "nexovue_scheduler.insight.sweep"
+# A word job lives an hour, and has two attempts: an invalid answer, a 5xx or a 429 gets
+# one more, as a new attempt with its own time limit (FR38; design, *The wording decision*).
+WORD_EXPIRES_SECONDS: Final = 3600
+WORD_MAX_ATTEMPTS: Final = 2
+# Its limits follow the connection's time per call (design): the call, then room to write.
+WORD_SOFT_LIMIT_EXTRA_SECONDS: Final = 20
+WORD_HARD_LIMIT_EXTRA_SECONDS: Final = 40
 
 # Why a gather runs (design, *Facts: when and how*). `retry_read` re-reads a failed
 # read once, 60 seconds later (gather step 9).
@@ -78,6 +87,34 @@ def gather_evidence_request(
         max_attempts=GATHER_MAX_ATTEMPTS,
         soft_limit_seconds=GATHER_SOFT_LIMIT_SECONDS,
         hard_limit_seconds=GATHER_HARD_LIMIT_SECONDS,
+    )
+
+
+def word_explanation_request(
+    *,
+    explanation_id: Any,
+    org_id: Any,
+    generation: int,
+    requested_by: Any | None,
+    call_seconds: int,
+) -> JobRequest:
+    """One wording run of one version. Ids and the generation only (AC60): the job reads
+    `model_input` itself, and stops if the row has moved past `generation` (AC81).
+    `requested_by` is the person on a click, None on an automatic run."""
+    return JobRequest(
+        task=WORD_EXPLANATION_TASK,
+        queue=INSIGHT_QUEUE,
+        kwargs={
+            "explanation_id": str(explanation_id),
+            "org_id": str(org_id),
+            "generation": generation,
+            "requested_by": None if requested_by is None else str(requested_by),
+        },
+        org_id=str(org_id),
+        expires_seconds=WORD_EXPIRES_SECONDS,
+        max_attempts=WORD_MAX_ATTEMPTS,
+        soft_limit_seconds=call_seconds + WORD_SOFT_LIMIT_EXTRA_SECONDS,
+        hard_limit_seconds=call_seconds + WORD_HARD_LIMIT_EXTRA_SECONDS,
     )
 
 
@@ -250,8 +287,10 @@ def cause_released(rule: str | None, *, override: bool) -> bool:
 # ------------------------------------------------------------ the wording slot
 
 WORDING_STATES: Final = ("off", "pending", "done", "failed", "over_limit", "abstained", "held")
-# Why wording is `failed` or `off`, a closed list (design, *Wording states*, *Provider
-# interface*); the API maps it again on read (A48).
+# Why wording is `failed`, a closed list (design, *Wording states*, *Provider interface*);
+# the API maps it again on read (A48). `not_found` and `bad_request` joined in migration
+# 0072, so a run says "model not found" apart from a refused key, as the test does (0071);
+# `error` is a fault in nexovue's own task, written before it is raised (AC54).
 WORDING_REASONS: Final = (
     "died",
     "expired",
@@ -262,7 +301,16 @@ WORDING_REASONS: Final = (
     "limited",
     "refused",
     "invalid",
+    "not_found",
+    "bad_request",
+    "error",
 )
+# A fact of these kinds may become a likely cause (FR8), so a new one is a material change
+# and starts a run (FR34); the rest support, inform or say what is missing.
+CAUSE_CAPABLE_KINDS: Final = frozenset({"deploy", "dependency", "other_finding", "traffic"})
+# A pending run older than this reads "Plainer wording is not available right now", and a
+# click may ask again at once (spec, *States*; a guess).
+WORDING_STALLED_AFTER: Final = timedelta(minutes=10)
 
 # --------------------------------------------------------------- the bounds
 
