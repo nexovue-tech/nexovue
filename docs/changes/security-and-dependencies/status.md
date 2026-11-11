@@ -59,6 +59,14 @@ pass.
 - Vitest 5, `@types/node` 26, TanStack Query and Router, OpenTelemetry API 1.10 and web SDK 2.12,
   web-vitals 6.2.3, Playwright 1.64.1: no change needed.
 
+**Go 1.27.3 → 1.27.4, 2026-11-11.** CI's `just audit` turned red on `feature/phase-2` with no code
+change: GO-2026-6859, "HTTP/1 server crash due to MaxBytesReader header race in net/http", published
+after 2026-11-09, reachable from the receiver's HTTP server (govulncheck traced 44 paths, e.g.
+`receiver.httpListener` → `http.Server.ListenAndServe`). Fixed in Go 1.27.4. Changed: `go.work`, every
+`go.mod`, `deploy/docker/go-dev.Dockerfile` and `deploy/images/nexovue-pipeline.Dockerfile`. govulncheck
+on the receiver at 1.27.3 reported the vulnerability; at 1.27.4, `just audit` reports none in the
+receiver, workers or contracts, and pip-audit and pnpm audit pass.
+
 ## Next action
 
 The pull request; it closes #10-#12 when it merges.
@@ -99,4 +107,4 @@ None beyond this record.
 
 ## Last updated
 
-2026-10-30
+2026-11-11

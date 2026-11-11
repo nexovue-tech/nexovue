@@ -1,3 +1,3 @@
 module github.com/nexovue/nexovue/tools/gateseed
 
-go 1.27.3
+go 1.27.4
