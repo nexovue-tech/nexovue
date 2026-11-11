@@ -23,11 +23,24 @@ guarded libcurl client, and it is stateful where GitHub is:
   then followed by a callback (the harness kills its worker there), and the list can see
   a new issue only after a stated delay (`search_delay`), the model AC44 is proved under.
 
+- **git data and pull requests** (F5, plan T2.10): refs, commits, recursive trees that
+  can be cut short (`tree_entry_limit`, as GitHub's `truncated`), blobs, ancestry by
+  `compare`, a person's permission on a repository, a user by id, and pull requests
+  listed by `?head=` and `state`, opened as drafts, refused with 422 for a second on
+  one branch. Objects are hashed as git hashes them (`github_git_data.py`). A token
+  minted with named permissions is held to them on these routes, so a read token
+  cannot write. Every write can be dropped after it is applied, as issues can, which
+  is how a crash at each step of the draft job is driven.
+
 A route's answer can be replaced (`fail`) to drive each failure the code must survive.
+F5's routes are compared with recordings in `fixtures/github_fix/` by
+`test_fake_github_matches_recordings.py`; those recordings are shaped from GitHub's
+documents, not yet recorded from GitHub, until the founder runs `record_github.py`.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import secrets
@@ -42,6 +55,7 @@ from urllib.parse import parse_qs, urlsplit
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from github_git_data import GitData
 from recording_site import RecordedRequest, RecordingSite, Reply, json_reply, serve_recording_site
 
 FIXTURES: Final = Path(__file__).parent / "fixtures" / "github"
@@ -97,6 +111,55 @@ _ISSUE_PATH: Final = re.compile(
 _MOVED_PATH: Final = re.compile(
     r"^/repositories/(?P<repository_id>[0-9]+)/issues/(?P<number>[0-9]+)$"
 )
+_REPO: Final = r"^/repos/(?P<owner>[^/]+)/(?P<name>[^/]+)"
+_GIT_REF_PATH: Final = re.compile(_REPO + r"/git/refs?/heads/(?P<branch>.+)$")
+_GIT_REFS_PATH: Final = re.compile(_REPO + r"/git/refs$")
+_GIT_OBJECT_PATH: Final = re.compile(
+    _REPO + r"/git/(?P<kind>commits|trees|blobs)(?:/(?P<sha>[0-9a-f]{40}))?$"
+)
+_COMPARE_PATH: Final = re.compile(_REPO + r"/compare/(?P<base>[^.]+)\.\.\.(?P<head>.+)$")
+_PERMISSION_PATH: Final = re.compile(_REPO + r"/collaborators/(?P<login>[^/]+)/permission$")
+_PULLS_PATH: Final = re.compile(_REPO + r"/pulls(?:/(?P<number>[0-9]+))?$")
+_USER_PATH: Final = re.compile(r"^/user/(?P<user_id>[0-9]+)$")
+# GitHub's documented cap on a recursive tree (its Git trees page, as summarised by a
+# search on 2026-11-11): 100,000 entries or 7 MB, past which `truncated` is true.
+TREE_ENTRY_LIMIT: Final = 100_000
+_BLOB_LINE: Final = 60
+# Each route's needed permission when a token was minted with named permissions.
+_NEEDS: Final = {
+    "read_ref": ("contents", "read"),
+    "read_commit": ("contents", "read"),
+    "read_tree": ("contents", "read"),
+    "read_blob": ("contents", "read"),
+    "compare": ("contents", "read"),
+    "permission": ("metadata", "read"),
+    "list_pulls": ("pull_requests", "read"),
+    "read_pull": ("pull_requests", "read"),
+    "create_blob": ("contents", "write"),
+    "create_tree": ("contents", "write"),
+    "create_commit": ("contents", "write"),
+    "create_ref": ("contents", "write"),
+    "update_ref": ("contents", "write"),
+    "delete_ref": ("contents", "write"),
+    "create_pull": ("pull_requests", "write"),
+}
+_LEVELS: Final = {"read": 1, "write": 2, "admin": 3}
+
+
+@dataclass
+class FakePull:
+    id: int
+    number: int
+    repository_id: int
+    head_ref: str
+    head_sha: str
+    base_ref: str
+    title: str
+    body: str
+    draft: bool
+    creator: str
+    state: str = "open"
+    merged: bool = False
 
 
 @dataclass
@@ -121,6 +184,12 @@ class FakeGitHub:
     # Called with the route's name after a write is applied, before its reply.
     after_commit: Callable[[str], None] | None = None
     removed_repository_ids: set[int] = field(default_factory=set)
+    # F5's git data, per repository id; people and their permissions; pull requests.
+    git: dict[int, GitData] = field(default_factory=dict)
+    users: dict[int, str] = field(default_factory=dict)
+    permissions: dict[tuple[int, str], str] = field(default_factory=dict)
+    pulls: list[FakePull] = field(default_factory=list)
+    tree_entry_limit: int = TREE_ENTRY_LIMIT
     # What "now" is for the list's delay: a test's own clock, so a retry it moves forward
     # sees what the tracker would by then.
     clock: Callable[[], float] = time.monotonic
@@ -386,7 +455,32 @@ class FakeGitHub:
             return self._guarded("read_issue", request, match, self._read)
         if match := _MOVED_PATH.match(path):
             return self._moved(request, match)
-        return not_found
+        if match := _USER_PATH.match(path):
+            return self._user(request, match)
+        return self._dispatch_git(request, path) or not_found
+
+    def _dispatch_git(self, request: RecordedRequest, path: str) -> Reply | None:
+        """F5's routes: git data, compare, a person's permission, pull requests."""
+        method = request.method
+        if match := _GIT_REF_PATH.match(path):
+            name = {"GET": "read_ref", "PATCH": "update_ref", "DELETE": "delete_ref"}.get(method)
+            return None if name is None else self._guarded(name, request, match, self._ref)
+        if (match := _GIT_REFS_PATH.match(path)) and method == "POST":
+            return self._guarded("create_ref", request, match, self._create_ref)
+        if match := _GIT_OBJECT_PATH.match(path):
+            kind = match["kind"].rstrip("s")
+            name = f"read_{kind}" if method == "GET" else f"create_{kind}"
+            return self._guarded(name, request, match, self._git_object)
+        if match := _COMPARE_PATH.match(path):
+            return self._guarded("compare", request, match, self._compare)
+        if match := _PERMISSION_PATH.match(path):
+            return self._guarded("permission", request, match, self._permission)
+        if match := _PULLS_PATH.match(path):
+            if match["number"]:
+                return self._guarded("read_pull", request, match, self._read_pull)
+            name = "create_pull" if method == "POST" else "list_pulls"
+            return self._guarded(name, request, match, self._pulls)
+        return None
 
     def _guarded(
         self,
@@ -401,6 +495,8 @@ class FakeGitHub:
         minted = self._installation_token(request)
         if minted is None:
             return json_reply({"message": "Bad credentials"}, 401)
+        if not self._permits(minted, name):
+            return json_reply({"message": "Resource not accessible by integration"}, 403)
         full_name = f"{match['owner']}/{match['name']}"
         found = [each for each in self.repositories if each["full_name"] == full_name]
         if not found:
@@ -410,7 +506,7 @@ class FakeGitHub:
         if not reached or repository["id"] in self.removed_repository_ids:
             return json_reply({"message": "Not Found"}, 404)
         reply = handler(request, repository, match)
-        if request.method in ("POST", "PATCH") and 200 <= reply.status < 300:
+        if request.method in ("POST", "PATCH", "DELETE") and 200 <= reply.status < 300:
             if self.after_commit is not None:
                 self.after_commit(name)
             if name in self.drop_after_commit:
@@ -535,6 +631,358 @@ class FakeGitHub:
         return json_reply(
             {**fixture("issue_comment"), "id": 6000000 + len(issue.comments), "body": body}, 201
         )
+
+    # --------------------------------------------- F5's git data and pull requests
+
+    def _permits(self, minted: MintedToken, route: str) -> bool:
+        """A token minted with named permissions reaches only what they allow."""
+        need = _NEEDS.get(route)
+        if need is None or minted.permissions is None:
+            return True
+        held = minted.permissions.get(need[0])
+        return held is not None and _LEVELS.get(held, 0) >= _LEVELS[need[1]]
+
+    def git_of(self, full_name: str) -> GitData:
+        return self.git.setdefault(self.repository(full_name)["id"], GitData())
+
+    def seed_files(
+        self,
+        full_name: str,
+        files: dict[str, str | tuple[str, str]],
+        *,
+        branch: str = "main",
+        message: str = "seed",
+    ) -> str:
+        """A commit on `branch` with `files` changed; the branch moves to it."""
+        return self.git_of(full_name).commit_files(branch, files, message)
+
+    def add_user(self, user_id: int, login: str) -> None:
+        self.users[user_id] = login
+
+    def grant(self, full_name: str, login: str, permission: str) -> None:
+        self.permissions[(self.repository(full_name)["id"], login)] = permission
+
+    def pulls_in(self, full_name: str) -> list[FakePull]:
+        repository_id = self.repository(full_name)["id"]
+        return [pull for pull in self.pulls if pull.repository_id == repository_id]
+
+    def _api(self, repository: dict[str, Any], tail: str) -> str:
+        return f"{self.base_url}/repos/{repository['full_name']}/{tail}"
+
+    def _user(self, request: RecordedRequest, match: re.Match[str]) -> Reply:
+        if "read_user" in self.faults:
+            return self.faults["read_user"]
+        if self._installation_token(request) is None:
+            return json_reply({"message": "Bad credentials"}, 401)
+        user_id = int(match["user_id"])
+        login = self.users.get(user_id)
+        if login is None:
+            return json_reply({"message": "Not Found"}, 404)
+        return json_reply({**fixture("user"), "id": user_id, "login": login})
+
+    def _ref_json(self, repository: dict[str, Any], branch: str, sha: str) -> dict[str, Any]:
+        return {
+            "ref": f"refs/heads/{branch}",
+            "node_id": "REF_fake",
+            "url": self._api(repository, f"git/refs/heads/{branch}"),
+            "object": {
+                "sha": sha,
+                "type": "commit",
+                "url": self._api(repository, f"git/commits/{sha}"),
+            },
+        }
+
+    def _ref(
+        self, request: RecordedRequest, repository: dict[str, Any], match: re.Match[str]
+    ) -> Reply:
+        data = self.git.setdefault(repository["id"], GitData())
+        branch = match["branch"]
+        if branch not in data.refs:
+            return json_reply({"message": "Not Found"}, 404)
+        if request.method == "DELETE":
+            del data.refs[branch]
+            return Reply(status=204, body=b"")
+        if request.method == "PATCH":
+            asked = json.loads(request.body or b"{}")
+            sha, force = asked.get("sha"), bool(asked.get("force"))
+            if sha not in data.commits:
+                return json_reply({"message": "Object does not exist"}, 422)
+            if not force and data.refs[branch] not in data.ancestors(sha):
+                return json_reply({"message": "Update is not a fast forward"}, 422)
+            data.refs[branch] = sha
+        return json_reply(self._ref_json(repository, branch, data.refs[branch]))
+
+    def _create_ref(
+        self, request: RecordedRequest, repository: dict[str, Any], _: re.Match[str]
+    ) -> Reply:
+        data = self.git.setdefault(repository["id"], GitData())
+        asked = json.loads(request.body or b"{}")
+        ref, sha = str(asked.get("ref", "")), asked.get("sha")
+        if not ref.startswith("refs/heads/") or sha not in data.commits:
+            return json_reply({"message": "Reference update failed"}, 422)
+        branch = ref.removeprefix("refs/heads/")
+        if branch in data.refs:
+            return json_reply({"message": "Reference already exists"}, 422)
+        data.refs[branch] = sha
+        return json_reply(self._ref_json(repository, branch, sha), 201)
+
+    def _tree_json(
+        self, repository: dict[str, Any], data: GitData, sha: str, recursive: bool
+    ) -> dict[str, Any]:
+        listed = list(data.walk(sha)) if recursive else [(e.name, e) for e in data.trees[sha]]
+        truncated = len(listed) > self.tree_entry_limit
+        entries = []
+        for path, entry in listed[: self.tree_entry_limit]:
+            item: dict[str, Any] = {
+                "path": path,
+                "mode": entry.mode,
+                "type": entry.kind,
+                "sha": entry.sha,
+                "url": self._api(repository, f"git/{entry.kind}s/{entry.sha}"),
+            }
+            if entry.kind == "blob":
+                item["size"] = len(data.blobs[entry.sha])
+            entries.append(item)
+        return {
+            "sha": sha,
+            "url": self._api(repository, f"git/trees/{sha}"),
+            "tree": entries,
+            "truncated": truncated,
+        }
+
+    def _commit_json(self, repository: dict[str, Any], data: GitData, sha: str) -> dict[str, Any]:
+        commit = data.commits[sha]
+        person = {
+            "name": "Nexovue Fake",
+            "email": "fake@example.invalid",
+            "date": "2023-11-14T22:13:20Z",
+        }
+        return {
+            "sha": sha,
+            "node_id": "C_fake",
+            "url": self._api(repository, f"git/commits/{sha}"),
+            "author": person,
+            "committer": person,
+            "message": commit.message,
+            "tree": {"sha": commit.tree, "url": self._api(repository, f"git/trees/{commit.tree}")},
+            "parents": [
+                {"sha": parent, "url": self._api(repository, f"git/commits/{parent}")}
+                for parent in commit.parents
+            ],
+            "verification": {
+                "verified": False,
+                "reason": "unsigned",
+                "signature": None,
+                "payload": None,
+            },
+        }
+
+    def _git_object(
+        self, request: RecordedRequest, repository: dict[str, Any], match: re.Match[str]
+    ) -> Reply:
+        data = self.git.setdefault(repository["id"], GitData())
+        kind, sha = match["kind"], match["sha"]
+        if request.method == "POST":
+            return self._create_object(repository, data, kind, json.loads(request.body or b"{}"))
+        if sha is None:
+            return json_reply({"message": "Not Found"}, 404)
+        if kind == "blobs" and sha in data.blobs:
+            raw = base64.b64encode(data.blobs[sha]).decode()
+            lines = [raw[i : i + _BLOB_LINE] for i in range(0, len(raw), _BLOB_LINE)]
+            return json_reply(
+                {
+                    "sha": sha,
+                    "node_id": "B_fake",
+                    "size": len(data.blobs[sha]),
+                    "url": self._api(repository, f"git/blobs/{sha}"),
+                    "content": "\n".join(lines) + "\n",
+                    "encoding": "base64",
+                }
+            )
+        if kind == "trees" and sha in data.trees:
+            recursive = "recursive" in parse_qs(urlsplit(request.path).query)
+            return json_reply(self._tree_json(repository, data, sha, recursive))
+        if kind == "commits" and sha in data.commits:
+            return json_reply(self._commit_json(repository, data, sha))
+        return json_reply({"message": "Not Found"}, 404)
+
+    def _create_object(
+        self, repository: dict[str, Any], data: GitData, kind: str, asked: dict[str, Any]
+    ) -> Reply:
+        if kind == "blobs":
+            content = asked.get("content")
+            if not isinstance(content, str):
+                return json_reply({"message": "Invalid request"}, 422)
+            raw = (
+                base64.b64decode(content)
+                if asked.get("encoding") == "base64"
+                else content.encode("utf-8")
+            )
+            sha = data.add_blob(raw)
+            return json_reply({"sha": sha, "url": self._api(repository, f"git/blobs/{sha}")}, 201)
+        if kind == "trees":
+            base = asked.get("base_tree")
+            if base is not None and base not in data.trees:
+                return json_reply({"message": "Invalid tree info"}, 422)
+            flat = dict(data.flat(base)) if base else {}
+            for entry in asked.get("tree") or []:
+                path, mode = entry.get("path"), entry.get("mode", "100644")
+                if "content" in entry:
+                    flat[path] = (mode, data.add_blob(str(entry["content"]).encode("utf-8")))
+                elif entry.get("sha") is None:
+                    flat.pop(path, None)
+                elif entry["sha"] in data.blobs:
+                    flat[path] = (mode, entry["sha"])
+                else:
+                    return json_reply({"message": "Invalid tree info"}, 422)
+            sha = data.tree_from_paths(flat)
+            return json_reply(self._tree_json(repository, data, sha, recursive=False), 201)
+        tree, parents = asked.get("tree"), tuple(asked.get("parents") or ())
+        if tree not in data.trees or any(parent not in data.commits for parent in parents):
+            return json_reply({"message": "Invalid request"}, 422)
+        sha = data.add_commit(tree, parents, str(asked.get("message", "")))
+        return json_reply(self._commit_json(repository, data, sha), 201)
+
+    def _commit_named(self, data: GitData, name: str) -> str | None:
+        return data.refs.get(name) or (name if name in data.commits else None)
+
+    def _compare(
+        self, request: RecordedRequest, repository: dict[str, Any], match: re.Match[str]
+    ) -> Reply:
+        data = self.git.setdefault(repository["id"], GitData())
+        base = self._commit_named(data, match["base"])
+        head = self._commit_named(data, match["head"])
+        if base is None or head is None:
+            return json_reply({"message": "Not Found"}, 404)
+        head_line, base_line = data.ancestors(head), data.ancestors(base)
+        merge_base = next((sha for sha in head_line if sha in base_line), None)
+        ahead = [sha for sha in head_line if sha not in base_line]
+        behind = [sha for sha in base_line if sha not in head_line]
+        status = (
+            "identical"
+            if base == head
+            else "ahead"
+            if not behind
+            else "behind"
+            if not ahead
+            else "diverged"
+        )
+        return json_reply(
+            {
+                "url": self._api(repository, f"compare/{match['base']}...{match['head']}"),
+                "status": status,
+                "ahead_by": len(ahead),
+                "behind_by": len(behind),
+                "total_commits": len(ahead),
+                "base_commit": self._commit_json(repository, data, base),
+                "merge_base_commit": None
+                if merge_base is None
+                else self._commit_json(repository, data, merge_base),
+                "commits": [self._commit_json(repository, data, sha) for sha in reversed(ahead)],
+                "files": [],
+            }
+        )
+
+    def _permission(
+        self, request: RecordedRequest, repository: dict[str, Any], match: re.Match[str]
+    ) -> Reply:
+        login = match["login"]
+        if login not in self.users.values():
+            return json_reply({"message": "Not Found"}, 404)
+        permission = self.permissions.get((repository["id"], login), "none")
+        [user_id] = [i for i, name in self.users.items() if name == login]
+        return json_reply(
+            {
+                "permission": permission,
+                "role_name": permission,
+                "user": {**fixture("user"), "id": user_id, "login": login},
+            }
+        )
+
+    def _pull_json(self, repository: dict[str, Any], pull: FakePull) -> dict[str, Any]:
+        owner = repository["full_name"].split("/")[0]
+        return {
+            **fixture("pull"),
+            "id": pull.id,
+            "number": pull.number,
+            "state": pull.state,
+            "draft": pull.draft,
+            "merged": pull.merged,
+            "title": pull.title,
+            "body": pull.body,
+            "user": {"login": pull.creator, "type": "Bot"},
+            "head": {
+                "ref": pull.head_ref,
+                "sha": pull.head_sha,
+                "label": f"{owner}:{pull.head_ref}",
+            },
+            "base": {"ref": pull.base_ref, "label": f"{owner}:{pull.base_ref}"},
+            "url": self._api(repository, f"pulls/{pull.number}"),
+            "html_url": f"https://github.com/{repository['full_name']}/pull/{pull.number}",
+        }
+
+    def _pulls(
+        self, request: RecordedRequest, repository: dict[str, Any], _: re.Match[str]
+    ) -> Reply:
+        data = self.git.setdefault(repository["id"], GitData())
+        owner = repository["full_name"].split("/")[0]
+        mine = [pull for pull in self.pulls if pull.repository_id == repository["id"]]
+        if request.method == "POST":
+            asked = json.loads(request.body or b"{}")
+            head, base = str(asked.get("head", "")), str(asked.get("base", ""))
+            head_ref = head.removeprefix(f"{owner}:")
+            if head_ref not in data.refs or base not in data.refs:
+                return json_reply({"message": "Validation Failed"}, 422)
+            if any(
+                p.head_ref == head_ref and p.base_ref == base and p.state == "open" for p in mine
+            ):
+                return json_reply(
+                    {
+                        "message": "Validation Failed",
+                        "errors": [
+                            {
+                                "resource": "PullRequest",
+                                "code": "custom",
+                                "message": f"A pull request already exists for {owner}:{head_ref}.",
+                            }
+                        ],
+                    },
+                    422,
+                )
+            pull = FakePull(
+                id=7000000 + len(self.pulls) + 1,
+                number=1 + max((p.number for p in mine), default=0),
+                repository_id=repository["id"],
+                head_ref=head_ref,
+                head_sha=data.refs[head_ref],
+                base_ref=base,
+                title=str(asked.get("title", "")),
+                body=str(asked.get("body") or ""),
+                draft=bool(asked.get("draft")),
+                creator=f"{self.app_slug}[bot]",
+            )
+            self.pulls.append(pull)
+            return json_reply(self._pull_json(repository, pull), 201)
+        query = parse_qs(urlsplit(request.path).query)
+        head_filter = query.get("head", [None])[0]
+        state = query.get("state", ["open"])[0]
+        listed = [
+            pull
+            for pull in mine
+            if (head_filter is None or f"{owner}:{pull.head_ref}" == head_filter)
+            and (state == "all" or pull.state == state)
+        ]
+        return json_reply([self._pull_json(repository, pull) for pull in listed])
+
+    def _read_pull(
+        self, request: RecordedRequest, repository: dict[str, Any], match: re.Match[str]
+    ) -> Reply:
+        found = [
+            p for p in self.pulls_in(repository["full_name"]) if p.number == int(match["number"])
+        ]
+        if not found:
+            return json_reply({"message": "Not Found"}, 404)
+        return json_reply(self._pull_json(repository, found[0]))
 
     def _revoke(self, request: RecordedRequest) -> Reply:
         minted = self._installation_token(request)

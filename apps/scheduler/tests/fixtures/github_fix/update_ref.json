@@ -1,0 +1,20 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Update a reference', PATCH /repos/{owner}/{repo}/git/refs/{ref}, fast forward.",
+  "request": {
+    "method": "PATCH",
+    "path": "/repos/acme/api/git/refs/heads/nexovue/suggestion-1"
+  },
+  "status": 200,
+  "compared": ["ref", "object.sha"],
+  "values": ["ref"],
+  "body": {
+    "ref": "refs/heads/nexovue/suggestion-1",
+    "node_id": "REF_x",
+    "url": "u",
+    "object": {
+      "sha": "0000000000000000000000000000000000000000",
+      "type": "commit",
+      "url": "u"
+    }
+  }
+}

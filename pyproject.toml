@@ -37,7 +37,10 @@ dev = [
 target-version = "py313"
 line-length = 100
 src = ["apps/api/src", "apps/scheduler/src"]
-extend-exclude = ["packages/contracts/gen"]   # generated code is not ours to lint
+extend-exclude = [
+    "packages/contracts/gen",                 # generated code is not ours to lint
+    "tools/ai-eval/fix/repository",           # F5's made-up customer code, its bugs seeded on purpose
+]
 
 [tool.ruff.lint]
 select = [
@@ -86,6 +89,7 @@ exclude = [
     "packages/contracts/gen/",   # generated code is not ours to type
     "tools/otel-demo/upstream/", # P1-62 pins a clone of the OTel Demo; upstream code, not ours
     "tools/detection-sim/",      # its own uv project (numpy, scipy), typed by its own strict mypy
+    "tools/ai-eval/fix/repository/", # F5's made-up customer code, its bugs seeded on purpose
 ]
 # tests/helpers holds `live`, the shared "fail rather than skip" guard.
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve

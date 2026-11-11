@@ -1,0 +1,5 @@
+{
+  "name": "fixture-web",
+  "private": true,
+  "description": "F5's fixture repository: a made-up shop's web service with seeded bugs."
+}

@@ -1,0 +1,24 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Create a tree', POST /repos/{owner}/{repo}/git/trees with base_tree.",
+  "request": {
+    "method": "POST",
+    "path": "/repos/acme/api/git/trees"
+  },
+  "status": 201,
+  "compared": ["sha", "tree"],
+  "values": [],
+  "body": {
+    "sha": "0000000000000000000000000000000000000000",
+    "url": "u",
+    "tree": [
+      {
+        "path": "services",
+        "mode": "040000",
+        "type": "tree",
+        "sha": "0000000000000000000000000000000000000000",
+        "url": "u"
+      }
+    ],
+    "truncated": false
+  }
+}

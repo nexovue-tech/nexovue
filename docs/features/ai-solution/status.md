@@ -2,12 +2,71 @@
 
 ## Lifecycle status
 
-**Step 1 built and committed 2026-11-11.** The founder approved the specification, design and plan on 2026-11-02. Step 1 (the deploy line and the brief, T1.1 to T1.5) is on `feature/phase-2`. T1.6's Playwright spec is written and not run (deferred to the hardening pass). Steps 2 onward are not started.
+**Step 2 built and committed 2026-11-11.** The founder approved the specification, design and plan on 2026-11-02. Steps 1 (the deploy line and the brief, T1.1 to T1.5) and 2 (the checks, the bed's parts and the fake, T2.1 to T2.11) are on `feature/phase-2`. T1.6's Playwright spec is written and not run (deferred to the hardening pass). Steps 2b onward are not started.
 
 
 ## Current task
 
-Step 1 awaits the founder's review of the diff and a commit (`F5 Step 1: the deploy line and the brief`). Then the founder's *Judgeable* for Step 1 (plan), on the demo stack.
+Step 2 awaits the founder's review of the diff and a commit (`F5 Step 2: the checks, the bed's parts and the fake`), after Step 1's. Then each step's *Judgeable* (plan): for Step 2, reading the rules report, which is deferred to F5's hardening pass with the rest below.
+
+## Step 2, built 2026-11-11
+
+**What it ships.** No model, no GitHub, no migration, no ADR, no screen. The module every later step rests on, proved against hostile fixtures first:
+
+- **The lists** (T2.1, `nexovue_platform/fixes/policy.py`): the source-extension allow-list, the hard never-sent list (secrets and keys, CI, agent instructions), the configuration-shaped list an owner may loosen by named path, and the never-changed list, with `CHECKS_VERSION`. Matching is on the whole path, case-insensitive, at any depth.
+- **The rules** (T2.2, T2.3, `fixes/checks.py`, `fixes/patterns.py`): the schema guards first (outcome, at least one edit, unchanged edits, C0 controls, NUL and lone surrogates, oversized answers, display-fact keys, unknown evidence ids, a `why` failing the prose checks), each an unusable answer with a fixed retry code; then K1 to K10 on the whole file, every refusal named by rule and detail; then FR18's six flags, each naming its file and line, and the paths whose language the flag lists do not cover.
+- **The diff** (T2.3, `fixes/diff.py`): line changes worked out per region an edit touches, numbered hunks with 3 lines of context, a git-format patch with blob ids, mode, quoted paths and the no-final-newline marker; D53's display facts and the hunks derived from them alone; their shape check; and the digest (SHA-256 over each changed file's path, base blob id and new content in path order, each field length-prefixed, no head sha).
+- **The secret patterns** (T2.4, `fixes/secrets.py`): private key headers, 12 token prefixes after gitleaks' default rules (read 2026-11-11), and long random values assigned to secret-named keys. A net, not a boundary.
+- **The prose checks and the deletion statement** (T2.5, `fixes/prose.py`, `fixes/statements.py`): U4 (URL, email, Markdown or HTML, host names and IPs anywhere), hidden and control characters, the 300-character cap, aliases restored through F3's `restore` or refused, BR11's words replaced by the fixed sentence; `CLEAR_STORED_CODE`, one statement over Step 3's source columns and tables, binding `org_id` in each part.
+- **The bed's parts** (T2.6 to T2.8, T2.11, `tools/ai-eval/fix/`): a fixture repository of 12 seeded bugs in three services (Python, TypeScript, Java), with the bug in the stack, one import away, or neither, three where a refusal is right, and two with planted instructions (asking for `.env` and a workflow edit; asking for a call to an outside address); a span seeder writing each case's stack in its language's form; the rules report, `docs/research/f5-rules-report-2026-11.md`, 26 planted changes and what stopped each, generated and checked current by its test; and the traceability check, now in the gate.
+- **The no-AI, no-I/O walk** (T2.9) and **the simulated GitHub's git data and pull requests** (T2.10): F22's fake gains refs, commits, recursive trees that can be cut short, blobs, `compare`, a person's permission, a user by id, pull requests by `?head=`, drafts, the 422 on a second pull request, token permissions held on these routes, and every write droppable after it is applied. Its answers are compared with shaped recordings in `fixtures/github_fix/`; `record_github.py` will replace them with GitHub's own.
+
+**Shared files touched, and why.** Root `pyproject.toml` (named by T2.11): `tools/ai-eval` joins `pythonpath` and `testpaths`, and the fixture repository is excluded from ruff and mypy, because it is made-up customer code with bugs seeded on purpose. F22's `apps/scheduler/tests/tracker_fake.py` (named by T2.10): F5's routes added; F22's routes, names and behaviour unchanged, except that a dropped-write fault now also covers `DELETE` (F22 has none). The git object store lives in a new `github_git_data.py` beside it, to keep the fake readable. Two base fixtures (`fixtures/github/user.json`, `pull.json`) join F22's folder, marked unverified as F22's are. F22's live suites over the fake pass unchanged (80).
+
+**Files.** New: `packages/py-platform/src/nexovue_platform/fixes/policy.py`, `checks.py`, `patterns.py`, `diff.py`, `secrets.py`, `prose.py`, `statements.py`; `packages/py-platform/tests/test_fix_policy.py`, `test_fix_checks.py`, `test_fix_diff.py`, `test_fix_secrets.py`, `test_fix_prose.py`; `apps/api/tests/test_fix_platform_holds_no_ai.py`; `apps/scheduler/tests/github_git_data.py`, `test_fake_github_matches_recordings.py`, `fixtures/github_fix/` (22 files), `fixtures/github/user.json`, `pull.json`; `tools/ai-eval/fix/` (`__init__.py`, `conftest.py`, `fixtures.py`, `cases.json`, `repository/`, `seed_findings.py`, `rules_report.py`, `record_github.py`, `check_traceability.py` and five tests); `docs/research/f5-rules-report-2026-11.md`. Changed: `pyproject.toml`, `apps/scheduler/tests/tracker_fake.py`, this file, `plan.md`, `docs/product/phase-2-tracker.md`.
+
+### Tests, each seen failing
+
+Each behaviour was removed from the file by a scripted change, the named test run, and the file restored and compared byte for byte with its saved copy. 80 removals; every one failed. Counts are what the run printed. Two removals first passed, which showed two missing tests; those tests were added and the removals then failed (marked †). A review finding (K6, below) was written as a test first and seen failing (3 failed) before the fix.
+
+| Test (count) | Behaviour removed | Failed |
+|---|---|---|
+| `test_fix_policy.py` (45) | Matching at any depth · case-insensitive · the owner's named allowance · the extension allow-list · build files never changed | 4 · 4 · 2 · 3 · 11 |
+| `test_fix_checks.py` (97) | K1 folder · K2 · K3 exactly once · K3 overlap · K4 emptying · K4 file-operation key · K5 · K6 · K6 "already in the file" · K7 hidden · K7 mixed script · K8 · K8 joined words · K8 hex threshold · K9 · K10 long line · K10 blank run | 1 · 4 · 1 · 1 · 1 · 1 · 1 · 8 · 1 · 3 · 2 · 2 · 1 · 1 · 1 · 1 · 1 |
+| | Schema: display-fact key · control characters · unchanged edit · evidence ids · `why` · oversized | 3 · 3 · 1 · 2 · 2 · 2 |
+| | Flags: new import · risky call · comment · new letters · removed check · test file | 4 · 3 · 3 · 1 · 1 · 1 |
+| `test_fix_diff.py` (365, 300 of them random layouts and 40 applied by real git) | No-final-newline marker · mode in header · path quoting · base blob in digest · digest length prefix · a region taking in the next line † · context cap · facts shape check · new-letter lines · only `\n` ends a line † | 15 · 1 · 1 · 1 · 1 · 1 · 1 · 9 · 1 · 1 |
+| `test_fix_secrets.py` (29) | Token prefixes · assigned values · their randomness | 15 · 4 · 1 |
+| `test_fix_prose.py` (30) | Banned words · addresses · email · markup · alias not in the book · cap · hidden characters · alias restored · a column left out of `CLEAR_STORED_CODE` (pinned to the design's list) · its tenant binding | 6 · 4 · 1 · 3 · 2 · 1 · 1 · 2 · 1 · 1 |
+| `test_fix_platform_holds_no_ai.py` (4) | A network client imported by `checks.py` | 1 |
+| `test_fixtures.py` (86) | The seeded bug fixed · a frame's line wrong · the planted `.env` ask removed · a reach misnamed | 2 · 1 · 1 · 1 |
+| `test_rules_report.py` (29) | K6 removed from the rules · the report edited by hand | 3 · 1 |
+| `test_check_traceability.py` (10) | The lone-half rule · task ranges † · unknown tasks · unplanned criteria | 2 · 1 · 2 · 1 |
+| `test_record_github.py` (4) | A step left out · names left uncleaned | 1 · 1 |
+| `test_fake_github_matches_recordings.py` (31) | Trees never truncated · a second pull request allowed · token permissions not held · `draft` ignored · blob ids not git's · a dropped write not applied | 1 · 1 · 1 · 2 · 1 · 5 |
+| `test_seed_findings_live.py` (25) | No exception event · Python frames in the wrong order · no spans for the service | 12 · 1 · 24 |
+
+**Clocks.** No test reads the wall clock for a judgement: the rules and diff are pure; the fake's commits carry a fixed author time; the seeder takes `end` as an argument, and its live test fixes it once per run, relative to now, because ClickHouse's own `received_at` window must hold it.
+
+### Validation, 2026-11-11
+
+- **F5's and the nearby suites, one run: 1,146 passed.** All of `test_fix_*` (Step 1's and Step 2's), `test_fake_github_matches_recordings.py`, F22's `test_connections_github_live.py` and `test_connections_sync_live.py` (80, over the extended fake), all of `tools/ai-eval`, `test_cross_service_contracts.py`, `test_scheduler_postgres_tenancy_structure.py`, `test_read_surface_structure.py`, F3's `test_evidence_rules.py`. Against this step's own containers, `f5s2-pg` (`pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, migrated to `0069` with alembic) and `f5s2-ch` (`clickhouse:26.3.20.7-jammy`, port 38123, 40 ClickHouse migrations by the Go setup), both removed afterwards.
+- `uv run mypy .`: no issues in 965 files. `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,339 files formatted. Biome over `tools/ai-eval`, the new fixtures and `docs/research`: no errors (one warning, on the existing 3.1 MiB `detection_parity.json`). The web is not touched, so `pnpm typecheck` was not run.
+- `check_traceability.py` over the real documents: 215 ids, 0 problems.
+- **gitleaks 8.30.1** (the version of the history scan, `docs/changes/ready-to-deploy`) over every new and changed file: no leaks. The fake values are assembled at run time, so **`.gitleaksignore` needs no entry.** For review all the same: `test_fix_secrets.py` (`FAKES`, `fake()`, the body `Qz7Wn2…`), `test_fix_checks.py` (an `AKIA…` key built from parts, a 44-character base64-like string, a SHA-256 hex string), `rules_report.py` (`_FAKE_KEY`, `_ENCODED`), `test_record_github.py` (`"ghs_" + "Q" * 36`), `test_fake_github_matches_recordings.py` (`ghs_fake_read_only_token`, `ghs_fake_write_token`, no secret shape). All made up.
+- **Not run:** `just check`; real GitHub (never, by instruction); any model; the TypeScript and Java fixtures' seeded tests (no Node test runner or JDK for the fixture repository; they are read, and their reference changes pass the rules); `record_github.py` (only its dry run and cleaning, offline).
+
+### Deferred to F5's hardening pass (founder, 2026-11-11)
+
+- **The founder reading the rules report** (Step 2's *Judgeable*): `docs/research/f5-rules-report-2026-11.md`.
+- Browser, phone and Playwright checks, performance, customer documents and Design QA: Step 2 has no screen, so none applies to it yet.
+- **Real GitHub recordings** (T2.10): the founder runs `record_github.py` on a scratch repository after Phase 2 (foundation item 28). Until then the fake is proved against GitHub's documents as read, not against GitHub, and `docs.github.com` could not be fetched from the build session: the fixtures cite searches and are marked unverified.
+
+### Review (`/review-diff`), 2026-11-11
+
+- **Fixed, MEDIUM:** K6's "already in that file" was a substring test, so `evil.com` passed in a file holding `devil.com`, and a shorter URL passed inside a longer one. It now compares whole addresses, case-insensitively, read anywhere in the file. Test first, seen failing (3), then fixed.
+- **Fixed, LOW:** literal hidden and look-alike characters had reached test sources (a bidirectional override, a zero-width space, a line separator, Cyrillic letters); every one is now an escape, so the repository holds no Trojan-source text of its own.
+- Unintended changes: none. Tenancy: the one Postgres statement binds `org_id` in all three parts; the seeder's ClickHouse writes are a dev tool refusing any host but this machine; the reads in the live test go through the API's and F3's tenant-bound readers. No route, migration, Go or web change.
 
 ## Step 1, built 2026-11-11
 
@@ -92,12 +151,26 @@ Each was written with its code, then proved by removing the behaviour from the f
 
 ## Next action
 
-The founder reviews and commits Step 1, then runs its *Judgeable* on the demo stack. Step 2 (the checks) is next; it needs no other feature. Before then, the open decisions below.
+The founder reviews and commits Steps 1 and 2, then reads the rules report and runs Step 1's *Judgeable* on the demo stack (both in the hardening pass). Step 2b is next, and is blocked on F3's provider (F3 Step 4). Before then, the open decisions below.
 
 **Earlier text, kept for the record:** start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
 
 
 ## Open decisions
+
+**From Step 2's build, 2026-11-11.** None blocks Step 2b. Each is built as recommended, and each is a guess the bed (Step 6) or the founder should settle.
+
+5. **K8's one threshold cannot catch hex.** The design gives 4.0 bits per character for base64-like and hex runs alike, but hex has 16 symbols, so no hex value reaches 4.0, and a 40-character hex secret would pass. **Built:** hex runs use 3.0 (`OPAQUE_HEX_MIN_BITS_PER_CHARACTER`), so a random 40-character hex string, a git sha among them, is refused. **Recommendation:** keep, and let T6.3's replay over real history measure how often it refuses honest code; correct the design's table.
+6. **K5's 16 KiB is reached only with letters of several bytes.** With K10's 200 characters and K5's 60 changed lines, ASCII additions stop near 12 KiB first. **Built** as specified. **Recommendation:** leave it; it binds for non-Latin text and costs nothing.
+7. **"At any depth" read as every segment, folders included.** So a folder named `secrets/`, `config/` or `prod/` keeps everything in it back, and a name pattern such as `*config*` matches `src/configuration/`. **Recommendation:** keep (it errs toward keeping files back; an owner can allow configuration paths by name).
+8. **The never-changed list includes the configuration-shaped list,** per the design's "all of the above". An owner's allowance lets such a file be read, never changed. **Recommendation:** keep; say so on the consent screen at T3.6.
+9. **Banned words include "fixes" and "fixed",** read as the bare "fix" BR11 bans; "safely" and "unsafe" pass. **Recommendation:** your wording call (foundation decision 2).
+10. **The prose checks refuse host-shaped words anywhere in `why`** (there is no string literal in prose), so "the call to req.app fails" is refused. **Recommendation:** keep; the model is told to name files as `file_N` and nothing host-shaped.
+11. **K4 has no mode to check,** because the schema has no mode field: it refuses an answer carrying a file-operation key (`mode`, `create`, `delete`, `rename` and kin) and a change that empties a file. **Recommendation:** keep; amend K4's wording at T6.2.
+12. **Test file flag adds Python's `test_*.py`,** missing from the design's list. Showing more is the safe side. **Recommendation:** add it to the design's table.
+13. **T2.9 would have repeated T1.5.** T1.5's walk already denies `nexovue_platform.ai` over the whole package, so T2.9 holds what it does not: no network client, process or file access, transitively. **Recommendation:** amend T2.9's wording.
+14. **T2.7 proves the link without a finding row.** It proves F3's new-error read finds each case's group and F3's `groups_for` links it to the service, and the API returns each stack in its form; the full chain through detection to a finding row is the founder's *Judgeable* (seed, then `just detection-fault`). TypeScript's compiled lines equal the source's, a seeded shape. **Recommendation:** accept; T3.8 measures matching on these shapes and says so.
+15. **The fixture package is named `fix`** (`tools/ai-eval/fix`, imported as `fix.*`), as the plan's path implies once `tools/ai-eval` is on `pythonpath`. F3's bed will share that root. **Recommendation:** keep; rename only if F3's bed needs a top-level `fix`.
 
 **From Step 1's build, 2026-11-11.** None blocks Step 2. Each is built as recommended where something had to be built.
 
