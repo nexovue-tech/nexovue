@@ -525,3 +525,70 @@ async def test_a_disconnected_connection_is_left_alone(
 
     assert github.site.requests == []
     assert (await _row(engine, connection_id)).state == "disconnected"
+
+
+# --------------------------------------------- a repository turning public (T6.2)
+
+
+async def _public_marks(engine: AsyncEngine, connection_id: uuid.UUID) -> dict[str, Any]:
+    async with engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT key, is_private, public_told_at, public_allowed_at "
+                    "FROM connection_repositories WHERE connection_id = :id"
+                ),
+                {"id": connection_id},
+            )
+        ).all()
+    return {row.key: (row.is_private, row.public_told_at, row.public_allowed_at) for row in rows}
+
+
+async def test_a_repository_turning_public_owes_its_admins_one_notice(
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+) -> None:
+    """FR42, AC115: one first listed public owes nothing; one that turns public owes a
+    notice (`public_told_at` cleared, which the cases sweep then sends once); one that
+    turns private loses its allowance, so turning public again needs a new one."""
+    pinned = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    github.app_id = 2_000_000 + uuid.uuid4().int % 10**6
+    github.install(3_000_000 + uuid.uuid4().int % 10**6)
+    github.add_repository(21, "acme/api", private=True)
+    github.add_repository(22, "acme/site", private=False)
+    connection_id = await _app_connection(engine, tenant, github)
+    ids = _ids(tenant, connection_id)
+
+    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=pinned, **ids)
+
+    assert await _public_marks(engine, connection_id) == {
+        "acme/api": (True, None, None),
+        "acme/site": (False, pinned, None),
+    }
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE connection_repositories SET public_allowed_at = :at "
+                "WHERE connection_id = :id AND key = 'acme/site'"
+            ),
+            {"at": pinned, "id": connection_id},
+        )
+    github.make_public("acme/api")
+    github.repository("acme/site")["private"] = True
+    later = pinned + timedelta(hours=1)
+    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=later, **ids)
+
+    assert await _public_marks(engine, connection_id) == {
+        "acme/api": (False, None, None),
+        "acme/site": (True, pinned, None),
+    }
+
+    github.repository("acme/site")["private"] = False
+    await tasks.refresh(
+        engine, keys=KEYS, endpoint=_endpoint(github), now=later + timedelta(hours=1), **ids
+    )
+
+    assert await _public_marks(engine, connection_id) == {
+        "acme/api": (False, None, None),
+        "acme/site": (False, None, None),
+    }

@@ -662,3 +662,56 @@ async def test_a_connection_needing_attention_tells_owners_and_admins_once_per_e
     assert await sweep(NOW + 27 * HOUR) == []
     [row] = await rows(engine, "SELECT * FROM connections WHERE id = :id", id=connection_id)
     assert row.failure_told_at is not None and row.expiry_told_at is not None
+
+
+# ------------------------------------------- a repository turned public (T6.2)
+
+
+async def test_admins_are_told_once_for_each_repository_that_turned_public(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """FR42, AC115: the refresh clears `public_told_at` when a repository turns public;
+    one email per such repository then, naming it by its strict key, and never again for
+    that turn. A repository first seen public, and a private one, owe nothing."""
+    from nexovue_platform.email import Message
+
+    from nexovue_scheduler.case_emails import tell_connection_admins
+
+    connection_id, place_id = await _place(engine, tenant)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO connection_repositories (org_id, connection_id, external_id, key, "
+                "is_private, public_told_at) VALUES (:org, :connection, '43', 'acme/site', "
+                "false, :at), (:org, :connection, '44', 'acme/docs', true, NULL)"
+            ),
+            {"org": tenant.org_id, "connection": connection_id, "at": NOW - DAY},
+        )
+        await connection.execute(
+            text("UPDATE connection_repositories SET is_private = false WHERE id = :id"),
+            {"id": place_id},
+        )
+    sender = RecordingEmail()
+
+    async def tell(at: datetime) -> list[tuple[Any, dict[str, Any]]]:
+        sender.sent.clear()
+        await tell_connection_admins(
+            engine, sender=sender, app_base_url="https://n.example", now=at
+        )
+        return [(message, data) for to, message, data in sender.sent if to == tenant.owner_email]
+
+    assert await tell(NOW) == [
+        (
+            Message.CONNECTION_REPOSITORY_PUBLIC,
+            {
+                "tracker": "GitHub",
+                "repository": "acme/api",
+                "link": "https://n.example/settings/connections",
+            },
+        )
+    ]
+    assert await tell(NOW + HOUR) == []
+    [told] = await rows(
+        engine, "SELECT public_told_at FROM connection_repositories WHERE id = :id", id=place_id
+    )
+    assert told.public_told_at == NOW

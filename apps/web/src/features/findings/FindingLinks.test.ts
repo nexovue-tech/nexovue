@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CaseLink, FindingDetail } from "./api";
 import {
@@ -294,5 +294,167 @@ describe("the status region and the person's notes", () => {
     expect(copied).toEqual(["rolled back"]);
     // Nothing is sent: the notes reach the clipboard and no request carries them.
     expect(api.calls.slice(before).filter((call) => call.method !== "GET")).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------ attached issues and the mapping (T6.3) */
+
+// A fixed instant for this block's ages: nothing here may read differently on another day.
+const PINNED = new Date("2026-06-01T12:00:00Z");
+
+const CONNECTIONS = {
+  available: true,
+  unavailable_reason: null,
+  connections: [
+    {
+      id: "c-1",
+      kind: "github",
+      state: "working",
+      repositories: [
+        { id: "p-1", key: "acme/api", is_private: true, is_reachable: true },
+        { id: "p-2", key: "acme/web", is_private: true, is_reachable: true },
+      ],
+    },
+  ],
+};
+
+function reference(overrides: Partial<CaseLink> = {}): CaseLink {
+  return link({
+    id: "l-9",
+    role: "reference",
+    external_key: "acme/api#7",
+    url: "https://github.com/acme/api/issues/7",
+    ...overrides,
+  });
+}
+
+describe("attached issues, syncing one, and the preselected repository (T6.3)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: PINNED });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("attaches a pasted address, sending it as written for the API to parse (FR40)", async () => {
+    const api = stubApi(activeCase(), {
+      role: "member",
+      extra: {
+        "POST /findings/f-1/links": json(
+          { finding: activeCase({ links: [reference({ last_synced_at: null })] }), link_id: "l-9" },
+          201,
+        ),
+      },
+    });
+    const { container } = await mountFinding();
+    await page(container);
+    await press(container, "Attach an issue");
+    expect(readable(container)).toContain("it never changes this case");
+    const field = await waitFor(
+      () => container.querySelector<HTMLInputElement>('input[name="issue"]'),
+      "the address field",
+    );
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setValue?.call(field, " https://github.com/acme/api/issues/7 ");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(container, "Attach");
+
+    expect(api.to("POST", "/findings/f-1/links")[0]?.body).toEqual({
+      url: "https://github.com/acme/api/issues/7",
+    });
+    expect(readable(container)).toContain("Attached. Its status shows below");
+  });
+
+  it("shows an attached issue's own status, never as the case's (AC53)", async () => {
+    stubApi(
+      activeCase({ links: [reference({ seen_state: "closed", last_synced_at: minutesAgo(20) })] }),
+      { role: "member" },
+    );
+    const { container } = await mountFinding();
+    await page(container);
+
+    expect(readable(container)).toContain(
+      "Also linked: acme/api#7 · Closed in GitHub, read 20 min. ago. It does not change this case",
+    );
+  });
+
+  it("warns before syncing an attached issue, then asks for it (FR41, AC88)", async () => {
+    const api = stubApi(activeCase({ links: [reference()] }), {
+      role: "member",
+      extra: {
+        "POST /findings/f-1/links/l-9/promote": json(
+          {
+            finding: activeCase({
+              links: [reference({ role: "synced", sync_status: "promoting" })],
+            }),
+            link_id: "l-9",
+          },
+          202,
+        ),
+      },
+    });
+    const { container } = await mountFinding();
+    await page(container);
+    await press(container, "Sync with this case");
+
+    expect(readable(container)).toContain(
+      "Anyone who can close it in GitHub can then resolve this case",
+    );
+    expect(api.to("POST", "/findings/f-1/links/l-9/promote")).toEqual([]);
+    await press(container, "Sync it");
+
+    expect(api.to("POST", "/findings/f-1/links/l-9/promote")).toHaveLength(1);
+    expect(readable(container)).not.toContain("Sync it");
+  });
+
+  it("offers no sync while the case has a synced issue, or is resolved", async () => {
+    stubApi(activeCase({ links: [link(), reference()] }), { role: "member" });
+    const { container } = await mountFinding();
+    await page(container);
+    expect(readable(container)).not.toContain("Sync with this case");
+  });
+
+  it("says a link's repository is public, to everyone (FR42, AC115)", async () => {
+    stubApi(activeCase({ links: [link({ place_public: true })] }), { role: "viewer" });
+    const { container } = await mountFinding();
+    await page(container);
+    expect(readable(container)).toContain("acme/api is public: anyone can read this issue.");
+  });
+
+  it("starts the create panel on the service's mapped repository", async () => {
+    const api = stubApi(activeCase(), {
+      role: "member",
+      extra: {
+        "GET /connections": json(CONNECTIONS),
+        "GET /service-repositories": json({
+          mappings: [
+            {
+              project_id: "x",
+              service_name: "checkout",
+              place_id: "p-2",
+              place_key: "acme/web",
+            },
+          ],
+        }),
+        "GET /findings/f-1/links/preview": json({
+          place_id: "p-2",
+          place_key: "acme/web",
+          title: "nexovue: slower than normal on checkout",
+          body: "nexovue detected this on `checkout`.\n",
+          public: false,
+          refusal: null,
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await page(container);
+    await press(container, "Create an issue");
+    await waitFor(() => container.querySelector('[data-testid="issue-preview"]'), "the preview");
+
+    expect(container.querySelector<HTMLSelectElement>("select")?.value).toBe("p-2");
+    expect(readable(container)).toContain("Create issue in acme/web");
+    expect(api.to("GET", "/service-repositories")[0]?.search).toContain("project_id=");
   });
 });

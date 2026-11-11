@@ -97,6 +97,7 @@ export function linkStatusWords(link: CaseLink, reader: LinkReader): string {
       return `Checking this repository before syncing it`;
     case "in_sync": {
       const since = minutesSince(link.last_synced_at, now);
+      if (link.role === "reference") return referenceWords(link, now);
       if (since == null) return `waiting for its first sync`;
       if (reader.caseActive && since > SYNC_LATE_MINUTES) return `${lateWords(since)}`;
       return `synced ${formatRelativeTime(link.last_synced_at ?? "", now)}`;
@@ -113,9 +114,11 @@ export function linkStatusWords(link: CaseLink, reader: LinkReader): string {
       return `${reader.admin ? attentionForAdmin(link) : ASK_AN_ADMIN}`;
     case "refused":
       if (link.last_failure === "public_repository") {
+        // A promoted reference names its issue; a refused creation has none.
+        const what = link.external_key == null ? "Not created" : "Not synced";
         return reader.admin
-          ? "Not created: the repository is public. An admin can allow it in settings."
-          : "Not created: the repository is public. Ask an admin.";
+          ? `${what}: the repository is public. An admin can allow it in settings.`
+          : `${what}: the repository is public. Ask an admin.`;
       }
       return "Not created: the stored facts could not be read. Create it again.";
     case "gone":
@@ -130,6 +133,52 @@ export function linkStatusWords(link: CaseLink, reader: LinkReader): string {
     case "stopped":
       return `GitHub was disconnected. This issue is no longer followed.`;
   }
+}
+
+/**
+ * FR41, AC53: a reference's own status, read hourly and shown, never a case's. It is not
+ * "synced": nothing follows it either way.
+ */
+function referenceWords(link: CaseLink, now: number): string {
+  if (link.last_synced_at == null || link.seen_state == null) return "Not read yet";
+  const state = link.seen_state === "closed" ? "Closed" : "Open";
+  return `${state} in ${trackerName(link)}, read ${formatRelativeTime(link.last_synced_at, now)}. It does not change this case`;
+}
+
+/** FR42, AC115: a link in a repository anyone can read says so, to everyone. */
+export function publicPlaceLine(link: CaseLink): string | null {
+  if (!link.place_public) return null;
+  return `${link.place_key ?? "This repository"} is public: anyone can read this issue.`;
+}
+
+/** FR41, AC88: what syncing an attached issue means, said before the click. */
+export function promoteWarning(link: CaseLink): string {
+  const key = link.external_key ?? "this issue";
+  return `Sync ${key} with this case? Anyone who can close it in ${trackerName(link)} can then resolve this case, and when the case ends here, nexovue closes it there with one comment.`;
+}
+
+/** Whether a person may choose to sync an attached issue now (FR41). */
+export function canPromote(link: CaseLink, root: WithLinks & { case_state?: string | null }) {
+  return (
+    link.role === "reference" &&
+    link.sync_status === "in_sync" &&
+    link.last_synced_at != null &&
+    root.case_state !== "resolved" &&
+    syncedLink(root) == null
+  );
+}
+
+/** Which repository the create panel starts on: the service's mapping, if reachable. */
+export function preselectedPlace(
+  places: readonly { id: string }[],
+  mappings: readonly { service_name: string; place_id: string }[],
+  serviceName: string | null,
+): string | null {
+  if (serviceName == null) return null;
+  const mapped = mappings.find((mapping) => mapping.service_name === serviceName);
+  return mapped != null && places.some((place) => place.id === mapped.place_id)
+    ? mapped.place_id
+    : null;
 }
 
 interface ResolvingCase extends WithLinks {
@@ -286,8 +335,9 @@ export function issueEventSentence(event: TimelineEvent): string | null {
       return "The issue moved";
     case "tracker_write_failed": {
       const failure = FAILURE_WORDS[String(detail.failure)] ?? "the tracker refused it";
+      // One event for a refused creation and a refused promotion: words true of both.
       return detail.failure === "public_repository"
-        ? `The issue was not created: ${failure}`
+        ? `nexovue did not write to the issue: ${failure}`
         : `A change to the issue did not go through: ${failure}`;
     }
     default:

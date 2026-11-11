@@ -89,13 +89,26 @@ _BIND: Final = text(
     WHERE org_id = :org_id AND id = :connection_id AND state <> 'disconnected'
     """
 )
+# FR42, AC115. A repository first seen public is listed as public, and owes no notice.
+# One that turns public owes its admins one notice (`public_told_at` cleared; the cases
+# sweep sends it, `case_emails.py`). One that turns private loses any allowance, so if
+# it turns public again nobody's earlier word lets an issue through unwarned.
 _UPSERT_PLACE: Final = text(
     """
     INSERT INTO connection_repositories
-        (org_id, connection_id, external_id, key, is_private, is_reachable)
-    VALUES (:org_id, :connection_id, :external_id, :key, :is_private, true)
+        (org_id, connection_id, external_id, key, is_private, is_reachable, public_told_at)
+    VALUES (:org_id, :connection_id, :external_id, :key, :is_private, true,
+            CASE WHEN :is_private THEN NULL ELSE CAST(:at AS timestamptz) END)
     ON CONFLICT (connection_id, external_id)
-    DO UPDATE SET key = EXCLUDED.key, is_private = EXCLUDED.is_private, is_reachable = true
+    DO UPDATE SET key = EXCLUDED.key, is_private = EXCLUDED.is_private, is_reachable = true,
+        public_told_at = CASE
+            WHEN connection_repositories.is_private AND NOT EXCLUDED.is_private THEN NULL
+            ELSE connection_repositories.public_told_at END,
+        public_allowed_at = CASE WHEN EXCLUDED.is_private THEN NULL
+            ELSE connection_repositories.public_allowed_at END,
+        public_allowed_by = CASE WHEN EXCLUDED.is_private THEN NULL
+            ELSE connection_repositories.public_allowed_by END
+    WHERE connection_repositories.org_id = :org_id
     """
 )
 _UNREACHED_PLACES: Final = text(
@@ -269,6 +282,7 @@ async def _write_reach(
                     "external_id": place.external_id,
                     "key": place.key,
                     "is_private": place.is_private,
+                    "at": now,
                 },
             )
         await connection.execute(

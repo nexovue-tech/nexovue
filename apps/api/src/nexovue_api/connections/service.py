@@ -52,10 +52,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
 from nexovue_api.connections import jobs, queries, webhooks
+from nexovue_api.connections import places as places_module
 from nexovue_api.connections.schemas import (
     MAX_PRIVATE_KEY_CHARS,
     Availability,
-    ConnectionPlace,
     ConnectionsOverview,
     ConnectionTestAccepted,
     ConnectionTestResult,
@@ -208,15 +208,7 @@ def _view(
         failing_since=row.failing_since,
         last_failure=row.last_failure,
         last_failure_status=row.last_failure_status,
-        repositories=[
-            ConnectionPlace(
-                id=place.id,
-                key=place.key,
-                is_private=place.is_private,
-                is_reachable=place.is_reachable,
-            )
-            for place in places
-        ],
+        repositories=[places_module.place_view(place) for place in places],
     )
 
 

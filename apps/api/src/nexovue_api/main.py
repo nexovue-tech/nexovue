@@ -167,6 +167,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(channels_router.router)
     versioned.include_router(channel_tests_router.router)
     versioned.include_router(connections_router.router)
+    versioned.include_router(connections_router.service_repositories_router)
     versioned.include_router(connection_tests_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)

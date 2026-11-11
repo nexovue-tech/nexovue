@@ -11,13 +11,18 @@ each connection's hourly repository refresh. `sync_connection` then, for one con
    (AC48); a held lease stops it;
 2. stops while the connection is paused (`paused_until`, after a failure or a limit);
 3. takes up to 50 due links, oldest first;
-4. creates an issue for a link `creating`, or reads, compares and acts for the others;
+4. creates an issue for a link `creating`, checks and reads a reference being promoted
+   (`promoting`), or reads, compares and acts for the others;
 5. before each call out, reads the connection's state with no lock, and stops if it is
    no longer usable, so a disconnect stops a running job before its next write (AC37);
 6. commits per link, and keeps GitHub writes at least a second apart (NFR4);
 7. ends the run at the first timeout, connection failure or 5xx, pausing the
    connection with backoff, or for as long as a rate limit asked (AC49, AC86);
 8. revokes the run's tokens.
+
+**A reference link** (FR41) is read hourly and its status recorded; the comparison never
+lets one change a case. Its first read stores the tracker's own id for the issue, which
+a pasted address does not carry.
 
 **Kind-agnostic** (foundation item 29): nothing here names GitHub. The adapter for the
 connection's kind does the calls (`trackers.Tracker`); Jira later is a second adapter.
@@ -61,6 +66,9 @@ from nexovue_platform.connections import (
     GONE_RECHECK,
     GONE_RECHECK_FOR,
     IDLE_WARNING,
+    PROMOTING,
+    REFERENCE,
+    REFERENCE_POLL,
     REPOSITORY_REFRESH,
     RESOLVED_POLL,
     SYNC_HARD_LIMIT_SECONDS,
@@ -259,7 +267,25 @@ _REFUSED: Final = text(
     UPDATE finding_links
     SET sync_status = 'refused', frozen_facts = NULL, last_failure = :failure,
         wanted_state = NULL, comment_wanted = NULL, next_sync_at = NULL
-    WHERE org_id = :org_id AND id = :link_id AND sync_status = 'creating'
+    WHERE org_id = :org_id AND id = :link_id AND sync_status IN ('creating', 'promoting')
+    """
+)
+# A promoted reference's first read as the synced issue (FR41): what it says now is what
+# was seen, so only a later change in the tracker moves the case.
+_PROMOTED: Final = text(
+    """
+    UPDATE finding_links
+    SET sync_status = 'in_sync', seen_state = :seen, wanted_state = :wanted,
+        external_id = COALESCE(external_id, :external_id), failures = 0, last_failure = NULL,
+        last_synced_at = :at, next_sync_at = :next_sync_at
+    WHERE org_id = :org_id AND id = :link_id AND sync_status = 'promoting'
+    """
+)
+# A pasted reference carries no tracker id until its first read (FR40).
+_LEARN_ISSUE_ID: Final = text(
+    """
+    UPDATE finding_links SET external_id = :external_id
+    WHERE org_id = :org_id AND id = :link_id AND external_id IS NULL
     """
 )
 _SEEN: Final = text(
@@ -388,17 +414,24 @@ class _Run:
 
 
 def _next_poll(
-    case_state: str | None, resolved_at: datetime | None, now: datetime
+    case_state: str | None,
+    resolved_at: datetime | None,
+    now: datetime,
+    *,
+    role: str | None = None,
 ) -> datetime | None:
-    """D49: active every 5 minutes, resolved hourly for 30 days, then not at all."""
-    if case_state == INVESTIGATING:
-        return now + ACTIVE_POLL
+    """D49: active every 5 minutes, resolved hourly for 30 days, then not at all. A
+    reference is read hourly while followed, since it never changes the case (FR41)."""
     if (
         case_state == RESOLVED
         and resolved_at is not None
         and resolved_at <= now - FOLLOW_AFTER_RESOLVE
     ):
         return None
+    if role == REFERENCE:
+        return now + REFERENCE_POLL
+    if case_state == INVESTIGATING:
+        return now + ACTIVE_POLL
     return now + RESOLVED_POLL
 
 
@@ -485,9 +518,11 @@ async def _seen(
     this act moved (`case_state`) is polled on its new schedule."""
     now = run.clock()
     if case_state is None:
-        next_sync_at = _next_poll(row.case_state, row.case_resolved_at, now)
+        next_sync_at = _next_poll(row.case_state, row.case_resolved_at, now, role=row.role)
     else:
-        next_sync_at = _next_poll(case_state, now if case_state == RESOLVED else None, now)
+        next_sync_at = _next_poll(
+            case_state, now if case_state == RESOLVED else None, now, role=row.role
+        )
     if next_sync_at is None and status == "in_sync":
         status = "not_followed"
     if wanted is None and row.comment_wanted is not None:
@@ -558,11 +593,12 @@ async def _create(run: _Run, row: Any) -> None:
 
 
 async def _public_check_passes(run: _Run, row: Any) -> bool:
-    """BR12, AC51: the allowance and GitHub's own answer, read immediately before
-    creating, every try. A failed answer creates nothing (it raises, and the link waits)."""
+    """BR12, AC51, AC88: the allowance and GitHub's own answer, read immediately before
+    creating, every try, and before a promotion. A failed answer creates nothing (it
+    raises, and the link waits)."""
     async with run.engine.connect() as connection:
         fresh = (await connection.execute(_READ_LINK, {**run.ids, "link_id": row.id})).one_or_none()
-    if fresh is None or fresh.sync_status != "creating" or fresh.place_external_id is None:
+    if fresh is None or fresh.sync_status != row.sync_status or fresh.place_external_id is None:
         return False
     await run.before_call()
     if run.tracker.is_public(_place(fresh)) and fresh.public_allowed_at is None:
@@ -574,7 +610,7 @@ async def _public_check_passes(run: _Run, row: Any) -> bool:
 async def _refuse(run: _Run, row: Any, failure: str) -> None:
     async with run.engine.begin() as connection:
         locked = await _lock(connection, run, row)
-        if locked is None or locked.sync_status != "creating":
+        if locked is None or locked.sync_status != row.sync_status:
             return
         await connection.execute(
             _REFUSED, {"org_id": run.org_id, "link_id": row.id, "failure": failure}
@@ -612,6 +648,47 @@ async def _created(run: _Run, row: Any, issue: IssueRef) -> None:
     run.synced.append(str(row.id))
 
 
+# -------------------------------------------------------------- promoting
+
+
+async def _promote(run: _Run, row: Any) -> None:
+    """FR41, AC88: a reference a person chose to sync. The public check runs here, as
+    before a create; then the issue is read, and the link ends `in_sync`, or `refused`
+    above. A read that finds it gone, missing or moved is rows 8 to 11, as for any link."""
+    if not await _public_check_passes(run, row):
+        return
+    await run.before_call()
+    read = run.tracker.read(_place(row), _issue(row))
+    fixed = compare_read(read)
+    if fixed is not None:
+        await _apply_read(run, row, fixed, read)
+        return
+    assert isinstance(read, IssueSeen)
+    now = run.clock()
+    async with run.engine.begin() as connection:
+        locked = await _lock(connection, run, row)
+        if locked is None or locked.sync_status != PROMOTING:
+            return
+        # A person's act while it was promoting stays wanted, unless the issue already is.
+        wanted = locked.wanted_state if locked.wanted_state != read.state else None
+        await connection.execute(
+            _PROMOTED,
+            {
+                "org_id": run.org_id,
+                "link_id": row.id,
+                "seen": read.state,
+                "wanted": wanted,
+                "external_id": read.issue_id,
+                "at": now,
+                "next_sync_at": now
+                if wanted is not None
+                else _next_poll(locked.case_state, locked.case_resolved_at, now),
+            },
+        )
+    run.synced.append(str(row.id))
+    await _comment_if_owed(run, row)
+
+
 # -------------------------------------------------------------- reconciling
 
 
@@ -644,6 +721,11 @@ async def _apply(run: _Run, row: Any, read: IssueSeen) -> None:
         locked = await _lock(connection, run, row)
         if locked is None or locked.sync_status in ("stopped", "creating"):
             return
+        if locked.external_id is None and read.issue_id is not None:
+            await connection.execute(
+                _LEARN_ISSUE_ID,
+                {"org_id": run.org_id, "link_id": row.id, "external_id": read.issue_id},
+            )
         link, case = _views(locked, now)
         action = compare(link, read.state, case)
         if action is Action.WRITE_WANTED:
@@ -1090,7 +1172,9 @@ async def _links(run: _Run) -> None:
         try:
             if row.sync_status == "creating":
                 await _create(run, row)
-            elif row.sync_status != "promoting":
+            elif row.sync_status == PROMOTING:
+                await _promote(run, row)
+            else:
                 await _reconcile(run, row)
         except _RunEnds as ended:
             logger.info("a sync run stopped", connection_id=run.connection_id, why=str(ended))

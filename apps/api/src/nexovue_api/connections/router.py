@@ -15,28 +15,37 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Final
+from typing import Annotated, Final
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayManageConnections
-from nexovue_api.connections import service
+from nexovue_api.connections import places, service
 from nexovue_api.connections.schemas import (
     Availability,
     CompleteGitHubRequest,
+    ConnectionPlace,
     ConnectionsOverview,
     ConnectionTestAccepted,
     GitHubSetupCompleted,
     GitHubSetupStarted,
+    MapServiceRequest,
+    PlaceChange,
     ReplaceCredentialRequest,
+    ServiceRepositories,
+    ServiceRepositoryView,
     StartGitHubRequest,
 )
+from nexovue_api.data.postgres.models import SERVICE_NAME_LENGTH
 from nexovue_api.deps import AppSettings, DbSession, EmailAvailable
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.settings import Settings
 
 router = APIRouter(prefix="/connections", tags=["connections"])
+# Which repository each service's issues go to (design, *API*): read by every person,
+# for the create panel's preselection; changed by an owner or admin.
+service_repositories_router = APIRouter(prefix="/service-repositories", tags=["connections"])
 
 # D29, a guess: an `issues` delivery is a few kilobytes, and a refused one costs nothing,
 # since polling is the base. The edge allows far more (`Caddyfile`, 65 MiB).
@@ -176,6 +185,78 @@ async def disconnect(
         actor_user_id=identity.user.id,
         connection_id=connection_id,
         hooks=tuple(service.DISCONNECT_HOOKS),
+    )
+
+
+@router.patch(
+    "/{connection_id}/places/{place_id}",
+    summary="Allow issues in a public repository, or withdraw that",
+)
+async def change_place(
+    identity: MayManageConnections,
+    db: DbSession,
+    settings: AppSettings,
+    connection_id: uuid.UUID,
+    place_id: uuid.UUID,
+    request: PlaceChange,
+) -> ConnectionPlace:
+    """FR42, AC115: each audited. The console warns first what becomes public."""
+    return await places.set_public_allowed(
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        connection_id=connection_id,
+        place_id=place_id,
+        allowed=request.public_allowed,
+        availability=availability_of(settings),
+        now=datetime.now(UTC),
+    )
+
+
+@service_repositories_router.get("", summary="Which repository each service's issues go to")
+async def list_service_repositories(
+    identity: CurrentIdentity,
+    db: DbSession,
+    project_id: Annotated[uuid.UUID | None, Query(description="Only this project's")] = None,
+) -> ServiceRepositories:
+    """A support view reads no repository names, as `GET /connections` gives it none."""
+    if identity.impersonation is not None:
+        return ServiceRepositories(mappings=[])
+    return ServiceRepositories(
+        mappings=await places.mappings(db, org_id=identity.org_id, project_id=project_id)
+    )
+
+
+@service_repositories_router.put("", summary="Set the repository a service's issues go to")
+async def map_service_repository(
+    identity: MayManageConnections, db: DbSession, request: MapServiceRequest
+) -> ServiceRepositoryView:
+    return await places.map_service(
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        project_id=request.project_id,
+        service_name=request.service_name,
+        place_id=request.place_id,
+        now=datetime.now(UTC),
+    )
+
+
+@service_repositories_router.delete(
+    "", status_code=status.HTTP_204_NO_CONTENT, summary="Stop preselecting a service's repository"
+)
+async def unmap_service_repository(
+    identity: MayManageConnections,
+    db: DbSession,
+    project_id: Annotated[uuid.UUID, Query()],
+    service_name: Annotated[str, Query(min_length=1, max_length=SERVICE_NAME_LENGTH)],
+) -> None:
+    await places.unmap_service(
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        project_id=project_id,
+        service_name=service_name,
     )
 
 

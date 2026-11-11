@@ -1,14 +1,15 @@
-"""What `cases_sweep` sends (F22 plan T4.6; design, *Keeping and ending*, step 5): the
-case emails owed through `finding_emails_owed`, and each connection's failure and expiry
-notices (FR33).
+"""What `cases_sweep` sends (F22 plan T4.6, T6.2; design, *Keeping and ending*, step 5):
+the case emails owed through `finding_emails_owed`, each connection's failure and expiry
+notices (FR33), and one notice when a repository it reaches turns public (FR42).
 
 It runs on `scheduler-light`, which holds the mail settings; `scheduler-connections`
 holds none (D30), so the sync owes an email by writing a row and this sends it.
 
 **At most once, never twice** (D90, AC94). An owed row is deleted, and a connection's
-marker (`failure_told_at`, `expiry_told_at`) set, in a transaction that commits before
-any send. A crash or a refusing provider loses that email; nothing repeats it. A row per
-email means a second one owed before this runs cannot overwrite the first.
+marker (`failure_told_at`, `expiry_told_at`, a repository's `public_told_at`) set, in a
+transaction that commits before any send. A crash or a refusing provider loses that email;
+nothing repeats it. A row per email means a second one owed before this runs cannot
+overwrite the first.
 
 **No outside words** (D28): an email names the service in its strict form, a fixed
 sentence, a date and a link. Never a finding title, a note, a tracker's text, or a
@@ -160,7 +161,11 @@ _TO_TELL: Final = text(
             AND (state = 'needs_attention'
                  OR (state = 'failing' AND failing_since <= :failing_before)))
         OR (expiry_told_at IS NULL AND token_expires_on IS NOT NULL
-            AND token_expires_on <= :expires_by))
+            AND token_expires_on <= :expires_by)
+        OR EXISTS (
+            SELECT 1 FROM connection_repositories AS place
+            WHERE place.org_id = connections.org_id AND place.connection_id = connections.id
+              AND NOT place.is_private AND place.public_told_at IS NULL))
     ORDER BY id
     LIMIT :batch
     """
@@ -172,6 +177,15 @@ _LOCK_CONNECTION: Final = text(
     FROM connections
     WHERE org_id = :org_id AND id = :id AND state <> 'disconnected'
     FOR NO KEY UPDATE SKIP LOCKED
+    """
+)
+# FR42: each repository that turned public, marked told before its notice is sent.
+_PUBLIC_TOLD: Final = text(
+    """
+    UPDATE connection_repositories SET public_told_at = :now
+    WHERE org_id = :org_id AND connection_id = :id
+      AND NOT is_private AND public_told_at IS NULL
+    RETURNING key
     """
 )
 _TOLD: Final = text(
@@ -189,7 +203,8 @@ async def tell_connection_admins(
 ) -> int:
     """FR33, AC78: one email when a connection needs attention or has failed for a day,
     and one before a stated expiry, each with its own marker. The failure marker clears
-    when the connection works again (`connections/store.py`), ending the episode."""
+    when the connection works again (`connections/store.py`), ending the episode. FR42,
+    AC115: one email for each repository the refresh saw turn public."""
     if sender is None:
         return 0
     async with engine.connect() as connection:
@@ -274,6 +289,16 @@ async def _connection_emails(
             )
         )
         expiry_told = now
+    for repository in await connection.scalars(
+        _PUBLIC_TOLD, {"org_id": org_id, "id": connection_id, "now": now}
+    ):
+        emails.append(
+            (
+                Message.CONNECTION_REPOSITORY_PUBLIC,
+                {"tracker": tracker, "repository": repository, "link": link},
+                f"public-{repository}",
+            )
+        )
     if not emails:
         return []
     await connection.execute(

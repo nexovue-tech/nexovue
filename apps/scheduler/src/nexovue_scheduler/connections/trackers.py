@@ -72,6 +72,9 @@ class IssueSeen:
     state: str
     # The tracker's close reason, as its enum (`ISSUE_CLOSE_REASONS`); None when open.
     close_reason: str | None
+    # The tracker's own id for the issue, under `external_id`'s strict form; a pasted
+    # reference learns it from its first read (FR40), and a webhook rings by it.
+    issue_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

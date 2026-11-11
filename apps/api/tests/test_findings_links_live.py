@@ -19,7 +19,7 @@ import httpx
 import pytest
 from environment import TEST_ENVIRONMENT
 from nexovue_platform.connections import SYNC_CONNECTION_TASK, IssueFacts, issue_text
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from test_findings_cases_live import (
     ASYNC_DSN,
@@ -664,3 +664,305 @@ async def test_a_disconnect_stops_every_link_and_frees_each_case_s_slot(
         db, acme, acme.member, "POST", f"/findings/{first.id}/links", {"place_id": str(new_place)}
     )
     assert response.status_code == 201
+
+
+# ------------------------------------------- pasted references and promotion (T6.1)
+
+ISSUE_ADDRESS: Final = "https://github.com/ACME/Api/issues/7"
+
+
+async def _attach(
+    db: AsyncSession, team: Team, finding: FindingRow, url: str = ISSUE_ADDRESS
+) -> httpx.Response:
+    return await _call(db, team, team.member, "POST", f"/findings/{finding.id}/links", {"url": url})
+
+
+async def _read_once(db: AsyncSession, link_id: uuid.UUID, external_id: str = "7000007") -> None:
+    """What the job's first read of a reference leaves: the tracker's id, and a status."""
+    await db.execute(
+        text(
+            "UPDATE finding_links SET external_id = :id, seen_state = 'open', "
+            "last_synced_at = now() WHERE id = :link"
+        ),
+        {"id": external_id, "link": link_id},
+    )
+
+
+async def _audit_actions(db: AsyncSession, team: Team, prefix: str) -> list[str]:
+    return list(
+        await db.scalars(
+            select(AuditLogEntry.action)
+            .where(AuditLogEntry.org_id == team.org_id, AuditLogEntry.action.like(f"{prefix}%"))
+            .order_by(AuditLogEntry.id)
+        )
+    )
+
+
+async def test_a_pasted_address_attaches_as_a_reference_read_by_the_job(
+    db: AsyncSession, acme: Team
+) -> None:
+    """FR40, FR41: parsed to the place's own spelling, attached as a reference, read by a
+    job; it starts a case with nobody assigned, as any link does (D70)."""
+    connection_id, place_id = await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+
+    response = await _attach(db, acme, finding)
+
+    assert response.status_code == 201, response.text
+    link = await _link(db, acme, uuid.UUID(response.json()["link_id"]))
+    assert (
+        link.role,
+        link.sync_status,
+        link.external_key,
+        link.external_id,
+        link.connection_id,
+        link.place_id,
+    ) == ("reference", "in_sync", "acme/api#7", None, connection_id, place_id)
+    assert link.next_sync_at is not None
+    assert await _sync_jobs(db, acme) == 1
+    [shown] = response.json()["finding"]["links"]
+    assert (shown["role"], shown["url"], shown["place_public"]) == (
+        "reference",
+        "https://github.com/acme/api/issues/7",
+        False,
+    )
+    row = await _fresh(db, finding)
+    assert (row.case_state, row.assignee_id, row.case_worked_at is not None) == (
+        "investigating",
+        None,
+        True,
+    )
+    assert [event.kind for event in await _events(db, acme, finding.id)][-1] == "link_added"
+    assert await _audit_actions(db, acme, "link.") == ["link.added"]
+
+
+@pytest.mark.parametrize(
+    ("url", "status", "words"),
+    [
+        ("https://github.com/acme/api/pull/7", 422, "not a GitHub issue address"),
+        ("https://evil.example/acme/api/issues/7", 422, "not a GitHub issue address"),
+        ("https://github.com/acme/other/issues/7", 409, "not in a repository"),
+        ("https://github.com/elsewhere/api/issues/7", 409, "not in a repository"),
+    ],
+)
+async def test_an_address_outside_a_connected_repository_is_refused_and_nothing_is_added(
+    db: AsyncSession, acme: Team, url: str, status: int, words: str
+) -> None:
+    """AC54: refused here, by parsing and a lookup; the API holds no tracker client at all
+    (`test_no_tracker_calls_in_api.py`), so no call can go out."""
+    await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+
+    response = await _attach(db, acme, finding, url)
+
+    assert response.status_code == status, response.text
+    assert words in response.text
+    count = await db.scalar(
+        select(func.count()).select_from(FindingLink).where(FindingLink.org_id == acme.org_id)
+    )
+    assert (count, await _sync_jobs(db, acme)) == (0, 0)
+    assert (await _fresh(db, finding)).case_state is None
+
+
+async def test_a_repository_the_connection_no_longer_reaches_takes_no_reference(
+    db: AsyncSession, acme: Team
+) -> None:
+    _, place_id = await _connected(db, acme)
+    await db.execute(
+        text("UPDATE connection_repositories SET is_reachable = false WHERE id = :id"),
+        {"id": place_id},
+    )
+    finding = await _case_finding(db, acme)
+
+    assert (await _attach(db, acme, finding)).status_code == 409
+
+
+async def test_one_issue_is_a_reference_on_two_cases_but_once_on_each(
+    db: AsyncSession, acme: Team
+) -> None:
+    """AC53: the same issue may be attached to many cases, once each."""
+    await _connected(db, acme)
+    first = await _case_finding(db, acme)
+    second = await _case_finding(db, acme, service="payments")
+
+    assert (await _attach(db, acme, first)).status_code == 201
+    assert (await _attach(db, acme, second)).status_code == 201
+    again = await _attach(db, acme, first, "acme/api#7")
+
+    assert again.status_code == 409
+    assert "already on this case" in again.text
+
+
+async def test_a_case_holds_at_most_twenty_references(db: AsyncSession, acme: Team) -> None:
+    await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+    for number in range(1, 21):
+        response = await _attach(db, acme, finding, f"acme/api#{number}")
+        assert response.status_code == 201, response.text
+
+    refused = await _attach(db, acme, finding, "acme/api#21")
+
+    assert refused.status_code == 409
+    assert "at most 20" in refused.text
+
+
+async def test_a_reference_on_a_resolved_case_leaves_it_resolved(
+    db: AsyncSession, acme: Team
+) -> None:
+    """Like a note: shown on the case, which it never changes (FR41)."""
+    await _connected(db, acme)
+    finding = await _case_finding(
+        db,
+        acme,
+        state="closed",
+        case_state="resolved",
+        case_resolution="resolved",
+        case_opened_at=NOW,
+        case_resolved_at=NOW,
+        case_activity_at=NOW,
+    )
+
+    assert (await _attach(db, acme, finding)).status_code == 201
+    assert (await _fresh(db, finding)).case_state == "resolved"
+
+
+async def _promote(
+    db: AsyncSession, team: Team, finding: FindingRow, link_id: uuid.UUID
+) -> httpx.Response:
+    return await _call(
+        db, team, team.member, "POST", f"/findings/{finding.id}/links/{link_id}/promote"
+    )
+
+
+async def test_promoting_a_read_reference_makes_it_the_synced_issue_through_a_job(
+    db: AsyncSession, acme: Team
+) -> None:
+    """FR41, AC88: a second choice, run as a job; the API only marks it `promoting`."""
+    await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+    link_id = uuid.UUID((await _attach(db, acme, finding)).json()["link_id"])
+    await _read_once(db, link_id)
+
+    response = await _promote(db, acme, finding, link_id)
+
+    assert response.status_code == 202, response.text
+    link = await _link(db, acme, link_id)
+    assert (link.role, link.sync_status, link.external_id) == ("synced", "promoting", "7000007")
+    assert await _sync_jobs(db, acme) == 1
+    assert [event.kind for event in await _events(db, acme, finding.id)][-1] == "link_promoted"
+    assert await _audit_actions(db, acme, "link.") == ["link.added", "link.promoted"]
+
+
+async def test_a_reference_not_yet_read_cannot_be_promoted(db: AsyncSession, acme: Team) -> None:
+    """Until its first read, nexovue does not know the issue's id, and so cannot hold it to
+    one case; the person is told to wait."""
+    await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+    link_id = uuid.UUID((await _attach(db, acme, finding)).json()["link_id"])
+
+    response = await _promote(db, acme, finding, link_id)
+
+    assert response.status_code == 409
+    assert "not read this issue yet" in response.text
+    assert (await _link(db, acme, link_id)).role == "reference"
+
+
+async def test_an_issue_is_synced_on_one_case_only(db: AsyncSession, acme: Team) -> None:
+    """AC53: promoting an issue synced on another case is refused, and so is promoting a
+    second issue onto a case that has one."""
+    await _connected(db, acme)
+    first = await _case_finding(db, acme)
+    second = await _case_finding(db, acme, service="payments")
+    on_first = uuid.UUID((await _attach(db, acme, first)).json()["link_id"])
+    on_second = uuid.UUID((await _attach(db, acme, second)).json()["link_id"])
+    await _read_once(db, on_first)
+    await _read_once(db, on_second)
+    assert (await _promote(db, acme, first, on_first)).status_code == 202
+
+    elsewhere = await _promote(db, acme, second, on_second)
+    assert elsewhere.status_code == 409
+    assert "synced with another case" in elsewhere.text
+
+    other = uuid.UUID((await _attach(db, acme, first, "acme/api#8")).json()["link_id"])
+    await _read_once(db, other, external_id="7000008")
+    already = await _promote(db, acme, first, other)
+    assert already.status_code == 409
+    assert "already has a synced issue" in already.text
+
+
+@pytest.mark.parametrize(
+    ("arrange", "words"),
+    [
+        ("public", "This repository is public"),
+        ("resolved", "This case is resolved"),
+        ("needs_attention", "needs attention"),
+        ("synced", "Only an attached issue"),
+    ],
+)
+async def test_what_refuses_a_promotion(
+    db: AsyncSession, acme: Team, arrange: str, words: str
+) -> None:
+    connection_id, _ = await _connected(db, acme, private=arrange != "public")
+    finding = await _case_finding(db, acme)
+    link_id = uuid.UUID((await _attach(db, acme, finding)).json()["link_id"])
+    await _read_once(db, link_id)
+    if arrange == "resolved":
+        finding.case_state, finding.case_resolution = "resolved", "resolved"
+        finding.case_resolved_at = NOW
+        await db.flush()
+    elif arrange == "needs_attention":
+        await db.execute(
+            text("UPDATE connections SET state = 'needs_attention' WHERE id = :id"),
+            {"id": connection_id},
+        )
+    elif arrange == "synced":
+        await db.execute(
+            text("UPDATE finding_links SET role = 'synced' WHERE id = :id"), {"id": link_id}
+        )
+
+    response = await _promote(db, acme, finding, link_id)
+
+    assert response.status_code == 409, response.text
+    assert words in response.text
+
+
+async def test_promoting_another_organization_s_link_is_the_same_404(
+    db: AsyncSession, acme: Team, globex: Team
+) -> None:
+    await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+    link_id = uuid.UUID((await _attach(db, acme, finding)).json()["link_id"])
+    theirs = await _case_finding(db, globex)
+
+    response = await _call(
+        db, globex, globex.member, "POST", f"/findings/{theirs.id}/links/{link_id}/promote"
+    )
+
+    assert response.status_code == 404
+
+
+async def test_a_link_in_a_repository_that_is_public_says_so(db: AsyncSession, acme: Team) -> None:
+    """FR42, AC115: once the refresh records a repository as public, its links show it."""
+    _, place_id = await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+    await _attach(db, acme, finding)
+    await db.execute(
+        text("UPDATE connection_repositories SET is_private = false WHERE id = :id"),
+        {"id": place_id},
+    )
+
+    response = await _call(db, acme, acme.member, "GET", f"/findings/{finding.id}")
+
+    [shown] = response.json()["links"]
+    assert shown["place_public"] is True
+
+
+async def test_a_request_names_either_a_repository_or_an_address(
+    db: AsyncSession, acme: Team
+) -> None:
+    _, place_id = await _connected(db, acme)
+    finding = await _case_finding(db, acme)
+
+    for body in ({}, {"place_id": str(place_id), "url": ISSUE_ADDRESS}):
+        response = await _call(db, acme, acme.member, "POST", f"/findings/{finding.id}/links", body)
+        assert response.status_code == 422, response.text

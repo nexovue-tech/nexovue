@@ -214,6 +214,8 @@ export interface ConnectionPlace {
   key: string;
   is_private: boolean;
   is_reachable: boolean;
+  /** When an admin allowed issues in it while public (FR42); null or absent when not. */
+  public_allowed_at?: string | null;
 }
 
 /** One live connection. Never a credential; a support view gets id, kind and state alone. */
@@ -335,5 +337,67 @@ export function useDisconnect() {
   return useMutation({
     mutationFn: (connectionId: string) => apiClient.delete<null>(`connections/${connectionId}`),
     onSettled: () => queryClient.invalidateQueries({ queryKey: connectionsQueryKey }),
+  });
+}
+
+// ------------------------------------------------- public repositories and mapping (F22 T6.3)
+
+/** FR42, AC115: allow issues in a public repository, or withdraw that. Each is audited. */
+export function usePublicAllowance() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["connections", "public-allowance"],
+    mutationFn: (change: { connectionId: string; placeId: string; allowed: boolean }) =>
+      apiClient.patch<ConnectionPlace>(
+        `connections/${encodeURIComponent(change.connectionId)}/places/${encodeURIComponent(change.placeId)}`,
+        { public_allowed: change.allowed },
+      ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: connectionsQueryKey }),
+  });
+}
+
+/** A project's service, and the repository its issues go to by default. */
+export interface ServiceRepository {
+  project_id: string;
+  service_name: string;
+  place_id: string;
+  place_key: string;
+}
+
+export const serviceRepositoriesQueryKey = ["service-repositories"] as const;
+
+export function useServiceRepositories(enabled = true) {
+  return useQuery({
+    queryKey: serviceRepositoriesQueryKey,
+    enabled,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ mappings: ServiceRepository[] }>("service-repositories", { signal }),
+    select: (response) => response.mappings,
+  });
+}
+
+export function useMapService() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["service-repositories", "map"],
+    mutationFn: (mapping: { projectId: string; serviceName: string; placeId: string }) =>
+      apiClient.put<ServiceRepository>("service-repositories", {
+        project_id: mapping.projectId,
+        service_name: mapping.serviceName,
+        place_id: mapping.placeId,
+      }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: serviceRepositoriesQueryKey }),
+  });
+}
+
+export function useUnmapService() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["service-repositories", "unmap"],
+    mutationFn: (mapping: { projectId: string; serviceName: string }) =>
+      apiClient.delete<null>("service-repositories", {
+        searchParams: { project_id: mapping.projectId, service_name: mapping.serviceName },
+      }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: serviceRepositoriesQueryKey }),
   });
 }

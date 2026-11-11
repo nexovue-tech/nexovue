@@ -31,6 +31,12 @@ const mounted: Root[] = [];
 // What the start page asked to submit; jsdom does not submit forms.
 const submitted: HTMLFormElement[] = [];
 const CONNECTION = "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0c01";
+const PROJECT = {
+  id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0c21",
+  slug: "production",
+  name: "Production",
+  first_reported_on: null,
+};
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -109,6 +115,8 @@ function stubApi(
       if (path === "auth/me") return json(identityFor(role));
       if (path === "system/info") return json({ deployment: "self-hosted" });
       if (path === "connections") return json(answer);
+      if (path === "service-repositories" && method === "GET") return json({ mappings: [] });
+      if (path === "projects") return json({ projects: [PROJECT] });
       throw new Error(`no stub for ${method} ${url.pathname}`);
     }),
   );
@@ -504,5 +512,145 @@ describe("the console-wide banner (FR31, AC113)", () => {
     const { container } = await mount(ConnectionsBanner, "/anywhere");
 
     expect(container.textContent?.includes("GitHub needs attention. Open settings.")).toBe(shown);
+  });
+});
+
+describe("public repositories and where each service's issues go (T6.3, FR42, AC115)", () => {
+  it("refuses a public repository until an admin allows it, warning first", async () => {
+    const sent = stubApi("owner", overview([view()]), (path, method) =>
+      path === `connections/${CONNECTION}/places/r2` && method === "PATCH"
+        ? json({ id: "r2", key: "acme/site", is_private: false, is_reachable: true })
+        : undefined,
+    );
+    const { container } = await mount(ConnectionsScreen, "/settings/connections");
+
+    const site = container.querySelector('[data-repository="acme/site"]');
+    expect(site?.textContent).toContain(
+      "Public. nexovue creates no issue here unless an admin allows it.",
+    );
+    expect(container.querySelector('[data-repository="acme/api"]')?.textContent).not.toContain(
+      "Allow",
+    );
+    const allow = [...(site?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "Allow",
+    );
+    await act(async () => allow?.click());
+    expect(site?.textContent).toContain(
+      "Issues nexovue creates in acme/site will be public: anyone can read the service name",
+    );
+    expect(sent.some((each) => each.method === "PATCH")).toBe(false);
+
+    const confirm = [...(site?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "Allow issues in acme/site",
+    );
+    await act(async () => confirm?.click());
+    await settle();
+
+    expect(sent.find((each) => each.method === "PATCH")).toEqual({
+      method: "PATCH",
+      path: `connections/${CONNECTION}/places/r2`,
+      body: { public_allowed: true },
+    });
+  });
+
+  it("an allowed public repository says since when, and can be withdrawn", async () => {
+    const sent = stubApi(
+      "owner",
+      overview([
+        view({
+          repositories: [
+            {
+              id: "r2",
+              key: "acme/site",
+              is_private: false,
+              is_reachable: true,
+              public_allowed_at: "2026-06-01T12:00:00Z",
+            },
+          ],
+        }),
+      ]),
+      (path, method) =>
+        path === `connections/${CONNECTION}/places/r2` && method === "PATCH"
+          ? json({ id: "r2", key: "acme/site", is_private: false, is_reachable: true })
+          : undefined,
+    );
+    const { container } = await mount(ConnectionsScreen, "/settings/connections");
+
+    const site = container.querySelector('[data-repository="acme/site"]');
+    expect(site?.textContent).toContain("Public. Issues allowed here since");
+    const withdraw = [...(site?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "Withdraw",
+    );
+    await act(async () => withdraw?.click());
+    await settle();
+
+    expect(sent.find((each) => each.method === "PATCH")?.body).toEqual({ public_allowed: false });
+  });
+
+  it("an empty mapping is not a warning; a service is set to a repository", async () => {
+    const sent = stubApi("owner", overview([view()]), (path, method) =>
+      path === "service-repositories" && method === "PUT"
+        ? json({
+            project_id: PROJECT.id,
+            service_name: "checkout",
+            place_id: "r1",
+            place_key: "acme/api",
+          })
+        : undefined,
+    );
+    const { container } = await mount(ConnectionsScreen, "/settings/connections");
+
+    expect(container.textContent).toContain(
+      "No service has a repository set. Creating an issue asks for one each time.",
+    );
+    const service = container.querySelector<HTMLInputElement>('input[name="service"]');
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setValue?.call(service, "checkout");
+      service?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const set = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Set repository",
+    );
+    await act(async () => set?.click());
+    await settle();
+
+    expect(sent.find((each) => each.method === "PUT")?.body).toEqual({
+      project_id: PROJECT.id,
+      service_name: "checkout",
+      place_id: "r1",
+    });
+  });
+
+  it("lists each mapping by project, service and repository, and removes one", async () => {
+    const sent = stubApi("owner", overview([view()]), (path, method) => {
+      if (path === "service-repositories" && method === "GET") {
+        return json({
+          mappings: [
+            {
+              project_id: PROJECT.id,
+              service_name: "checkout",
+              place_id: "r1",
+              place_key: "acme/api",
+            },
+          ],
+        });
+      }
+      if (path === "service-repositories" && method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      return undefined;
+    });
+    const { container } = await mount(ConnectionsScreen, "/settings/connections");
+
+    const row = container.querySelector('[data-mapping="checkout"]');
+    expect(row?.textContent).toContain("Production · checkout → acme/api");
+    const remove = [...(row?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "Remove",
+    );
+    await act(async () => remove?.click());
+    await settle();
+
+    expect(sent.some((each) => each.method === "DELETE")).toBe(true);
   });
 });

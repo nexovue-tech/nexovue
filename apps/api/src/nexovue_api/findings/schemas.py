@@ -11,7 +11,8 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from nexovue_platform.connections import MAX_PASTED_ADDRESS_LENGTH
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 FindingScope = Literal["service", "project"]
 FindingSeverity = Literal["critical", "warning"]
@@ -309,6 +310,9 @@ class CaseLink(BaseModel):
     url: str | None
     # The repository it lives in, by its strict key; None once that place is gone.
     place_key: str | None
+    # Anyone can read that repository now (FR42): issues there are already exposed, and
+    # the page says so. Whether an admin allowed it decides only creating and promoting.
+    place_public: bool = False
     seen_state: IssueState | None
     wanted_state: IssueState | None
     # A comment is owed and not yet written (BR10).
@@ -530,10 +534,18 @@ class IssuePreview(BaseModel):
 
 
 class CreateLinkRequest(BaseModel):
-    """`POST /findings/{id}/links`: create an issue in one of the connection's places.
-    Attaching a pasted address as a reference is Step 6's (FR40)."""
+    """`POST /findings/{id}/links`: either `place_id`, to create an issue in one of the
+    connection's places, or `url`, a pasted issue address to attach as a reference
+    (FR40). Exactly one."""
 
-    place_id: uuid.UUID
+    place_id: uuid.UUID | None = None
+    url: str | None = Field(default=None, max_length=MAX_PASTED_ADDRESS_LENGTH)
+
+    @model_validator(mode="after")
+    def _one_of_the_two(self) -> CreateLinkRequest:
+        if (self.place_id is None) == (self.url is None):
+            raise ValueError("send either place_id, to create an issue, or url, to attach one")
+        return self
 
 
 class LinkChanged(BaseModel):

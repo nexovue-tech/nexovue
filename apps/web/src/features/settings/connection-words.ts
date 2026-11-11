@@ -98,3 +98,13 @@ export const ACTION_LABEL: Record<Exclude<SetupAction, null>, string> = {
   choose_repositories: "Choose repositories on GitHub",
   test_again: "Test again",
 };
+
+/** FR42, D12: what allowing a public repository makes public, said before the click. */
+export const allowPublicWarning = (repository: string) =>
+  `Issues nexovue creates in ${repository} will be public: anyone can read the service name, what moved, the times and the link to your console. A case synced with an issue there can be resolved by anyone who can close it. Issues already there are already public.`;
+export const PUBLIC_REFUSED_UNTIL_ALLOWED =
+  "Public. nexovue creates no issue here unless an admin allows it.";
+export const publicAllowedSince = (since: string) => `Public. Issues allowed here since ${since}.`;
+/** The mapping is optional, so an empty table is not a warning (design). */
+export const NO_MAPPING =
+  "No service has a repository set. Creating an issue asks for one each time.";

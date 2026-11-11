@@ -107,6 +107,9 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # issues go with its finding; a connection or place that goes leaves them as text.
     "connection_repositories": "connections",
     "finding_links": "findings",
+    # F22 T6.2. A service's repository mapping goes with its project (and with its
+    # repository, when the connection that reaches it goes).
+    "service_repositories": "projects",
     # F3. A finding's explanation versions go with the finding; the hour's error-group
     # read with its project (it also expires on its own after an hour).
     "finding_explanations": "findings",

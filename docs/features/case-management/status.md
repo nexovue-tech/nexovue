@@ -2,14 +2,188 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2.
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR.
 
 
 ## Current task
 
-Step 5 is on `feature/phase-2` (2026-11-09): a tracker's signed webhook makes the issue it
-names be read sooner, and nothing else (ADR-035, point 2). No migration and no new ADR.
-Four new open decisions (8 to 11), none blocking the commit.
+Step 6 is on `feature/phase-2` (2026-11-11): a pasted issue address attaches as a reference
+that is read hourly and never changes its case; a person may promote one to the synced
+issue after a warning, through a job that runs the public check; an admin maps a service
+to a repository, which the create panel preselects, and allows or withdraws a public
+repository, each audited; admins are told once when a repository turns public. Migrations
+0068 and 0069; no new ADR. Eight new
+open decisions (12 to 19), none blocking the commit.
+
+
+## Step 6 built, 2026-11-11
+
+Plan tasks T6.1 to T6.3, each with its note in `plan.md`. **Built against the simulated
+GitHub only** (foundation item 28): the step's judgeable check against real GitHub is
+**not yet run; the founder tests it after Phase 2**, with T3.0, T4.8 and T5.2.
+**Kind-agnostic (foundation item 29):** the parser returns a kind, and the attach finds the
+place through the connection of that kind; the job's promotion, reference reads and public
+check go through `Tracker` (`read`, `is_public`) and name no tracker; the issue's id comes
+back on `IssueSeen.issue_id`, which Jira's adapter fills the same way. Jira's address forms
+join `parse_issue_address` with Step 7.
+
+What exists now:
+
+- **Pasting an address** (`POST /findings/{id}/links` with `{url}`): parsed by
+  `nexovue_platform.connections.parse_issue_address` (GitHub's issue page, with any
+  trailing slash, query or fragment, or the key `owner/name#n`; a pull request, another
+  host, a port, a user part, `.` or `..` as a name are refused), then found among the live
+  connection's reachable places ignoring case, and stored under the place's own spelling.
+  Nothing is fetched (AC54). Outside a connected repository: 409; not an address: 422. The
+  same issue once per case (409); any number of cases (AC53); at most 20 references a case.
+  It starts a case with nobody assigned, like any link (D70), counts as an act beyond
+  taking (FR49), and on a resolved case leaves it resolved, as a note does. Audited
+  `link.added`; timeline `link_added`; a sync job is added and the workers woken.
+- **The job reads a reference hourly** (`REFERENCE_POLL`, FR41) whatever the case's state,
+  until 30 days after the case resolved (`not_followed`). It records the status and never
+  changes the case (the comparison's reference row, AC53). Its first read stores the
+  tracker's own id for the issue (`external_id`), which a pasted address does not carry.
+- **Promoting** (`POST /findings/{id}/links/{link_id}/promote`, `MayOperateCases`): only a
+  reference already read (so its id is known), on a case that is not resolved and has no
+  live synced link, whose connection works and whose repository is reachable and private
+  or allowed; else 409 with the reason. The link becomes `synced`, `promoting`; one
+  case per issue is the database's index (`uq_finding_links_synced_once`), so promoting an
+  issue synced elsewhere is a 409. Audited `link.promoted`; timeline `link_promoted`. The
+  job (`sync._promote`) runs the public check, reads the issue and ends `in_sync`, adopting
+  the status it read, or `refused` (`public_repository`), or rows 8 to 11 for a gone,
+  missing or moved issue. A failure that may pass leaves it `promoting`, with backoff.
+- **AC88's "only the click route writes `creating`"** is `test_link_status_writers.py`, a
+  scan of every ORM keyword, attribute and SQL text in the API, the scheduler and the
+  shared package that sets `sync_status` to `creating`.
+- **Public repositories** (`PATCH /connections/{id}/places/{place_id}`,
+  `MayManageConnections`, `connections/places.py`): allow or withdraw, each audited
+  (`connection.public_repository_allowed`, `…_withdrawn`, naming the repository); asking
+  for what already holds writes nothing. Only a repository public now can be allowed
+  (open decision 15). The refresh (`tasks._UPSERT_PLACE`) clears `public_told_at` when a
+  repository turns public, sets it when one is first listed public (nothing turned), and
+  clears the allowance when one turns private. The cases sweep (`case_emails.py`) sends
+  `CONNECTION_REPOSITORY_PUBLIC` to verified owners and admins once per such repository,
+  marking it told before the send. A link shows `place_public`, and the page says
+  "acme/api is public: anyone can read this issue." (FR42).
+- **The mapping** (`GET`, `PUT`, `DELETE /service-repositories`; reading for any person,
+  none for a support view; writing `MayManageConnections`), audited
+  `service_repository.changed`. Migration 0069's table, keyed `(org_id, project_id,
+  service_name)`, refers to `projects` through 0068's `(org_id, id)` index and to the
+  place, both composite, so a cross-organization insert is refused by the database (AC72).
+  It goes with its project, or its place (`organizations/tables.py`).
+- **The console:** `/settings/connections` lists each public repository as refused until
+  allowed, with **Allow** behind the warning naming what becomes public, and **Withdraw**;
+  and the mapping, with a form (project, service, repository) and **Remove**. The finding
+  page has **Attach an issue** (`AttachIssuePanel.tsx`), a reference's own status in
+  words ("Closed in GitHub, read 20 min. ago. It does not change this case"), **Sync with
+  this case** behind the warning, the public line, and the create panel starting on the
+  service's mapped repository.
+
+### Unverified until the founder's real-GitHub run (foundation item 28)
+
+- That `GET /repos/{r}/issues/{n}` carries `id`, which a reference's first read stores,
+  is from GitHub's documentation as Step 4 read it; the fake answers so.
+- The issue page's address form (`/<owner>/<name>/issues/<n>`) and GitHub's names being
+  case-insensitive are general knowledge, not read from GitHub's pages in this session.
+- That a repository turning public shows as `private: false` in the installation's
+  repository list on the next refresh is the fake's behaviour, shaped from documentation.
+
+### Where the code needed more than the plan named
+
+- **Migration 0068**, a concurrent unique index on `projects (org_id, id)`: without it a
+  mapping's project could not be keyed with its organization, and AC72's "a direct insert
+  of a mapping across organizations must be refused by the database" would not hold.
+- **New files:** `connections/places.py` (allowance and mapping, beside `service.py`),
+  `findings/AttachIssuePanel.tsx`, `test_link_status_writers.py`,
+  `test_pasted_issue_address.py`.
+- **`IssueSeen.issue_id`**, so a pasted reference learns its tracker id.
+- **A new email message**, `CONNECTION_REPOSITORY_PUBLIC`, for "admins must be told once".
+- **One timeline sentence changed:** a refusal for a public repository now reads "nexovue
+  did not write to the issue: the repository is public", true of a refused creation and a
+  refused promotion, which share one event.
+- **The plan's file names:** T6.1's work is in `findings/links.py` and `sync.py`, not
+  `findings/cases.py` and `tasks.py`; tests sit where Step 4's link and sync tests are.
+
+### Validation run (read, not inferred)
+
+Against this worktree's own Postgres (`f22s6-pg`, port 45432, Postgres 18,
+`pgvector/pgvector:0.8.6-pg18-trixie`, migrated to 0069) and ClickHouse container
+(`f22s6-ch`, port 48123, not migrated: Step 6 touches no ClickHouse), torn down afterwards.
+
+- **Seen failing first, then passing** (each by putting the committed file back from a
+  saved copy, running, and restoring):
+  - `test_pasted_issue_address.py`, 30: a collection error on the committed
+    `connections.py` (no parser); 30 passed. A control putting back the old `.`/`..`
+    lookahead failed the two dot-name rows.
+  - `test_findings_links_live.py`, 19 new tests: on the committed `findings/links.py`,
+    `router.py` and `schemas.py`, 19 failed and the 25 earlier passed; restored, 44 passed.
+  - `test_connections_live.py`, 6 new tests: a collection error on the committed
+    connections code (no `places` module). Controls on the built code: the private-refusal
+    and idempotence lines removed failed 2; `fk_service_repositories_project` dropped in
+    the database failed the cross-organization test; restored, 43 passed.
+  - `test_link_status_writers.py`, 2: its first run failed on its own wrong source root
+    (the scan saw nothing); fixed, with a guard that each root exists. A control planting
+    a SQL writer in `sync.py` and `promote` writing `creating` failed, naming both;
+    restored, 2 passed. It holds an invariant the committed code already kept.
+  - `test_connections_sync_live.py`, 6 new tests: on the committed `sync.py`,
+    `trackers.py` and `github.py`, 5 failed; the sixth (a reference past 30 days is not
+    followed) passed, because that rule already held for every link, and stays as a guard.
+  - `test_connections_github_live.py` and `test_cases_sweep_live.py`, one new test each
+    (a repository turning public): both failed on the committed `tasks.py` and
+    `case_emails.py`; restored, both passed.
+  - `test_deletion_live.py`: with `service_repositories` left out of
+    `organizations/tables.py`, 2 failed (an unclassified table; a tenant table not erased).
+  - Web: `FindingLinks.test.ts` (5 new), `link-words.test.ts` (19 new rows, 1 changed),
+    `ConnectionsScreen.test.ts` (4 new): on the committed web sources 23 failed (the two
+    unchanged "Not created" rows passed); restored, all passed.
+- **The inventory and structure suites**, one process: `test_deletion_live.py`,
+  `test_keys_live.py`, `test_apikeys_live.py`, `test_migration_rules.py`,
+  `test_setup_schema.py`, `test_postgres_tenancy_structure.py`,
+  `test_scheduler_postgres_tenancy_structure.py`, `test_tenant_chokepoint_structure.py`,
+  `test_authorization_coverage.py`, `test_ratelimit_coverage.py`,
+  `test_no_tracker_calls_in_api.py`, `test_notifications_console.py`,
+  `test_connection_model.py`, `test_link_status_writers.py`: **2,617 passed**.
+- **The scheduler's connection, sweep and prune suites**, one process: every
+  `apps/scheduler/tests/test_connections_*.py`, `test_cases_sweep_live.py`,
+  `test_beat_schedule.py`, `test_detection_prune_live.py`, `test_slo_prune_live.py`:
+  **228 passed**.
+- **The API's case and link suites**, one process: `test_case_transition_parity_live.py`,
+  `test_findings_cases_live.py`, `test_connections_webhook_live.py`,
+  `test_finding_links_schema_live.py`, `test_findings_links_live.py`,
+  `test_connections_live.py`, with `test_pasted_issue_address.py` and
+  `test_issue_text.py`: **284 passed**.
+- **Migrations 0068 and 0069** down to 0067 and up again: the table and the index went and
+  came back, the index valid.
+- **The whole web suite:** 169 files, **2,083 tests passed**.
+- `uv run mypy .`: no issues in 928 files (after rebuilding a cache a single-file run had
+  left stale, which reported two false import errors); `ruff check` and `ruff format --check` clean; Biome clean on
+  `features/findings` and `features/settings`; `pnpm -r --if-present run typecheck` clean;
+  `verify-tokens.js` clean.
+- **Concurrent workers (this week's lesson 1).** The new scheduler tests own their tenant,
+  App id and installation, pin the job's clock (2099-01-05) and set the connection's
+  `paused_until` a day before it: the live stack's sweep, on the wall clock, sees a paused
+  connection and adds no job for it, while the test's own run, past the pause, goes on. The
+  API tests run in one rolled-back transaction each. No new assertion depends on today's
+  date: the allowance and mapping tests and the scheduler tests pass pinned instants, the
+  new web tests pin `Date`, and the link route tests assert no time.
+- **Not run:** `just check` (the coordinator's); the judgeable check against real GitHub
+  (foundation item 28); a hand check of the new screens at 375 px.
+
+### Residual risks
+
+- **A reference's id is learned on its first read.** Two references on one case that turn
+  out to be one issue (attached by two spellings that a later transfer joined) would make
+  that read's update collide with `uq_finding_links_issue_per_case`; the run's transaction
+  for that link fails and the next run tries again. Not reachable by pasting, which uses
+  the place's own spelling; not handled further.
+- **A promoted issue that turns out gone or moved** holds the case's synced slot, as a
+  refused one does (open decision 14), until a person removes it.
+- **Self-review (LOW, not fixed):** a promotion refused because the connection needs
+  attention reuses creation's sentence, "… so no issue can be created now", which is
+  loosely worded for a sync; it belongs with open decision 17's wording review.
+- **The live stack's cases sweep** may tell a test's repository's admins before the test's
+  own call does; the test arranges and acts within milliseconds, against a sweep every 5
+  minutes, as Step 4's sweep tests do.
 
 
 ## Step 5 built, 2026-11-09
@@ -786,14 +960,70 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-The coordinator commits Step 5 (no migration to re-chain). The founder answers open
-decisions 8 to 11 below, with Step 4's. Then Step 6 (reference links, mapping and public
-repositories). T4.9 measures the built container. After Phase 2, the founder runs T3.0, T3.9's hand
+The founder answers open decisions 12 to 19 below, with Steps 4's and 5's. Then
+Step 8 (customer documents, and the whole gate); Step 7 waits on Atlassian. T4.9 measures
+the built container. After Phase 2, the founder runs T3.0, T3.9's hand
 checks and T4.8 against real GitHub and a real browser (foundation item 28). T2.9 waits
 on F3; Step 7 on Atlassian.
 
 
 ## Open decisions
+
+**From Step 6 (2026-11-11).** None blocks the commit; each is built as recommended.
+
+**12. A promotion adopts the issue's status as it reads it.** The spec says promotion
+"runs as a job that makes the public check" and ends `in_sync` or `refused`; it does not
+say what an already-closed issue does to an active case. Built: the first read is
+recorded as seen, so only a later change in the tracker moves the case (a closed issue
+promoted onto an active case does not resolve it then). *Option A (recommended):* keep it:
+a second click should not end a case by surprise. *Option B:* treat the first read as a
+change from `open`, so a closed issue holds or resolves the case at once (rows 5a, 5c).
+
+**13. Only a reference nexovue has read can be promoted.** A pasted address carries no
+tracker id, and one-case-per-issue is enforced on that id. Built: a reference not yet
+read is refused, "nexovue has not read this issue yet … Try again in a minute."; the first
+read follows the attach at once. *Option A (recommended):* keep it: the database's index
+then decides at the click. *Option B:* allow it, and let the job refuse a collision,
+which needs a new link failure word and a migration.
+
+**14. A refused promotion keeps the case's synced slot.** As a refused creation does today
+(the index frees only `stopped`), so the person removes it before creating or promoting
+another. *Option A (recommended):* keep it, consistent with creation. *Option B:* a
+refused promotion falls back to a reference, still read hourly; a refused creation would
+then deserve the same, which is a change to Step 4.
+
+**15. Only a public repository can be allowed, and turning private clears the
+allowance.** The design says an admin "may allow" a public repository. Built: allowing a
+private one is refused ("nothing to allow"), and the refresh clears an allowance when its
+repository turns private, so a later turn to public needs a fresh one after the warning.
+*Option A (recommended):* keep it: an allowance given ahead of time would let a repository
+turn public with nobody warned. *Option B:* allow ahead of time and keep allowances.
+
+**16. A reference on a resolved case leaves it resolved.** The spec lets a link start a
+case and says a reference never changes one; it is silent on a resolved case. Built:
+allowed, like a note (FR14), and the case stays resolved. *Option A (recommended):* keep
+it. *Option B:* refuse it, as creating is refused (open decision 1).
+
+**17. Where Attach lives, and new words.** The design names the paste but not its place.
+Built: **Attach an issue** among the case's actions, for anyone who may operate cases,
+opening a panel. New fixed text needing the founder's eye: the attach panel's sentence;
+"Sync with this case" and its warning; "Closed in GitHub, read … It does not change this
+case"; "Not synced: the repository is public …"; "acme/api is public: anyone can read this
+issue."; the settings screen's allow warning, "Public. nexovue creates no issue here unless
+an admin allows it.", the mapping's empty line; the repository-public email; and the
+timeline's "nexovue did not write to the issue: the repository is public", replacing "The
+issue was not created: …" because a refused promotion shares that event. *Recommended:*
+review once on the built screen.
+
+**18. The mapping's service is typed, not chosen.** The settings form takes the service
+name as text, because the screen holds no list of the project's services and reading one
+is a telemetry read. *Option A (recommended):* keep it; F5 or a later step may add a
+picker. *Option B:* read the project's services there.
+
+**19. A repository first seen public owes no notice.** FR42 tells admins when the refresh
+sees a repository *turn* public. Built: one already public when first listed is shown as
+public and refused, with no email. *Option A (recommended):* keep it. *Option B:* tell
+admins about every public repository the first refresh finds.
 
 **From Step 5 (2026-11-09).** None blocks the commit; each is built as recommended.
 

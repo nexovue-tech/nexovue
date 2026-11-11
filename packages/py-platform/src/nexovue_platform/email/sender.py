@@ -66,6 +66,9 @@ class Message(Enum):
     CONNECTION_NEEDS_ATTENTION = "connection_needs_attention"
     CONNECTION_FAILING = "connection_failing"
     CONNECTION_EXPIRING = "connection_expiring"
+    # F22 Step 6 (FR42): a repository the connection reaches turned public. Names the
+    # repository by its strict key; nothing an issue says.
+    CONNECTION_REPOSITORY_PUBLIC = "connection_repository_public"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

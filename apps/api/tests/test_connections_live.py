@@ -35,11 +35,12 @@ from nexovue_platform.connections import (
     connection_secret_owner,
 )
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from nexovue_api.connections import service
+from nexovue_api.connections import places, service
 from nexovue_api.connections.schemas import Availability
-from nexovue_api.data.postgres.models import AuditLogEntry, Connection
+from nexovue_api.data.postgres.models import AuditLogEntry, Connection, ConnectionRepository
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
@@ -198,7 +199,7 @@ def _box(purpose: str) -> SealedBox:
     return SealedBox(keyring_from(KEYS.current), purpose=purpose)
 
 
-async def _working(db: AsyncSession, tenant: ProvisionedTenant) -> uuid.UUID:
+async def _working(db: AsyncSession, tenant: ProvisionedTenant, *, app_id: int = 7) -> uuid.UUID:
     """A connection whose App is made, installed and tested."""
     connection_id = uuid.uuid4()
     owner = connection_secret_owner(str(tenant.organization.id), str(connection_id))
@@ -209,7 +210,7 @@ async def _working(db: AsyncSession, tenant: ProvisionedTenant) -> uuid.UUID:
             kind="github",
             state="working",
             sealed_credential=_box(CONNECTION_CREDENTIAL_PURPOSE).seal("old key", owner=owner),
-            github_app_id=7,
+            github_app_id=app_id,
             github_app_slug="nexovue-connections",
             github_installation_id=70,
             last_ok_at=NOW,
@@ -697,3 +698,276 @@ async def test_waiting_for_a_test_holds_no_transaction_and_keeps_what_was_loaded
 
     assert waited.pending is True
     assert loaded.github_app_slug == "nexovue-connections"
+
+
+# ------------------------------------------- public repositories and mapping (T6.2)
+
+# A fixed instant: nothing here may read differently on another day (`status.md`).
+PINNED: Final = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+
+async def _place(
+    db: AsyncSession, tenant: ProvisionedTenant, connection_id: uuid.UUID, *, private: bool
+) -> uuid.UUID:
+    place_id: uuid.UUID = (
+        await db.execute(
+            text(
+                "INSERT INTO connection_repositories (org_id, connection_id, external_id, key, "
+                "is_private) VALUES (:org, :id, :external, :key, :private) RETURNING id"
+            ),
+            {
+                "org": tenant.organization.id,
+                "id": connection_id,
+                "external": str(uuid.uuid4().int % 10**9),
+                "key": f"acme/site-{uuid.uuid4().hex[:6]}",
+                "private": private,
+            },
+        )
+    ).scalar_one()
+    return place_id
+
+
+async def _allow(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    connection_id: uuid.UUID,
+    place_id: uuid.UUID,
+    allowed: bool,
+    *,
+    availability: Availability = SELF_HOSTED,
+) -> Any:
+    return await places.set_public_allowed(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        connection_id=connection_id,
+        place_id=place_id,
+        allowed=allowed,
+        availability=availability,
+        now=PINNED,
+    )
+
+
+async def _place_actions(db: AsyncSession, tenant: ProvisionedTenant) -> list[tuple[str, Any]]:
+    rows = await db.execute(
+        select(AuditLogEntry.action, AuditLogEntry.detail)
+        .where(
+            AuditLogEntry.org_id == tenant.organization.id,
+            AuditLogEntry.action.in_(
+                ("connection.public_repository_allowed", "connection.public_repository_withdrawn")
+            ),
+        )
+        .order_by(AuditLogEntry.id)
+    )
+    return [(action, detail) for action, detail in rows.all()]
+
+
+async def test_an_admin_allows_and_withdraws_a_public_repository_each_audited(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """AC115, FR42: the allowance names who and when, and each change is one audit row
+    naming the repository; asking again for what already holds writes nothing."""
+    connection_id = await _working(db, tenant)
+    place_id = await _place(db, tenant, connection_id, private=False)
+
+    allowed = await _allow(db, tenant, connection_id, place_id, True)
+    again = await _allow(db, tenant, connection_id, place_id, True)
+    row = await db.scalar(select(ConnectionRepository).where(ConnectionRepository.id == place_id))
+    assert row is not None
+    assert (allowed.public_allowed_at, again.public_allowed_at) == (PINNED, PINNED)
+    assert row.public_allowed_by == tenant.user.id
+
+    withdrawn = await _allow(db, tenant, connection_id, place_id, False)
+    await _allow(db, tenant, connection_id, place_id, False)
+    cleared = (
+        await db.execute(
+            select(
+                ConnectionRepository.public_allowed_at, ConnectionRepository.public_allowed_by
+            ).where(ConnectionRepository.id == place_id)
+        )
+    ).one()
+
+    assert withdrawn.public_allowed_at is None
+    assert tuple(cleared) == (None, None)
+    assert [action for action, _ in await _place_actions(db, tenant)] == [
+        "connection.public_repository_allowed",
+        "connection.public_repository_withdrawn",
+    ]
+    assert all(
+        detail == {"place_id": str(place_id), "repository": row.key}
+        for _, detail in await _place_actions(db, tenant)
+    )
+
+
+async def test_a_private_repository_has_nothing_to_allow(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """An allowance given before a repository is public would let it turn public with
+    nobody warned, so it is refused."""
+    connection_id = await _working(db, tenant)
+    place_id = await _place(db, tenant, connection_id, private=True)
+
+    with pytest.raises(ConflictError, match="private"):
+        await _allow(db, tenant, connection_id, place_id, True)
+
+    assert await _place_actions(db, tenant) == []
+
+
+async def test_allowing_a_repository_elsewhere_or_where_connections_do_not_exist_is_refused(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """AC72: another organization's place is the same 404 as none."""
+    elsewhere = await provision_tenant(
+        db,
+        organization_name="Elsewhere",
+        email=f"elsewhere-{uuid.uuid4()}@example.test",
+        password="correct horse battery staple",
+    )
+    connection_id = await _working(db, tenant)
+    place_id = await _place(db, tenant, connection_id, private=False)
+
+    with pytest.raises(NotFoundError):
+        await _allow(db, elsewhere, connection_id, place_id, True)
+    with pytest.raises(NotFoundError):
+        await _allow(db, tenant, connection_id, uuid.uuid4(), True)
+    with pytest.raises(ConflictError, match="hosted service"):
+        await _allow(
+            db,
+            tenant,
+            connection_id,
+            place_id,
+            True,
+            availability=Availability(deployment="hosted", enabled=True, app_base_url=CONSOLE),
+        )
+
+
+async def _map(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    place_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID | None = None,
+    service_name: str = "checkout",
+) -> Any:
+    return await places.map_service(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        project_id=project_id or tenant.project.id,
+        service_name=service_name,
+        place_id=place_id,
+        now=PINNED,
+    )
+
+
+async def _mapping_actions(db: AsyncSession, tenant: ProvisionedTenant) -> list[Any]:
+    rows = await db.scalars(
+        select(AuditLogEntry.detail)
+        .where(
+            AuditLogEntry.org_id == tenant.organization.id,
+            AuditLogEntry.action == "service_repository.changed",
+        )
+        .order_by(AuditLogEntry.id)
+    )
+    return list(rows)
+
+
+async def test_a_service_is_mapped_changed_and_unmapped_each_audited(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    connection_id = await _working(db, tenant)
+    first = await _place(db, tenant, connection_id, private=True)
+    second = await _place(db, tenant, connection_id, private=True)
+
+    await _map(db, tenant, first)
+    changed = await _map(db, tenant, second)
+    await _map(db, tenant, first, service_name="payments")
+    listed = await places.mappings(db, org_id=tenant.organization.id, project_id=tenant.project.id)
+
+    assert changed.place_id == second
+    assert [(each.service_name, each.place_id) for each in listed] == [
+        ("checkout", second),
+        ("payments", first),
+    ]
+
+    await places.unmap_service(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        project_id=tenant.project.id,
+        service_name="checkout",
+    )
+    with pytest.raises(NotFoundError):
+        await places.unmap_service(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            project_id=tenant.project.id,
+            service_name="checkout",
+        )
+
+    assert [
+        each.service_name
+        for each in await places.mappings(db, org_id=tenant.organization.id, project_id=None)
+    ] == ["payments"]
+    assert await _mapping_actions(db, tenant) == [
+        {"service": "checkout", "place_id": str(first)},
+        {"service": "checkout", "place_id": str(second)},
+        {"service": "payments", "place_id": str(first)},
+        {"service": "checkout", "place_id": None},
+    ]
+
+
+async def test_a_mapping_naming_another_organization_s_project_or_repository_is_refused(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """AC72: by the service, as a 404, and by the database for a direct insert, either
+    way it crosses."""
+    elsewhere = await provision_tenant(
+        db,
+        organization_name="Elsewhere",
+        email=f"elsewhere-{uuid.uuid4()}@example.test",
+        password="correct horse battery staple",
+    )
+    connection_id = await _working(db, tenant)
+    place_id = await _place(db, tenant, connection_id, private=True)
+    their_connection = await _working(db, elsewhere, app_id=8 + uuid.uuid4().int % 10**9)
+    their_place = await _place(db, elsewhere, their_connection, private=True)
+
+    with pytest.raises(NotFoundError):
+        await _map(db, tenant, place_id, project_id=elsewhere.project.id)
+    with pytest.raises(NotFoundError):
+        await _map(db, tenant, their_place)
+
+    for project_id, place in ((elsewhere.project.id, place_id), (tenant.project.id, their_place)):
+        with pytest.raises(IntegrityError):
+            async with db.begin_nested():
+                await db.execute(
+                    text(
+                        "INSERT INTO service_repositories (org_id, project_id, service_name, "
+                        "place_id) VALUES (:org, :project, 'checkout', :place)"
+                    ),
+                    {"org": tenant.organization.id, "project": project_id, "place": place},
+                )
+    assert await _mapping_actions(db, tenant) == []
+
+
+async def test_a_disconnected_connection_s_mappings_are_not_listed(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """A mapping to a repository nexovue no longer reaches preselects nothing."""
+    connection_id = await _working(db, tenant)
+    place_id = await _place(db, tenant, connection_id, private=True)
+    await _map(db, tenant, place_id)
+
+    await service.disconnect(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        connection_id=connection_id,
+        hooks=(),
+    )
+
+    assert await places.mappings(db, org_id=tenant.organization.id, project_id=None) == []
+    with pytest.raises(NotFoundError):
+        await _map(db, tenant, place_id, service_name="payments")

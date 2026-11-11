@@ -1,5 +1,5 @@
-"""A case's tracker issues, from the API's side (F22 plan T4.3; design, *Creating without
-duplicates*, *API*).
+"""A case's tracker issues, from the API's side (F22 plan T4.3, T6.1; design, *Creating
+without duplicates*, *API*).
 
 **Nothing here calls a tracker** (AC32, BR15). A person's click writes the link row,
 `creating`, with the facts the preview showed frozen on it (AC83), and adds a sync job;
@@ -12,6 +12,12 @@ issue per case (the database's index, a double click is a 409); a link starts a 
 with nobody assigned and no acknowledgement (D70, AC99), and is the first act beyond
 taking (FR49), so it stops the untouched end; a public repository nobody allowed is
 refused at the click, as the job refuses it again before every create (BR12, AC51).
+
+**A pasted address is parsed, never fetched** (FR40, AC54): it is attached only inside a
+repository the organization's connection reaches, as a *reference*, which the job reads
+hourly and which never changes the case (FR41). **Promoting** one to the synced issue is
+a second, explicit choice, and a job: the public check and first read are
+`scheduler-connections`' (AC88).
 
 Each operation takes the root's lock first, as every case act does (design, *Locks*),
 and commits before its view is built (AC102).
@@ -27,7 +33,12 @@ from typing import Final
 from nexovue_platform.connections import (
     CREATING,
     FAILING,
+    IN_SYNC,
     MAX_CREATING_PER_CONNECTION,
+    MAX_REFERENCES_PER_CASE,
+    PROMOTING,
+    REFERENCE,
+    STOPPED,
     SYNCED,
     TRACKER_KINDS,
     WORKING,
@@ -35,6 +46,7 @@ from nexovue_platform.connections import (
     issue_facts,
     issue_text,
     link_url,
+    parse_issue_address,
 )
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -43,7 +55,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import Connection, ConnectionRepository, FindingLink, User
 from nexovue_api.data.postgres.models import Finding as FindingRow
-from nexovue_api.errors.exceptions import ConflictError, NotFoundError
+from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import cases, link_sync
 from nexovue_api.findings.schemas import CaseLink, IssuePreview
 
@@ -73,6 +85,24 @@ NO_ADDRESS: Final = (
 NO_SUCH_LINK: Final = "No such issue on this case."
 RETRY_CANNOT_HELP: Final = "Trying again cannot help this issue now."
 STILL_CREATING: Final = "This issue is still being created. Remove it once it has been."
+NOT_AN_ISSUE_ADDRESS: Final = (
+    "This is not a GitHub issue address. Paste one like https://github.com/acme/api/issues/412."
+)
+OUTSIDE_CONNECTED: Final = (
+    "This issue is not in a repository the GitHub connection reaches, so it cannot be attached."
+)
+ALREADY_ATTACHED: Final = "This issue is already on this case."
+TOO_MANY_REFERENCES: Final = (
+    f"A case holds at most {MAX_REFERENCES_PER_CASE} attached issues. Remove one first."
+)
+ONLY_A_REFERENCE: Final = "Only an attached issue can be synced."
+PROMOTE_RESOLVED: Final = "This case is resolved. Reopen it to sync an issue with it."
+NOT_READ_YET: Final = (
+    "nexovue has not read this issue yet, so it cannot be synced. Try again in a minute."
+)
+SYNCED_ELSEWHERE: Final = "This issue is already synced with another case."
+# The partial unique index that keeps an issue synced on one case only (0061).
+_SYNCED_ONCE_INDEX: Final = "uq_finding_links_synced_once"
 
 # Statuses a person's retry can move: a failure that may pass, or one a person fixed.
 _RETRYABLE: Final = ("waiting", "needs_attention", CREATING)
@@ -89,7 +119,12 @@ async def links_of(
     """The case's links, synced first, with the address nexovue builds (D81)."""
     rows = (
         await session.execute(
-            select(FindingLink, Connection.kind, ConnectionRepository.key)
+            select(
+                FindingLink,
+                Connection.kind,
+                ConnectionRepository.key,
+                ConnectionRepository.is_private,
+            )
             .outerjoin(
                 Connection,
                 (Connection.org_id == FindingLink.org_id)
@@ -104,10 +139,15 @@ async def links_of(
             .order_by(FindingLink.role.desc(), FindingLink.created_at)
         )
     ).all()
-    return [_view(link, kind, place_key) for link, kind, place_key in rows]
+    return [
+        _view(link, kind, place_key, place_public=is_private is False)
+        for link, kind, place_key, is_private in rows
+    ]
 
 
-def _view(link: FindingLink, kind: str | None, place_key: str | None) -> CaseLink:
+def _view(
+    link: FindingLink, kind: str | None, place_key: str | None, *, place_public: bool
+) -> CaseLink:
     url = None
     if link.external_key is not None and kind in TRACKER_KINDS:
         try:
@@ -122,6 +162,7 @@ def _view(link: FindingLink, kind: str | None, place_key: str | None) -> CaseLin
         external_key=link.external_key,
         url=url,
         place_key=place_key,
+        place_public=place_public,
         seen_state=link.seen_state,
         wanted_state=link.wanted_state,
         comment_owed=link.comment_wanted is not None,
@@ -367,6 +408,160 @@ async def remove(
         action=audit.LINK_REMOVED,
         finding_id=root.id,
         detail={"link_id": str(link_id)},
+    )
+    await session.commit()
+    return root
+
+
+# ----------------------------------------------------- references (T6.1)
+
+
+async def _pasted_place(
+    session: AsyncSession, *, org_id: uuid.UUID, url: str
+) -> tuple[_Place, str]:
+    """FR40, AC54: the pasted address parsed to a key inside a repository the live
+    connection reaches, or refused; nothing is fetched, here or anywhere."""
+    pasted = parse_issue_address(url)
+    if pasted is None:
+        raise InvalidRequestError(NOT_AN_ISSUE_ADDRESS)
+    found = (
+        await session.execute(
+            select(Connection, ConnectionRepository)
+            .join(
+                ConnectionRepository,
+                (ConnectionRepository.org_id == Connection.org_id)
+                & (ConnectionRepository.connection_id == Connection.id),
+            )
+            .where(
+                Connection.org_id == org_id,
+                ConnectionRepository.org_id == org_id,
+                Connection.state != "disconnected",
+                Connection.kind == pasted.kind,
+                ConnectionRepository.is_reachable,
+                # GitHub's names ignore case; the key takes the place's own spelling.
+                func.lower(ConnectionRepository.key) == pasted.place_key.lower(),
+            )
+        )
+    ).first()
+    if found is None:
+        raise ConflictError(OUTSIDE_CONNECTED)
+    place = _Place(connection=found[0], place=found[1])
+    return place, pasted.key_in(place.place.key)
+
+
+async def attach_reference(
+    session: AsyncSession, *, actor: User, finding_id: uuid.UUID, url: str, now: datetime
+) -> tuple[FindingRow, uuid.UUID]:
+    """FR40, FR41: any issue in a connected repository, shown on the case and read hourly,
+    never changing it. Like a note, it is allowed on a resolved case and does not reopen
+    it; on a finding with no case, it starts one with nobody assigned (D70)."""
+    root = await cases.root_for_act(session, org_id=actor.org_id, finding_id=finding_id)
+    place, external_key = await _pasted_place(session, org_id=actor.org_id, url=url)
+    on_case = (
+        await session.execute(
+            select(FindingLink.role, FindingLink.connection_id, FindingLink.external_key).where(
+                FindingLink.org_id == actor.org_id, FindingLink.finding_id == root.id
+            )
+        )
+    ).all()
+    if any(
+        connection_id == place.connection.id and key == external_key
+        for _, connection_id, key in on_case
+    ):
+        raise ConflictError(ALREADY_ATTACHED)
+    if sum(1 for role, _, _ in on_case if role == REFERENCE) >= MAX_REFERENCES_PER_CASE:
+        raise ConflictError(TOO_MANY_REFERENCES)
+    if root.case_state is None:
+        root = await cases.start_case_without_assignee(session, root, actor, at=now)
+    link = FindingLink(
+        org_id=actor.org_id,
+        finding_id=root.id,
+        connection_id=place.connection.id,
+        place_id=place.place.id,
+        role=REFERENCE,
+        sync_status=IN_SYNC,
+        external_key=external_key,
+        next_sync_at=now,
+    )
+    session.add(link)
+    await session.flush()
+    cases.note_act_beyond_taking(root, actor, at=now)
+    await cases.record_event(session, "link_added", root, at=now, actor=actor, link_id=link.id)
+    await audit.record_case_action(
+        session,
+        org_id=root.org_id,
+        actor_user_id=actor.id,
+        action=audit.LINK_ADDED,
+        finding_id=root.id,
+        detail={"link_id": str(link.id), "place_id": str(place.place.id)},
+    )
+    await link_sync.ask_sync(
+        session, org_id=root.org_id, connection_id=place.connection.id, wake=True
+    )
+    await session.commit()
+    return root, link.id
+
+
+async def promote(
+    session: AsyncSession, *, actor: User, finding_id: uuid.UUID, link_id: uuid.UUID, now: datetime
+) -> FindingRow:
+    """FR41, AC88: a reference becomes the case's synced issue by a second choice the
+    console warns about first. It turns `promoting`; the job runs the public check and
+    reads the issue, and ends it `in_sync` or `refused`. Only an issue nexovue has read
+    is promoted, so the database's one-case-per-issue index decides here, not in the job."""
+    root = await cases.root_for_act(session, org_id=actor.org_id, finding_id=finding_id)
+    link = await _locked_link(session, org_id=actor.org_id, root_id=root.id, link_id=link_id)
+    if link.role != REFERENCE:
+        raise ConflictError(ONLY_A_REFERENCE)
+    if root.case_state == "resolved":
+        raise ConflictError(PROMOTE_RESOLVED)
+    if link.external_id is None or link.sync_status != IN_SYNC:
+        raise ConflictError(NOT_READ_YET)
+    if link.place_id is None:
+        raise ConflictError(PLACE_UNREACHABLE)
+    place = await _place(session, org_id=actor.org_id, place_id=link.place_id)
+    refusal = _refusal(place)
+    if refusal is not None:
+        raise ConflictError(refusal)
+    synced = await session.scalar(
+        select(FindingLink.finding_id).where(
+            FindingLink.org_id == actor.org_id,
+            FindingLink.role == SYNCED,
+            FindingLink.sync_status != STOPPED,
+            (FindingLink.finding_id == root.id)
+            | (
+                (FindingLink.connection_id == link.connection_id)
+                & (FindingLink.external_id == link.external_id)
+            ),
+        )
+    )
+    if synced is not None:
+        raise ConflictError(ALREADY_SYNCED if synced == root.id else SYNCED_ELSEWHERE)
+    link.role = SYNCED
+    link.sync_status = PROMOTING
+    link.next_sync_at = now
+    link.failures = 0
+    link.last_failure = None
+    try:
+        async with session.begin_nested():
+            await session.flush()
+    except IntegrityError as taken:
+        # Another person promoted or created at the same moment; the indexes chose.
+        raise ConflictError(
+            SYNCED_ELSEWHERE if _SYNCED_ONCE_INDEX in str(taken.orig) else ALREADY_SYNCED
+        ) from taken
+    cases.note_act_beyond_taking(root, actor, at=now)
+    await cases.record_event(session, "link_promoted", root, at=now, actor=actor, link_id=link.id)
+    await audit.record_case_action(
+        session,
+        org_id=root.org_id,
+        actor_user_id=actor.id,
+        action=audit.LINK_PROMOTED,
+        finding_id=root.id,
+        detail={"link_id": str(link.id)},
+    )
+    await link_sync.ask_sync(
+        session, org_id=root.org_id, connection_id=place.connection.id, wake=True
     )
     await session.commit()
     return root

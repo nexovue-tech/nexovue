@@ -245,6 +245,8 @@ export interface CaseLink {
   external_key: string | null;
   url: string | null;
   place_key: string | null;
+  /** Anyone can read its repository now (FR42); the page says so. */
+  place_public?: boolean;
   seen_state: "open" | "closed" | null;
   wanted_state: "open" | "closed" | null;
   comment_owed: boolean;
@@ -715,6 +717,29 @@ export interface IssuePlace {
   key: string;
   is_private: boolean;
   is_reachable: boolean;
+  public_allowed_at?: string | null;
+}
+
+/** Which repository a project's service sends its issues to by default (T6.2). */
+export interface IssueMapping {
+  project_id: string;
+  service_name: string;
+  place_id: string;
+  place_key: string;
+}
+
+/** The project's mappings, for the create panel's preselection; read when it opens. */
+export function useIssueMappings(projectId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["service-repositories", projectId] as const,
+    enabled,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ mappings: IssueMapping[] }>("service-repositories", {
+        signal,
+        searchParams: { project_id: projectId },
+      }),
+    select: (response) => response.mappings,
+  });
 }
 
 export interface IssueConnection {
@@ -776,6 +801,30 @@ export function useCreateIssue(findingId: string) {
       apiClient.post<LinkChanged>(`findings/${encodeURIComponent(findingId)}/links`, {
         place_id: placeId,
       }),
+    onSuccess: (changed) => refreshAfterCaseChange(queryClient, findingId, changed.finding),
+  });
+}
+
+/** FR40: attach an issue that already exists by its address; it is parsed, never fetched. */
+export function useAttachIssue(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "attach-issue", findingId],
+    mutationFn: (url: string) =>
+      apiClient.post<LinkChanged>(`findings/${encodeURIComponent(findingId)}/links`, { url }),
+    onSuccess: (changed) => refreshAfterCaseChange(queryClient, findingId, changed.finding),
+  });
+}
+
+/** FR41, AC88: sync an attached issue with the case, after the warning; a job checks it. */
+export function usePromoteLink(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "promote-link", findingId],
+    mutationFn: (linkId: string) =>
+      apiClient.post<LinkChanged>(
+        `findings/${encodeURIComponent(findingId)}/links/${encodeURIComponent(linkId)}/promote`,
+      ),
     onSuccess: (changed) => refreshAfterCaseChange(queryClient, findingId, changed.finding),
   });
 }

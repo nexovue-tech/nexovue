@@ -8,7 +8,8 @@ import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 
 import type { IssuePlace } from "./api";
-import { useCreateIssue, useIssueConnections, useIssuePreview } from "./api";
+import { useCreateIssue, useIssueConnections, useIssueMappings, useIssuePreview } from "./api";
+import { preselectedPlace } from "./link-words";
 
 const PROSE = "max-w-prose";
 /** Nothing is connected yet: an admin is pointed at settings, others at an admin. */
@@ -19,23 +20,38 @@ const NOT_READY =
   "The GitHub connection needs attention, so no issue can be created now. The case still works.";
 
 /**
- * Create an issue (FR35, design *Creating an issue*): pick a repository, read exactly
- * what will be written, then create. Nothing leaves before the click; the job writes
- * it, and the links list shows when it has (AC83's preview is the issue's bytes).
+ * Create an issue (FR35, design *Creating an issue*): pick a repository, preselected from
+ * the service's mapping when it has one (T6.3), read exactly what will be written, then
+ * create. Nothing leaves before the click; the job writes it, and the links list shows
+ * when it has (AC83's preview is the issue's bytes).
  */
 export function CreateIssuePanel({
   findingId,
+  projectId,
+  serviceName,
   admin,
   onCreated,
   onCancel,
 }: {
   findingId: string;
+  projectId: string;
+  serviceName: string | null;
   admin: boolean;
   onCreated: () => void;
   onCancel: () => void;
 }) {
   const connections = useIssueConnections(true);
-  const [placeId, setPlaceId] = useState<string | null>(null);
+  const mappings = useIssueMappings(projectId, serviceName != null);
+  // Undefined until the person chooses: until then the mapping's repository stands.
+  const [chosenId, setChosenId] = useState<string | null | undefined>(undefined);
+  const github = connections.data?.connections.find((connection) => connection.kind === "github");
+  const reachable: IssuePlace[] = (github?.repositories ?? []).filter(
+    (place) => place.is_reachable,
+  );
+  const placeId =
+    chosenId === undefined
+      ? preselectedPlace(reachable, mappings.data ?? [], serviceName)
+      : chosenId;
   const preview = useIssuePreview(findingId, placeId);
   const create = useCreateIssue(findingId);
 
@@ -50,8 +66,7 @@ export function CreateIssuePanel({
     );
   }
   const overview = connections.data;
-  const github = overview.connections.find((connection) => connection.kind === "github");
-  const places: IssuePlace[] = (github?.repositories ?? []).filter((place) => place.is_reachable);
+  const places = reachable;
 
   let blocked: React.ReactNode = null;
   if (!overview.available) {
@@ -89,7 +104,7 @@ export function CreateIssuePanel({
             value={placeId ?? ""}
             options={[{ id: "", key: "Choose a repository" }, ...places]}
             optionLabel={(place) => place.key}
-            onChange={(id) => setPlaceId(id === "" ? null : id)}
+            onChange={(id) => setChosenId(id === "" ? null : id)}
           />
           {placeId != null && preview.isPending ? (
             <SkeletonRows rows={3} label="Reading what will be written" />

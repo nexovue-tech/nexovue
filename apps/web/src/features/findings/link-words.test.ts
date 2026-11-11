@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import type { CaseLink, TimelineEvent } from "./api";
 import {
+  canPromote,
   falseAlarmIssueSentence,
   holdLine,
   issueEventSentence,
   linkAnnouncement,
   linkSentence,
+  linkStatusWords,
   myNotesText,
+  preselectedPlace,
+  promoteWarning,
+  publicPlaceLine,
   resolveChoice,
   resolveDoneSentence,
   syncedLink,
@@ -262,7 +267,7 @@ describe("timeline rows about the issue (FR16)", () => {
         actor_kind: "system",
         detail: { failure: "public_repository" },
       },
-      "The issue was not created: the repository is public",
+      "nexovue did not write to the issue: the repository is public",
     ],
   ] as const)("%o", (event, words) => {
     expect(
@@ -273,5 +278,79 @@ describe("timeline rows about the issue (FR16)", () => {
   it("finds the case's live synced link", () => {
     expect(syncedLink({ links: [link({ role: "reference" }), link({ id: "s" })] })?.id).toBe("s");
     expect(syncedLink({ links: [link({ sync_status: "stopped" })] })).toBeNull();
+  });
+});
+
+describe("an attached issue, syncing one, and a public repository (F22 T6.3)", () => {
+  const reader = { caseActive: true, admin: false, now: NOW };
+  const reference = (overrides: Partial<CaseLink> = {}) =>
+    link({ role: "reference", external_key: "acme/api#7", ...overrides });
+
+  it.each([
+    [
+      { seen_state: "open" as const },
+      "Open in GitHub, read 3 min. ago. It does not change this case",
+    ],
+    [
+      { seen_state: "closed" as const, last_synced_at: minutesAgo(200) },
+      "Closed in GitHub, read 3 hr. ago. It does not change this case",
+    ],
+    [{ seen_state: null, last_synced_at: null }, "Not read yet"],
+  ])("a reference reads its own status, never late or synced (AC53): %o", (overrides, words) => {
+    expect(linkStatusWords(reference(overrides), reader)).toBe(words);
+  });
+
+  it.each([
+    [false, null, "Not created: the repository is public. Ask an admin."],
+    [true, null, "Not created: the repository is public. An admin can allow it in settings."],
+    [false, "acme/api#7", "Not synced: the repository is public. Ask an admin."],
+    [
+      true,
+      "acme/api#7",
+      "Not synced: the repository is public. An admin can allow it in settings.",
+    ],
+  ])("a refusal for a public repository, admin %s, issue %s", (admin, key, words) => {
+    const refused = link({
+      sync_status: "refused",
+      last_failure: "public_repository",
+      external_key: key,
+    });
+    expect(linkStatusWords(refused, { ...reader, admin })).toBe(words);
+  });
+
+  it("says a public repository's link is readable by anyone, and nothing otherwise", () => {
+    expect(publicPlaceLine(link({ place_public: true }))).toBe(
+      "acme/api is public: anyone can read this issue.",
+    );
+    expect(publicPlaceLine(link({ place_public: false }))).toBeNull();
+    expect(publicPlaceLine(link())).toBeNull();
+  });
+
+  it("warns, before syncing, that whoever can close the issue can resolve the case", () => {
+    expect(promoteWarning(reference())).toBe(
+      "Sync acme/api#7 with this case? Anyone who can close it in GitHub can then resolve this case, and when the case ends here, nexovue closes it there with one comment.",
+    );
+  });
+
+  it.each([
+    ["a read reference on an active case", [reference()], "investigating", true],
+    ["one not read yet", [reference({ last_synced_at: null })], "investigating", false],
+    ["one gone", [reference({ sync_status: "gone" })], "investigating", false],
+    ["a resolved case", [reference()], "resolved", false],
+    ["a case with a synced issue", [reference(), link({ id: "s" })], "investigating", false],
+  ])("offers to sync %s: %s", (_, links, caseState, offered) => {
+    expect(canPromote(links[0] as CaseLink, { links, case_state: caseState })).toBe(offered);
+  });
+
+  it("preselects the service's mapped repository only while it is reachable", () => {
+    const places = [{ id: "p-1" }, { id: "p-2" }];
+    const mappings = [
+      { service_name: "checkout", place_id: "p-2" },
+      { service_name: "payments", place_id: "p-9" },
+    ];
+    expect(preselectedPlace(places, mappings, "checkout")).toBe("p-2");
+    expect(preselectedPlace(places, mappings, "payments")).toBeNull();
+    expect(preselectedPlace(places, mappings, "search")).toBeNull();
+    expect(preselectedPlace(places, mappings, null)).toBeNull();
   });
 });

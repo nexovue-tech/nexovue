@@ -111,6 +111,13 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "The {tracker} credential nexovue uses expires on {expires_on}. Replace it before "
         "then, or issues stop being kept in step:\n\n{link}",
     ),
+    Message.CONNECTION_REPOSITORY_PUBLIC: (
+        "{repository} is now public, so nexovue creates no issues there",
+        "nexovue saw that {repository} on {tracker} is now public. Anyone can read the "
+        "issues already there, including any nexovue created: they were exposed when it "
+        "turned public. nexovue refuses new issues there, and syncing an issue there, "
+        "unless an admin allows it:\n\n{link}",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

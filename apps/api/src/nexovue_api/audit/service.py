@@ -160,11 +160,20 @@ CASE_NOTE_DELETED: Final = "note.deleted"
 # what the case follows (design, *Audit*). A retry repeats a recorded act: none.
 LINK_ISSUE_REQUESTED: Final = "link.issue_requested"
 LINK_REMOVED: Final = "link.removed"
+# F22 Step 6. Attaching a pasted issue changes what the case shows; promoting it lets a
+# tracker close the case and nexovue write to the issue (design, *Audit*).
+LINK_ADDED: Final = "link.added"
+LINK_PROMOTED: Final = "link.promoted"
 # F22. Connecting sends data to a third party, and a key replaced or a connection
 # removed changes who can write to a customer's tracker (design, *Audit*).
 CONNECTION_CREATED: Final = "connection.created"
 CONNECTION_CREDENTIAL_REPLACED: Final = "connection.credential_replaced"
 CONNECTION_DELETED: Final = "connection.deleted"
+# F22 Step 6. Allowing issues in a public repository makes what they say public (D12,
+# D31), and a mapping decides where a service's issues go by default.
+CONNECTION_PUBLIC_REPOSITORY_ALLOWED: Final = "connection.public_repository_allowed"
+CONNECTION_PUBLIC_REPOSITORY_WITHDRAWN: Final = "connection.public_repository_withdrawn"
+SERVICE_REPOSITORY_CHANGED: Final = "service_repository.changed"
 FINDING_FALSE_ALARM: Final = "finding.false_alarm"
 # F3. A person's judgement of an explanation, and a rule an organization stopped from
 # naming causes, or started again (FR20, FR54). The reason is a closed-list word.
@@ -1117,6 +1126,48 @@ def record_connection_event(
         action=action,
         target=_target(CONNECTION_TARGET, connection_id),
         detail={"kind": kind},
+    )
+
+
+def record_place_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    action: str,
+    connection_id: uuid.UUID,
+    place_id: uuid.UUID,
+    place_key: str,
+) -> None:
+    """A public repository allowed, or the allowance withdrawn (F22, AC115). Names the
+    repository by its strict key, which is what became, or stopped being, writable."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(CONNECTION_TARGET, connection_id),
+        detail={"place_id": str(place_id), "repository": place_key},
+    )
+
+
+def record_service_repository_changed(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    place_id: uuid.UUID | None,
+) -> None:
+    """Where a service's issues go by default, set or removed (`place_id` None) (F22)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=SERVICE_REPOSITORY_CHANGED,
+        target=_target(PROJECT_TARGET, project_id),
+        detail={"service": service_name, "place_id": None if place_id is None else str(place_id)},
     )
 
 

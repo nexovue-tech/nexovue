@@ -184,6 +184,11 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "expires_on": "23 Nov 2026",
             "link": "https://app.nexovue.com/settings/connections",
         },
+        Message.CONNECTION_REPOSITORY_PUBLIC: {
+            "tracker": "GitHub",
+            "repository": "acme/api",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 

@@ -440,7 +440,7 @@ async def preview_issue(
 @router.post(
     "/{finding_id}/links",
     status_code=status.HTTP_201_CREATED,
-    summary="Create a tracker issue for the case; sync writes it",
+    summary="Create a tracker issue for the case, or attach a pasted one as a reference",
 )
 async def create_issue(
     identity: MayOperateCases,
@@ -451,17 +451,24 @@ async def create_issue(
     finding_id: uuid.UUID,
     request: CreateLinkRequest,
 ) -> LinkChanged:
-    """The link is `creating` and a job is added; the result arrives without the person
-    waiting on the page (FR35)."""
+    """With `place_id`, the link is `creating` and a job is added; the result arrives
+    without the person waiting on the page (FR35). With `url`, the pasted address is
+    parsed, never fetched, and attached as a reference the job reads (FR40, FR41)."""
     now = datetime.now(UTC)
-    root, link_id = await links.create(
-        db,
-        actor=identity.user,
-        finding_id=finding_id,
-        place_id=request.place_id,
-        base_url=settings.app_base_url,
-        now=now,
-    )
+    if request.place_id is not None:
+        root, link_id = await links.create(
+            db,
+            actor=identity.user,
+            finding_id=finding_id,
+            place_id=request.place_id,
+            base_url=settings.app_base_url,
+            now=now,
+        )
+    else:
+        # The request's validator holds exactly one of the two.
+        root, link_id = await links.attach_reference(
+            db, actor=identity.user, finding_id=finding_id, url=request.url or "", now=now
+        )
     view = await service.member_view(
         db,
         repository,
@@ -488,6 +495,35 @@ async def retry_issue(
 ) -> LinkChanged:
     now = datetime.now(UTC)
     root = await links.retry(
+        db, actor=identity.user, finding_id=finding_id, link_id=link_id, now=now
+    )
+    view = await service.member_view(
+        db,
+        repository,
+        org_id=identity.org_id,
+        finding_id=root.id,
+        now=now,
+        email_available=email is not None,
+    )
+    return LinkChanged(finding=view, link_id=link_id)
+
+
+@router.post(
+    "/{finding_id}/links/{link_id}/promote",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Sync an attached issue with the case; sync checks and reads it",
+)
+async def promote_issue(
+    identity: MayOperateCases,
+    db: DbSession,
+    repository: TenantRepository,
+    email: OptionalEmail,
+    finding_id: uuid.UUID,
+    link_id: uuid.UUID,
+) -> LinkChanged:
+    """FR41, AC88: the link is `promoting`; the job ends it `in_sync` or `refused`."""
+    now = datetime.now(UTC)
+    root = await links.promote(
         db, actor=identity.user, finding_id=finding_id, link_id=link_id, now=now
     )
     view = await service.member_view(

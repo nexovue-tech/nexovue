@@ -11,6 +11,8 @@ from typing import Any, Final, Literal
 from nexovue_platform.deployment import HOSTED
 from pydantic import BaseModel, Field
 
+from nexovue_api.data.postgres.models import SERVICE_NAME_LENGTH
+
 # What a person sees where connections do not exist (spec, *Packaging and limits*;
 # design, `/settings/connections` states). The console shows these words as given.
 HOSTED_SENTENCE: Final = "Tracker connections are not available on the hosted service yet."
@@ -67,6 +69,35 @@ class ConnectionPlace(BaseModel):
     key: str
     is_private: bool
     is_reachable: bool
+    # When an admin allowed issues in it while it is public (FR42); None when not.
+    public_allowed_at: datetime | None = None
+
+
+class PlaceChange(BaseModel):
+    """`PATCH /connections/{id}/places/{place_id}`: allow issues in a public repository,
+    or withdraw that (FR42). Jira's issue type and transitions join with Step 7."""
+
+    public_allowed: bool
+
+
+class ServiceRepositoryView(BaseModel):
+    """A project's service, and the repository its issues go to by default."""
+
+    project_id: uuid.UUID
+    service_name: str
+    place_id: uuid.UUID
+    place_key: str
+
+
+class ServiceRepositories(BaseModel):
+    mappings: list[ServiceRepositoryView]
+
+
+class MapServiceRequest(BaseModel):
+    project_id: uuid.UUID
+    # `findings.service_name`'s limit, so any service a finding names can be mapped.
+    service_name: str = Field(min_length=1, max_length=SERVICE_NAME_LENGTH)
+    place_id: uuid.UUID
 
 
 class ConnectionView(BaseModel):

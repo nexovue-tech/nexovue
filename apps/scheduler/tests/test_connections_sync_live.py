@@ -1506,3 +1506,219 @@ async def test_ac48_two_jobs_started_together_make_one_run(
     closes = [call for call in _writes(world.github) if call[0] == "PATCH"]
     assert len(closes) == 2
     assert all(world.github.issue(key).state == "closed" for key in keys)
+
+
+# ------------------------------------------------ references and promotion (T6.1)
+
+# The job's clock, pinned: nothing here reads differently on another day. It sits past
+# the pause `_owned` sets, which keeps the live stack's own sweep, on the wall clock, away
+# from this test's connection while it runs (`status.md`, Step 6, *Validation run*).
+PINNED: Final = datetime(2099, 1, 5, 12, 0, tzinfo=UTC)
+
+
+async def _owned(engine: AsyncEngine, world: World) -> None:
+    world.clock.now = PINNED
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE connections SET paused_until = :until WHERE id = :id"),
+            {"until": PINNED - timedelta(days=1), "id": world.connection_id},
+        )
+
+
+async def _reference(
+    engine: AsyncEngine,
+    world: World,
+    finding_id: uuid.UUID,
+    *,
+    state: str = "open",
+    status: str = "in_sync",
+    role: str = "reference",
+    learned: bool = False,
+) -> tuple[uuid.UUID, Any]:
+    """An issue someone else wrote, attached by its pasted key: no tracker id yet, unless
+    `learned`, as a first read leaves it."""
+    issue = world.github._new_issue(API_ID, "someone else's", "no link back", [])
+    issue.state = state
+    if state == "closed":
+        issue.state_reason = "completed"
+    async with engine.begin() as connection:
+        link_id: uuid.UUID = (
+            await connection.execute(
+                text(
+                    "INSERT INTO finding_links (org_id, finding_id, connection_id, place_id, role, "
+                    "sync_status, external_id, external_key, seen_state, next_sync_at) VALUES "
+                    "(:org, :finding, :connection, :place, :role, :status, :external_id, :key, "
+                    ":seen, :now) RETURNING id"
+                ),
+                {
+                    "org": world.tenant.org_id,
+                    "finding": finding_id,
+                    "connection": world.connection_id,
+                    "place": world.api_place,
+                    "role": role,
+                    "status": status,
+                    "external_id": str(issue.id) if learned else None,
+                    "key": f"acme/api#{issue.number}",
+                    "seen": "open" if learned else None,
+                    "now": world.clock.now,
+                },
+            )
+        ).scalar_one()
+    return link_id, issue
+
+
+async def test_a_reference_is_read_and_shown_and_never_changes_its_case(
+    engine: AsyncEngine, world: World
+) -> None:
+    """AC53, FR41: closed there, with the case's signal closed, which would resolve a
+    synced issue's case (row 5c): the reference records it, hourly, and the case stays."""
+    await _owned(engine, world)
+    finding = await _case(engine, world, signal="closed")
+    link_id, issue = await _reference(engine, world, finding, state="closed")
+
+    assert await _sync(engine, world) == [str(link_id)]
+
+    link = await _link(engine, link_id)
+    assert (link.sync_status, link.seen_state, link.external_id) == (
+        "in_sync",
+        "closed",
+        str(issue.id),
+    )
+    assert link.next_sync_at == PINNED + timedelta(hours=1)
+    assert (await _finding(engine, finding)).case_state == "investigating"
+    assert await _events(engine, finding) == []
+    assert await _emails(engine, finding) == []
+    assert _writes(world.github) == []
+
+    issue.state, issue.state_reason = "open", None
+    world.clock.advance(timedelta(hours=1))
+    await _sync(engine, world)
+
+    assert (await _link(engine, link_id)).seen_state == "open"
+    assert (await _finding(engine, finding)).case_state == "investigating"
+    assert await _events(engine, finding) == []
+
+
+async def test_a_reference_on_a_case_resolved_over_30_days_ago_is_no_longer_followed(
+    engine: AsyncEngine, world: World
+) -> None:
+    await _owned(engine, world)
+    finding = await _case(engine, world, case_state="resolved", resolved_ago=timedelta(days=31))
+    link_id, _ = await _reference(engine, world, finding, learned=True)
+
+    await _sync(engine, world)
+
+    link = await _link(engine, link_id)
+    assert (link.sync_status, link.next_sync_at) == ("not_followed", None)
+    assert not [r for r in world.github.site.requests if r.path.startswith("/repos/")]
+
+
+async def test_a_promoted_reference_is_checked_read_and_synced_from_then_on(
+    engine: AsyncEngine, world: World
+) -> None:
+    """AC88: the public check runs in the job, then the issue is read; what it says now is
+    what was seen, so its being closed does not move the case. The next poll is a synced
+    issue's, and a later close there resolves the case (row 5c)."""
+    await _owned(engine, world)
+    finding = await _case(engine, world, signal="closed")
+    link_id, issue = await _reference(
+        engine, world, finding, state="closed", role="synced", status="promoting", learned=True
+    )
+
+    assert await _sync(engine, world) == [str(link_id)]
+
+    link = await _link(engine, link_id)
+    assert (link.role, link.sync_status, link.seen_state, link.wanted_state) == (
+        "synced",
+        "in_sync",
+        "closed",
+        None,
+    )
+    assert link.next_sync_at == PINNED + ACTIVE_POLL
+    assert (await _finding(engine, finding)).case_state == "investigating"
+    assert any(r.path == "/repos/acme/api" for r in world.github.site.requests)
+    assert _writes(world.github) == []
+
+    issue.state, issue.state_reason = "open", None
+    world.clock.advance(ACTIVE_POLL)
+    await _sync(engine, world)
+    world.github.close(f"acme/api#{issue.number}")
+    world.clock.advance(ACTIVE_POLL)
+    await _sync(engine, world)
+
+    assert (await _finding(engine, finding)).case_resolution == "tracker_closed"
+
+
+async def test_a_promotion_into_a_public_repository_nobody_allowed_is_refused(
+    engine: AsyncEngine, world: World
+) -> None:
+    """AC88, FR42: refused in the job even when the repository was private at the click;
+    once an admin allows it, a promotion goes through."""
+    await _owned(engine, world)
+    world.github.make_public("acme/api")
+    finding = await _case(engine, world)
+    refused, _ = await _reference(
+        engine, world, finding, role="synced", status="promoting", learned=True
+    )
+
+    await _sync(engine, world)
+
+    link = await _link(engine, refused)
+    assert (link.sync_status, link.last_failure, link.next_sync_at) == (
+        "refused",
+        "public_repository",
+        None,
+    )
+    assert (
+        "tracker_write_failed",
+        "system",
+        {"link_id": str(refused), "failure": "public_repository"},
+    ) in await _events(engine, finding)
+
+    other = await _case(engine, world, service="payments")
+    allowed, _ = await _reference(
+        engine, world, other, role="synced", status="promoting", learned=True
+    )
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE connection_repositories SET public_allowed_at = :now WHERE id = :id"),
+            {"now": PINNED, "id": world.api_place},
+        )
+    await _sync(engine, world)
+
+    assert (await _link(engine, allowed)).sync_status == "in_sync"
+
+
+async def test_a_promotion_whose_check_fails_waits_and_changes_nothing(
+    engine: AsyncEngine, world: World
+) -> None:
+    await _owned(engine, world)
+    finding = await _case(engine, world)
+    link_id, _ = await _reference(
+        engine, world, finding, role="synced", status="promoting", learned=True
+    )
+    world.github.fail("repository", 502)
+
+    await _sync(engine, world)
+
+    link = await _link(engine, link_id)
+    assert (link.sync_status, link.last_failure, link.seen_state) == (
+        "promoting",
+        "server_error",
+        "open",
+    )
+    assert link.next_sync_at > PINNED
+
+
+async def test_a_promoted_issue_that_was_deleted_is_gone(engine: AsyncEngine, world: World) -> None:
+    await _owned(engine, world)
+    finding = await _case(engine, world)
+    link_id, issue = await _reference(
+        engine, world, finding, role="synced", status="promoting", learned=True
+    )
+    world.github.delete(f"acme/api#{issue.number}")
+
+    await _sync(engine, world)
+
+    assert (await _link(engine, link_id)).sync_status == "gone"
+    assert (await _finding(engine, finding)).case_state == "investigating"

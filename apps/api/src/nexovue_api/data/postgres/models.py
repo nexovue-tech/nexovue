@@ -420,6 +420,8 @@ class Project(Base):
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_projects_org_id_slug"),
         Index("ix_projects_org_id", "org_id"),
+        # F22: what later tables key on, so the database refuses a cross-tenant key (0068).
+        Index("uq_projects_org_id_id", "org_id", "id", unique=True),
         CheckConstraint(
             f"detection_sensitivity IN ({_quoted(SENSITIVITIES)})",
             name="detection_sensitivity_is_known",
@@ -2243,6 +2245,38 @@ class ConnectionRepository(Base):
             ondelete="SET NULL (public_allowed_by)",
             name="fk_connection_repositories_public_allowed_by",
         ),
+    )
+
+
+class ServiceRepository(Base):
+    """Which repository a project's service sends its issues to: the create panel
+    preselects it (F22, T6.2), and F5 reads it to find the service's code. Optional."""
+
+    __tablename__ = "service_repositories"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    place_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    changed_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_service_repositories_project",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "place_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="CASCADE",
+            name="fk_service_repositories_place",
+        ),
+        CheckConstraint("length(service_name) > 0", name="service_is_named"),
+        Index("ix_service_repositories_org_id_place_id", "org_id", "place_id"),
     )
 
 

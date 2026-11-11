@@ -183,6 +183,7 @@ POLICY_OF: Final = {
     # F22 Step 4: a case's tracker issue, created, retried or removed by a working role.
     "nexovue_api/findings/router.py:create_issue": "MayOperateCases",
     "nexovue_api/findings/router.py:retry_issue": "MayOperateCases",
+    "nexovue_api/findings/router.py:promote_issue": "MayOperateCases",
     "nexovue_api/findings/router.py:remove_issue": "MayOperateCases",
     # F3 A20, FR41: reading a finding's facts again; members and up, never a token.
     "nexovue_api/findings/router.py:read_explanation_again": "MayRequestExplanation",
@@ -237,6 +238,9 @@ POLICY_OF: Final = {
     "nexovue_api/connections/router.py:refresh_github": "MayManageConnections",
     "nexovue_api/connections/router.py:replace_credential": "MayManageConnections",
     "nexovue_api/connections/router.py:disconnect": "MayManageConnections",
+    "nexovue_api/connections/router.py:change_place": "MayManageConnections",
+    "nexovue_api/connections/router.py:map_service_repository": "MayManageConnections",
+    "nexovue_api/connections/router.py:unmap_service_repository": "MayManageConnections",
     "nexovue_api/connections/test_router.py:test_connection": "MayManageConnections",
     "nexovue_api/checksecrets/router.py:write_secret": "MayManageCheckSecrets",
     "nexovue_api/checksecrets/router.py:delete_secret": "MayManageCheckSecrets",

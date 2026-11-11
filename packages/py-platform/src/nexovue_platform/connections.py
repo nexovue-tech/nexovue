@@ -169,9 +169,13 @@ LINK_FAILURES: Final = (
 )
 LINK_ROLES: Final = ("synced", "reference")
 SYNCED: Final = "synced"
+# Any other issue attached to a case: shown, read hourly, and never changing it (FR41).
+REFERENCE: Final = "reference"
 # What a tracker's issue is, as nexovue stores it: open or closed, nothing more (BR10).
 ISSUE_STATES: Final = ("open", "closed")
 CREATING: Final = "creating"
+# A person chose to sync a reference; the job's public check and first read decide (FR41).
+PROMOTING: Final = "promoting"
 IN_SYNC: Final = "in_sync"
 STOPPED: Final = "stopped"
 NOT_FOLLOWED: Final = "not_followed"
@@ -181,6 +185,9 @@ ACTIVE_POLL: Final = timedelta(minutes=5)
 RESOLVED_POLL: Final = timedelta(hours=1)
 # A resolved case's link is followed this long, then `not_followed` (FR39, AC85).
 FOLLOW_AFTER_RESOLVE: Final = timedelta(days=30)
+# A reference link is read hourly whatever its case's state (FR41, a guess), and stops
+# 30 days after its case resolved, as a synced one does.
+REFERENCE_POLL: Final = timedelta(hours=1)
 # A 404 from a repository still readable is read again daily for a week (row 9).
 GONE_RECHECK: Final = timedelta(days=1)
 GONE_RECHECK_FOR: Final = timedelta(days=7)
@@ -188,6 +195,8 @@ GONE_RECHECK_FOR: Final = timedelta(days=7)
 REPOSITORY_REFRESH: Final = timedelta(hours=1)
 # A refusal once this many issues are being created on one connection (spec, a guess).
 MAX_CREATING_PER_CONNECTION: Final = 20
+# Reference links a case may hold (spec, *Packaging and limits*, a guess).
+MAX_REFERENCES_PER_CASE: Final = 20
 
 
 def sync_job(*, org_id: str, connection_id: str) -> JobRequest:
@@ -234,10 +243,10 @@ def connection_secret_owner(org_id: str, connection_id: str) -> str:
 # ------------------------------------------------------------ built addresses
 
 # GitHub's owner: letters, digits and inner hyphens, at most 39. A repository name:
-# letters, digits, `.`, `_` and `-`, never `.` or `..` alone (general knowledge of
-# GitHub's rules, not read from its pages).
+# letters, digits, `.`, `_` and `-`, never `.` or `..` alone, in a key or an address path
+# (general knowledge of GitHub's rules, not read from its pages).
 _OWNER: Final = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})"
-_REPOSITORY: Final = r"(?!\.{1,2}(?:#|$))[A-Za-z0-9._-]{1,100}"
+_REPOSITORY: Final = r"(?!\.{1,2}(?:[#/]|$))[A-Za-z0-9._-]{1,100}"
 _REPOSITORY_KEY: Final = re.compile(rf"{_OWNER}/{_REPOSITORY}")
 _GITHUB_ISSUE_KEY: Final = re.compile(
     rf"(?P<repository>{_OWNER}/{_REPOSITORY})#(?P<number>[1-9][0-9]{{0,9}})"
@@ -286,6 +295,47 @@ def split_github_issue_key(key: str) -> tuple[str, int]:
     if issue is None:
         raise ValueError("the key is not a GitHub issue key")
     return issue["repository"], int(issue["number"])
+
+
+# A pasted address is a few dozen characters; anything far longer is not one (FR40).
+MAX_PASTED_ADDRESS_LENGTH: Final = 2048
+# GitHub's issue page, `https://github.com/<owner>/<name>/issues/<n>`, with any trailing
+# slash, query or fragment (`#issuecomment-1`) ignored; or the key itself, `owner/name#n`.
+# Pull requests and every other page are not issues and are refused.
+_GITHUB_ISSUE_ADDRESS: Final = re.compile(
+    rf"https?://(?:www\.)?(?i:github\.com)/(?P<repository>{_OWNER}/{_REPOSITORY})"
+    r"/issues/(?P<number>[1-9][0-9]{0,9})/?(?:[?#].*)?"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PastedIssue:
+    """An issue a person pasted, parsed to its parts; nothing was fetched (FR40)."""
+
+    kind: str
+    # The repository as pasted. GitHub's names ignore case, so the connected place it
+    # names is found ignoring case, and the stored key takes that place's own spelling.
+    place_key: str
+    number: int
+
+    def key_in(self, place_key: str) -> str:
+        """The issue's strict key in the connected place's own spelling."""
+        key = github_issue_key(place_key, self.number)
+        if key is None:
+            raise ValueError("the place's key is not a GitHub repository key")
+        return key
+
+
+def parse_issue_address(address: str) -> PastedIssue | None:
+    """A pasted GitHub issue address or key, or None when it is neither (FR40). Jira's
+    `/browse/KEY-1` and bare keys join here with Step 7 (foundation item 29)."""
+    pasted = address.strip()
+    if len(pasted) > MAX_PASTED_ADDRESS_LENGTH:
+        return None
+    found = _GITHUB_ISSUE_ADDRESS.fullmatch(pasted) or _GITHUB_ISSUE_KEY.fullmatch(pasted)
+    if found is None:
+        return None
+    return PastedIssue(kind=GITHUB, place_key=found["repository"], number=int(found["number"]))
 
 
 def link_url(kind: str, site: str | None, external_key: str) -> str:

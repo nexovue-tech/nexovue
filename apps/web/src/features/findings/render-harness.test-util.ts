@@ -172,6 +172,8 @@ export function stubApi(
     "GET /findings/f-1/explanation": json(explanation()),
     [`GET /projects/${PROJECT_ID}/detection`]: json({ sensitivity: "normal", timezone: "UTC" }),
     "GET /releases/markers": json({ markers: [], truncated: false, cap: 500 }),
+    // F22 T6.3: the create panel's preselection; a test that cares stubs its own.
+    "GET /service-repositories": json({ mappings: [] }),
     ...extra,
   };
   vi.stubGlobal(

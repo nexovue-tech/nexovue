@@ -580,12 +580,13 @@ def _seen(document: Any) -> IssueSeen:
     state = document.get("state") if isinstance(document, dict) else None
     if state not in ("open", "closed"):
         raise TrackerFailure("unexpected_answer")
-    reason = document.get("state_reason")
+    reason, issue_id = document.get("state_reason"), document.get("id")
     return IssueSeen(
         state=state,
         close_reason=issue_close_reason(reason if isinstance(reason, str) else None)
         if state == "closed"
         else None,
+        issue_id=str(issue_id) if isinstance(issue_id, int) and issue_id > 0 else None,
     )
 
 

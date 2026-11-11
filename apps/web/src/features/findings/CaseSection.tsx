@@ -7,7 +7,7 @@ import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { useCan, useSession } from "@/shared/identity";
-
+import { AttachIssuePanel } from "./AttachIssuePanel";
 import type { EmailOutcome, FindingDetail } from "./api";
 import { useCaseChange, useRootCase } from "./api";
 import { CaseLine } from "./CaseLine";
@@ -60,7 +60,9 @@ export function CaseSection({
   const change = useCaseChange(finding.id);
   // FR13: Reopen that case acts on the earlier case, not on this finding.
   const reopenEarlier = useCaseChange(finding.earlier_case?.id ?? finding.id);
-  const [armed, setArmed] = useState<"resolve" | "reassign" | "create-issue" | null>(null);
+  const [armed, setArmed] = useState<
+    "resolve" | "reassign" | "create-issue" | "attach-issue" | null
+  >(null);
   const [done, setDone] = useState("");
   const [changedMeanwhile, setChangedMeanwhile] = useState("");
   const line = useRef<HTMLParagraphElement>(null);
@@ -262,6 +264,15 @@ export function CaseSection({
               Create an issue
             </Button>
           ) : null}
+          {canOperate ? (
+            <Button
+              variant="secondary"
+              className={CASE_ACTION}
+              onClick={() => setArmed("attach-issue")}
+            >
+              Attach an issue
+            </Button>
+          ) : null}
           {actions.reopen ? (
             <Button
               className={CASE_ACTION}
@@ -359,11 +370,29 @@ export function CaseSection({
       {armed === "create-issue" ? (
         <CreateIssuePanel
           findingId={finding.id}
+          projectId={root.project_id}
+          serviceName={root.service_name}
           admin={admin}
           onCreated={() => {
             setArmed(null);
             onOwnAct();
             setDone("Asked for the issue. The link below shows when it exists.");
+            landOnTheLine();
+          }}
+          onCancel={() => {
+            setArmed(null);
+            landOnTheLine();
+          }}
+        />
+      ) : null}
+
+      {armed === "attach-issue" ? (
+        <AttachIssuePanel
+          findingId={finding.id}
+          onAttached={() => {
+            setArmed(null);
+            onOwnAct();
+            setDone("Attached. Its status shows below; it never changes this case.");
             landOnTheLine();
           }}
           onCancel={() => {
@@ -382,6 +411,7 @@ export function CaseSection({
       <LinksList
         findingId={finding.id}
         links={links}
+        caseState={root.case_state ?? null}
         caseActive={root.case_state === "investigating"}
         admin={admin}
         canOperate={canOperate}
