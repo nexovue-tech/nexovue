@@ -122,8 +122,13 @@ export interface DashboardContext {
 }
 
 export interface Series {
-  /** The reading's own name: `requests_per_minute`, `error_rate`, `p50_ms`, `p95_ms`, `p99_ms`. */
+  /**
+   * The reading's own name: `requests_per_minute`, `error_rate`, `p50_ms`, `p95_ms`,
+   * `p99_ms`, or a node chart's metric name.
+   */
   label: string;
+  /** A top-N chart's line: the service it is, drawn as a link to that service (FR35). */
+  service?: string | null;
   points: [string, number][];
 }
 
@@ -136,6 +141,8 @@ export type PanelResult =
       bucket_seconds: number;
       data_starts_at: string | null;
       data_ends_at: string | null;
+      /** The newest bucket of a live window, still filling: off the line, "so far" (FR66). */
+      incomplete_from?: string | null;
       series: Series[];
     }
   | { state: "empty"; kind: string; read_at: string; last_seen_at: string | null }
@@ -252,6 +259,34 @@ export function useServiceChoices(projectId: string | undefined, choice: WindowC
   });
 }
 
+/** A node as the infrastructure screen identifies it, with the metrics it sent. */
+export interface NodeChoice {
+  host: string;
+  container: string;
+  reporter: string;
+  reporter_instance: string;
+  signals: string[];
+}
+
+/**
+ * The displayed project's nodes in the window, for a node chart's real values (FR23).
+ * Read from the Infrastructure screen's own endpoint: features do not import one another.
+ */
+export function useNodeChoices(projectId: string | undefined, choice: WindowChoice) {
+  return useQuery({
+    queryKey: ["dashboard-node-choices", projectId, windowCacheKey(choice)] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) => {
+      const window = resolveChoice(choice);
+      return apiClient.get<{ nodes: NodeChoice[] }>("infrastructure/hosts", {
+        searchParams: { project_id: projectId, from: window.from, to: window.to },
+        signal,
+      });
+    },
+    select: (response) => response.nodes,
+  });
+}
+
 /** One Apply: the draft as it stands, and which panel it reads. */
 export interface PreviewAsk {
   definition: Definition;
@@ -337,20 +372,31 @@ export function useDashboardPanels(
   dashboard: Dashboard | undefined,
   projectId: string | undefined,
   choice: WindowChoice,
+  /** After a drag, only these panels are read; the rest as they scroll in (FR53). */
+  panelIds?: readonly string[],
 ) {
   const interval = dashboard ? refreshIntervalOf(dashboard.definition, choice) : false;
+  // The choice and not the instants: the key stays still while a live window moves, so
+  // a refresh never brings the skeleton back (AC29).
+  const read = [
+    "dashboard-panels",
+    dashboard?.id,
+    dashboard?.version,
+    projectId,
+    windowCacheKey(choice),
+  ] as const;
   return useQuery({
-    // The choice and not the instants: the key stays still while a live window moves, so
-    // a refresh never brings the skeleton back (AC29).
-    queryKey: [
-      "dashboard-panels",
-      dashboard?.id,
-      dashboard?.version,
-      projectId,
-      windowCacheKey(choice),
-    ] as const,
-    enabled: dashboard !== undefined && projectId !== undefined,
+    queryKey: [...read, panelIds?.join(",")] as const,
+    enabled: dashboard !== undefined && projectId !== undefined && panelIds?.length !== 0,
     refetchInterval: interval,
+    // Growing the panels read keeps what is drawn: the panels already read come from the
+    // server's kept answers at no cost (BR6). Only within one read: a change of project or
+    // window never carries an old reading across (FR31).
+    placeholderData: <Answer>(
+      previous: Answer | undefined,
+      previousQuery?: { queryKey: readonly unknown[] },
+    ) =>
+      read.every((part, index) => previousQuery?.queryKey[index] === part) ? previous : undefined,
     // Back on the tab, it reads again only once past its own interval.
     staleTime: interval === false ? Number.POSITIVE_INFINITY : interval,
     // Each refresh is the retry: a cold ClickHouse's 503 must not be read three times a
@@ -364,6 +410,7 @@ export function useDashboardPanels(
           dashboard_id: dashboard?.id,
           project_id: projectId,
           ...windowParams(choice),
+          ...(panelIds === undefined ? {} : { panels: panelIds.join(",") }),
         },
         timeoutMs: PANEL_READ_CLIENT_TIMEOUT_MS,
         signal,

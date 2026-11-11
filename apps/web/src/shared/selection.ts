@@ -60,6 +60,24 @@ interface Selection {
   rangeId: string;
   /** The window the whole console reads against, unless a screen overrides it. */
   window: WindowChoice;
+  /**
+   * The clock a screen declared its times in, while it overrides: the top bar's phrase,
+   * chip and picker read it (F20, FR46). Absent, every time is on the browser's clock.
+   */
+  zone?: string;
+}
+
+/**
+ * What one mounted screen shows in place of the reader's own choice (F20, design section
+ * 7): a dashboard opened from a link, or dragged to a moment. Every reader of
+ * `useSelection`, the top bar included, sees it, so a header and its data cannot
+ * disagree; and it is never remembered, so leaving the screen, or reloading elsewhere,
+ * shows the reader's own project and window (AC69).
+ */
+export interface ScreenOverride {
+  projectId?: string;
+  window?: WindowChoice;
+  zone?: string;
 }
 
 export const SELECTION_STORAGE_KEY = "nexovue.selection";
@@ -105,8 +123,13 @@ function validWindowChoice(choice: WindowChoice | undefined): WindowChoice | und
 }
 
 let selection: Selection = readStored();
+let override: ScreenOverride = {};
+// What readers see: the remembered choice with the override over it, rebuilt on change
+// only, since `useSyncExternalStore` needs the same object until something changes.
+let shown: Selection = selection;
 const listeners = new Set<() => void>();
 
+/** Only the reader's own choice is ever written: the override never reaches storage. */
 function remember() {
   try {
     localStorage.setItem(
@@ -119,7 +142,59 @@ function remember() {
 }
 
 function publish() {
+  shown = {
+    ...selection,
+    ...(override.projectId === undefined ? {} : { projectId: override.projectId }),
+    ...(override.window === undefined ? {} : { window: override.window }),
+    ...(override.zone === undefined ? {} : { zone: override.zone }),
+  };
   for (const listener of listeners) listener();
+}
+
+/** Drops the override's say over a part the reader has just chosen on purpose. */
+function yieldTo(part: "projectId" | "window") {
+  if (override[part] === undefined) return;
+  const { [part]: _given, ...rest } = override;
+  override = rest;
+}
+
+/**
+ * A screen's own project, window or clock, shown while it holds and never remembered.
+ * Parts not named keep what the screen set before.
+ */
+export function setScreenOverride(next: ScreenOverride): void {
+  override = { ...override, ...next };
+  publish();
+}
+
+/**
+ * The reader follows a link out of the screen on purpose, such as a panel's service: what
+ * the screen showed becomes their own choice, remembered as any choice is (design
+ * section 7, FR35). The clock stays the screen's own.
+ */
+export function adoptScreenOverride(): void {
+  if (override.projectId === undefined && override.window === undefined) return;
+  selection = {
+    ...selection,
+    ...(override.projectId === undefined ? {} : { projectId: override.projectId }),
+    ...(override.window === undefined
+      ? {}
+      : {
+          window: override.window,
+          rangeId:
+            override.window.kind === "relative" ? override.window.rangeId : selection.rangeId,
+        }),
+  };
+  override = {};
+  remember();
+  publish();
+}
+
+/** The screen has gone: the reader's own choice shows again. */
+export function clearScreenOverride(): void {
+  if (Object.keys(override).length === 0) return;
+  override = {};
+  publish();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -128,14 +203,17 @@ function subscribe(listener: () => void): () => void {
 }
 
 export function setSelectedProjectId(projectId: string): void {
-  if (selection.projectId === projectId) return;
+  if (selection.projectId === projectId && override.projectId === undefined) return;
+  yieldTo("projectId");
   selection = { ...selection, projectId };
   remember();
   publish();
 }
 
 export function setSelectedRangeId(rangeId: string): void {
-  if (selection.rangeId === rangeId && selection.window.kind === "relative") return;
+  const unchanged = selection.rangeId === rangeId && selection.window.kind === "relative";
+  if (unchanged && override.window === undefined) return;
+  yieldTo("window");
   selection = { ...selection, rangeId, window: { kind: "relative", rangeId } };
   remember();
   publish();
@@ -150,20 +228,28 @@ export function setSelectedRangeId(rangeId: string): void {
 export function setAbsoluteWindow(from: string, to: string): void {
   const choice = validWindowChoice({ kind: "absolute", from, to });
   if (!choice) return;
+  yieldTo("window");
   selection = { ...selection, window: choice };
   remember();
   publish();
 }
 
 export function clearAbsoluteWindow(): void {
-  if (selection.window.kind === "relative") return;
+  if (selection.window.kind === "relative" && override.window === undefined) return;
+  // "Back to live" ends a screen's fixed or dragged window too (FR53).
+  yieldTo("window");
   selection = { ...selection, window: { kind: "relative", rangeId: selection.rangeId } };
   remember();
   publish();
 }
 
 export function useSelection(): Selection {
-  return useSyncExternalStore(subscribe, () => selection);
+  return useSyncExternalStore(subscribe, readSelection);
+}
+
+/** What every screen is read against now: the reader's choice, under any override. */
+export function readSelection(): Selection {
+  return shown;
 }
 
 /**

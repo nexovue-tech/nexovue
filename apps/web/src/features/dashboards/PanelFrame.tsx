@@ -2,6 +2,9 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { CHART_HEIGHT } from "@/shared/components/TrendChart";
+import { adoptScreenOverride } from "@/shared/selection";
+
+import { PANEL_ID_ATTRIBUTE } from "./visible-panels";
 
 /**
  * One panel's frame: a `<section>` named by its `<h2>`, so a screen reader can move
@@ -13,17 +16,22 @@ export function PanelFrame({
   service,
   title,
   span,
+  watch,
   children,
 }: {
   panelId: string;
   service?: string;
   title: string;
   span: string;
+  /** Told when the frame mounts, to follow whether it is on screen (FR53). */
+  watch?: (element: HTMLElement | null) => void;
   children: ReactNode;
 }) {
   const headingId = `panel-${panelId}-title`;
   return (
     <section
+      ref={watch}
+      {...{ [PANEL_ID_ATTRIBUTE]: panelId }}
       id={`panel-${panelId}`}
       aria-labelledby={headingId}
       tabIndex={-1}
@@ -35,7 +43,13 @@ export function PanelFrame({
         ) : (
           <>
             {/* The service is the click target: a line on a canvas cannot be (FR35). */}
-            <Link to="/services/$name" params={{ name: service }} className="hover:text-ink">
+            {/* Followed on purpose, so the project and window shown here go with it (FR35). */}
+            <Link
+              to="/services/$name"
+              params={{ name: service }}
+              onClick={adoptScreenOverride}
+              className="hover:text-ink"
+            >
               {service}
             </Link>
             {` · ${title}`}

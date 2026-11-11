@@ -19,12 +19,17 @@ here, so a table added next month is guarded the day it is created.
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from nexovue_platform.tenant_statements import PROJECT_BINDING, binds_project
+from nexovue_platform.tenant_statements import (
+    PROJECT_BINDING,
+    binds_project,
+    executable_text,
+)
 
 from nexovue_api.data.clickhouse.base import TENANT_BINDING
 
@@ -116,6 +121,17 @@ SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
 # go through `alerts.telemetry`'s reader and so need no driver of their own. F3 (T1.3):
 # so does the evidence job, through the same reader.
 PROJECT_BOUND_PACKAGES: Final = ("detection", "releases", "evidence")
+
+# F20, NFR2 and AC85: a dashboard is shown against one project, so every statement a
+# panel reads binds the project in **each** `SELECT` over a telemetry table, subqueries
+# included. Named here by module and constant, read as the text that runs. T5.2 adds the
+# reused statements its readers call.
+DASHBOARD_STATEMENTS: Final = (
+    ("nexovue_api.services.queries", "OVERVIEW_TREND_SQL"),
+    ("nexovue_api.services.queries", "TREND_SQL"),
+    ("nexovue_api.services.queries", "TOP_SERVICES_TREND_SQL"),
+    ("nexovue_api.infrastructure.queries", "NODE_TREND_SQL"),
+)
 
 # ADR-023: the one module that may write telemetry. Every other module in either
 # service reads, or (the erasure) deletes.
@@ -602,3 +618,82 @@ def test_the_detection_writer_is_where_the_rules_say_it_is() -> None:
         module for module in SCHEDULER_MODULES if module.dotted_name == TELEMETRY_WRITER_MODULE
     )
     assert _insert_calls(writer), f"{TELEMETRY_WRITER_MODULE} no longer inserts; move this rule"
+
+
+# ------------------------------------------------------- dashboards (F20, NFR2, AC85)
+
+_UNION: Final = re.compile(r"\bUNION\s+(?:ALL|DISTINCT)\b", re.IGNORECASE)
+
+
+def _selects(sql: str) -> list[str]:
+    """Each `SELECT` of a statement, with the subqueries inside it cut out.
+
+    A bracket opens a scope; what a scope says at its own depth is its text, and a
+    `UNION` divides it into its `SELECT`s. So the project predicate in an outer `WHERE`
+    cannot vouch for a subquery that reads a telemetry table without one.
+    """
+    scopes: list[list[str]] = [[]]
+    finished: list[str] = []
+    for character in executable_text(sql):
+        if character == "(":
+            scopes[-1].append("()")
+            scopes.append([])
+        elif character == ")" and len(scopes) > 1:
+            finished.append("".join(scopes.pop()))
+        else:
+            scopes[-1].append(character)
+    finished.extend("".join(scope) for scope in scopes)
+    return [part for scope in finished for part in _UNION.split(scope)]
+
+
+def _unbound_selects(sql: str) -> list[str]:
+    """The `SELECT`s reading a telemetry table without `project_id = {project_id:String}`."""
+    return [
+        " ".join(select.split())[:120]
+        for select in _selects(sql)
+        if _READS_A_TELEMETRY_TABLE.search(select) and not binds_project(select)
+    ]
+
+
+def test_every_dashboard_statement_binds_the_project_in_each_select() -> None:
+    unbound = {
+        f"{module}.{name}": found
+        for module, name in DASHBOARD_STATEMENTS
+        if (found := _unbound_selects(getattr(importlib.import_module(module), name)))
+    }
+    assert not unbound, (
+        f"a dashboard statement reads a telemetry table without "
+        f"`project_id = {PROJECT_BINDING}` in a SELECT: {unbound}"
+    )
+
+
+def test_a_subquery_without_the_project_fails_the_dashboard_check() -> None:
+    """The control: an outer predicate cannot vouch for an inner `SELECT` (AC85)."""
+    bound = (
+        "SELECT a FROM endpoint_stats_1m WHERE tenant_id = {tenant_id:String} "
+        "AND project_id = {project_id:String}"
+    )
+    inner_unbound = (
+        f"{bound} AND service_name IN (SELECT service_name FROM endpoint_stats_1m "
+        "WHERE tenant_id = {tenant_id:String} ORDER BY count() DESC LIMIT 5)"
+    )
+    union_unbound = (
+        f"SELECT * FROM ({bound} UNION ALL SELECT a FROM metrics_sum "
+        "WHERE tenant_id = {tenant_id:String})"
+    )
+    commented = (
+        "SELECT a FROM endpoint_stats_1m WHERE tenant_id = {tenant_id:String} "
+        "-- AND project_id = {project_id:String}"
+    )
+    assert not _unbound_selects(bound)
+    assert _unbound_selects(inner_unbound)
+    assert _unbound_selects(union_unbound)
+    assert _unbound_selects(commented)
+
+
+def test_every_named_dashboard_statement_is_a_module_constant_that_reads_telemetry() -> None:
+    """A renamed or emptied statement must break the list, not leave it guarding nothing."""
+    for module, name in DASHBOARD_STATEMENTS:
+        source = next(found for found in API_MODULES if found.dotted_name == module)
+        assert name in _module_level_names(source.tree), f"{module}.{name} is not a module constant"
+        assert _READS_A_TELEMETRY_TABLE.search(getattr(importlib.import_module(module), name))

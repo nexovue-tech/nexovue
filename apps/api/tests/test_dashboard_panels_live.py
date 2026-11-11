@@ -11,8 +11,15 @@ real middleware: slots that free just before each 5 s wait ends give a 200 with 
 inside the console's 25 s; a bucket that stays full gives a 429 at the end of its wait,
 and the handler never runs.
 
-The fixture writes its own rows to `endpoint_stats_1m`, under its own tenant, as the
-workers' rollup does, so nothing depends on demo traffic.
+Step 4 (T4.1, T4.2, T4.9): a `top_services_trend` panel chooses its lines in the store
+and from the displayed project alone, each line equal to that service's trend (AC26,
+AC14); a `node_trend` panel for a host late in the alphabet, on a fleet past the fleet
+read's row cap, draws from one statement bound to that node (AC58); and a live window's
+newest bucket, still filling, is marked so a steady line has no dip at its right edge at
+1 and 24 hours (AC114).
+
+The fixture writes its own rows to `endpoint_stats_1m` and `metrics_gauge`, under its own
+tenant, as the workers do, so nothing depends on demo traffic.
 """
 
 from __future__ import annotations
@@ -116,7 +123,13 @@ async def acme(db: AsyncSession) -> Team:  # noqa: F811
 
 
 async def _seed(
-    team: Team, service: str, start: datetime, *, minutes: int, per_minute: int
+    team: Team,
+    service: str,
+    start: datetime,
+    *,
+    minutes: int,
+    per_minute: int,
+    project: str | None = None,
 ) -> None:
     writer = await _connect(WRITER_DSN)
     try:
@@ -124,7 +137,7 @@ async def _seed(
             FIXTURE_INSERT,
             parameters={
                 "tenant": str(team.org_id),
-                "project": str(team.project_id),
+                "project": project or str(team.project_id),
                 "service": service,
                 "start": start.replace(tzinfo=None),
                 "per_minute": per_minute,
@@ -540,3 +553,281 @@ async def test_ac84b_a_bucket_that_stays_full_answers_429_and_the_handler_never_
     assert SLOT_WAIT - 0.5 < took < SLOT_WAIT + 2
     stamped = await db.scalar(select(Dashboard.last_viewed_at).where(Dashboard.id == dashboard.id))
     assert stamped is None, "the handler ran"
+
+
+# ------------------------------------------------------------ T4.1, AC26
+
+
+async def test_ac26_top_services_chooses_in_the_store_from_the_displayed_project_only(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """Another project's services fail far more, and none of them is chosen. Each line is
+    that service's own trend, and the lines are the services list's first rows (AC14)."""
+    start = _hour_ago()
+    for rank, service in enumerate(("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")):
+        await _seed(acme, service, start, minutes=30, per_minute=(rank + 1) * 20)
+    elsewhere = str(uuid.uuid4())
+    for noisy in ("noisy-1", "noisy-2", "noisy-3"):
+        await _seed(acme, noisy, start, minutes=30, per_minute=2_000, project=elsewhere)
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_top_errors", "top_services_trend", signal="errors", order="worst", count=3),
+        _panel("p_top_rate", "top_services_trend", signal="rate", order="worst", count=3),
+        _panel("p_top_five", "top_services_trend", signal="rate", order="slowest", count=5),
+    )
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=30)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        batch = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+        ranked = (await client.get(f"{API_PREFIX}/services", params=window | {"limit": 3})).json()
+        trends = {
+            name: (
+                await client.get(
+                    f"{API_PREFIX}/services/trend", params=window | {"service_name": name}
+                )
+            ).json()["services"][0]["points"]
+            for name in ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+        }
+
+    panels = batch["panels"]
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    chosen = {series["service"] for series in panels["p_top_errors"]["series"]}
+    assert chosen == {"foxtrot", "echo", "delta"}
+    assert chosen == {row["service_name"] for row in ranked["services"]}
+    assert len(panels["p_top_five"]["series"]) == 5
+    every_line = [series for panel in panels.values() for series in panel["series"]]
+    assert not {series["service"] for series in every_line} & {"noisy-1", "noisy-2", "noisy-3"}
+    for series in panels["p_top_errors"]["series"]:
+        assert series["label"] == "error_rate"
+        assert [value for _, value in series["points"]] == [
+            point["error_rate"] for point in trends[series["service"]]
+        ]
+    for series in panels["p_top_rate"]["series"]:
+        assert [value for _, value in series["points"]] == [
+            point["requests_per_minute"] for point in trends[series["service"]]
+        ]
+
+
+# ------------------------------------------------------------ T4.2, AC58
+
+FLEET_INSERT: Final = """
+INSERT INTO metrics_gauge
+    (timestamp, start_timestamp, received_at, tenant_id, project_id, service_name,
+     scope_name, scope_version, metric_name, metric_unit, metric_description,
+     resource_attrs, attrs, flags, value)
+SELECT
+    toDateTime64({start:DateTime}, 3) + toIntervalMinute(number % {minutes:UInt32}) AS at,
+    at, at, {tenant:String}, {project:String}, 'otelcol', '', '',
+    'system.cpu.utilization', '1', '',
+    CAST(
+        concat(
+            '{"host.name":"',
+            {prefix:String},
+            leftPad(toString(intDiv(number, {minutes:UInt32})), 4, '0'),
+            '"}'
+        ) AS JSON
+    ),
+    CAST('{"cpu":0,"state":"user"}' AS JSON), 0,
+    {value:Float64}
+FROM numbers({total:UInt32})
+"""
+
+
+async def _seed_fleet(
+    team: Team, start: datetime, *, prefix: str, hosts: int, minutes: int, value: float
+) -> None:
+    writer = await _connect(WRITER_DSN)
+    try:
+        await writer.command(
+            FLEET_INSERT,
+            parameters={
+                "start": start.replace(tzinfo=None),
+                "minutes": minutes,
+                "tenant": str(team.org_id),
+                "project": str(team.project_id),
+                "prefix": prefix,
+                "total": hosts * minutes,
+                "value": value,
+            },
+        )
+    finally:
+        await writer.close()
+
+
+class _Recorded(TenantScopedRepository):
+    """The tenant's repository, keeping every statement it is asked to run."""
+
+    def __init__(self, client: AsyncClient, tenant_id: str, ran: list[tuple[str, dict[str, Any]]]):
+        super().__init__(client, tenant_id=tenant_id)
+        self._ran = ran
+
+    async def query(
+        self, sql: str, parameters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        self._ran.append((sql, dict(parameters or {})))
+        return await super().query(sql, parameters)
+
+
+async def test_ac58_a_node_late_in_the_alphabet_on_a_fleet_past_the_row_cap_draws(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    from nexovue_api.infrastructure.queries import NODE_TREND_SQL
+    from nexovue_api.infrastructure.service import MAX_SERIES
+
+    start = _hour_ago()
+    minutes = 60
+    fleet = MAX_SERIES // minutes + 10  # one row a host a minute: past the fleet read's cap
+    await _seed_fleet(acme, start, prefix="host-", hosts=fleet, minutes=minutes, value=0.5)
+    await _seed_fleet(acme, start, prefix="zz-late-", hosts=1, minutes=minutes, value=0.25)
+    late = {"host": "zz-late-0000", "container": "", "reporter": "", "reporter_instance": ""}
+    first = late | {"host": "host-0000"}
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_late", "node_trend", node=late, metric="system.cpu.utilization"),
+        _panel("p_first", "node_trend", node=first, metric="system.cpu.utilization"),
+    )
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=minutes)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        fleet_read = (await client.get(f"{API_PREFIX}/infrastructure/trend", params=window)).json()
+        app = client._transport.app  # type: ignore[attr-defined]
+        app.dependency_overrides[get_tenant_repository] = lambda: _Recorded(
+            reader, str(acme.org_id), ran
+        )
+        batch = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+
+    # The fleet read is cut alphabetically by host, and the late host is not in it.
+    assert fleet_read["truncated"] is True
+    assert "zz-late-0000" not in {trend["host"] for trend in fleet_read["trends"]}
+    panel = batch["panels"]["p_late"]
+    assert panel["state"] == "ok"
+    [line] = panel["series"]
+    assert line["label"] == "system.cpu.utilization"
+    assert [value for _, value in line["points"]] == [0.25] * minutes
+    # One statement for each node, bound to it: never the fleet read.
+    statements = [parameters for sql, parameters in ran if sql == NODE_TREND_SQL]
+    assert len(ran) == len(statements) == 2
+    assert {parameters["host"] for parameters in statements} == {"zz-late-0000", "host-0000"}
+    # The node the fleet read does reach reads the same line there as here (AC14).
+    [route] = [
+        trend["points"]
+        for trend in fleet_read["trends"]
+        if trend["host"] == "host-0000" and trend["metric_name"] == "system.cpu.utilization"
+    ]
+    assert [value for _, value in batch["panels"]["p_first"]["series"][0]["points"]] == [
+        point["value"] for point in route
+    ]
+
+
+# ------------------------------------------------------------ T4.9, AC114
+
+STEADY_PER_MINUTE: Final = 60
+LIVE_RANGES: Final = ("1h", "24h")
+MINUTE_ROLLOVER_ATTEMPTS: Final = 3
+
+
+async def test_ac114_a_live_windows_filling_bucket_is_marked_and_no_whole_bucket_dips(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """A steady service, its current minute half-written as one still arriving is. The
+    newest bucket of a live window is marked `incomplete_from`, and every whole bucket
+    before it reads the steady rate: drop the marked one, and the right edge is flat."""
+    for attempt in range(MINUTE_ROLLOVER_ATTEMPTS):
+        minute = datetime.now(UTC).replace(second=0, microsecond=0)
+        service = f"steady-{attempt}"
+        await _seed(
+            acme,
+            service,
+            minute - timedelta(hours=25),
+            minutes=25 * 60,
+            per_minute=STEADY_PER_MINUTE,
+        )
+        await _seed(acme, service, minute, minutes=1, per_minute=STEADY_PER_MINUTE // 2)
+        dashboard = await _dashboard(
+            db, acme, _panel(f"p_{attempt}", "service_trend", service=service, signal="rate")
+        )
+        answers = {}
+        async with _app_client(db, acme, acme.member, reader) as client:
+            for range_id in LIVE_RANGES:
+                answers[range_id] = (
+                    await client.get(
+                        f"{API_PREFIX}/dashboard-panels/read",
+                        params={
+                            "dashboard_id": str(dashboard.id),
+                            "project_id": str(acme.project_id),
+                            "range": range_id,
+                        },
+                    )
+                ).json()["panels"][f"p_{attempt}"]
+        # A minute that turned over mid-test makes the half-written one whole: try again.
+        if datetime.now(UTC).replace(second=0, microsecond=0) == minute:
+            break
+    else:
+        pytest.fail("the minute turned over during every attempt")
+
+    for range_id, panel in answers.items():
+        [line] = panel["series"]
+        buckets = [datetime.fromisoformat(at) for at, _ in line["points"]]
+        rates = [rate for _, rate in line["points"]]
+        newest = buckets[-1]
+        assert panel["incomplete_from"] is not None, range_id
+        assert datetime.fromisoformat(panel["incomplete_from"]) == newest, range_id
+        assert newest <= minute < newest + timedelta(seconds=panel["bucket_seconds"]), range_id
+        # The marked bucket is the one that would dip; every whole one reads steady. At
+        # 24 hours the first bucket starts before the window and is cut by it.
+        whole = rates[1:-1] if range_id == "24h" else rates[:-1]
+        assert whole and set(whole) == {STEADY_PER_MINUTE}, range_id
+        assert rates[-1] < STEADY_PER_MINUTE, range_id
+
+
+async def test_a_fixed_windows_newest_bucket_is_not_marked(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    start = _hour_ago()
+    await _seed(acme, "settled", start, minutes=30, per_minute=STEADY_PER_MINUTE)
+    dashboard = await _dashboard(
+        db, acme, _panel("p_settled", "service_trend", service="settled", signal="rate")
+    )
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panel = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params={
+                    "dashboard_id": str(dashboard.id),
+                    "project_id": str(acme.project_id),
+                    "from": start.isoformat(),
+                    "to": (start + timedelta(minutes=30)).isoformat(),
+                },
+            )
+        ).json()["panels"]["p_settled"]
+    assert panel["state"] == "ok"
+    assert panel["incomplete_from"] is None

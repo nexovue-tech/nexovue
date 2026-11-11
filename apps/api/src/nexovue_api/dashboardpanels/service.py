@@ -27,7 +27,7 @@ import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from nexovue_platform.telemetry.logging import get_logger
@@ -35,7 +35,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.dashboardpanels.caps import ScanCaps
-from nexovue_api.dashboardpanels.scans import RAW_READERS, READERS, Trend
+from nexovue_api.dashboardpanels.scans import (
+    RAW_READERS,
+    READERS,
+    NodeLine,
+    ServiceTrends,
+    Trend,
+)
 from nexovue_api.dashboardpanels.schemas import (
     EmptyPanel,
     FailedPanel,
@@ -74,10 +80,12 @@ from nexovue_api.dashboards.compile import (
 )
 from nexovue_api.dashboards.definition import (
     Definition,
-    NotePanel,
+    KnownPanel,
+    NodeTrendPanel,
     ProjectTrendPanel,
     ServiceTrendPanel,
     StoredDefinition,
+    TopServicesTrendPanel,
     UnknownPanel,
     parse_stored,
 )
@@ -99,9 +107,16 @@ SIGNAL_SERIES: Final[dict[str, tuple[str, ...]]] = {
     "errors": ("error_rate",),
     "latency": ("p50_ms", "p95_ms", "p99_ms"),
 }
+# A top-N chart draws one line a service, so one reading a signal: latency is the p95,
+# the reading the "slowest" ranking orders by (`services/queries.SLOWEST_FIRST`).
+TOP_SERVICES_SERIES: Final[dict[str, str]] = {
+    "rate": "requests_per_minute",
+    "errors": "error_rate",
+    "latency": "p95_ms",
+}
 
 Disconnected = Callable[[], Awaitable[bool]]
-StoredPanel = ProjectTrendPanel | ServiceTrendPanel | NotePanel | UnknownPanel
+StoredPanel = KnownPanel | UnknownPanel
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +168,9 @@ class _Scanning:
     window: tuple[datetime, datetime]
     deadline: float
     disconnected: Disconnected
+    # A live range's newest bucket is still filling at `now`; a fixed window's is not.
+    live: bool
+    now: datetime
 
 
 def _deadline(reads: PanelReads, arrived_at: float | None) -> float:
@@ -202,6 +220,8 @@ async def read_panels(
             window=window,
             deadline=deadline,
             disconnected=disconnected,
+            live=asked.range_id is not None,
+            now=now,
         ),
         plan,
         last_seen,
@@ -254,6 +274,8 @@ async def preview_panels(
             window=window,
             deadline=deadline,
             disconnected=disconnected,
+            live=asked.range_id is not None,
+            now=now,
         ),
         plan,
         last_seen,
@@ -327,8 +349,9 @@ async def _scan_and_assemble(
         zip(plan.scans, await asyncio.gather(*(scan(key) for key in plan.scans)), strict=True)
     )
     panels: dict[str, PanelResult] = {}
+    filling_at = scanning.now if scanning.live else None
     for panel, compiled, resolved in plan.panels:
-        result = _result(panel, compiled, resolved, plan, outcomes, last_seen)
+        result = _result(panel, compiled, resolved, plan, outcomes, last_seen, filling_at)
         if result is not None:
             panels[panel.id] = result
     return panels, outcomes
@@ -365,6 +388,7 @@ def _result(
     plan: _Plan,
     outcomes: dict[ScanKey, Outcome],
     last_seen: dict[str, datetime],
+    filling_at: datetime | None,
 ) -> PanelResult | None:
     if isinstance(panel, UnknownPanel):
         return UnknownKindPanel()
@@ -381,30 +405,81 @@ def _result(
         return TimedOutPanel(kind=panel.kind)
     if isinstance(outcome, FailedRead):
         return FailedPanel(kind=panel.kind)
-    return _drawn(panel, resolved, outcome, last_seen)
+    try:
+        return _drawn(panel, resolved, outcome, last_seen, filling_at)
+    except TypeError as error:
+        # The panel boundary: an answer this panel cannot draw fails it alone (FR14).
+        logger.warning(
+            "a dashboard panel could not be drawn", kind=panel.kind, error=type(error).__name__
+        )
+        return FailedPanel(kind=panel.kind)
 
 
 def _drawn(
-    panel: StoredPanel, key: ScanKey, served: Served, last_seen: dict[str, datetime]
+    panel: StoredPanel,
+    key: ScanKey,
+    served: Served,
+    last_seen: dict[str, datetime],
+    filling_at: datetime | None,
 ) -> PanelResult:
-    trend = served.answer.value
-    assert isinstance(trend, Trend) and isinstance(panel, ProjectTrendPanel | ServiceTrendPanel)
-    if not trend.points:
+    lines = _lines(panel, served.answer.value)
+    read_at = served.answer.read_at
+    buckets = sorted({at for line in lines for at, _ in line.points})
+    if not buckets:
         if key.reader != SERVICE_TREND:
-            return EmptyPanel(kind=panel.kind, read_at=served.answer.read_at)
+            return EmptyPanel(kind=panel.kind, read_at=read_at)
         seen = last_seen.get(key.service or "")
         if seen is None:
             # No record here, identical whether it reports elsewhere or nowhere (FR16).
             return NotInProjectPanel(kind=panel.kind)
-        return EmptyPanel(kind=panel.kind, read_at=served.answer.read_at, last_seen_at=seen)
+        return EmptyPanel(kind=panel.kind, read_at=read_at, last_seen_at=seen)
+    bucket_seconds = served.answer.value.bucket_seconds
     return OkPanel(
         kind=panel.kind,
-        read_at=served.answer.read_at,
-        bucket_seconds=trend.bucket_seconds,
-        data_starts_at=trend.points[0].bucket,
-        data_ends_at=trend.points[-1].bucket,
-        series=_series(trend.points, panel.settings.signal),
+        read_at=read_at,
+        bucket_seconds=bucket_seconds,
+        data_starts_at=buckets[0],
+        data_ends_at=buckets[-1],
+        incomplete_from=_filling(buckets[-1], bucket_seconds, filling_at),
+        series=lines,
     )
+
+
+def _filling(newest: datetime, bucket_seconds: int, filling_at: datetime | None) -> datetime | None:
+    """The newest bucket, if it has not ended by now on a live window (FR66).
+
+    A live window's end is rounded up to the next minute, so its last bucket holds only
+    part of its time, while the rate divides by the whole bucket.
+    """
+    if filling_at is None:
+        return None
+    # The store's buckets come back without a zone, and are UTC (`wire.to_iso_millis`).
+    start = newest if newest.tzinfo is not None else newest.replace(tzinfo=UTC)
+    return start if start + timedelta(seconds=bucket_seconds) > filling_at else None
+
+
+def _lines(panel: StoredPanel, value: object) -> list[Series]:
+    """A panel's lines from its reader's answer, by kind."""
+    if isinstance(panel, TopServicesTrendPanel) and isinstance(value, ServiceTrends):
+        reading = TOP_SERVICES_SERIES[panel.settings.signal]
+        return [
+            Series(
+                label=reading,
+                service=line.service_name,
+                points=[(point.bucket, getattr(point, reading)) for point in line.points],
+            )
+            for line in value.services
+        ]
+    if isinstance(panel, NodeTrendPanel) and isinstance(value, NodeLine):
+        return [
+            Series(
+                label=panel.settings.metric,
+                points=[(point.bucket, point.value) for point in value.points],
+            )
+        ]
+    if isinstance(panel, ProjectTrendPanel | ServiceTrendPanel) and isinstance(value, Trend):
+        return _series(value.points, panel.settings.signal)
+    raise TypeError(f"a {panel.kind} panel cannot draw {type(value).__name__}")
 
 
 def _series(points: Sequence[OverviewPoint | TrendPoint], signal: str) -> list[Series]:

@@ -6,6 +6,7 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 
 ## Records
 
+- [Overview newest bucket reads low](overview-newest-bucket-reads-low/bug.md) — on a live window the newest point of Overview's rate charts divides a bucket still filling by its whole length, so a steady service seems to fall at the right edge; recorded by F20 Step 4, not yet fixed.
 - [Console findings review](console-findings-review/bug.md) — a screen's reads wait rather than being refused; titles, snooze state, units, chart zone and the seed's rates corrected.
 - [Live tests on a Mac](live-tests-on-a-mac/bug.md) — five live tests failed on a machine outside UTC or outside Linux, or while the dev stack's own scheduler ran.
 - [Detection false delayed](detection-false-delayed/bug.md) — Findings said nexovue was behind on a healthy stack, because a sweep just before the worker's once-a-minute write reads 2 minutes short.

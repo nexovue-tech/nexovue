@@ -22,9 +22,12 @@ from nexovue_api.wire import IsoTimestamp
 
 
 class Series(BaseModel):
-    """One line: a reading's name (`requests_per_minute`, `p95_ms`) and its points."""
+    """One line: a reading's name (`requests_per_minute`, `p95_ms`, or a node's metric
+    name) and its points. A top-N chart's line also names its service, which the console
+    draws as a link to that service (FR35)."""
 
     label: str
+    service: str | None = None
     points: list[tuple[IsoTimestamp, float]]
 
 
@@ -36,6 +39,10 @@ class OkPanel(BaseModel):
     # When the data starts, if later than the window's start (FR15, D13).
     data_starts_at: IsoTimestamp | None
     data_ends_at: IsoTimestamp | None
+    # The newest bucket of a live window, still filling: a rate there is divided by the
+    # whole bucket and would read as a collapse. The console leaves it off the line and
+    # shows it as "so far" (FR66, AC114). Null on a fixed window, or when it is whole.
+    incomplete_from: IsoTimestamp | None = None
     series: list[Series]
 
 

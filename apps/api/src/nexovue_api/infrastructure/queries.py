@@ -217,6 +217,25 @@ ORDER BY host, container, reporter, reporter_instance, metric_name, bucket_nanos
 LIMIT {{max_series:UInt32}}
 """
 
+# One node's one metric over time, for a dashboard's `node_trend` panel (F20, T4.2).
+# `NODE_TRENDS_SQL`'s body bound to the node and the metric, never the fleet read: that
+# one's `LIMIT` counts rows, cut alphabetically by host, so a host late in the alphabet
+# on a large fleet would read empty (AC58). The caller passes the one metric as
+# `metric_names`, so `_READINGS` narrows in the store before the node is chosen.
+NODE_TREND_SQL: Final = f"""
+SELECT
+    {_BUCKET_NANOS} AS bucket_nanos,
+    avg(value) AS mean_value
+FROM ({_ONE_ROW_PER_READING.format(readings=_READINGS)}
+)
+WHERE host = {{host:String}}
+  AND container = {{container:String}}
+  AND reporter = {{reporter:String}}
+  AND reporter_instance = {{reporter_instance:String}}
+GROUP BY bucket_nanos
+ORDER BY bucket_nanos
+"""
+
 # What has arrived at all, which is what the screen's empty state needs: a
 # project with no rows here has no collector sending host metrics, and that is a
 # different problem from a host that has gone quiet.

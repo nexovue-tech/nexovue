@@ -394,6 +394,74 @@ describe("Apply (AC135)", () => {
   });
 });
 
+describe("Step 4's kinds (T4.1, T4.2)", () => {
+  const choose = (container: Element, kind: string) =>
+    act(() =>
+      [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+        .find((radio) => radio.value === kind)
+        ?.click(),
+    );
+
+  it("makes a top-N chart of the ranking, its count and its signal", async () => {
+    stubApi({ "GET /services": services("checkout") });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+    choose(container, "top_services_trend");
+    act(() => typeInto(labelled(container, "Chooses"), "slowest"));
+    act(() => typeInto(labelled(container, "How many services"), "3"));
+    act(() => typeInto(labelled(container, "Shows"), "latency"));
+
+    act(() => button(container, "Add to dashboard")?.click());
+    expect(kept).toEqual([
+      expect.objectContaining({
+        kind: "top_services_trend",
+        settings: { signal: "latency", order: "slowest", count: 3 },
+      }),
+    ]);
+  });
+
+  it("chooses a machine from the project's real nodes, escaped, holding its whole identity", async () => {
+    const hidden = "web\u202E01";
+    stubApi({
+      "GET /infrastructure/hosts": json({
+        nodes: [
+          {
+            host: hidden,
+            container: "",
+            reporter: "",
+            reporter_instance: "",
+            signals: ["system.cpu.utilization", "system.memory.usage"],
+          },
+        ],
+        truncated: false,
+      }),
+    });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+    choose(container, "node_trend");
+    await waitFor(() => container.querySelectorAll("select option").length > 1, "the machines");
+
+    act(() => button(container, "Add to dashboard")?.click());
+    expect(text(container.querySelector('[role="alert"]'))).toBe("Choose a machine.");
+
+    const machine = labelled<HTMLSelectElement>(container, "Machine");
+    const option = [...machine.options].find((each) => each.textContent === "web[U+202E]01");
+    expect(option).toBeDefined();
+    act(() => typeInto(machine, option?.value ?? ""));
+    act(() => typeInto(labelled(container, "Shows"), "system.memory.usage"));
+    act(() => button(container, "Add to dashboard")?.click());
+    expect(kept).toEqual([
+      expect.objectContaining({
+        kind: "node_trend",
+        settings: {
+          node: { host: hidden, container: "", reporter: "", reporter_instance: "" },
+          metric: "system.memory.usage",
+        },
+      }),
+    ]);
+  });
+});
+
 describe("the sheet and the preview's width (AC112)", () => {
   it("scales with the window, and fills the screen below lg", async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

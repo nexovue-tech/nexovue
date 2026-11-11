@@ -1,16 +1,22 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ApiError, isNotFound, isRateLimited } from "@/shared/api-client";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { CHART_HEIGHT } from "@/shared/components/TrendChart";
 import { detectionHeadlineFor } from "@/shared/detection/headline";
+import { roundedOut } from "@/shared/drag-window";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 import { formatZonedTime, zoneLabel } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
-import { useSelection } from "@/shared/selection";
-
+import type { WindowChoice } from "@/shared/selection";
+import {
+  clearScreenOverride,
+  setScreenOverride,
+  useSelection,
+  windowCacheKey,
+} from "@/shared/selection";
 import type { Dashboard, DashboardContext, PanelReadResponse, StoredPanel } from "./api";
 import { refreshIntervalOf, useDashboard, useDashboardContext, useDashboardPanels } from "./api";
 import { gridSpans } from "./grid-spans";
@@ -18,8 +24,10 @@ import type { KeptReadings } from "./kept-readings";
 import { allFailing, keptLine, nextExpiry, nextKept } from "./kept-readings";
 import { NotePanel } from "./NotePanel";
 import { CorrelationId, PanelFrame, PanelWords, StaleStrip } from "./PanelFrame";
-import { panelTitle, signalOf, stateWords, transient, unread } from "./panel-words";
+import { panelTitle, stateWords, TIME_KINDS, transient, unread } from "./panel-words";
 import { TimePanel } from "./TimePanel";
+import { chartHeight, syncKeyOf } from "./time-lines";
+import { useVisiblePanels } from "./visible-panels";
 
 /**
  * A saved dashboard, read in one charged batch (F20, Step 2).
@@ -31,11 +39,48 @@ import { TimePanel } from "./TimePanel";
  * (BR5): it keeps an earlier line for one interval under a filled strip, then words alone.
  */
 
+/** A drag's window, and the panels read in it so far: those on screen, then as they scroll in. */
+interface Dragged {
+  windowKey: string;
+  read: ReadonlySet<string>;
+}
+
 export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
   const { projectId, window: choice } = useSelection();
   const dashboard = useDashboard(dashboardId);
   const context = useDashboardContext(dashboard.data, projectId, choice);
-  const panels = useDashboardPanels(dashboard.data, projectId, choice);
+  const onScreen = useVisiblePanels();
+  const [drag, setDrag] = useState<Dragged | undefined>();
+  // A drag's narrowing lasts while its window does: any other window reads every panel.
+  const dragged = drag?.windowKey === windowCacheKey(choice) ? drag : undefined;
+  const panelIds = useMemo(() => (dragged ? [...dragged.read].sort() : undefined), [dragged]);
+  const panels = useDashboardPanels(dashboard.data, projectId, choice, panelIds);
+
+  // A panel scrolling in after a drag joins the read; those already read cost nothing,
+  // since the server keeps their answers (BR6).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is when the panels on screen changed
+  useEffect(() => {
+    const now = onScreen.visibleNow();
+    if (!dragged || !now) return;
+    const joining = [...now].filter((panelId) => !dragged.read.has(panelId));
+    if (joining.length > 0) setDrag({ ...dragged, read: new Set([...dragged.read, ...joining]) });
+  }, [onScreen.version, dragged]);
+
+  // The screen's window is never remembered: leaving shows the reader's own (AC69).
+  useEffect(() => clearScreenOverride, []);
+
+  /** One drag, one window: rounded out, through the screen override, never remembered. */
+  const onDrag = useCallback(
+    (fromSeconds: number, toSeconds: number) => {
+      const window = roundedOut(fromSeconds, toSeconds);
+      if (window === undefined) return;
+      const choice: WindowChoice = { kind: "absolute", ...window };
+      const visible = onScreen.visibleNow();
+      setDrag(visible ? { windowKey: windowCacheKey(choice), read: visible } : undefined);
+      setScreenOverride({ window: choice });
+    },
+    [onScreen],
+  );
   const canEdit = useCan("edit_dashboards");
   const [kept, setKept] = useState<KeptReadings>({});
   const [lastGoodAt, setLastGoodAt] = useState<string | undefined>();
@@ -95,6 +140,9 @@ export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
       intervalMs={intervalMs}
       canEdit={canEdit}
       onReadAgain={() => void panels.refetch()}
+      onDrag={onDrag}
+      watch={onScreen.watch}
+      panelIds={panelIds}
     />
   );
 }
@@ -129,6 +177,10 @@ interface ViewProps {
   intervalMs: number | false;
   canEdit: boolean;
   onReadAgain: () => void;
+  onDrag: (fromSeconds: number, toSeconds: number) => void;
+  watch: (element: HTMLElement | null) => void;
+  /** After a drag, the panels read so far; undefined when every panel is read. */
+  panelIds: readonly string[] | undefined;
 }
 
 function DashboardView(props: ViewProps) {
@@ -346,9 +398,18 @@ function PanelCell(
   const { panel, span, answer, pending, kept, now, intervalMs, context, zone, canEdit, dashboard } =
     props;
   const title = panelTitle(panel);
-  const frame = (body: ReactNode) => (
-    <PanelFrame panelId={panel.id} service={title.service} title={title.text} span={span}>
+  // "View as table" opens at the full row's width (FR49).
+  const [asTable, setAsTable] = useState(false);
+  const frame = (body: ReactNode, toggle?: ReactNode) => (
+    <PanelFrame
+      panelId={panel.id}
+      service={title.service}
+      title={title.text}
+      span={asTable ? "" : span}
+      watch={props.watch}
+    >
       {body}
+      {toggle}
     </PanelFrame>
   );
 
@@ -357,6 +418,17 @@ function PanelCell(
     return frame(<NotePanel text={text} />);
   }
   const result = answer?.panels[panel.id];
+  const awaitingScroll = props.panelIds !== undefined && !props.panelIds.includes(panel.id);
+  if (result === undefined && awaitingScroll) {
+    // After a drag, read when it scrolls into view (FR53).
+    return frame(
+      <div
+        aria-hidden
+        className="rounded-xs bg-raised"
+        style={{ height: chartHeight(panel.height) }}
+      />,
+    );
+  }
   if (result === undefined) {
     // Loading, or the whole batch failed: an earlier line may stay, words otherwise.
     const old = keptLine(kept[panel.id], intervalMs, now);
@@ -373,18 +445,20 @@ function PanelCell(
     return frame(<PanelWords words="Could not read this." />);
   }
   if (result.state === "ok") {
-    const signal = signalOf(panel);
+    if (!TIME_KINDS.has(panel.kind)) {
+      return frame(<PanelWords words="This panel type is no longer available." />);
+    }
     return frame(
-      signal ? (
-        <TimePanel
-          reading={result}
-          signal={signal}
-          zone={zone}
-          description={`${title.service ? `${title.service} · ` : ""}${title.text} across the window.`}
-        />
-      ) : (
-        <PanelWords words="This panel type is no longer available." />
-      ),
+      <TimePanel
+        panel={panel}
+        reading={result}
+        zone={zone}
+        syncKey={syncKeyOf(dashboard.id)}
+        onDrag={props.onDrag}
+        asTable={asTable}
+        description={`${title.service ? `${title.service} · ` : ""}${title.text} across the window.`}
+      />,
+      <TableToggle asTable={asTable} onToggle={() => setAsTable((before) => !before)} />,
     );
   }
   const words =
@@ -413,18 +487,26 @@ function KeptChart(
   },
 ) {
   const { panel, zone, reading } = props;
-  const signal = signalOf(panel);
   return (
     <>
       <StaleStrip since={formatZonedTime(reading.read_at, { zone })} />
-      {signal ? (
-        <TimePanel
-          reading={reading}
-          signal={signal}
-          zone={zone}
-          description="An earlier reading."
-        />
+      {TIME_KINDS.has(panel.kind) ? (
+        <TimePanel panel={panel} reading={reading} zone={zone} description="An earlier reading." />
       ) : null}
     </>
+  );
+}
+
+/** Every chart offers its numbers as a table (FR34); a 44 px target below `md` (FR50). */
+function TableToggle({ asTable, onToggle }: { asTable: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={asTable}
+      className="mt-1 inline-flex min-h-11 items-center text-brand text-xs underline md:min-h-0"
+    >
+      View as table
+    </button>
   );
 }

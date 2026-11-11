@@ -805,3 +805,49 @@ async def test_a_preview_logs_its_line_as_a_draft(monkeypatch: pytest.MonkeyPatc
     assert line["dashboard_id"] is None
     assert line["draft"] is True
     assert line["scans_run"] == 3
+
+
+# ------------------------------------------------- Step 4: the panel boundary, the filling bucket
+
+
+def _served(value: Any) -> Any:
+    from nexovue_api.dashboardpanels.shared_reads import Answer, Served
+
+    return Served(answer=Answer(value=value, rows=1, read_at=datetime.now(UTC)), source="read")
+
+
+def _stored_panel(kind: str, settings: dict[str, Any]) -> Any:
+    from nexovue_api.dashboards.definition import parse_stored
+
+    raw = {"id": "p_1", "kind": kind, "title": None, "width": 4, "height": "medium"}
+    [panel] = parse_stored({"panels": [raw | {"settings": settings}]}).panels
+    return panel
+
+
+def test_an_answer_a_panel_cannot_draw_fails_that_panel_alone() -> None:
+    """The panel boundary (FR14): a reader's answer of the wrong shape is that panel's
+    `failed`, never a 500 for the page."""
+    from nexovue_api.dashboardpanels.scans import NodeLine
+    from nexovue_api.dashboards.compile import scan_of
+
+    panel = _stored_panel("project_trend", {"signal": "rate"})
+    key = scan_of(panel)
+    assert key is not None, "a project trend panel reads one scan"
+    plan = service._Plan(panels=[], scans=(key,), over_limit=frozenset())
+    outcomes = {key: _served(NodeLine(bucket_seconds=60, points=[]))}
+
+    result = service._result(
+        panel, cast(Any, SimpleNamespace(scan=key)), key, plan, outcomes, {}, None
+    )
+
+    assert result is not None and result.state == "failed"
+
+
+def test_only_a_bucket_that_has_not_ended_is_marked_filling() -> None:
+    newest = datetime(2026, 11, 9, 10, 3)  # noqa: DTZ001 - the store hands buckets back without a zone
+    assert service._filling(newest, 60, datetime(2026, 11, 9, 10, 3, 30, tzinfo=UTC)) == (
+        newest.replace(tzinfo=UTC)
+    )
+    assert service._filling(newest, 60, datetime(2026, 11, 9, 10, 4, tzinfo=UTC)) is None
+    # A fixed window marks nothing.
+    assert service._filling(newest, 60, None) is None

@@ -67,7 +67,45 @@ async def service_trend(
     rows = await repository.query(
         queries.trend_sql(one_service=service_name is not None), parameters
     )
+    return _trend_response(rows, bucket_seconds, from_time, to_time)
 
+
+# The most lines a top-N chart draws: more than five cannot be told apart by colour
+# and dash together (F20, FR6).
+MAX_TOP_SERVICES: Final = 5
+
+
+async def top_services_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    order: str,
+    count: int,
+    from_time: datetime,
+    to_time: datetime,
+) -> ServiceTrendResponse:
+    """The history of the `count` worst or slowest services, chosen in the store.
+
+    The services list's own ranking chooses them, so the lines are the first rows of
+    that list over the same window; each line is that service's own trend (AC14, AC26).
+    """
+    if order not in ORDERINGS:
+        raise ValueError(f"unknown ordering {order!r}")
+    if not 1 <= count <= MAX_TOP_SERVICES:
+        raise ValueError(f"a top-N chart draws 1 to {MAX_TOP_SERVICES} lines, not {count}")
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.top_services_trend_sql(order=order),
+        _window_parameters(project_id, from_time, to_time)
+        | {"bucket_seconds": bucket_seconds, "limit": count},
+    )
+    return _trend_response(rows, bucket_seconds, from_time, to_time)
+
+
+def _trend_response(
+    rows: list[dict[str, Any]], bucket_seconds: int, from_time: datetime, to_time: datetime
+) -> ServiceTrendResponse:
+    """Trend rows, one service each, as the sparkline and every chart read them."""
     # Each bucket is its own small window, so a rate is against the bucket
     # rather than the whole span — otherwise a quiet minute inside a busy hour
     # would read as the hour's average and the line would be flat.

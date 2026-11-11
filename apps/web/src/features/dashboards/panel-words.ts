@@ -11,7 +11,39 @@ import type { PanelResult, Signal, StoredPanel } from "./api";
  * name an action follow the reader's role: a viewer is never told to remove panels (FR65).
  */
 
-export const TIME_KINDS = new Set(["project_trend", "service_trend"]);
+export const TIME_KINDS = new Set([
+  "project_trend",
+  "service_trend",
+  "top_services_trend",
+  "node_trend",
+]);
+
+/** A node as the infrastructure screen names it: its container, its host, or its reporter. */
+export interface NodeRef {
+  host: string;
+  container: string;
+  reporter: string;
+  reporter_instance: string;
+}
+
+export function nodeOf(panel: StoredPanel): NodeRef | undefined {
+  const node = panel.settings.node;
+  if (typeof node !== "object" || node === null) return undefined;
+  const { host, container, reporter, reporter_instance } = node as Record<string, unknown>;
+  return typeof host === "string" &&
+    typeof container === "string" &&
+    typeof reporter === "string" &&
+    typeof reporter_instance === "string"
+    ? { host, container, reporter, reporter_instance }
+    : undefined;
+}
+
+/** "checkout" for a container, "web-01" for a host, "reported by recommendation" otherwise. */
+export function nodeName(node: NodeRef): string {
+  if (node.container) return visibleEscapes(node.container);
+  if (node.host) return visibleEscapes(node.host);
+  return `reported by ${visibleEscapes(node.reporter)}`;
+}
 
 const SIGNAL_NAMES: Record<Signal, string> = {
   rate: "Rate",
@@ -41,6 +73,24 @@ export function panelTitle(panel: StoredPanel): { service?: string; text: string
       text: what,
     };
   }
+  if (panel.kind === "top_services_trend") {
+    const count = Number(panel.settings.count) || 0;
+    const order = panel.settings.order === "slowest" ? "Slowest" : "Worst";
+    return {
+      text: panel.title
+        ? visibleEscapes(panel.title)
+        : `${order} ${count} ${count === 1 ? "service" : "services"} · ${what}`,
+    };
+  }
+  if (panel.kind === "node_trend") {
+    const node = nodeOf(panel);
+    const metric = typeof panel.settings.metric === "string" ? panel.settings.metric : "";
+    return {
+      text: panel.title
+        ? visibleEscapes(panel.title)
+        : `${node ? nodeName(node) : "A machine"} · ${visibleEscapes(metric)}`,
+    };
+  }
   if (!TIME_KINDS.has(panel.kind) && panel.kind !== "note") {
     return { text: panel.title ? visibleEscapes(panel.title) : "Panel" };
   }
@@ -66,6 +116,11 @@ export function stateWords(
     case "ok":
       return undefined;
     case "empty":
+      if (panel.kind === "top_services_trend") return "No services reported in this window.";
+      if (panel.kind === "node_trend") {
+        const node = nodeOf(panel);
+        return `${node ? nodeName(node) : "This machine"} has not reported in this window.`;
+      }
       if (panel.kind !== "service_trend") return "Nothing reported in this window.";
       return result.last_seen_at === null
         ? "No requests in this window."

@@ -205,6 +205,14 @@ export function worstCaseReads(definition: Definition): number {
       const service = panel.settings.service;
       keys.add(`service:${typeof service === "string" ? service : PICKED_SERVICE}`);
     }
+    // One read answers every signal of a ranking and count (`compile.py`).
+    if (panel.kind === "top_services_trend") {
+      keys.add(`top:${String(panel.settings.order)}:${String(panel.settings.count)}`);
+    }
+    // One read per node and metric.
+    if (panel.kind === "node_trend") {
+      keys.add(`node:${JSON.stringify(panel.settings.node)}:${String(panel.settings.metric)}`);
+    }
   }
   return keys.size;
 }

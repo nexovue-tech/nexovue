@@ -403,6 +403,62 @@ describe("the dashboard view", () => {
     expect(text(section(container, "p_gone"))).toContain("This panel type is no longer available.");
   });
 
+  it("names Step 4's charts and says their empty states in their own words (T4.1, T4.2)", async () => {
+    const top = panel("p_top", "top_services_trend", {
+      signal: "errors",
+      order: "worst",
+      count: 5,
+    });
+    const node = panel("p_node", "node_trend", {
+      node: { host: "web\u202E01", container: "", reporter: "", reporter_instance: "" },
+      metric: "system.cpu.utilization",
+    });
+    stubApi({
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(dashboard([top, node])),
+      [`GET /dashboards/${DASHBOARD_ID}/context`]: json(context()),
+      "GET /dashboard-panels/read": json(
+        batch({
+          p_top: { state: "empty", kind: "top_services_trend", read_at: at(0), last_seen_at: null },
+          p_node: { state: "empty", kind: "node_trend", read_at: at(0), last_seen_at: null },
+        }),
+      ),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(() => text(section(container, "p_node")).includes("reported"), "the words");
+
+    expect(text(section(container, "p_top")?.querySelector("h2") ?? null)).toBe(
+      "Worst 5 services · Errors",
+    );
+    expect(text(section(container, "p_top"))).toContain("No services reported in this window.");
+    expect(text(section(container, "p_node")?.querySelector("h2") ?? null)).toBe(
+      "web[U+202E]01 · system.cpu.utilization",
+    );
+    expect(text(section(container, "p_node"))).toContain(
+      "web[U+202E]01 has not reported in this window.",
+    );
+  });
+
+  it("offers every chart's numbers as a table, opened at the full row's width (FR34, FR49)", async () => {
+    stubApi(viewOf(json(batch({ p_rate: ok(), p_checkout: ok("p95_ms", "service_trend") }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => section(container, "p_checkout")?.querySelector("canvas, [role=img]"),
+      "a chart",
+    );
+    const checkout = () => section(container, "p_checkout");
+    const toggle = [...(checkout()?.querySelectorAll("button") ?? [])].find(
+      (each) => text(each) === "View as table",
+    );
+    expect(toggle).toBeDefined();
+    expect(checkout()?.className).toMatch(/lg:col-span/);
+
+    act(() => toggle?.click());
+
+    expect(checkout()?.querySelector("table")).not.toBeNull();
+    expect(text(checkout()?.querySelector("thead") ?? null)).toContain("p95 (est.)");
+    expect(checkout()?.className).not.toMatch(/lg:col-span/);
+  });
+
   it.each([
     ["owner", "Remove 1 panel."],
     ["viewer", "Ask Asha, or someone who can edit it, to remove panels."],

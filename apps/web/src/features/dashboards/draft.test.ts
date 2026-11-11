@@ -196,6 +196,29 @@ describe("what a definition costs at worst (FR7)", () => {
     // checkout, the project, the picked service and payment.
     expect(worstCaseReads(definition)).toBe(4);
   });
+
+  it("counts a top-N chart once per ranking and count, and a node chart per node and metric", () => {
+    const node = { host: "web-01", container: "", reporter: "", reporter_instance: "" };
+    const definition = documentWith(
+      panel("p_1", {
+        kind: "top_services_trend",
+        settings: { signal: "rate", order: "worst", count: 5 },
+      }),
+      panel("p_2", {
+        kind: "top_services_trend",
+        settings: { signal: "errors", order: "worst", count: 5 },
+      }),
+      panel("p_3", {
+        kind: "top_services_trend",
+        settings: { signal: "rate", order: "slowest", count: 5 },
+      }),
+      panel("p_4", { kind: "node_trend", settings: { node, metric: "system.cpu.utilization" } }),
+      panel("p_5", { kind: "node_trend", settings: { node, metric: "system.cpu.utilization" } }),
+      panel("p_6", { kind: "node_trend", settings: { node, metric: "system.memory.usage" } }),
+    ).definition;
+    // As `compile.py` counts them: two rankings, two node metrics.
+    expect(worstCaseReads(definition)).toBe(4);
+  });
 });
 
 describe("what the live region says (AC37)", () => {

@@ -20,11 +20,13 @@ from typing import Final
 
 from nexovue_api.dashboards.definition import (
     Definition,
-    NotePanel,
+    KnownPanel,
+    NodeTrendPanel,
     Picker,
     ProjectTrendPanel,
     ServiceTrendPanel,
     StoredDefinition,
+    TopServicesTrendPanel,
     UnknownPanel,
     uses_picker,
 )
@@ -34,8 +36,20 @@ from nexovue_api.ratelimit.policy import MAX_SCANS_PER_READ
 # Reader names, one per existing service function a scan calls (`dashboardpanels/scans.py`).
 PROJECT_TREND: Final = "project_trend"
 SERVICE_TREND: Final = "service_trend"
+TOP_SERVICES_TREND: Final = "top_services_trend"
+NODE_TREND: Final = "node_trend"
 
-AnyPanel = ProjectTrendPanel | ServiceTrendPanel | NotePanel | UnknownPanel
+AnyPanel = KnownPanel | UnknownPanel
+
+
+@dataclass(frozen=True, slots=True)
+class NodeIdentity:
+    """A node as `infrastructure/service.NodeKey` names it, hashable for a scan key."""
+
+    host: str
+    container: str
+    reporter: str
+    reporter_instance: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +61,13 @@ class ScanKey:
     service: str | None = None
     # The dashboard's picker, before `resolve` puts the picked service in.
     picked: bool = False
+    # A top-N chart's ranking and how many lines it keeps. Its signal is not here: one
+    # read answers rate, errors and latency alike.
+    order: str | None = None
+    count: int | None = None
+    # A node chart's node and metric: one scan per node and metric (FR6).
+    node: NodeIdentity | None = None
+    metric: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +102,22 @@ def scan_of(panel: AnyPanel) -> ScanKey | None:
         if isinstance(service, Picker):
             return ScanKey(reader=SERVICE_TREND, picked=True)
         return ScanKey(reader=SERVICE_TREND, service=service)
+    if isinstance(panel, TopServicesTrendPanel):
+        return ScanKey(
+            reader=TOP_SERVICES_TREND, order=panel.settings.order, count=panel.settings.count
+        )
+    if isinstance(panel, NodeTrendPanel):
+        node = panel.settings.node
+        return ScanKey(
+            reader=NODE_TREND,
+            node=NodeIdentity(
+                host=node.host,
+                container=node.container,
+                reporter=node.reporter,
+                reporter_instance=node.reporter_instance,
+            ),
+            metric=panel.settings.metric,
+        )
     return None
 
 

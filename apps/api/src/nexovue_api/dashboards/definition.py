@@ -16,8 +16,8 @@ unique index or deceive a reader (FR61, BR10). Descriptions and notes may hold a
 which the console only ever shows as text with such characters made visible; only NUL
 is refused there, because Postgres cannot store it.
 
-Step 2 knows three kinds (plan, Step 2). Every value marked as a cap is the spec's
-*guess* until plan T5.7 measures it.
+Step 2 knew three kinds; Step 4 adds `top_services_trend` and `node_trend` (plan, T4.1,
+T4.2). Every value marked as a cap is the spec's *guess* until plan T5.7 measures it.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from nexovue_api.data.postgres.models import (
     DASHBOARD_TITLE_MAX_LENGTH,
 )
 from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.infrastructure.conventions import INFRASTRUCTURE_METRIC_NAMES
 
 SCHEMA_VERSION: Final = 1
 
@@ -150,6 +151,11 @@ LinkAddress = Annotated[
 ]
 
 Signal = Literal["rate", "errors", "latency"]
+# The services list's two orderings (`services/router.py`), the same ranking a top-N
+# chart uses to choose its lines.
+Order = Literal["worst", "slowest"]
+# A top-N chart's lines: more than five cannot be told apart by colour and dash (FR6).
+TopCount = Annotated[int, Field(ge=1, le=5)]
 Width = Literal[3, 4, 6, 8, 12]
 Height = Literal["small", "medium", "large"]
 RefreshSeconds = Literal[30, 60, 300]
@@ -177,6 +183,47 @@ class ProjectTrendSettings(_Strict):
 class ServiceTrendSettings(_Strict):
     service: ServiceRef
     signal: Signal
+
+
+class TopServicesTrendSettings(_Strict):
+    signal: Signal
+    order: Order
+    count: TopCount
+
+
+def _known_metric(value: str) -> str:
+    if value not in INFRASTRUCTURE_METRIC_NAMES:
+        raise ValueError("must be one of the infrastructure screen's metric names")
+    return value
+
+
+InfrastructureMetric = Annotated[str, AfterValidator(_known_metric)]
+# One part of a node's identity: empty when the node did not name it.
+NodePart = Annotated[
+    str, StringConstraints(max_length=NAME_MAX_LENGTH), AfterValidator(_refuse_nul)
+]
+
+
+class NodeRef(_Strict):
+    """One node as the infrastructure screen identifies it: a host, a container, or the
+    process that reported readings naming neither (`infrastructure/service.NodeKey`).
+    All four parts, because a host name alone cannot pick a container on it."""
+
+    host: NodePart
+    container: NodePart
+    reporter: NodePart
+    reporter_instance: NodePart
+
+    @model_validator(mode="after")
+    def _names_a_node(self) -> NodeRef:
+        if not (self.host or self.container or self.reporter):
+            raise ValueError("a node names a host, a container or the service that reported it")
+        return self
+
+
+class NodeTrendSettings(_Strict):
+    node: NodeRef
+    metric: InfrastructureMetric
 
 
 class NoteSettings(_Strict):
@@ -210,13 +257,28 @@ class ServiceTrendPanel(_TimePanel):
     settings: ServiceTrendSettings
 
 
+class TopServicesTrendPanel(_TimePanel):
+    kind: Literal["top_services_trend"]
+    settings: TopServicesTrendSettings
+
+
+class NodeTrendPanel(_TimePanel):
+    kind: Literal["node_trend"]
+    settings: NodeTrendSettings
+
+
 class NotePanel(_Panel):
     kind: Literal["note"]
     settings: NoteSettings
 
 
-Panel = Annotated[ProjectTrendPanel | ServiceTrendPanel | NotePanel, Field(discriminator="kind")]
-TIME_KINDS: Final = frozenset({"project_trend", "service_trend"})
+KnownPanel = (
+    ProjectTrendPanel | ServiceTrendPanel | TopServicesTrendPanel | NodeTrendPanel | NotePanel
+)
+Panel = Annotated[KnownPanel, Field(discriminator="kind")]
+TIME_KINDS: Final = frozenset(
+    {"project_trend", "service_trend", "top_services_trend", "node_trend"}
+)
 
 
 class Link(_Strict):
@@ -322,7 +384,7 @@ class StoredDefinition(BaseModel):
     default_range: RangeId | None = None
     service_picker: bool = False
     links: list[Link] = []
-    panels: list[ProjectTrendPanel | ServiceTrendPanel | NotePanel | UnknownPanel]
+    panels: list[KnownPanel | UnknownPanel]
 
 
 _PANEL: Final = TypeAdapter[Panel](Panel)
@@ -338,7 +400,7 @@ _SETTINGS: Final[dict[str, TypeAdapter[Any]]] = {
 
 def parse_stored(stored: dict[str, Any]) -> StoredDefinition:
     """A stored definition, panel by panel: one bad panel never takes the page (FR8)."""
-    panels: list[ProjectTrendPanel | ServiceTrendPanel | NotePanel | UnknownPanel] = []
+    panels: list[KnownPanel | UnknownPanel] = []
     for position, raw in enumerate(stored.get("panels") or [], start=1):
         try:
             panels.append(_PANEL.validate_python(raw))

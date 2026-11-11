@@ -185,6 +185,44 @@ async def node_trends(
     )
 
 
+async def node_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    node: NodeKey,
+    metric_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> tuple[int, list[NodeTrendPoint]]:
+    """One node's one metric across the window: its bucket width and points (F20, T4.2).
+
+    The same readings and the same mean per bucket as `node_trends` draws for that node,
+    from one statement bound to the node, so it costs one series, not the fleet.
+    """
+    if metric_name not in conventions.INFRASTRUCTURE_METRIC_NAMES:
+        raise ValueError(f"{metric_name!r} is not an infrastructure metric")
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.NODE_TREND_SQL,
+        _read_parameters(project_id, from_time, to_time)
+        | {
+            "metric_names": [metric_name],
+            "bucket_seconds": bucket_seconds,
+            "host": node.host,
+            "container": node.container,
+            "reporter": node.reporter,
+            "reporter_instance": node.reporter_instance,
+        },
+    )
+    return bucket_seconds, [
+        NodeTrendPoint(
+            bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+            value=float(row["mean_value"]),
+        )
+        for row in rows
+    ]
+
+
 async def list_nodes(
     repository: TenantScopedRepository,
     *,

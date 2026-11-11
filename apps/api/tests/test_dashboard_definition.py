@@ -8,7 +8,8 @@ longer knows reads `unknown_kind`, and the rest still parse), AC77 (`javascript:
 AC123 (control and invisible characters and NUL), AC124 (link credentials, more than 5
 links, hosts only), AC141 (`default_range`'s list held to the console's).
 
-Step 2 knows three kinds: `project_trend`, `service_trend` and `note` (plan, Step 2).
+Step 2 knew three kinds: `project_trend`, `service_trend` and `note` (plan, Step 2).
+Step 4 adds `top_services_trend` and `node_trend` (T4.1, T4.2).
 """
 
 from __future__ import annotations
@@ -36,6 +37,9 @@ WIDTHS: Final = (3, 4, 6, 8, 12)
 HEIGHTS: Final = ("small", "medium", "large")
 REFRESH: Final = (30, 60, 300, None)
 DEFAULT_RANGES: Final = ("15m", "1h", "6h", "24h", "7d", "30d", None)
+ORDERS: Final = ("worst", "slowest")
+COUNTS: Final = (1, 2, 3, 4, 5)
+A_HOST: Final = {"host": "web-01", "container": "", "reporter": "", "reporter_instance": ""}
 
 
 def _panel(panel_id: str = "p_01", **changes: Any) -> dict[str, Any]:
@@ -449,3 +453,105 @@ def test_a_picked_service_resolves_to_the_same_scan_as_a_named_one() -> None:
     resolved = {compiling.resolve(panel.scan, picked="checkout") for panel in compiled.panels}
 
     assert resolved == {compiling.ScanKey(reader=compiling.SERVICE_TREND, service="checkout")}
+
+
+# ------------------------------------------------------- Step 4's kinds (T4.1, T4.2)
+
+
+def _top(**settings: Any) -> dict[str, Any]:
+    return _panel(
+        "p_top",
+        kind="top_services_trend",
+        settings={"signal": "errors", "order": "worst", "count": 5} | settings,
+    )
+
+
+def _node(**settings: Any) -> dict[str, Any]:
+    return _panel(
+        "p_node",
+        kind="node_trend",
+        settings={"node": A_HOST, "metric": "system.cpu.utilization"} | settings,
+    )
+
+
+@pytest.mark.parametrize("count", COUNTS)
+@pytest.mark.parametrize("order", ORDERS)
+@pytest.mark.parametrize("signal", SIGNALS)
+def test_every_allowed_top_services_setting_is_accepted(
+    signal: str, order: str, count: int
+) -> None:
+    _accepted(_document(panels=[_top(signal=signal, order=order, count=count)]))
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [{"count": 0}, {"count": 6}, {"order": "busiest"}, {"signal": "uptime"}, {"service": "x"}],
+    ids=["count-0", "count-6", "order", "signal", "extra-field"],
+)
+def test_ac4_a_top_services_setting_outside_the_table_is_refused(settings: dict[str, Any]) -> None:
+    _refused(_document(panels=[_top(**settings)]))
+
+
+def test_every_infrastructure_metric_name_is_accepted_on_a_node_chart() -> None:
+    from nexovue_api.infrastructure.conventions import INFRASTRUCTURE_METRIC_NAMES
+
+    for metric in INFRASTRUCTURE_METRIC_NAMES:
+        _accepted(_document(panels=[_node(metric=metric)]))
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"metric": "orders_processed"},
+        {"node": {"host": "", "container": "", "reporter": "", "reporter_instance": "i-1"}},
+        {"node": A_HOST | {"host": "x" * 256}},
+        {"node": A_HOST | {"host": "web\x0001"}},
+        {"node": {"host": "web-01"}},
+        {"node": "web-01"},
+    ],
+    ids=["unknown-metric", "names-nothing", "too-long", "nul", "missing-parts", "plain-name"],
+)
+def test_ac4_a_node_setting_outside_the_table_is_refused(settings: dict[str, Any]) -> None:
+    _refused(_document(panels=[_node(**settings)]))
+
+
+@pytest.mark.parametrize("kind", ["top_services_trend", "node_trend"])
+def test_ac67_step_4_charts_saved_small_are_refused(kind: str) -> None:
+    panel = _top() if kind == "top_services_trend" else _node()
+    assert "cannot be small" in _refused(_document(panels=[panel | {"height": "small"}]))
+
+
+def test_a_top_services_chart_is_one_scan_per_ordering_and_count_whatever_its_signal() -> None:
+    panels = [_top(signal=signal) | {"id": f"p_{signal}"} for signal in SIGNALS] + [
+        _top(order="slowest") | {"id": "p_slow"}
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    assert compiled.worst_case_scans == 2
+    assert compiled.scans[0] == compiling.ScanKey(
+        reader=compiling.TOP_SERVICES_TREND, order="worst", count=5
+    )
+    assert compiled.service_names == []
+
+
+def test_a_node_chart_is_one_scan_per_node_and_metric() -> None:
+    panels = [
+        _node() | {"id": "p_cpu"},
+        _node() | {"id": "p_cpu_again"},
+        _node(metric="system.memory.usage") | {"id": "p_memory"},
+        _node(node=A_HOST | {"host": "web-02"}) | {"id": "p_other"},
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    assert compiled.worst_case_scans == 3
+    assert compiled.scans[0] == compiling.ScanKey(
+        reader=compiling.NODE_TREND,
+        node=compiling.NodeIdentity(host="web-01", container="", reporter="", reporter_instance=""),
+        metric="system.cpu.utilization",
+    )
+
+
+def test_a_stored_step_4_chart_reads_back_as_itself() -> None:
+    stored = _document(panels=[_top(), _node()])["definition"]
+    kinds = [panel.kind for panel in definition.parse_stored(stored).panels]
+    assert kinds == ["top_services_trend", "node_trend"]

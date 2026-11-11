@@ -9,11 +9,12 @@ import { CHART_HEIGHT } from "@/shared/components/TrendChart";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 import type { WindowChoice } from "@/shared/selection";
 
-import type { Definition, PanelResult, PreviewAsk, Signal, StoredPanel } from "./api";
-import { usePanelPreview, useServiceChoices } from "./api";
+import type { Definition, NodeChoice, PanelResult, PreviewAsk, Signal, StoredPanel } from "./api";
+import { useNodeChoices, usePanelPreview, useServiceChoices } from "./api";
 import { NotePanel } from "./NotePanel";
 import { PanelWords } from "./PanelFrame";
-import { signalOf, stateWords } from "./panel-words";
+import type { NodeRef } from "./panel-words";
+import { nodeName, nodeOf, signalOf, stateWords, TIME_KINDS } from "./panel-words";
 import { TimePanel } from "./TimePanel";
 
 /**
@@ -29,21 +30,37 @@ import { TimePanel } from "./TimePanel";
  * **Apply reads once.** Each Apply is one charged read of this one panel, inside the
  * sheet, with the live window; typing reads nothing (AC135).
  *
- * Step 3 offers the kinds the API knows today. Machines, checks, statements and the rest
+ * Step 4 adds the top-N chart and one machine's metric; checks, statements and the rest
  * join with Step 5's kinds.
  */
 
-type Kind = "project_trend" | "service_trend" | "note";
+type Kind = "project_trend" | "service_trend" | "top_services_trend" | "node_trend" | "note";
+type Order = "worst" | "slowest";
+
+const KINDS: ReadonlySet<string> = new Set<Kind>([
+  "project_trend",
+  "service_trend",
+  "top_services_trend",
+  "node_trend",
+  "note",
+]);
 
 const KIND_GROUPS: readonly { question: string; kinds: readonly { id: Kind; label: string }[] }[] =
   [
     {
       question: "How is the project doing",
-      kinds: [{ id: "project_trend", label: "The whole project over time" }],
+      kinds: [
+        { id: "project_trend", label: "The whole project over time" },
+        { id: "top_services_trend", label: "The worst or slowest services over time" },
+      ],
     },
     {
       question: "How is a service doing",
       kinds: [{ id: "service_trend", label: "One service over time" }],
+    },
+    {
+      question: "Machines",
+      kinds: [{ id: "node_trend", label: "One machine's metric over time" }],
     },
     { question: "Text", kinds: [{ id: "note", label: "A note" }] },
   ];
@@ -53,6 +70,15 @@ const SIGNALS: readonly { id: Signal; label: string }[] = [
   { id: "errors", label: "Errors" },
   { id: "latency", label: "Latency" },
 ];
+
+const ORDERS: readonly { id: Order; label: string }[] = [
+  { id: "worst", label: "Worst first: most failures" },
+  { id: "slowest", label: "Slowest first" },
+];
+
+/** A top-N chart draws one to five lines (FR6). */
+const COUNTS = [1, 2, 3, 4, 5].map((count) => ({ id: String(count), label: String(count) }));
+const MOST_LINES = "5";
 
 /** No service chosen in the list: the typed field, or nothing yet. */
 const NONE = "";
@@ -84,6 +110,11 @@ export function holdsHiddenCharacters(value: string): boolean {
 interface Form {
   kind: Kind;
   signal: Signal;
+  order: Order;
+  count: string;
+  /** The chosen node, as its key; NONE until one is chosen. */
+  node: string;
+  metric: string;
   chosen: string;
   typed: string;
   followsPicker: boolean;
@@ -96,6 +127,10 @@ function formOf(panel: StoredPanel | undefined): Form {
   return {
     kind: panel && isKind(panel.kind) ? panel.kind : "service_trend",
     signal: (panel && signalOf(panel)) ?? "rate",
+    order: panel?.settings.order === "slowest" ? "slowest" : "worst",
+    count: typeof panel?.settings.count === "number" ? String(panel.settings.count) : MOST_LINES,
+    node: panel && nodeOf(panel) ? nodeKey(nodeOf(panel) as NodeRef) : NONE,
+    metric: typeof panel?.settings.metric === "string" ? panel.settings.metric : NONE,
     chosen: typeof service === "string" ? service : NONE,
     typed: "",
     followsPicker: typeof service === "object" && service !== null,
@@ -105,7 +140,26 @@ function formOf(panel: StoredPanel | undefined): Form {
 }
 
 function isKind(kind: string): kind is Kind {
-  return kind === "project_trend" || kind === "service_trend" || kind === "note";
+  return KINDS.has(kind);
+}
+
+/** One node's identity as a select's value: all four parts, so two hosts never collide. */
+export function nodeKey(node: NodeRef): string {
+  return JSON.stringify([node.host, node.container, node.reporter, node.reporter_instance]);
+}
+
+function nodeFromKey(key: string): NodeRef | undefined {
+  try {
+    const [host, container, reporter, reporter_instance] = JSON.parse(key) as string[];
+    return {
+      host: host ?? "",
+      container: container ?? "",
+      reporter: reporter ?? "",
+      reporter_instance: reporter_instance ?? "",
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /** The panel the form describes, or the sentence saying what is missing. */
@@ -123,6 +177,18 @@ function panelOf(
   };
   if (form.kind === "note") return { ...base, settings: { text: form.text } };
   if (form.kind === "project_trend") return { ...base, settings: { signal: form.signal } };
+  if (form.kind === "top_services_trend") {
+    return {
+      ...base,
+      settings: { signal: form.signal, order: form.order, count: Number(form.count) },
+    };
+  }
+  if (form.kind === "node_trend") {
+    const node = form.node === NONE ? undefined : nodeFromKey(form.node);
+    if (node === undefined) return { missing: "Choose a machine." };
+    if (form.metric === NONE) return { missing: "Choose what to show for it." };
+    return { ...base, settings: { node, metric: form.metric } };
+  }
   const service = serviceOf(form);
   if (service === undefined) return { missing: "Choose a service, or type its name." };
   return { ...base, settings: { service, signal: form.signal } };
@@ -174,6 +240,7 @@ export function PanelPicker({
   const [applied, setApplied] = useState<StoredPanel | undefined>();
   const [problem, setProblem] = useState<string | undefined>();
   const services = useServiceChoices(form.kind === "service_trend" ? projectId : undefined, choice);
+  const nodes = useNodeChoices(form.kind === "node_trend" ? projectId : undefined, choice);
   const preview = usePanelPreview(ask, projectId, choice, undefined);
   const update = (changes: Partial<Form>) => setForm((current) => ({ ...current, ...changes }));
   const candidate = panelOf(form, panelId, initial);
@@ -241,9 +308,39 @@ export function PanelPicker({
             onRetry={() => void services.refetch()}
           />
         ) : null}
+        {form.kind === "node_trend" ? (
+          <NodeChoiceFields
+            form={form}
+            update={update}
+            pending={nodes.isPending}
+            failed={nodes.isError}
+            nodes={nodes.data}
+            onRetry={() => void nodes.refetch()}
+          />
+        ) : null}
+        {form.kind === "top_services_trend" ? (
+          <>
+            <SelectField
+              label="Chooses"
+              value={form.order}
+              options={ORDERS}
+              optionLabel={(order) => order.label}
+              onChange={(order) => update({ order: order as Order })}
+              stacked
+            />
+            <SelectField
+              label="How many services"
+              value={form.count}
+              options={COUNTS}
+              optionLabel={(count) => count.label}
+              onChange={(count) => update({ count })}
+              stacked
+            />
+          </>
+        ) : null}
         {form.kind === "note" ? (
           <NoteText value={form.text} onChange={(text) => update({ text })} />
-        ) : (
+        ) : form.kind === "node_trend" ? null : (
           <SelectField
             label="Shows"
             value={form.signal}
@@ -486,11 +583,10 @@ function PreviewBody({
     );
   }
   if (!result) return null;
-  const signal = signalOf(applied);
-  if (result.state === "ok" && signal) {
+  if (result.state === "ok" && TIME_KINDS.has(applied.kind)) {
     return (
       <>
-        <TimePanel reading={result} signal={signal} zone={zone} description="A preview." />
+        <TimePanel panel={applied} reading={result} zone={zone} description="A preview." />
         <p className="text-ink-dim text-xs">Applied</p>
       </>
     );
@@ -515,4 +611,68 @@ function refusalOf(error: ApiError): string {
     return first.reason ?? "the draft was refused";
   }
   return "the draft was refused";
+}
+
+/**
+ * A machine and one of the metrics it sent, from the displayed project's real nodes.
+ * Each label is escaped and each value is the node's whole identity (FR23, FR61).
+ */
+function NodeChoiceFields({
+  form,
+  update,
+  pending,
+  failed,
+  nodes,
+  onRetry,
+}: {
+  form: Form;
+  update: (changes: Partial<Form>) => void;
+  pending: boolean;
+  failed: boolean;
+  nodes: NodeChoice[] | undefined;
+  onRetry: () => void;
+}) {
+  if (pending) return <SkeletonRows rows={2} label="Listing machines" />;
+  if (failed) {
+    return (
+      <div className="flex flex-col items-start gap-1 text-sm">
+        <p className="text-ink-dim">Could not list machines.</p>
+        <button type="button" onClick={onRetry} className="text-brand underline">
+          Read again
+        </button>
+      </div>
+    );
+  }
+  if (!nodes || nodes.length === 0) {
+    return <p className="text-ink-dim text-sm">No machine has reported in this window.</p>;
+  }
+  const options = [
+    { id: NONE, label: "Choose a machine" },
+    ...nodes.map((node) => ({ id: nodeKey(node), label: nodeName(node) })),
+  ];
+  const chosen = nodes.find((node) => nodeKey(node) === form.node);
+  const metrics = [
+    { id: NONE, label: "Choose a metric" },
+    ...(chosen?.signals ?? []).map((metric) => ({ id: metric, label: visibleEscapes(metric) })),
+  ];
+  return (
+    <>
+      <SelectField
+        label="Machine"
+        value={form.node}
+        options={options}
+        optionLabel={(option) => option.label}
+        onChange={(node) => update({ node, metric: NONE })}
+        stacked
+      />
+      <SelectField
+        label="Shows"
+        value={form.metric}
+        options={metrics}
+        optionLabel={(option) => option.label}
+        onChange={(metric) => update({ metric })}
+        stacked
+      />
+    </>
+  );
 }

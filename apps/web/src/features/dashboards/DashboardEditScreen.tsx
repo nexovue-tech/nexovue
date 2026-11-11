@@ -44,7 +44,7 @@ import { PanelWords } from "./PanelFrame";
 import { PanelPicker } from "./PanelPicker";
 import type { ActionKey } from "./PanelToolbar";
 import { PanelToolbar } from "./PanelToolbar";
-import { signalOf, stateWords, TIME_KINDS } from "./panel-words";
+import { stateWords, TIME_KINDS } from "./panel-words";
 import { SideSheet } from "./SideSheet";
 import { TimePanel } from "./TimePanel";
 
@@ -638,12 +638,11 @@ function BuilderPanelBody({
     }
     return <PanelWords words="Not read since it changed. Edit it and Apply to see it." />;
   }
-  const signal = signalOf(panel);
-  if (reading.state === "ok" && signal) {
+  if (reading.state === "ok") {
     return (
       <TimePanel
+        panel={panel}
         reading={reading}
-        signal={signal}
         zone={zone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}
         description={`${panelName(panel)}, as it reads now.`}
       />
