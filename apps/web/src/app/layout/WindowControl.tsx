@@ -3,9 +3,12 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { SelectField } from "@/shared/components/SelectField";
+import { formatZonedTime, zoneLabel } from "@/shared/format/zoned";
 import { fromLocalInput, isUsableRange, toLocalInput } from "@/shared/local-instant";
+import { isFixedInterval, useLiveStream } from "@/shared/refresh";
 import {
   clearAbsoluteWindow,
+  DASHBOARD_RANGES,
   describeWindowChoice,
   setAbsoluteWindow,
   setSelectedProjectId,
@@ -81,21 +84,28 @@ function AddressWindow({ window }: { window: UrlWindow }) {
 }
 
 function ChosenWindow() {
-  const { window: choice } = useSelection();
+  const { window: choice, zone } = useSelection();
   const live = useLiveWindow();
   const [picking, setPicking] = useState(false);
+  // A dashboard offers 30 days besides, through its own declaration (FR52); it is
+  // never remembered, so it is chosen through the screen and not the stored selection.
+  const declared = useLiveStream();
+  const dashboard = isFixedInterval(declared) ? declared : undefined;
 
   if (choice.kind === "absolute") {
     return (
       <span className="flex min-w-0 items-center gap-2">
-        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Window</span>
+        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+          {/* One name for a window that does not move, while a dashboard is open (FR53). */}
+          {zone === undefined ? "Window" : "Fixed time"}
+        </span>
         {/* The phrase every screen's subtitle uses, so the bar and the page say one
             thing; the exact instants are one hover away. */}
         <span
           className="min-w-0 truncate text-ink text-sm"
-          title={`${new Date(choice.from).toLocaleString()} — ${new Date(choice.to).toLocaleString()}`}
+          title={`${formatZonedTime(choice.from, { zone })} — ${formatZonedTime(choice.to, { zone })}`}
         >
-          {describeWindowChoice(choice)}
+          {describeWindowChoice(choice, zone)}
         </span>
         {/* The way back is on the control itself. A window somebody pinned during an
             incident is one they will want to leave, and hunting for how is its own
@@ -103,7 +113,7 @@ function ChosenWindow() {
         <button
           type="button"
           onClick={clearAbsoluteWindow}
-          className="shrink-0 text-brand-text text-sm underline-offset-2 hover:underline"
+          className="inline-flex min-h-11 shrink-0 items-center text-brand-text text-sm underline-offset-2 hover:underline md:min-h-0"
         >
           Back to live
         </button>
@@ -116,28 +126,30 @@ function ChosenWindow() {
       <SelectField
         label="Last"
         value={live.isAbsolute ? "" : choice.rangeId}
-        options={TIME_RANGES}
-        onChange={setSelectedRangeId}
+        options={dashboard ? DASHBOARD_RANGES : TIME_RANGES}
+        onChange={dashboard ? dashboard.chooseRange : setSelectedRangeId}
         optionLabel={(range) => range.label}
       />
       <button
         type="button"
         onClick={() => setPicking(true)}
-        className="text-ink-dim text-xs underline-offset-2 hover:text-ink hover:underline"
+        className="inline-flex min-h-11 items-center text-ink-dim text-xs underline-offset-2 hover:text-ink hover:underline md:min-h-0"
       >
         Pick a range
       </button>
-      {picking ? <RangePicker onClose={() => setPicking(false)} /> : null}
+      {picking ? <RangePicker zone={zone} onClose={() => setPicking(false)} /> : null}
     </span>
   );
 }
 
-function RangePicker({ onClose }: { onClose: () => void }) {
+function RangePicker({ zone, onClose }: { zone?: string; onClose: () => void }) {
   const live = useLiveWindow();
-  const [from, setFrom] = useState(() => toLocalInput(live.from));
-  const [to, setTo] = useState(() => toLocalInput(live.to));
+  const [from, setFrom] = useState(() => toLocalInput(live.from, zone));
+  const [to, setTo] = useState(() => toLocalInput(live.to, zone));
+  // While a dashboard is open the fields are on the project's clock, and say so (FR46).
+  const clockName = zone === undefined ? undefined : zoneLabel(zone, new Date(live.to));
 
-  const chosen = { from: fromLocalInput(from), to: fromLocalInput(to) };
+  const chosen = { from: fromLocalInput(from, zone), to: fromLocalInput(to, zone) };
   const usable = isUsableRange(chosen.from, chosen.to);
 
   // Seeded from the window already on screen rather than from empty fields: somebody
@@ -154,13 +166,18 @@ function RangePicker({ onClose }: { onClose: () => void }) {
           Pick a range
         </h2>
         <p className="mt-1 text-ink-dim text-sm">
-          Times are yours, and are read against telemetry in UTC. A pinned window stops refreshing
-          on its own — nothing new can arrive in a period that has ended.
+          {clockName === undefined
+            ? "Times are yours, and are read against telemetry in UTC."
+            : `Times in ${clockName}, this project's clock.`}{" "}
+          A pinned window stops refreshing on its own — nothing new can arrive in a period that has
+          ended.
         </p>
 
         <div className="mt-4 flex flex-col gap-3">
           <label className="flex flex-col gap-1">
-            <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">From</span>
+            <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+              From{clockName === undefined ? "" : ` · times in ${clockName}`}
+            </span>
             <input
               type="datetime-local"
               value={from}
@@ -169,7 +186,9 @@ function RangePicker({ onClose }: { onClose: () => void }) {
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">To</span>
+            <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+              To{clockName === undefined ? "" : ` · times in ${clockName}`}
+            </span>
             <input
               type="datetime-local"
               value={to}

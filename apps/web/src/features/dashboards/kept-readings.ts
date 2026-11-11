@@ -50,28 +50,35 @@ export function allFailing(previous: KeptReadings, now: number): KeptReadings {
   );
 }
 
-function limitOf(intervalMs: number | false): number {
+/**
+ * How long a line is kept: a refresh interval, or "closed" for a fixed window, where the
+ * line stays with no time limit because nothing about it became wrong (FR31, AC110).
+ */
+export type KeepFor = number | false | "closed";
+
+function limitOf(intervalMs: KeepFor): number {
+  if (intervalMs === "closed") return Number.POSITIVE_INFINITY;
   return intervalMs === false ? KEEP_AT_MOST_MS : Math.min(intervalMs, KEEP_AT_MOST_MS);
 }
 
 /** When the next kept line must go, so the page can drop it then, refresh or none. */
 export function nextExpiry(
   kept: KeptReadings,
-  intervalMs: number | false,
+  intervalMs: KeepFor,
   now: number,
 ): number | undefined {
   const expiries = Object.values(kept)
     .flatMap((reading) =>
       reading.failingSince === null ? [] : [reading.failingSince + limitOf(intervalMs)],
     )
-    .filter((expiry) => expiry >= now);
+    .filter((expiry) => Number.isFinite(expiry) && expiry >= now);
   return expiries.length > 0 ? Math.min(...expiries) + 1 : undefined;
 }
 
 /** The old line to draw under the strip, while it may still be shown. */
 export function keptLine(
   kept: KeptReading | undefined,
-  intervalMs: number | false,
+  intervalMs: KeepFor,
   now: number,
 ): OkResult | undefined {
   if (kept === undefined || kept.failingSince === null) return undefined;

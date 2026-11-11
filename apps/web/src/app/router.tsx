@@ -11,6 +11,7 @@ import {
 import { parseNewRuleSearch } from "@/features/alerts/search";
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
+import { parseDashboardSearch } from "@/features/dashboards/dashboard-search";
 import { ERROR_FILTERS, parseErrorGroupSearch } from "@/features/errors/filters";
 import { parseFeedSearch } from "@/features/findings/feed-filter";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
@@ -560,11 +561,14 @@ const dashboardRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/dashboards/$dashboardId",
   component: DashboardRoute,
+  // The address decides this page's project, window and picked service (F20, FR28).
+  validateSearch: parseDashboardSearch,
 });
 
 function DashboardRoute() {
   const { dashboardId } = dashboardRoute.useParams();
-  return <DashboardScreen dashboardId={dashboardId} />;
+  // Keyed, so a tab's own interval and the lines kept from one dashboard never reach another.
+  return <DashboardScreen key={dashboardId} dashboardId={dashboardId} />;
 }
 
 // The builder: a draft from a starting point (`?template=`), or a blank one.

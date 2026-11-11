@@ -7,6 +7,7 @@ import {
   adoptScreenOverride,
   clearAbsoluteWindow,
   clearScreenOverride,
+  DASHBOARD_RANGES,
   describeChoice,
   describeWindowChoice,
   readSelection,
@@ -16,6 +17,7 @@ import {
   setScreenOverride,
   setSelectedProjectId,
   setSelectedRangeId,
+  TIME_RANGES,
   windowCacheKey,
 } from "./selection";
 
@@ -245,5 +247,45 @@ describe("a screen's override", () => {
     expect(readSelection()).toMatchObject({ projectId: STAGING, window: TUESDAY });
     expect(readSelection().zone).toBeUndefined();
     expect(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "").toContain(STAGING);
+  });
+});
+
+describe("the window phrase on the project's clock (F20, FR46, AC64)", () => {
+  const FROM = "2026-11-10T02:00:00.000Z";
+  const TO = "2026-11-10T03:00:00.000Z";
+  const window: WindowChoice = { kind: "absolute", from: FROM, to: TO };
+
+  it("writes the times on the named zone, not the browser's", () => {
+    expect(describeWindowChoice(window, "Asia/Kolkata")).toBe("07:30–08:30 on 10 Nov");
+    expect(describeWindowChoice(window, "America/New_York")).toBe("21:00–22:00 on 9 Nov");
+  });
+
+  it("names the day at each end when the zone's day changes across the range", () => {
+    const across: WindowChoice = {
+      kind: "absolute",
+      from: "2026-11-10T18:00:00.000Z",
+      to: "2026-11-10T19:00:00.000Z",
+    };
+    // 23:30 to 00:30 in Kolkata: two days, so each end says its own.
+    expect(describeWindowChoice(across, "Asia/Kolkata")).toBe("10 Nov, 23:30 to 11 Nov, 00:30");
+  });
+
+  it("offers 30 days to a dashboard and never reads one back from storage (FR52)", () => {
+    expect(DASHBOARD_RANGES.map((range) => range.id)).toEqual([
+      ...TIME_RANGES.map((r) => r.id),
+      "30d",
+    ]);
+    expect(TIME_RANGES.some((range) => range.id === "30d")).toBe(false);
+    expect(describeWindowChoice({ kind: "relative", rangeId: "30d" })).toBe("the last 30 days");
+    expect(resolveChoice({ kind: "relative", rangeId: "30d" }, Date.parse(TO)).from).toBe(
+      new Date(Math.ceil(Date.parse(TO) / 10_000) * 10_000 - 30 * 24 * 60 * 60_000).toISOString(),
+    );
+  });
+
+  it("holds the screen's clock while it overrides, and drops it on leaving", () => {
+    setScreenOverride({ zone: "Asia/Kolkata" });
+    expect(readSelection().zone).toBe("Asia/Kolkata");
+    clearScreenOverride();
+    expect(readSelection().zone).toBeUndefined();
   });
 });

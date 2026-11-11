@@ -27,6 +27,16 @@ export const TIME_RANGES: readonly TimeRange[] = [
   { id: "7d", label: "7 days", minutes: 10_080 },
 ];
 
+/**
+ * Offered while a dashboard is open, and nowhere else (F20, FR52). It is not in
+ * `TIME_RANGES`, so it is never remembered, never read back from storage, and no other
+ * screen is offered a window its own reads were not built for.
+ */
+export const THIRTY_DAYS: TimeRange = { id: "30d", label: "30 days", minutes: 43_200 };
+
+/** The ranges a dashboard's top bar offers: the console's, and 30 days. */
+export const DASHBOARD_RANGES: readonly TimeRange[] = [...TIME_RANGES, THIRTY_DAYS];
+
 const DEFAULT_RANGE_ID = "1h";
 
 /**
@@ -150,6 +160,16 @@ function publish() {
     ...(override.zone === undefined ? {} : { zone: override.zone }),
   };
   for (const listener of listeners) listener();
+}
+
+/** The screen's own say over what the reader chose, as it stands now. */
+export function readScreenOverride(): ScreenOverride {
+  return override;
+}
+
+/** The reader's own choice, with no screen's override over it. */
+export function readRememberedSelection(): Selection {
+  return selection;
 }
 
 /** Drops the override's say over a part the reader has just chosen on purpose. */
@@ -314,7 +334,7 @@ export function describeChoice(choice: WindowChoice): string {
  * and "in the last 12:00–13:00" does not. Callers write "over {phrase}", never
  * "over the last {phrase}".
  */
-export function describeWindowChoice(choice: WindowChoice): string {
+export function describeWindowChoice(choice: WindowChoice, zone?: string): string {
   if (choice.kind === "relative") return `the last ${timeRangeById(choice.rangeId).label}`;
 
   const from = new Date(choice.from);
@@ -323,26 +343,50 @@ export function describeWindowChoice(choice: WindowChoice): string {
 
   // A range inside one day names the day once. Across days each end needs its own,
   // or "12:00–13:00 on 14 Sept" would quietly lose the day the range started.
-  return from.toDateString() === to.toDateString()
-    ? `${clock(from)}–${clock(to)} on ${day(from)}`
-    : `${day(from)}, ${clock(from)} to ${day(to)}, ${clock(to)}`;
+  return dayKey(from, zone) === dayKey(to, zone)
+    ? `${clock(from, zone)}–${clock(to, zone)} on ${day(from, zone)}`
+    : `${day(from, zone)}, ${clock(from, zone)} to ${day(to, zone)}, ${clock(to, zone)}`;
 }
 
 /* `hour12: false` for the reason `format/time.ts` sets it on every other clock in
    this console: the logs screen prints 13:22:47 and a window phrase reading
    "01:22 PM" beside it would be the same instant written two ways. */
-const WINDOW_CLOCK = new Intl.DateTimeFormat(undefined, {
+const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
   hour: "2-digit",
   minute: "2-digit",
   hour12: false,
-});
+};
+const WINDOW_CLOCK = new Intl.DateTimeFormat(undefined, CLOCK_OPTIONS);
 
-function clock(at: Date): string {
-  return WINDOW_CLOCK.format(at);
+/**
+ * A formatter on a named clock, or on the browser's when the name is not one this
+ * runtime knows: a phrase on the wrong clock is a smaller fault than no phrase (FR46).
+ */
+function zonedFormatter(
+  zone: string,
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  try {
+    return new Intl.DateTimeFormat(locale, { ...options, timeZone: zone });
+  } catch {
+    return new Intl.DateTimeFormat(locale, options);
+  }
 }
 
-function day(at: Date): string {
-  return formatDate(at.toISOString());
+function clock(at: Date, zone?: string): string {
+  return (zone ? zonedFormatter(zone, undefined, CLOCK_OPTIONS) : WINDOW_CLOCK).format(at);
+}
+
+/** Which calendar day an instant falls on, in the zone, as a comparable string. */
+function dayKey(at: Date, zone?: string): string {
+  return zone ? zonedFormatter(zone, "en-CA", {}).format(at) : at.toDateString();
+}
+
+function day(at: Date, zone?: string): string {
+  return zone
+    ? zonedFormatter(zone, "en-GB", { day: "numeric", month: "short" }).format(at)
+    : formatDate(at.toISOString());
 }
 
 /** What this screen is showing, for the sentence under its heading. */
@@ -351,7 +395,7 @@ export function useWindowPhrase(): string {
 }
 
 export function timeRangeById(rangeId: string): TimeRange {
-  return TIME_RANGES.find((range) => range.id === rangeId) ?? TIME_RANGES[1];
+  return DASHBOARD_RANGES.find((range) => range.id === rangeId) ?? TIME_RANGES[1];
 }
 
 export interface TimeWindow {

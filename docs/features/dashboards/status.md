@@ -2,12 +2,14 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is on `feature/phase-2`, 2026-11-02** (commit 44795cb). **Plan Step 2 — one saved dashboard, read through a charged batch — is on `feature/phase-2`** (migration 0056, ADR-031, ADR-032). **Plan Step 3 — the builder — is on `feature/phase-2`** (2026-11-09). **Plan Step 4 — the chart does a dashboard's job — is on `feature/phase-2` (2026-11-09)**. **Plan Step 5 — every panel kind, marks on charts, and the measurement — built 2026-11-11, awaiting commit** (on `wt/f20s5`; no migration; ADR-045; the measurement deferred to the hardening pass). Steps 6 to 11 are not started.
+**In development.** The founder approved the specification, design and plan on 2026-11-02. F6 merged (PR #24), and **plan Step 1 — the front door moves to the Findings feed — is on `feature/phase-2`, 2026-11-02** (commit 44795cb). **Plan Step 2 — one saved dashboard, read through a charged batch — is on `feature/phase-2`** (migration 0056, ADR-031, ADR-032). **Plan Step 3 — the builder — is on `feature/phase-2`** (2026-11-09). **Plan Step 4 — the chart does a dashboard's job — is on `feature/phase-2` (2026-11-09)**. **Plan Step 5 — every panel kind, marks on charts, and the measurement — built and committed 2026-11-11** (on `feature/phase-2`; no migration; ADR-045; the measurement deferred to the hardening pass). **Plan Step 6 — the address, refresh and staying honest — built and committed 2026-11-11** (on `feature/phase-2`; no migration, no ADR; browser specs and the 375 px run deferred to the hardening pass). Steps 7 to 11 are not started.
 
 
 ## Current task
 
-**Step 5 built 2026-11-11, awaiting commit.** T5.1a to T5.4, T5.5, T5.6b and T5.6c are built and ticked. T5.6a is built and left unticked for one part: its browser spec is written and not run, and the phone Safari hand check is deferred to the hardening pass. T5.7, the measurement, is deferred to F20's hardening pass (founder, 2026-11-11). No migration. ADR-045 filed. Five new open decisions below (8 to 12), none blocking the commit.
+**Step 6 built and committed 2026-11-11.** T6.1 to T6.7, T6.9 and T6.10 are built and ticked; T6.8 is built and left unticked for its Playwright run (deferred). No migration, no API change, no ADR. Four open decisions below (13 to 16), none blocking the commit.
+
+**Step 5 built and committed 2026-11-11.** T5.1a to T5.4, T5.5, T5.6b and T5.6c are built and ticked. T5.6a is built and left unticked for one part: its browser spec is written and not run, and the phone Safari hand check is deferred to the hardening pass. T5.7, the measurement, is deferred to F20's hardening pass (founder, 2026-11-11). No migration. ADR-045 filed. Five new open decisions below (8 to 12), none blocking the commit.
 
 **Step 4 is on `feature/phase-2` (2026-11-09).** T4.1 to T4.9 are built and ticked; T4.10 is left unticked: its browser spec is written and not run, and its trace and phone tap are the founder's after Phase 2. No migration and no new ADR. Three new open decisions below (5 to 7), none blocking the commit.
 
@@ -15,6 +17,14 @@ Step 3 is on `feature/phase-2` (2026-11-09).
 
 
 ## Completed
+
+- **2026-11-11. Plan Step 6 built (T6.1 to T6.10; browser specs written, not run).** What changed, read from the diff:
+  - **The address (T6.1, T6.2).** `dashboard-search.ts` parses `project`, `range`, `from`, `to`, `service`, `display` and is the route's `validateSearch`. `use-dashboard-address.ts`: the address's project and window become the screen override (so the top bar agrees), nothing reads until store and address agree, a project not in the reader's list is a refusal that keeps the address and leaves the stored choice alone, a drag pushes one history entry and Back returns, anything else replaces, a top-bar choice made on purpose ends the override and the address follows. The override ends with the page. `isDashboardNotFound` and `isProjectNotFound` in `api-client.ts` read the problem's type.
+  - **Refresh (T6.3, T6.4).** `shared/refresh.ts` has a third declaration, `FixedIntervalRefresh`; `RefreshControl` follows the design's state table with fixed checked first, an age from the last good reading on the project's clock, "Read now", and a tab interval of 30 s, 1 minute or 5 minutes that is never saved. `api.ts`: `effectiveIntervalMs`, a whole-request 429 read again no sooner than `Retry-After` (three tries, also on a fixed window), the service passed to the read. `catch-up.ts`: refused panels read again by themselves, only those, at most three times, waiting while paused or hidden, "Reading again in 20 s" only while scheduled. A closed window keeps its line with no limit.
+  - **Page lines (T6.6).** `page-lines.ts` (pure) and `PageLine.tsx`: one severe line in the design's order (NOT CURRENT after three intervals, at most five minutes, never when paused, fixed, off or back from a hidden tab before its first read; the 25 s state; FR45's sentence; the outage line; the pipeline line; detection's line; "Still reading"), one state line (picker, a link's unknown service, never reported by role, quiet), one merged context line. `StickyLine` holds the age and "6 of 30 panels could not be read".
+  - **Clock and window (T6.7).** The top bar's phrase, paused chip and range picker are on the project's clock, the picker labels its fields "Times in …", "Fixed time" is the one name, and 30 days is offered while a dashboard is open without entering `TIME_RANGES` or storage.
+  - **Phone, full screen, notes (T6.8 to T6.10).** One actions menu below `md`, runbook links outside it, 44 px targets, canvases drawn once seen; `?display=1` hides the sidebar and top bar (`DisplayBar`), Escape and "Leave full screen" leave; notes carry FR62's sentence by install.
+  - **Existing test changed:** `DashboardView.test.ts`'s refused-panel case now expects "Reading again in 20 s" and no reference until the tries are spent (FR45, AC111); `stubApi` gained default `/projects` and `/system/info`.
 
 - **2026-11-11. Plan Step 5 built (T5.1a to T5.6c; T5.6a's browser spec and phone check outstanding; T5.7 deferred).** What changed, read from the diff:
   - **The kinds.** `dashboards/definition.py` knows every kind in FR6 but `metric_series` and `slo_budget`: `endpoint_trend` (service or picker, span kind, endpoint, signal), `top_nodes_trend` (metric, count), `check_trend` (check by name, `uptime` or `duration`), `statement_trend` (hash, server, port, label), `project_number` and `service_number` (measure, `compare`), `open_findings` (service, picker or none), and six tables with their rows (1 to 20), order, `failing_only` and device class. `small` is refused on every chart and table (FR5). Any kind naming the picker needs the picker on; every literal service named is in `service_names` (FR57).
@@ -93,6 +103,8 @@ Step 3 is on `feature/phase-2` (2026-11-09).
 
 ## Next action
 
+**Step 6 (2026-11-11):** the coordinator reviews the diff and commits. Then the founder's judging step for Step 6 (paste a link into a second browser with another project selected; stop the API and watch the line and banner appear in order; pause; a phone view at 375 px; the top bar agreeing throughout on the project's clock), and open decisions 13 to 16. Step 7 fills the picker slot.
+
 **Step 5 (2026-11-11):** the coordinator reviews the diff and commits. Then the founder's judging step for Step 5 in a browser (build a dashboard from every kind on the demo and compare each with its own screen; see deploy rules, a seen version, shaded findings and an alert incident in the strip; stop ClickHouse and see the notes and findings stay), and open decisions 8 to 12. **Deferred to F20's hardening pass (founder, 2026-11-11):** T5.7's measurement, both new browser specs and the earlier ones, the phone Safari check of hostile names (AC74), and Design QA.
 
 **Step 4 (2026-11-09):** the coordinator reviews the diff, runs `just check` and commits. Then the founder's judging step for Step 4 in a browser (open a dashboard with a tall chart, a top-5 chart in five colours and a gauge off zero; move the cursor over one and read the same moment on all; drag, press Back and return; every other screen looks as before, by Design QA's screenshots of the screens listed under *Validation*, *Step 4*), T4.10's trace and phone tap, and open decisions 5 to 7. Back after a drag returns to the earlier window only once T6.2 puts the window in the address.
@@ -103,6 +115,14 @@ Still owed from Step 2: the founder's judging step for Step 2 in a browser (*Val
 
 
 ## Open decisions
+
+**13. Where a dashboard's service picker sits (2026-11-11, Step 6, T6.6).** The page line holds the picker's place ("Choose a service to fill this dashboard") and the link's `service=` is read and passed, but the picker control is T7.3. **Recommendation: keep; T7.3 fills `PageLine`'s `picker` slot and the sticky line's.**
+
+**14. A fixed window's "recent minutes" (2026-11-11, Step 6, AC28).** The spec says a window ending in recent minutes must say they can still change, with no figure. Built: ending within 10 minutes of now (*guess*, the settled-minute alert's own ten). **Recommendation: keep.**
+
+**15. The 404 with no problem type (2026-11-11, Step 6, AC75).** A context 404 that is neither `dashboard-not-found` nor `project-not-found` reads as the project page, as before. The API always types them. **Recommendation: keep.**
+
+**16. Notes name "purge" before it exists (2026-11-11, Step 6, T6.10).** FR62's note says an owner or admin can purge text at once; T7.7 builds the purge. **Recommendation: keep, since Step 7 follows before any release.** The hosted sentence needed no support-grant read, so no authorization surface was touched.
 
 **8. The rest of *Start from Overview* (2026-11-11, Step 5).** Step 2 calls the template "partial until Step 5", and AC39 is "held until Step 5 builds its number and table panels"; T9.1 names "the rest of *Start from Overview*" as its own. Step 5 builds the kinds and leaves `templates.py` alone, as the task list says. **Recommendation: add the four totals and the worst-services table in T9.1, as planned**, with AC39's live case there. Option: add them now, which is six panels and no new code.
 
@@ -456,6 +476,16 @@ Fourteen further findings. All fourteen were checked against the code or the doc
 
 ## Validation
 
+### Step 6, run 2026-11-11
+
+On this machine, console only: no store was needed and no container was started (nothing here touches the API, Postgres or ClickHouse). Counts read from the output. Every new test pins its clock (`vi.useFakeTimers({ toFake: ["Date"] })` and `vi.setSystemTime`) or passes fixed instants.
+
+- **Seen failing, then passing, by removing each behaviour from the file and restoring it byte-equal (`cmp`):** the read gate (4 failed); a project in the address ignored (3); a foreign project accepted (3); an unknown range accepted (1); a drag replacing its entry (1); the override not ending with the page (1); a fixed window showing an interval (2); the age from any answer (2); the paused chip on the browser's clock (2); a fixed window refreshing (1); a tab interval under the floor (1); `Retry-After` ignored (1); unlimited catch-up tries (1); catch-up while paused (1); catch-up reading every panel (2); the banner after one interval (2), without waiting for the first read (1); no pipeline line (1); a service not truncated (2); a viewer told to set up (1); no "newest minutes can still change" (2); the top bar's phrase (1) and picker (1) on the browser's clock; no 30 days (1); the picker's zone ignored (3); a closed window's line expiring (1); 30 days unknown to `timeRangeById` (1); copy link's order (2); one note wording for both installs (1); no purge (1); the shell ignoring `display` (3); Escape not leaving (1); a dashboard 404 read as a project's (1); the service not passed to the read (1); canvases drawn before they are seen (1). Two mutants first survived (`CATCH_UP_TRIES` read by its own test; a project 404 falling back to the same words) and were fixed by a literal and a better mutant.
+- **Found by a test and fixed:** `fromLocalInput` in a zone turned "2026-13-45T99:99" into a real instant (`Date.UTC` rolls over); the page no longer cleared its override on unmount until a test that did not clear it by hand showed it.
+- **Console:** whole `vitest run`: **178 files, 2,229 tests, all passed** (Step 5: 172 and 2,131). New: `use-dashboard-address.test.ts` 20, `PageLine.test.ts` 20, `api.test.ts` 12, `kept-readings.test.ts` 4, `FullScreen.test.ts` 5, `WindowControl.test.ts` 5; added cases in `RefreshControl.test.ts` 9, `DashboardView.test.ts` 12, `selection.test.ts` 4, `refresh.test.ts` 3, `local-instant.test.ts` 5. `pnpm -r --if-present run typecheck`: all `Done`. `biome check` on every touched file: clean. `verify-tokens`: "no default or raw colours outside tokens.css"; no string literal starting `from-`, `to-` or `via-`. Python untouched, so mypy and ruff were not run.
+- **Self-review (`/review-diff`), 2026-11-11.** Import direction holds (`shared` to `features` to `app`; the shell imports `dashboard-search` only). Only `shared/api-client.ts` reads a status or a problem type. Tenancy and authorization: no API, route, statement or secret touched; the project in a link is checked against the reader's own list and the API still proves it. **Fixed:** the screen's override no longer ended on unmount (found by a test); a misplaced comment in `PageLine.tsx`; canvases drawn before being seen (T6.8). **Recorded, not fixed:** open decisions 13 to 16; the console does not learn a self-hosted floor above 30 s (decision 9).
+- **Not run, deferred to F20's hardening pass:** `dashboards-link.spec.ts`, `dashboards-phone.spec.ts` (AC68, AC100, AC101, AC108 at 375 px), `dashboards-display.spec.ts` (AC76, AC142's browser half); AC101's single-severe-line check at 375 x 667; performance, customer docs, design QA, the founder's judging. `just check` by instruction.
+
 ### Step 5, run 2026-11-11
 
 On this machine, with my own stores: Postgres `f20s5-pg` (pgvector 0.8.6, Postgres 18, port 55432, migrated to 0069) and ClickHouse `f20s5-ch` (26.3.20.7, HTTP 58123, native 59000, the 40 migrations, the four `users.d` accounts including the new `api-reader.xml`), on network `f20s5-net`; all three removed at the end. Counts read from the output. No test reads the wall clock for what it asserts: the offline suites pin `NOW`, the strip's tests pass `now`, and the live suites assert against fixed windows they wrote themselves.
@@ -577,7 +607,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-11 (Step 5 built, awaiting commit: T5.1a to T5.6c but T5.6a's browser and phone checks; T5.7 deferred to the hardening pass; ADR-045; open decisions 8 to 12, none blocking)
+2026-11-11 (Step 6 committed: T6.1 to T6.10 but T6.8's 375 px run; browser specs written, not run; open decisions 13 to 16; before that Step 5 committed: T5.1a to T5.6c but T5.6a's browser and phone checks; T5.7 deferred to the hardening pass; ADR-045; open decisions 8 to 12, none blocking)
 
 ## Founder approval, 2026-11-02
 

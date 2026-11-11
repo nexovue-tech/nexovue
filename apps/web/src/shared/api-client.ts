@@ -71,6 +71,25 @@ export function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === HTTP_NOT_FOUND;
 }
 
+/** The problem types a dashboard's 404 carries, so its page can say which it was (F20, AC75). */
+const DASHBOARD_NOT_FOUND = "dashboard-not-found";
+const PROJECT_NOT_FOUND = "project-not-found";
+
+/** Whether the problem's type URI ends in the slug (`errors/problems.py`'s registry). */
+function hasProblemSlug(error: unknown, slug: string): boolean {
+  return error instanceof ApiError && error.problem?.type.endsWith(`/${slug}`) === true;
+}
+
+/** A 404 that names the dashboard: unknown, another organization's, or deleted. */
+export function isDashboardNotFound(error: unknown): boolean {
+  return isNotFound(error) && hasProblemSlug(error, DASHBOARD_NOT_FOUND);
+}
+
+/** A 404 that names the project: a link to one the reader cannot open. */
+export function isProjectNotFound(error: unknown): boolean {
+  return isNotFound(error) && hasProblemSlug(error, PROJECT_NOT_FOUND);
+}
+
 /**
  * True when the API refused a change because what it would change has moved on since
  * the screen read it: a finding closed or acknowledged meanwhile. The screen says so

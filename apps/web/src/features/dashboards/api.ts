@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiClient } from "@/shared/api-client";
+import type { ApiError } from "@/shared/api-client";
+import { apiClient, isRateLimited } from "@/shared/api-client";
 import type { ReleaseMark } from "@/shared/deploy-markers";
 import type { DetectionStatus } from "@/shared/detection/headline";
+import { DASHBOARD_REFRESH_FLOOR_MS } from "@/shared/refresh";
 import type { WindowChoice } from "@/shared/selection";
 import { resolveChoice, windowCacheKey } from "@/shared/selection";
 
@@ -442,22 +444,77 @@ function windowParams(choice: WindowChoice): Record<string, string> {
     : { from: choice.from, to: choice.to };
 }
 
-/** The dashboard's own refresh, never the console's 5 or 10 seconds; a fixed window never refreshes. */
-export function refreshIntervalOf(definition: Definition, choice: WindowChoice): number | false {
-  if (choice.kind === "absolute" || definition.refresh_seconds === null) return false;
-  return definition.refresh_seconds * MS_PER_SECOND;
+/**
+ * What this page refreshes at: the dashboard's setting, or this tab's own choice over it
+ * (FR71), within the floor. A fixed window never refreshes, and a paused page does not:
+ * both beat any choice a tab made (design, *The refresh control's states*).
+ */
+export function effectiveIntervalMs(parts: {
+  saved: number | false;
+  tab: number | undefined;
+  fixedWindow: boolean;
+  paused: boolean;
+}): number | false {
+  if (parts.fixedWindow || parts.paused) return false;
+  if (parts.tab !== undefined) return Math.max(parts.tab, DASHBOARD_REFRESH_FLOOR_MS);
+  return parts.saved;
+}
+
+/** What one page reads: a saved dashboard against a project, a window and a picked service. */
+export interface PanelReadScope {
+  dashboardId: string;
+  projectId: string;
+  choice: WindowChoice;
+  service?: string;
+}
+
+/** The batch's request, for the whole page and for a catch-up that reads some panels. */
+export function readPanels(
+  scope: PanelReadScope,
+  panelIds: readonly string[] | undefined,
+  signal?: AbortSignal,
+): Promise<PanelReadResponse> {
+  return apiClient.get<PanelReadResponse>("dashboard-panels/read", {
+    searchParams: {
+      dashboard_id: scope.dashboardId,
+      project_id: scope.projectId,
+      ...windowParams(scope.choice),
+      ...(scope.service === undefined ? {} : { service: scope.service }),
+      ...(panelIds === undefined ? {} : { panels: panelIds.join(",") }),
+    },
+    timeoutMs: PANEL_READ_CLIENT_TIMEOUT_MS,
+    signal,
+  });
+}
+
+/** Whole-request refusals in a row, counted once each however often the interval is asked. */
+export interface RefusalStreak {
+  errorAt: number;
+  dataAt: number;
+  refusals: number;
+}
+
+export function newRefusalStreak(): RefusalStreak {
+  return { errorAt: 0, dataAt: 0, refusals: 0 };
+}
+
+/** How a page reads: the interval it refreshes at, and whether it may read yet. */
+export interface ReadOptions {
+  intervalMs: number | false;
+  /** The address and the selection agree (AC27): until then, no read leaves the page. */
+  enabled: boolean;
 }
 
 export function useDashboardContext(
   dashboard: Dashboard | undefined,
   projectId: string | undefined,
   choice: WindowChoice,
+  options: ReadOptions = { intervalMs: false, enabled: true },
 ) {
-  const interval = dashboard ? refreshIntervalOf(dashboard.definition, choice) : false;
   return useQuery({
     queryKey: ["dashboard-context", dashboard?.id, projectId, windowCacheKey(choice)] as const,
-    enabled: dashboard !== undefined && projectId !== undefined,
-    refetchInterval: interval,
+    enabled: options.enabled && dashboard !== undefined && projectId !== undefined,
+    refetchInterval: options.intervalMs,
     queryFn: ({ signal }) =>
       apiClient.get<DashboardContext>(`dashboards/${dashboard?.id}/context`, {
         searchParams: { project_id: projectId, ...windowParams(choice) },
@@ -466,14 +523,41 @@ export function useDashboardContext(
   });
 }
 
+/** A whole-request 429 is tried again at most this many times, then waits for "Read again" (FR45). */
+export const WHOLE_REQUEST_RETRIES = 3;
+
+/**
+ * When the page reads next. The page's interval, except after a whole-request 429: then
+ * not sooner than the server's `Retry-After` says, even on a fixed window or with refresh
+ * off, since that read never finished (AC145). Paused is false whatever happened.
+ */
+export function nextReadAfterMs(parts: {
+  intervalMs: number | false;
+  paused: boolean;
+  error: unknown;
+  /** How many whole-request refusals in a row, this one included. */
+  refusals: number;
+}): number | false {
+  if (parts.paused) return false;
+  if (isRateLimited(parts.error) && parts.refusals <= WHOLE_REQUEST_RETRIES) {
+    const wait = (parts.error as ApiError).context.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS;
+    const asked = Math.max(wait, 1) * MS_PER_SECOND;
+    return parts.intervalMs === false ? asked : Math.max(asked, parts.intervalMs);
+  }
+  return parts.intervalMs;
+}
+
+const DEFAULT_RETRY_AFTER_SECONDS = 5;
+
 export function useDashboardPanels(
   dashboard: Dashboard | undefined,
   projectId: string | undefined,
   choice: WindowChoice,
   /** After a drag, only these panels are read; the rest as they scroll in (FR53). */
-  panelIds?: readonly string[],
+  panelIds: readonly string[] | undefined,
+  options: ReadOptions & { service?: string; paused: boolean; streak: { current: RefusalStreak } },
 ) {
-  const interval = dashboard ? refreshIntervalOf(dashboard.definition, choice) : false;
+  const { intervalMs, service, streak } = options;
   // The choice and not the instants: the key stays still while a live window moves, so
   // a refresh never brings the skeleton back (AC29).
   const read = [
@@ -482,36 +566,57 @@ export function useDashboardPanels(
     dashboard?.version,
     projectId,
     windowCacheKey(choice),
+    service,
   ] as const;
-  return useQuery({
+  return useQuery<PanelReadResponse>({
     queryKey: [...read, panelIds?.join(",")] as const,
-    enabled: dashboard !== undefined && projectId !== undefined && panelIds?.length !== 0,
-    refetchInterval: interval,
+    enabled:
+      options.enabled &&
+      dashboard !== undefined &&
+      projectId !== undefined &&
+      panelIds?.length !== 0,
+    refetchInterval: (query) => {
+      const { error, errorUpdatedAt, dataUpdatedAt } = query.state;
+      const seen = streak.current;
+      if (dataUpdatedAt !== seen.dataAt) {
+        seen.dataAt = dataUpdatedAt;
+        seen.refusals = 0;
+      }
+      if (errorUpdatedAt !== seen.errorAt) {
+        seen.errorAt = errorUpdatedAt;
+        seen.refusals = isRateLimited(error) ? seen.refusals + 1 : 0;
+      }
+      return nextReadAfterMs({
+        intervalMs,
+        paused: options.paused,
+        error,
+        refusals: seen.refusals,
+      });
+    },
     // Growing the panels read keeps what is drawn: the panels already read come from the
     // server's kept answers at no cost (BR6). Only within one read: a change of project or
     // window never carries an old reading across (FR31).
-    placeholderData: <Answer>(
-      previous: Answer | undefined,
+    placeholderData: (
+      previous: PanelReadResponse | undefined,
       previousQuery?: { queryKey: readonly unknown[] },
     ) =>
       read.every((part, index) => previousQuery?.queryKey[index] === part) ? previous : undefined,
     // Back on the tab, it reads again only once past its own interval.
-    staleTime: interval === false ? Number.POSITIVE_INFINITY : interval,
+    staleTime: intervalMs === false ? Number.POSITIVE_INFINITY : intervalMs,
     // Each refresh is the retry: a cold ClickHouse's 503 must not be read three times a
     // minute on a wall display (AC61).
     retry: false,
     // Said on the page in its own words, so the console raises no toast (AC61, AC145).
     meta: { ownWords: ["unavailable", "rate-limited"] },
-    queryFn: ({ signal }) =>
-      apiClient.get<PanelReadResponse>("dashboard-panels/read", {
-        searchParams: {
-          dashboard_id: dashboard?.id,
-          project_id: projectId,
-          ...windowParams(choice),
-          ...(panelIds === undefined ? {} : { panels: panelIds.join(",") }),
-        },
-        timeoutMs: PANEL_READ_CLIENT_TIMEOUT_MS,
+    queryFn: ({ signal }) => {
+      if (dashboard === undefined || projectId === undefined) {
+        throw new Error("a read needs a dashboard and a project");
+      }
+      return readPanels(
+        { dashboardId: dashboard.id, projectId, choice, service },
+        panelIds,
         signal,
-      }),
+      );
+    },
   });
 }

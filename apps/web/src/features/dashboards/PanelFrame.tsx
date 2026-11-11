@@ -64,10 +64,13 @@ export function PanelFrame({
 /** Words in place of a line, held at the chart's height so a row stays level. */
 export function PanelWords({
   words,
+  countdown,
   correlationId,
   onReadAgain,
 }: {
   words: string;
+  /** "Reading again in 20 s": ticks every second, so it is not announced (design, *Screen readers*). */
+  countdown?: string;
   correlationId?: string | null;
   onReadAgain?: () => void;
 }) {
@@ -77,8 +80,13 @@ export function PanelWords({
       style={{ minHeight: CHART_HEIGHT }}
     >
       <p>{words}</p>
+      {countdown ? <p aria-hidden="true">{countdown}</p> : null}
       {onReadAgain ? (
-        <button type="button" onClick={onReadAgain} className="text-brand text-sm underline">
+        <button
+          type="button"
+          onClick={onReadAgain}
+          className="inline-flex min-h-11 items-center text-brand text-sm underline md:min-h-0"
+        >
           Read again
         </button>
       ) : null}
@@ -100,10 +108,12 @@ export function CorrelationId({ value }: { value: string }) {
  * The filled strip over a line kept from an earlier read (FR31): dimming alone is not used.
  * Not a live region: the page has one, and a strip per panel would talk over it (AC143).
  */
-export function StaleStrip({ since }: { since: string }) {
+export function StaleStrip({ since, closed }: { since: string; closed?: boolean }) {
   return (
     <p className="mb-2 rounded-xs border border-warning-border bg-warning-subtle px-2 py-1 text-sm text-warning-text">
-      Could not read since {since}. Line below is old.
+      {closed
+        ? `Could not read again. This chart is from ${since} and covers a closed period.`
+        : `Could not read since ${since}. Line below is old.`}
     </p>
   );
 }

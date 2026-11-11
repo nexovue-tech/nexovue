@@ -12,7 +12,7 @@ import {
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Dashboard,
@@ -30,7 +30,7 @@ import type { DetectionStatus } from "@/shared/detection/headline";
 import { formatRelativeTime } from "@/shared/format/time";
 import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
-import { setSelectedProjectId, setSelectedRangeId } from "@/shared/selection";
+import { readSelection, setSelectedProjectId, setSelectedRangeId } from "@/shared/selection";
 import { dismissToast, getToasts } from "@/shared/toast/toast-store";
 
 // The API's own budget, read as text: this package compiles without node types.
@@ -171,11 +171,27 @@ const problem = (status: number, title: string, headers: Record<string, string> 
     ...headers,
   });
 
+const typedProblem = (status: number, slug: string): Handler =>
+  json({ type: `https://nexovue.com/problems/${slug}`, title: slug, status }, status, {
+    "content-type": "application/problem+json",
+  });
+
 function stubApi(handlers: Record<string, Handler | Handler[]>, role: TestRole = "owner") {
-  const calls: Array<{ method: string; path: string }> = [];
+  const calls: Array<{ method: string; path: string; search: string }> = [];
   const queues: Record<string, Handler[]> = {};
   const all: Record<string, Handler | Handler[]> = {
     "GET /auth/me": json(identityFor(role)),
+    "GET /projects": json({
+      projects: [
+        { id: PROJECT_ID, slug: "production", name: "production", first_reported_on: at(9000) },
+      ],
+    }),
+    "GET /system/info": json({
+      service: "api",
+      revision: "test",
+      build_time: at(0),
+      deployment: "self-hosted",
+    }),
     ...handlers,
   };
   vi.stubGlobal(
@@ -183,7 +199,7 @@ function stubApi(handlers: Record<string, Handler | Handler[]>, role: TestRole =
     vi.fn(async (url: URL, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       const path = url.pathname.slice(API_PREFIX.length);
-      calls.push({ method, path });
+      calls.push({ method, path, search: url.search });
       const key = `${method} ${path}`;
       const handler = all[key];
       if (!handler) throw new Error(`no stub for ${key}`);
@@ -334,7 +350,14 @@ describe("the dashboard view", () => {
           timed_out: "The database took too long to answer.",
         }[state],
       );
-      expect(text(node)).toContain("corr-42");
+      // A refused panel reads again by itself first, and quotes its reference only once
+      // the tries are spent (FR45, AC111): see the catch-up cases below.
+      if (state === "refused") {
+        expect(text(node)).toContain("Reading again in 20 s");
+        expect(text(node)).not.toContain("corr-42");
+      } else {
+        expect(text(node)).toContain("corr-42");
+      }
     },
   );
 
@@ -746,5 +769,263 @@ describe("the dashboard list", () => {
       () => getToasts().some((toast) => toast.message === "Rate limited by the API."),
       "the toast",
     );
+  });
+});
+
+const OTHER_PROJECT = "7b2e1d3f-4c5a-4b6e-8f9a-8d7c6b5a4e3f";
+const FIXED_NOW = new Date(NOW);
+const searchOf = (call: { search: string }) => new URLSearchParams(call.search);
+
+describe("the dashboard at an address (F20, Step 6)", () => {
+  beforeEach(() => {
+    // Pinned: every instant here is relative to `NOW`, and the page reads the date for its lines.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  const twoProjects = {
+    "GET /projects": json({
+      projects: [
+        { id: PROJECT_ID, slug: "production", name: "production", first_reported_on: at(9000) },
+        { id: OTHER_PROJECT, slug: "staging", name: "staging", first_reported_on: at(9000) },
+      ],
+    }),
+  };
+
+  it("reads project B for a link naming it, and no read reaches project A first (AC27)", async () => {
+    const calls = stubApi({
+      ...twoProjects,
+      ...viewOf(json(batch({ p_rate: ok() }))),
+      [`GET /dashboards/${DASHBOARD_ID}/context`]: json({
+        ...context(),
+        project: { id: OTHER_PROJECT, name: "staging", timezone: "UTC", retention: null },
+      }),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?project=${OTHER_PROJECT}`);
+    await waitFor(() => drawn(section(container, "p_rate")), "the chart");
+
+    const reads = calls.filter((call) => /dashboard-panels|context/.test(call.path));
+    expect(reads.length).toBeGreaterThan(1);
+    for (const call of reads) expect(searchOf(call).get("project_id")).toBe(OTHER_PROJECT);
+    expect(text(container)).toContain("Showing staging from this link. You were on production.");
+    expect(text(container)).toContain("Back to production");
+    expect(readSelection().projectId).toBe(OTHER_PROJECT);
+  });
+
+  it("refuses a link to a project the reader cannot open, with no read at all (AC69)", async () => {
+    const calls = stubApi({ ...viewOf(json(batch({ p_rate: ok() }))) });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?project=${OTHER_PROJECT}`);
+    await waitFor(() => text(container).includes("a project you cannot open"), "the refusal");
+
+    expect(calls.filter((call) => /dashboard-panels|context/.test(call.path))).toEqual([]);
+    expect(readSelection().projectId).toBe(PROJECT_ID);
+    expect(text(container)).toContain("View against mine");
+    expect(drawn(section(container, "p_rate"))).toBe(false);
+  });
+
+  it("tells the two 404s apart by the problem's type, as an unknown id reads as a foreign one (AC75)", async () => {
+    stubApi({
+      ...viewOf(json(batch({}))),
+      [`GET /dashboards/${DASHBOARD_ID}/context`]: typedProblem(404, "project-not-found"),
+    });
+    const project = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(project.container).includes("a project you cannot open"),
+      "project 404",
+    );
+
+    stubApi({
+      ...viewOf(json(batch({}))),
+      [`GET /dashboards/${DASHBOARD_ID}/context`]: typedProblem(404, "dashboard-not-found"),
+    });
+    const deleted = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(deleted.container).includes("This dashboard was deleted."),
+      "dashboard 404",
+    );
+    expect(text(deleted.container)).not.toContain("a project you cannot open");
+  });
+
+  it("shows a link's unknown service quoted and marked, never as the reader's own (AC123)", async () => {
+    const picker = {
+      ...panel("p_pick", "service_trend", { service: { picker: true }, signal: "rate" }),
+    };
+    stubApi({
+      ...viewOf(json(batch({ p_pick: { state: "not_in_project", kind: "service_trend" } }))),
+      [`GET /dashboards/${DASHBOARD_ID}`]: json({
+        ...dashboard([picker]),
+        definition: { ...dashboard([picker]).definition, service_picker: true },
+      }),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?service=${"y".repeat(60)}`);
+    await waitFor(() => text(container).includes("from this link was not found"), "the line");
+    expect(text(container)).toContain(
+      `“${"y".repeat(40)}…” from this link was not found in production.`,
+    );
+  });
+
+  it("passes the link's service to the read", async () => {
+    const calls = stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?service=checkout`);
+    await waitFor(() => drawn(section(container, "p_rate")), "the chart");
+    const read = calls.find((call) => call.path === "/dashboard-panels/read");
+    expect(searchOf(read ?? { search: "" }).get("service")).toBe("checkout");
+  });
+
+  it("says a fixed window by its times, and does not refresh it (AC28)", async () => {
+    const from = at(180);
+    const to = at(120);
+    const calls = stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?from=${from}&to=${to}`);
+    await waitFor(() => drawn(section(container, "p_rate")), "the chart");
+    expect(text(container)).toContain("Fixed time:");
+    expect(text(container)).toContain("Back to live");
+    expect(text(container)).not.toContain("can still change");
+    const read = calls.find((call) => call.path === "/dashboard-panels/read");
+    expect(searchOf(read ?? { search: "" }).get("from")).toBe(from);
+    expect(searchOf(read ?? { search: "" }).get("range")).toBeNull();
+  });
+
+  it("warns that a window ending in recent minutes can still change (AC28)", async () => {
+    stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?from=${at(60)}&to=${at(2)}`);
+    await waitFor(() => text(container).includes("Fixed time:"), "the line");
+    expect(text(container)).toContain("Its newest minutes can still change.");
+  });
+
+  it("offers both links, exact times first on a fixed window, and says which was copied (AC137)", async () => {
+    const written: string[] = [];
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText: async (url: string) => void written.push(url) },
+    });
+    stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const { container } = await mountAt(
+      `/dashboards/${DASHBOARD_ID}?from=${at(180)}&to=${at(120)}`,
+    );
+    await waitFor(() => drawn(section(container, "p_rate")), "the chart");
+
+    const copy = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Copy link",
+    );
+    await act(async () => copy?.click());
+    const options = [...container.querySelectorAll("li button")].map((b) => text(b));
+    expect(options[0]).toMatch(/^Link to these exact times \(/);
+    expect(options[1]).toBe("Link that stays live (last hour)");
+
+    await act(async () => (container.querySelectorAll("li button")[1] as HTMLElement).click());
+    const link = new URL(written[0] ?? "");
+    expect(link.searchParams.get("project")).toBe(PROJECT_ID);
+    expect(link.searchParams.get("range")).toBe("1h");
+    expect(link.searchParams.get("from")).toBeNull();
+    expect(text(container)).toContain("Copied the link that stays live.");
+  });
+
+  it("puts the live link first on a live window", async () => {
+    stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(() => drawn(section(container, "p_rate")), "the chart");
+    const copy = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Copy link",
+    );
+    await act(async () => copy?.click());
+    expect(text(container.querySelectorAll("li button")[0] ?? null)).toBe(
+      "Link that stays live (last hour)",
+    );
+  });
+
+  it("says who can read a note by install, and that text can be purged (AC119)", async () => {
+    stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const selfHosted = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(section(selfHosted.container, "p_note")).includes("Everyone"),
+      "the note",
+    );
+    const own = text(section(selfHosted.container, "p_note"));
+    expect(own).toContain(
+      "Everyone in this organization can read this. Do not paste secrets or personal details.",
+    );
+    expect(own).not.toMatch(/support/i);
+    expect(own).toContain("purge");
+
+    stubApi({
+      ...viewOf(json(batch({ p_rate: ok() }))),
+      "GET /system/info": json({
+        service: "api",
+        revision: "t",
+        build_time: at(0),
+        deployment: "hosted",
+      }),
+    });
+    const hosted = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(section(hosted.container, "p_note")).includes("support"),
+      "the hosted note",
+    );
+    const theirs = text(section(hosted.container, "p_note"));
+    expect(theirs).toContain("can read this, and support while an owner has granted access.");
+    expect(theirs).toContain("purge");
+  });
+
+  it("draws a chart only once it has scrolled into view, and keeps it drawn (FR50)", async () => {
+    const watching: Array<{ target: Element; fire: (on: boolean) => void }> = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        callback: IntersectionObserverCallback;
+        constructor(callback: IntersectionObserverCallback) {
+          this.callback = callback;
+        }
+        observe(target: Element) {
+          watching.push({
+            target,
+            fire: (on) =>
+              this.callback(
+                [{ target, isIntersecting: on } as IntersectionObserverEntry],
+                this as never,
+              ),
+          });
+        }
+        disconnect() {}
+        unobserve() {}
+      },
+    );
+    stubApi(viewOf(json(batch({ p_rate: ok() }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(() => watching.length > 0, "the panels watched");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(drawn(section(container, "p_rate"))).toBe(false);
+
+    const rate = watching.find((entry) => entry.target.id === "panel-p_rate");
+    await act(async () => rate?.fire(true));
+    await waitFor(() => drawn(section(container, "p_rate")), "the chart once seen");
+    await act(async () => rate?.fire(false));
+    expect(drawn(section(container, "p_rate"))).toBe(true);
+  });
+
+  it("tells a viewer nobody has connected a project, and offers no setup (AC105, AC109)", async () => {
+    stubApi(
+      {
+        ...viewOf(
+          json(
+            batch({
+              p_rate: { state: "empty", kind: "project_trend", read_at: at(0), last_seen_at: null },
+            }),
+          ),
+        ),
+        [`GET /dashboards/${DASHBOARD_ID}/context`]: json({
+          ...context(),
+          ever_reported: false,
+          last_seen_at: null,
+        }),
+      },
+      "viewer",
+    );
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(container).includes("Nobody has connected production yet"),
+      "the line",
+    );
+    expect(text(container)).not.toContain("Set up");
   });
 });
