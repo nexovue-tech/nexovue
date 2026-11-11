@@ -204,6 +204,9 @@ lint-go:
     #!/usr/bin/env bash
     set -euo pipefail
     for m in {{go_modules}}; do (cd "$m" && golangci-lint run ./...); done
+    # Images build each module alone (GOWORK=off, as the pipeline image does), where go.work no
+    # longer lends a missing go.sum line; tidy here, outside the workspace, is that build's view.
+    for m in {{go_modules}}; do (cd "$m" && GOWORK=off go mod tidy -diff) || { echo "$m: run 'GOWORK=off go mod tidy' there"; exit 1; }; done
 
 lint-py:
     uv run ruff check .
