@@ -2,15 +2,60 @@
 
 ## Lifecycle status
 
+**Step 3 built 2026-11-11, awaiting commit** (worktree `wt/f3s3`, from `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070 needs F22 Step 6's 0068 and 0069 on the branch first.
 **Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-Step 2 awaits the founder's review of the diff, then commit. Step 2b is the founder's after Phase 2 (foundation item 30); Step 2c's code (T2.15, T2.16) or Step 3 next, as the founder orders.
+Step 3 awaits the founder's review of the diff, then commit after F22 Step 6 (migration chain). Then the coordinator's first run of `just insight-fence`. Open decision 7 is the founder's.
+
+Step 2 is committed (`55703b4`). Step 2b is the founder's after Phase 2 (foundation item 30); Step 2c's code (T2.15, T2.16) is still to build.
 
 
 ## Completed
+
+### Step 3, built 2026-11-11 (worktree `wt/f3s3`)
+
+**What a person sees.** Nothing on screen. An install now runs one more container, `scheduler-insight`, idle, with its own Postgres account and network; `nexovue setup` says whether that account is ready and, if Postgres refused part of it, what is left. `SCHEDULER_INSIGHT_REPLICAS=0` leaves it out.
+
+**The spike (T3.1), run 2026-11-11 on Postgres 18 (`pgvector/pgvector:0.8.6-pg18-trixie`): passed.**
+
+- A column-level `UPDATE` grant does **not** permit `LOCK TABLE`: refused in `ACCESS EXCLUSIVE`, `EXCLUSIVE`, `SHARE`, `ROW EXCLUSIVE` and `ACCESS SHARE` on `finding_explanations`. A table-level `INSERT` does permit `ROW EXCLUSIVE` (measured on `job_results`), which is why the account holds none on the queue.
+- Revoking from `PUBLIC` holds against the account, and the install account keeps each function. **Revoking only the two functions the design named left `pg_try_advisory_xact_lock` open**, so `setup` revokes every `pg_advisory_*` and `pg_try_advisory_*` overload, read from the catalog.
+- The four functions and the shared statements agree on one table of cases (due, not yet due, leased, lapsed, expired, spent, order, limit, the lease fence, `SKIP LOCKED`), and never touch another queue; the store function writes `ai_check` and keeps the first result.
+- **Two things the design assumed are false** (open decision 7): the `NOTIFY` command needs no privilege, so revoking `pg_notify` does not stop it; and the account's timeouts are defaults it can `SET` to zero. A NOTIFY flood from 8 connections did not stall ordinary commits here (about 4,100 to 2,600 commits a second, CPU shared; one run on one machine).
+- `setup` cannot state `NOSUPERUSER`, `NOREPLICATION` or `NOBYPASSRLS` without being a superuser, even to restate false, nor `NOCREATEDB` without `CREATEDB` (measured), so it states only `LOGIN NOINHERIT`, the limit and the password, then reads the role back and refuses to call it ready if it holds any of those.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T3.1 | The spike, as a suite: parity table, locked row, other queues, the store, every refusal, the limit, the two gaps as they are | `apps/scheduler/tests/test_insight_account_live.py` |
+| T3.2 | `ai_connections`, `ai_project_opt_outs`, `ai_usage_monthly`, `ai_runs` with their `CHECK`s; the four `SECURITY DEFINER` functions, `search_path` fixed, tables named with their schema, `EXECUTE` taken from `PUBLIC`; `ai_check` in `JOB_RESULT_KINDS` and the check; deletion lists and statements | Migration `0070`, `models.py`, `organizations/tables.py`, `queries.py`, `nexovue_platform/ai_records.py` |
+| T3.3 | `provision`: role, limit, timeouts, password; everything taken, then `INSIGHT_GRANTS`; advisory, `pg_notify`, `TEMP`, `CREATE` on `public` from `PUBLIC`; each refusal said; `nexovue setup grants` | `nexovue_api/insight_account.py`, `setup.py`, `justfile`, `nexovue.yaml` |
+| T3.4 | Restore prints `setup` as next; `scheduler-insight` stopped first; the doc | `restore-postgres.sh`, `deploy/nexovue`, `backup-and-restore.md` |
+| T3.5 | `SCHEDULER_ROLE=insight`; `AI_SECRET_KEY` required in production for it alone; `AI_PRIVATE_ENDPOINTS` read as written (T4.2 parses it) | `scheduler/settings.py` |
+| T3.6 | Insight task set and preload; queue statements by role; `store_ai_check`; a worker refuses queues its functions cannot claim; `--tasks insight` only as `SCHEDULER_ROLE=insight`; 48 MiB children | `registry.py`, `preload_insight.py`, `insight/`, `queue.py`, `results.py`, `worker.py`, `__main__.py` |
+| T3.7 | `scheduler-insight`: `--queues insight --concurrency 4 --tasks insight` | `roles.py` |
+| T3.8 | `x-insight-env`, the service, `ai` network, replicas, 384M; Postgres on both networks; Prometheus on both; hosted, quickstart, build overlays; dev `insight` service replaced | `deploy/compose/` |
+| T3.9 | The password and the key written at install and added at upgrade | `deploy/nexovue` |
+| T3.10 | The reach test from inside the container (marker `insight_fence`); the sizing row, not measured | `test_insight_network_live.py`, `sizing.md` |
+| T3.11 | `just insight-fence` and its CI job: build, kit, install, reach, backup, empty volume, restore, catalog read, the account suites. **Not yet run** | `tools/insight-fence/fence.sh`, `justfile`, `.github/workflows/ci.yml` |
+
+Migration **0070** (on F22's **0069**; renumbered from 0068 at the coordinator's request), roll forward only (added to `test_migration_rules.py`). **ADR-040** filed. `docs/operations/ai.md` started (the account's runbook; Step 5 adds the rest), `current-system-reference.md` gains the second account.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **`ai_connections.sealed_key` waits for T4.6.** `test_keys_live.py` holds every binary column to `SEALED_COLUMNS`, and the `ai` ring that seals it is T4.6's; adding the column now would need the ring now. `key_id` is here.
+- **The API does not hold `AI_SECRET_KEY` yet:** it reads it from T4.6, so Compose names it on `scheduler-insight` alone for now; the Compose test allows `api` too.
+- **The closed lists live in `nexovue_platform.ai_records`**, not `nexovue_platform.ai`: the models import them, and every module importing the models would then "reach AI code" in the no-AI suites. `nexovue_platform.ai` is created by T4.1.
+- **`ai_runs.purpose` allows `explain`, `check`, `chat`, `fix`** (foundation's three and A51's), so F4 and F5 need no migration for it; outcomes are the design's failure table plus `started`, `done`, `abstained`, `died`.
+- **Timeouts:** statement 10 s, idle in transaction 30 s (guesses; see open decision 7 for why they are not a bound).
+- **`setup` also takes `CREATE` on `public` from `PUBLIC`** (Postgres 15's default, said again for an older database) and clears any role setting it does not set.
+- **The dev `scheduler-insight` has no `AI_SECRET_KEY`**: development allows it, and committing a new literal key would need a gitleaks entry; Step 4 sets one.
+- **T3.6 is proved in `test_insight_role.py`**, F22's pattern for its own role, rather than `test_jobs_live.py`.
+- **The `ai` network is declared once, in `compose.infra.yaml`**, where Postgres is defined; the deploy overlay inherits Postgres's list.
 
 ### Step 2, built 2026-11-09 (on `feature/phase-2`)
 
@@ -102,10 +147,18 @@ ADR-039 (an explanation is a frozen evidence record, with code choosing the caus
 
 ## Next action
 
+Founder: review Step 3's diff and open decision 7; commit after F22 Step 6. Coordinator: first run of `just insight-fence` by hand (expect fixes to the harness), which ticks T3.4, T3.10 and T3.11 and settles ADR-040's owed evidence. Then Step 4.
+
+Earlier:
 The founder reviews Step 2's diff; then commit. The founder's checks after Phase 2: send a test finding to Slack and email and read the follow-up (Step 2's *Judgeable*; A55 can be overturned there), follow each link from a demo finding and copy one into a private window, and the Playwright checks at 390 and 1920 pixels. T0.1 and T0.2 are still unticked and not part of Step 2. F22's T2.9 (the `explained` timeline event beside F3's row) can now be built, since `explained.write` exists.
 
 
 ## Open decisions
+
+**From Step 3, 2026-11-11:**
+
+7. **Two holes the fence cannot close with grants** (spike T3.1, measured). (a) **`NOTIFY` needs no privilege.** A broken-into AI process can notify, and a listener of its own that never reads can fill Postgres's notification queue (8 GB by default), after which every notifying commit in the database fails: Run now, send tests, read-again, connection syncs. Alerts and beat's schedule do not use it. (b) **The timeouts are defaults.** The account can `SET statement_timeout = 0` (and the idle and transaction timeouts) and hold a transaction open: that holds back vacuum for the whole database, so `jobs`, the busiest table, bloats over hours, and a migration that alters a table it read waits and fails its lock timeout, so `setup`, and with it every service's start, fails until the process is stopped. **Options:** (i) a watchdog on beat's leader, every minute, ending any `nexovue_insight` backend whose transaction is older than a bound (2 minutes) or that has been listening, with `pg_terminate_backend` as the install account, plus an alert; (ii) accept and document (done in `docs/operations/ai.md`); (iii) give the AI role no Postgres at all and pass its rows through the API (design's FD2 rejected this). **Recommendation: (i)**, built with Step 5's sweep (T5.5) and its metrics (T5.10), which already run on beat's leader; it bounds both holes to two minutes without a design change. The rest of Step 3 does not depend on it.
+8. **Migration 0070's down revision is F22's 0069,** which is not on this worktree's branch: `test_setup_schema.py` and `alembic upgrade` fail here (`KeyError: '0069'`) until F22 Step 6 is committed first, as the coordinator plans. **Recommendation:** commit F22 Step 6 first, then this; nothing to change here.
 
 **From Step 2, 2026-11-09:**
 
@@ -448,6 +501,26 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Validation
 
+### Step 3, 2026-11-11
+
+Own containers `f3s3-pg` (Postgres 18, port 25432) and `f3s3-ch` (ClickHouse 26.3, port 28123, network `f3s3-net`), migrated to 0070 before the renumbering. Every test below was seen failing first, or failing on a saved copy with its behaviour removed, then passing:
+
+| Test | Seen failing by | Then |
+|---|---|---|
+| `test_insight_account_live.py` (39) | Broken copies: a table `UPDATE` on `jobs`/`finding_explanations`, shared rights handed back to `PUBLIC`, no connection limit; function bodies without the queue filter, `SKIP LOCKED`, lease grace or the lease fence, and a store writing `check_run` and replacing: 17 failed, and the locked-row case blocked until killed | 39 passed |
+| `test_insight_grants_live.py` (8) | Broken copy (an extra `aliases` column, a table `UPDATE`, no take-back, limit 50, one timeout dropped, missing password fatal): 5 failed; the over-privilege check removed: 1 failed | 8 passed |
+| `test_insight_role.py` (11) | Full preload for the insight set: 2 failed; the worker's queue check removed: 1 failed; the role/tasks check removed: a real worker started (killed at 60 s); the child's limit at 10 MiB: failed | 11 passed; the child kept 20.7 MiB of its own |
+| `test_scheduler_settings.py` (+7) | Before the settings change: 4 failed (the misspelt-role cases already held) | 32 passed |
+| `test_roles.py` (+1) | Before the role: failed | 7 passed |
+| `test_compose_contract.py` (+15) | On the Compose files from `HEAD`: 12 failed; `test_a_restore_stops_every_role_that_writes_to_postgres` failed until `deploy/nexovue` named the role | 92 passed |
+| `test_install_secrets.py`, `test_install_script.py` | On `deploy/nexovue` from `HEAD`: 7 failed | passed |
+| `test_deletion_live.py` | AI tables left out of the deletion lists: 2 failed, naming all four | passed, with seeded AI rows |
+| `test_ai_vocabulary.py` (6) | A list and the call range changed in code only: 2 failed | 6 passed |
+
+Also run and passing: `test_jobs_live.py`, `test_detection_prune_live.py`, `test_slo_prune_live.py`, `test_erasure_inventory.py`, `test_keys_live.py`, `test_apikeys_live.py`, `test_migration_rules.py`, the three tenancy-structure suites, the three no-AI suites (2,715 passed in one run). **`test_setup_schema.py` fails here** with `KeyError: '0069'` after the renumbering (open decision 8). `uv run mypy .`: no issues in 934 files. `ruff check`, `ruff format --check`: clean. `pnpm -r --if-present run typecheck`: done; `verify-tokens.js`: clean (no web code changed). `docker compose -f deploy/compose/docker-compose.yaml config`: parses; Postgres on `ai` and `default`, `scheduler-insight` on `ai` only.
+
+**`just insight-fence`: not yet run here; the coordinator runs it.** Its parts that could run against these containers did (the account suites); the reach test (AC42), the real restore (AC46) and the container's memory need the built images and an installed kit.
+
 ### Step 2, 2026-11-09
 
 Every behaviour change has a test seen failing first, or proved by removing the behaviour from a saved copy and restoring it. Live suites ran on this build's own containers (`f3s2-pg` on 25432, `f3s2-ch` on 28123, with its reader, eraser and detection-writer users), migrated with Alembic and the Go setup, with every suite's DSN pointed at them.
@@ -556,7 +629,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-09 (Step 2 committed)
+2026-11-11 (Step 3 built, awaiting commit; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

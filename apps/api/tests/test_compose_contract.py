@@ -60,6 +60,8 @@ SETTINGS: Final = {
     "CHECK_SECRET_KEY": "check-key",
     "CREDENTIAL_ENCRYPTION_KEY": "credential-key",
     "CONNECTION_SECRET_KEY": "connection-key",
+    "POSTGRES_INSIGHT_PASSWORD": "insight-postgres-secret",
+    "AI_SECRET_KEY": "ai-key-stand-in",
     "S3_BUCKET": "nexovue",
     "S3_ACCESS_KEY_ID": "install-access-key",
     "S3_SECRET_ACCESS_KEY": "install-secret-key",
@@ -298,7 +300,7 @@ def test_scheduler_light_judges_detection_beside_its_probes(layout: str, tmp_pat
     queues = {
         name: _queues_of(
             command_for(service["command"][0], service["command"][1:]),
-            service["environment"]["PROBER_REGION"],
+            service["environment"].get("PROBER_REGION", "local"),
         )
         for name, service in services.items()
         if name.startswith("scheduler-") and name != "scheduler-beat"
@@ -335,7 +337,7 @@ def test_slo_work_runs_on_scheduler_light_under_its_floor(layout: str, tmp_path:
         if name.startswith("scheduler-") and name != "scheduler-beat"
     }
     queues = {
-        name: _queues_of(arguments, services[name]["environment"]["PROBER_REGION"])
+        name: _queues_of(arguments, services[name]["environment"].get("PROBER_REGION", "local"))
         for name, arguments in argv.items()
     }
     light = argv["scheduler-light"]
@@ -361,7 +363,7 @@ def test_the_release_sync_runs_on_scheduler_light_capped_under_its_floor(
         if name.startswith("scheduler-") and name != "scheduler-beat"
     }
     queues = {
-        name: _queues_of(arguments, services[name]["environment"]["PROBER_REGION"])
+        name: _queues_of(arguments, services[name]["environment"].get("PROBER_REGION", "local"))
         for name, arguments in argv.items()
     }
     for queue_name in releases.QUEUES:
@@ -493,3 +495,117 @@ def test_a_restore_stops_every_role_that_writes_to_postgres(tmp_path: Path) -> N
 
     assert CONNECTIONS_ROLE in writers
     assert writers <= set(stopped), sorted(writers - set(stopped))
+
+
+INSIGHT_ROLE: Final = "scheduler-insight"
+# F3 AC41: what the AI role holds, and nothing else. No Kafka, ClickHouse, check, channel or
+# connection key, no mail, no object store.
+INSIGHT_ROLE_VARIABLES: Final = frozenset(
+    {
+        "ENV",
+        "NEXOVUE_DEPLOYMENT",
+        "LOG_LEVEL",
+        "LOG_FORMAT",
+        "SCHEDULER_ROLE",
+        "POSTGRES_DSN",
+        "AI_SECRET_KEY",
+        "AI_SECRET_PREVIOUS_KEYS",
+        "AI_PRIVATE_ENDPOINTS",
+    }
+)
+
+
+def test_the_insight_role_holds_exactly_its_own_variables(layout: str, tmp_path: Path) -> None:
+    """AC41: an exact list in every layout, so a merged `control-plane-env` fails here."""
+    services = _render(layout, tmp_path)
+    insight = services[INSIGHT_ROLE]
+
+    held = set(insight["environment"])
+
+    assert held == INSIGHT_ROLE_VARIABLES, sorted(held ^ INSIGHT_ROLE_VARIABLES)
+    assert insight["environment"]["SCHEDULER_ROLE"] == "insight"
+    assert insight["environment"]["POSTGRES_DSN"].startswith(
+        "postgresql+asyncpg://nexovue_insight:"
+    )
+    assert insight["command"] == [INSIGHT_ROLE]
+    assert insight["deploy"]["resources"]["limits"]["memory"] == str(384 * 2**20)
+
+
+def test_only_the_api_and_the_insight_role_hold_the_ai_key(layout: str, tmp_path: Path) -> None:
+    """AC41, FD10: read by value, so a key passed under another name is caught too."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if SETTINGS["AI_SECRET_KEY"] in json.dumps(service.get("environment") or {})
+    }
+
+    assert INSIGHT_ROLE in holders
+    assert holders <= {"api", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
+
+
+def test_only_setup_and_the_insight_role_hold_its_password(layout: str, tmp_path: Path) -> None:
+    """AC41: setup creates the account; the role signs in as it; nothing else knows it."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if SETTINGS["POSTGRES_INSIGHT_PASSWORD"] in json.dumps(service.get("environment") or {})
+    }
+
+    assert holders == {"setup", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
+
+
+def test_the_insight_role_shares_a_network_with_postgres_and_the_monitor_alone(
+    layout: str, tmp_path: Path
+) -> None:
+    """AC42's Compose half: who the AI role can reach by name. Prometheus scrapes it, and its
+    metrics carry no tenant (design, *Network*). The live half runs in `just insight-fence`."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+    own = set(services[INSIGHT_ROLE]["networks"])
+
+    neighbours = {
+        name
+        for name, service in services.items()
+        if name != INSIGHT_ROLE and own & set(service.get("networks") or {})
+    }
+
+    assert own == {"ai"}
+    assert neighbours == {"postgres", "prometheus"}, f"{layout}: {sorted(neighbours)}"
+
+
+def test_the_insight_role_can_be_left_out_by_one_setting(tmp_path: Path) -> None:
+    """AC103: `SCHEDULER_INSIGHT_REPLICAS=0` runs the install with no AI container."""
+    services = _render("self-hosted", tmp_path, SCHEDULER_INSIGHT_REPLICAS="0")
+
+    assert services[INSIGHT_ROLE]["deploy"]["replicas"] == 0
+
+
+def test_an_install_without_the_ai_settings_still_renders(tmp_path: Path) -> None:
+    """AC71: `:-`, never `:?`, so a missing AI key or password stops this role alone, which
+    refuses them itself, and never the whole install."""
+    values = {
+        key: value
+        for key, value in SETTINGS.items()
+        if key not in {"AI_SECRET_KEY", "POSTGRES_INSIGHT_PASSWORD"}
+    }
+
+    assert _compose_config("self-hosted", tmp_path, values).returncode == 0
+
+
+def test_the_development_stack_runs_the_insight_role_on_its_own_tasks_and_network() -> None:
+    dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
+    service = dev["services"][INSIGHT_ROLE]
+
+    argv = service["command"].split()
+    assert argv[argv.index("--queues") + 1] == "insight"
+    assert argv[argv.index("--tasks") + 1] == "insight"
+    assert service["environment"]["SCHEDULER_ROLE"] == "insight"
+    assert "nexovue_insight:" in service["environment"]["POSTGRES_DSN"]
+    assert service["networks"] == ["ai"]
+    assert "CHECK_SECRET_KEY" not in service["environment"]
+    # The dead `insight` service and its model address are gone (F3 owns the removal).
+    assert "insight" not in dev["services"]
+    assert "LLM_BASE_URL" not in (COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8")

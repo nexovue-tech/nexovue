@@ -20,6 +20,9 @@ from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    AIConnection,
+    AIRun,
+    AIUsageMonth,
     ApiToken,
     AuditLogEntry,
     BillingSubscription,
@@ -126,6 +129,21 @@ async def delete_explanation_stopped_rules(session: AsyncSession, org_id: uuid.U
     )
 
 
+async def delete_ai_connections(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's AI connection and its owner's consent (F3)."""
+    return await _rows_deleted(session, delete(AIConnection).where(AIConnection.org_id == org_id))
+
+
+async def delete_ai_usage_monthly(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's tokens, month by month (F3)."""
+    return await _rows_deleted(session, delete(AIUsageMonth).where(AIUsageMonth.org_id == org_id))
+
+
+async def delete_ai_runs(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Where each of the organization's model calls went, and how it ended (F3)."""
+    return await _rows_deleted(session, delete(AIRun).where(AIRun.org_id == org_id))
+
+
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
@@ -140,6 +158,9 @@ DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitabl
     "connections": delete_connections,
     "dashboards": delete_dashboards,
     "explanation_stopped_rules": delete_explanation_stopped_rules,
+    "ai_connections": delete_ai_connections,
+    "ai_usage_monthly": delete_ai_usage_monthly,
+    "ai_runs": delete_ai_runs,
     "users": delete_users,
     "projects": delete_projects,
 }

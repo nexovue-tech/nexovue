@@ -56,6 +56,12 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     # F3. The rules an organization stopped from naming causes. Before `users`, whom
     # `created_by` names.
     "explanation_stopped_rules",
+    # F3. The AI connection, its months of tokens and its run records belong to the
+    # organization. Before `users`, whom consent and a run name, and before `projects`,
+    # which a run names.
+    "ai_connections",
+    "ai_usage_monthly",
+    "ai_runs",
     "users",
     "projects",
 )
@@ -116,6 +122,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "evidence_error_group_reads": "projects",
     # F3. A rating goes with the version it rates.
     "finding_explanation_ratings": "finding_explanations",
+    # F3. A project's AI opt-out goes with the project.
+    "ai_project_opt_outs": "projects",
     # F19. Targets and their change history go with the project; status and daily
     # counts with their target. The history and a purged target's months have no key
     # to the target, because they outlive its purge (FR31, D46).

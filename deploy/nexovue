@@ -114,13 +114,16 @@ write_choices() {
     esac
 }
 
-# ClickHouse's own accounts (deploy/clickhouse/users.d), whose passwords the store reads from its
-# environment each time it starts. Only these can be created after the install: every other secret
-# is written into a store, a key or the Kafka log once, and a new value would lock that data away.
-ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD"
+# The stores' own accounts whose passwords are set again each time they start: ClickHouse's
+# (deploy/clickhouse/users.d) from its environment, and the AI role's Postgres account, which
+# `setup` creates and sets at every start (F3). Only these can be created after the install: every
+# other secret is written into a store, a key or the Kafka log once, and a new value would lock
+# that data away.
+ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD POSTGRES_INSIGHT_PASSWORD"
 # Sealing keys added after an install was created. A key that has sealed nothing yet locks nothing
-# away, so an upgrade may add one; replacing one that exists would (F22: tracker connections).
-KEYS_ADDED_LATER="CONNECTION_SECRET_KEY"
+# away, so an upgrade may add one; replacing one that exists would (F22: tracker connections;
+# F3: AI provider keys).
+KEYS_ADDED_LATER="CONNECTION_SECRET_KEY AI_SECRET_KEY"
 
 write_secrets() {
     local file="$1" key
@@ -245,7 +248,8 @@ compose_profiles() {
 # Every service that writes to the stores, stopped before a restore. A role whose profile is off
 # is not named, because what `compose stop` does with one was not checked (F22 design).
 services_to_stop() {
-    printf '%s\n' proxy receiver worker api scheduler-beat scheduler-light scheduler-deliveries
+    printf '%s\n' proxy receiver worker api scheduler-beat scheduler-light scheduler-deliveries \
+        scheduler-insight
     if connections_run "$1"; then
         printf '%s\n' scheduler-connections
     fi

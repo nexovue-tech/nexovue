@@ -20,6 +20,13 @@ from decimal import Decimal
 from typing import Any, Final
 
 from nexovue_platform import slo
+from nexovue_platform.ai_records import CALL_SECONDS_DEFAULT as AI_CALL_SECONDS_DEFAULT
+from nexovue_platform.ai_records import CALL_SECONDS_MAX as AI_CALL_SECONDS_MAX
+from nexovue_platform.ai_records import CALL_SECONDS_MIN as AI_CALL_SECONDS_MIN
+from nexovue_platform.ai_records import OFF_REASONS as AI_OFF_REASONS
+from nexovue_platform.ai_records import RUN_OUTCOMES as AI_RUN_OUTCOMES
+from nexovue_platform.ai_records import RUN_PURPOSES as AI_RUN_PURPOSES
+from nexovue_platform.ai_records import WIRE_FORMATS as AI_WIRE_FORMATS
 from nexovue_platform.alerts.model import (
     ATTEMPT_KINDS,
     ATTEMPT_OUTCOMES,
@@ -2007,6 +2014,185 @@ class EvidenceErrorGroupRead(Base):
     __table_args__ = (Index("ix_evidence_error_group_reads_created_at", "created_at"),)
 
 
+class AIConnection(Base):
+    """An organization's AI provider (F3 FR30 to FR33, design *Data and migration impact*).
+
+    The `scheduler-insight` account reads it through column grants and may change only the
+    check's three columns (`setup.INSIGHT_GRANTS`). The sealed key joins in plan Step 4,
+    with the `ai` ring that seals it (T4.6). Turning it on needs a limit and an owner's
+    consent to this very address, which the database holds too.
+    """
+
+    __tablename__ = "ai_connections"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    wire_format: Mapped[str] = mapped_column(Text, nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    region_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # New on each saved key; a re-seal keeps it (design, *The two fingerprints*).
+    key_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    call_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=str(AI_CALL_SECONDS_DEFAULT)
+    )
+    monthly_token_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Per million tokens, as typed; only an estimate is ever shown (FR29).
+    price_input: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    price_output: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    off_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[OptionalTimestamp]
+    checked_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    checked_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    consented_at: Mapped[OptionalTimestamp]
+    consented_base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_schema: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "consented_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (consented_by)",
+            name="fk_ai_connections_consented_by",
+        ),
+        CheckConstraint(
+            f"wire_format IN ({_quoted(AI_WIRE_FORMATS)})", name="wire_format_is_known"
+        ),
+        CheckConstraint(
+            f"call_seconds BETWEEN {AI_CALL_SECONDS_MIN} AND {AI_CALL_SECONDS_MAX}",
+            name="call_seconds_in_range",
+        ),
+        CheckConstraint(
+            "monthly_token_limit IS NULL OR monthly_token_limit > 0", name="limit_is_positive"
+        ),
+        CheckConstraint(
+            "(price_input IS NULL OR price_input >= 0) "
+            "AND (price_output IS NULL OR price_output >= 0)",
+            name="prices_are_not_negative",
+        ),
+        CheckConstraint(
+            f"off_reason IS NULL OR off_reason IN ({_quoted(AI_OFF_REASONS)})",
+            name="off_reason_is_known",
+        ),
+        # On only with a limit and an owner's consent to this very address (FR30, FR33).
+        CheckConstraint(
+            "NOT enabled OR (monthly_token_limit IS NOT NULL AND consented_at IS NOT NULL "
+            "AND consented_base_url = base_url AND consented_fingerprint IS NOT NULL "
+            "AND consented_schema IS NOT NULL)",
+            name="on_only_with_limit_and_consent",
+        ),
+    )
+
+
+class AIProjectOptOut(Base):
+    """A project the organization's AI wording leaves alone (FD5)."""
+
+    __tablename__ = "ai_project_opt_outs"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[CreatedAt]
+
+
+class AIUsageMonth(Base):
+    """An organization's tokens in one calendar month: spent, and held by runs in flight
+    (FD7, design *Limits, in order, at the point of spending*)."""
+
+    __tablename__ = "ai_usage_monthly"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The month's first day.
+    month: Mapped[date] = mapped_column(Date, primary_key=True)
+    used_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+
+    __table_args__ = (
+        CheckConstraint(
+            "used_tokens >= 0 AND reserved_tokens >= 0", name="tokens_are_not_negative"
+        ),
+        CheckConstraint("extract(day FROM month) = 1", name="month_is_its_first_day"),
+    )
+
+
+class AIRun(Base):
+    """One model call (FR39): who, where, how many tokens, how it ended. Never its content
+    (FD9), only the names of the fields sent. `scheduler-insight` may insert one and change
+    only its outcome, tokens and finish (AC72); the address it went to stays as written."""
+
+    __tablename__ = "ai_runs"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    # The person on a click; null on an automatic run (AC72).
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # No foreign key: the run outlives the finding's explanations (design, *Data*).
+    explanation_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wire_format: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    region_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Scheme and host, never a path (AC72).
+    provider_host: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_sha256: Mapped[str | None] = mapped_column(String(SHA256_HEX_LENGTH), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tokens_estimated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    started_at: Mapped[CreatedAt]
+    finished_at: Mapped[OptionalTimestamp]
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, server_default="started")
+    fields_sent: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+    __table_args__ = (
+        CheckConstraint(f"purpose IN ({_quoted(AI_RUN_PURPOSES)})", name="purpose_is_known"),
+        CheckConstraint(f"outcome IN ({_quoted(AI_RUN_OUTCOMES)})", name="outcome_is_known"),
+        CheckConstraint(
+            f"wire_format IN ({_quoted(AI_WIRE_FORMATS)})", name="wire_format_is_known"
+        ),
+        CheckConstraint(
+            "request_sha256 IS NULL OR request_sha256 ~ '^[0-9a-f]{64}$'",
+            name="request_sha256_is_hex",
+        ),
+        CheckConstraint(
+            "coalesce(input_tokens, 0) >= 0 AND coalesce(output_tokens, 0) >= 0 "
+            "AND reserved_tokens >= 0",
+            name="tokens_are_not_negative",
+        ),
+        CheckConstraint("attempt >= 1", name="attempt_counts_from_one"),
+        Index("ix_ai_runs_org_id_started_at", "org_id", text("started_at DESC")),
+        Index("ix_ai_runs_subject_id_started_at", "subject_id", "started_at"),
+    )
+
+
 class FindingEvent(Base):
     """The timeline (F22, FR16): what happened to one finding, append-only.
 
@@ -2783,7 +2969,8 @@ class ApiTokenUsageDaily(Base):
 # SHA-256, hex, of a token, ticket, challenge or code — never the value itself.
 TOKEN_FINGERPRINT_LENGTH: Final = 64
 ONE_TIME_TOKEN_PURPOSES: Final = ("verify_email", "reset_password", "change_email")
-JOB_RESULT_KINDS: Final = ("check_run", "channel_test", "connection_test")
+# `ai_check` is written only by `scheduler-insight`, through `insight_store_check_result` (F3).
+JOB_RESULT_KINDS: Final = ("check_run", "channel_test", "connection_test", "ai_check")
 
 
 class SessionRecord(Base):

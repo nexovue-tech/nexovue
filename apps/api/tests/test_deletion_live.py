@@ -23,7 +23,7 @@ import socket
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final, cast
 from urllib.parse import urlsplit
 
@@ -38,6 +38,10 @@ from nexovue_api.auth.queries import load_identity
 from nexovue_api.billing import BillingError, CancellationOutcome, ConfiguredProcessor
 from nexovue_api.checkfiles.service import object_key as check_file_key
 from nexovue_api.data.postgres.models import (
+    AIConnection,
+    AIProjectOptOut,
+    AIRun,
+    AIUsageMonth,
     AlertEvaluation,
     AlertRule,
     AlertRuleChannel,
@@ -191,6 +195,11 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     # F3 Step 2: ratings of each explanation, and the rules the organization stopped.
     "finding_explanation_ratings",
     "explanation_stopped_rules",
+    # F3 Step 3: the AI connection, its opt-outs, months of tokens and run records.
+    "ai_connections",
+    "ai_project_opt_outs",
+    "ai_usage_monthly",
+    "ai_runs",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -277,6 +286,12 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     # F3 Step 2: a person's rating of each explanation, and one stopped rule per finding.
     "finding_explanation_ratings": ROWS_PER_TABLE,
     "explanation_stopped_rules": ROWS_PER_TABLE,
+    # F3 Step 3: one connection per organization (unique) consented by its person, the
+    # one project opted out, months of tokens, and runs on the project by that person.
+    "ai_connections": 1,
+    "ai_project_opt_outs": 1,
+    "ai_usage_monthly": ROWS_PER_TABLE,
+    "ai_runs": ROWS_PER_TABLE,
 }
 
 
@@ -523,6 +538,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
     await _write_detection_project_rows(db, tenant, now)
     await _write_connection_rows(db, tenant)
     await _write_dashboard_rows(db, tenant, now)
+    await _write_ai_rows(db, tenant, now)
     db.add_all(
         [
             *(
@@ -916,6 +932,40 @@ async def _write_dashboard_rows(db: AsyncSession, tenant: Tenant, now: datetime)
                 saved_at=now,
             )
         )
+
+
+async def _write_ai_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """F3 Step 3: rows naming the tenant's person and project, so `SET NULL` on either could
+    not hide a row the organization's deletion left behind."""
+    db.add(
+        AIConnection(
+            org_id=tenant.org_id,
+            wire_format="openai_chat",
+            base_url="https://models.example.com/v1",
+            model="a-model",
+            consented_by=tenant.user_id,
+            consented_at=now,
+        )
+    )
+    db.add(
+        AIProjectOptOut(
+            org_id=tenant.org_id, project_id=tenant.project_id, created_by=tenant.user_id
+        )
+    )
+    for index in range(ROWS_PER_TABLE):
+        db.add(AIUsageMonth(org_id=tenant.org_id, month=date(2026, 1 + index, 1), used_tokens=10))
+        db.add(
+            AIRun(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                requested_by=tenant.user_id,
+                purpose="explain",
+                wire_format="openai_chat",
+                model="a-model",
+                provider_host="https://models.example.com",
+            )
+        )
+    await db.flush()
 
 
 async def _row_counts(db: AsyncSession, tenant: Tenant) -> dict[str, int]:

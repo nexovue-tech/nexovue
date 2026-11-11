@@ -104,12 +104,13 @@ def grow(*, path: str, mebibytes: int) -> None:
 
 
 @task(LOADED)
-def loaded() -> None:
+def loaded(*, path: str | None = None) -> None:
     """Records every module this child holds, and how many objects it inherited frozen from
-    its forkserver's preload, where the no-AI suite reads them."""
+    its forkserver's preload, where a narrow role's suite reads them: at `path`, or where
+    the connections suite looks."""
     import json
     import tempfile
 
     record = {"modules": sorted(sys.modules), "frozen": gc.get_freeze_count()}
-    target = Path(tempfile.gettempdir()) / "nexovue-connections-child-modules.json"
+    target = Path(path or Path(tempfile.gettempdir()) / "nexovue-connections-child-modules.json")
     target.write_text(json.dumps(record))

@@ -92,6 +92,12 @@ QUEUE_CAPS: Final[Mapping[str, int]] = {
 # A fresh child holds a few MiB of its own; the worst job measured, a project's hourly
 # baseline, leaves about 30 MiB (T8.2). Eight at this limit fit `scheduler-light`.
 MAX_CHILD_PRIVATE_BYTES: Final = 64 * 2**20
+# `scheduler-insight`'s four children fit its 384 MiB with the parent and forkserver beside
+# them (F3 design, *Memory*; arithmetic, not a measurement: T3.10 reads a real run).
+INSIGHT_CHILD_PRIVATE_BYTES: Final = 48 * 2**20
+CHILD_PRIVATE_BYTES_OF_TASK_SET: Final[Mapping[str, int]] = {
+    "insight": INSIGHT_CHILD_PRIVATE_BYTES,
+}
 # The lines of /proc/<pid>/smaps_rollup that count pages no other process maps.
 _PRIVATE_LINES: Final = ("Private_Clean:", "Private_Dirty:")
 
@@ -110,6 +116,11 @@ def use_task_set(name: str) -> tuple[str, ...]:
         raise ValueError(f"no task set is called {name!r}; known: {sorted(registry.TASK_SETS)}")
     _CHILDREN.set_forkserver_preload([registry.PRELOAD_OF[name]])
     return registry.TASK_SETS[name]
+
+
+def child_memory_limit_of(task_set: str) -> int:
+    """The memory a child of this task set may keep after a job before it is replaced."""
+    return CHILD_PRIVATE_BYTES_OF_TASK_SET.get(task_set, MAX_CHILD_PRIVATE_BYTES)
 
 
 def private_bytes(pid: int) -> int | None:
@@ -236,10 +247,16 @@ class Worker:
         caps: Mapping[str, int] = QUEUE_CAPS,
         uncapped_floor: int = 0,
         child_memory_limit: int = MAX_CHILD_PRIVATE_BYTES,
+        statements: queue.QueueStatements = queue.SHARED_STATEMENTS,
     ) -> None:
         if not 0 <= uncapped_floor <= concurrency:
             raise ValueError(f"an uncapped floor of {uncapped_floor} does not fit {concurrency}")
+        if statements.queues is not None and not set(queues) <= statements.queues:
+            # The AI role's claim reaches its own queues only; a worker told to claim
+            # others would sit idle while their jobs waited.
+            raise ValueError(f"these statements claim only {sorted(statements.queues)}")
         self._engine = engine
+        self._statements = statements
         self._pulse = pulse or Pulse()
         self._reach_postgres_at = 0.0
         self._listen_dsn = listen_dsn
@@ -319,7 +336,13 @@ class Worker:
             if limit <= 0:
                 continue
             try:
-                jobs = await queue.claim(self._engine, queues=lane, worker=self._name, limit=limit)
+                jobs = await queue.claim(
+                    self._engine,
+                    queues=lane,
+                    worker=self._name,
+                    limit=limit,
+                    statements=self._statements,
+                )
             except Exception:
                 logger.exception("jobs could not be claimed; trying again")
                 return
@@ -365,7 +388,12 @@ class Worker:
             countdown, reason = outcome[1], outcome[2]
             if job.may_retry:
                 await queue.retry_later(
-                    self._engine, job, worker=self._name, countdown=countdown, error=reason
+                    self._engine,
+                    job,
+                    worker=self._name,
+                    countdown=countdown,
+                    error=reason,
+                    statements=self._statements,
                 )
                 metrics.JOBS_ENDED.labels(outcome=metrics.RETRIED).inc()
                 return
@@ -378,7 +406,7 @@ class Worker:
             )
         elif kind == DIED:
             logger.error("a job's process died", task=job.task, exit_code=outcome[1])
-        await queue.finish(self._engine, job, worker=self._name)
+        await queue.finish(self._engine, job, worker=self._name, statements=self._statements)
         ended = metrics.KILLED if kind in (KILLED, DIED) else metrics.FINISHED
         metrics.JOBS_ENDED.labels(outcome=ended).inc()
 

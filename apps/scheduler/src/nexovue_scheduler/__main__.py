@@ -1,7 +1,7 @@
 """`python -m nexovue_scheduler beat` or `... worker`: the scheduler's two roles.
 
     beat                                   schedule from Postgres while leader
-    worker [--queues a,b] [--concurrency N] [--uncapped-floor N] [--tasks all|connections]
+    worker [--queues a,b] [--concurrency N] [--uncapped-floor N] [--tasks all|connections|insight]
     health                                 exit 0 if this container's process is alive
 
 Either role answers /healthz, /readyz and /metrics on HEALTH_ADDR
@@ -16,8 +16,10 @@ most its cap at once, and `--uncapped-floor` keeps that many slots for the uncap
 queues whatever the capped ones ask (`jobs/worker.py`). `--queues` replaces the
 list, so naming `light` alone drops the region's probes.
 
-`--tasks` names the modules a worker loads (`registry.TASK_SETS`): `all` by default, or
-`connections` for `scheduler-connections`, which holds tracker keys and nothing else.
+`--tasks` names the modules a worker loads (`registry.TASK_SETS`): `all` by default,
+`connections` for `scheduler-connections`, which holds tracker keys and nothing else, or
+`insight` for `scheduler-insight`, the AI role (F3), which must run as `SCHEDULER_ROLE=insight`
+and reaches the queue only through its account's functions (`queue.STATEMENTS_OF_ROLE`).
 """
 
 from __future__ import annotations
@@ -38,10 +40,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from nexovue_scheduler import health, metrics, releases, slos
 from nexovue_scheduler.beat import Beat
 from nexovue_scheduler.detection import DETECTION_QUEUE
-from nexovue_scheduler.jobs import registry
-from nexovue_scheduler.jobs.worker import Worker, use_task_set
+from nexovue_scheduler.jobs import queue, registry
+from nexovue_scheduler.jobs.worker import Worker, child_memory_limit_of, use_task_set
 from nexovue_scheduler.leader import LeaderLock
-from nexovue_scheduler.settings import SERVICE_NAME, Settings, get_settings
+from nexovue_scheduler.settings import INSIGHT_ROLE, SERVICE_NAME, Settings, get_settings
 
 logger = get_logger(__name__)
 
@@ -71,13 +73,18 @@ def main(arguments: list[str] | None = None) -> None:
         "--tasks",
         choices=sorted(registry.TASK_SETS),
         default="all",
-        help="which task modules this worker loads (F22 D80)",
+        help="which task modules this worker loads (F22 D80, F3)",
     )
     chosen = parser.parse_args(arguments)
 
     settings = get_settings()
     if chosen.role == "health":
         sys.exit(0 if _alive(settings.health_addr) else 1)
+    if chosen.role == "worker" and (settings.scheduler_role == INSIGHT_ROLE) != (
+        chosen.tasks == INSIGHT_ROLE
+    ):
+        # The AI tasks need the AI role's keys, and its account can claim nothing else.
+        raise SystemExit("nexovue_scheduler: --tasks insight runs as SCHEDULER_ROLE=insight")
     configure_logging(
         level=settings.log_level,
         log_format=settings.log_format,
@@ -93,7 +100,15 @@ def main(arguments: list[str] | None = None) -> None:
         queues = worker_queues(chosen.queues, region=settings.prober_region)
         modules = use_task_set(chosen.tasks)
         asyncio.run(
-            _worker(settings, queues, chosen.concurrency, pulse, chosen.uncapped_floor, modules)
+            _worker(
+                settings,
+                queues,
+                chosen.concurrency,
+                pulse,
+                chosen.uncapped_floor,
+                modules,
+                child_memory_limit_of(chosen.tasks),
+            )
         )
 
 
@@ -144,6 +159,7 @@ async def _worker(
     pulse: health.Pulse,
     uncapped_floor: int,
     task_modules: tuple[str, ...],
+    child_memory_limit: int,
 ) -> None:
     engine = create_async_engine(
         str(settings.postgres_dsn), pool_size=2, max_overflow=2, pool_pre_ping=True
@@ -157,6 +173,8 @@ async def _worker(
             pulse=pulse,
             uncapped_floor=uncapped_floor,
             task_modules=task_modules,
+            child_memory_limit=child_memory_limit,
+            statements=queue.STATEMENTS_OF_ROLE[settings.scheduler_role],
         )
         await worker.run(_stop_on_signal())
     finally:

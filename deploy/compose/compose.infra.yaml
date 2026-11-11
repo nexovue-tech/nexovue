@@ -137,6 +137,9 @@ services:
     # Phase 2 RAG store needs no image swap. Postgres 18 for native uuidv7().
     image: pgvector/pgvector:0.8.6-pg18-trixie
     hostname: postgres
+    # F3: also on `ai`, the AI role's own network, whose only other member is that role (A4).
+    # Listed here, where the service is defined: an including file may not redefine it.
+    networks: [default, ai]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-nexovue}
       POSTGRES_USER: ${POSTGRES_USER:-nexovue}
@@ -187,6 +190,13 @@ services:
       resources:
         limits:
           memory: 512M
+
+# `ai` holds `scheduler-insight` and Postgres alone (and Prometheus when monitoring is on),
+# so the AI role reaches no Kafka, ClickHouse or object store by name. Not `internal`: the
+# role calls providers outside. Compose is not an outbound firewall (F3 AC42).
+networks:
+  default:
+  ai:
 
 volumes:
   kafka-data:

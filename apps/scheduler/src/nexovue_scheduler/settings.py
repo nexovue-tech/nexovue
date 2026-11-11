@@ -30,10 +30,12 @@ from pydantic_settings import SettingsError as SettingsSourceError
 Environment = Literal["development", "staging", "production"]
 # Which keys this process may hold (F3's mechanism, F22 D80): `full` is every role but
 # the narrow ones; `connections` is `scheduler-connections`, which holds the tracker key
-# and nothing else, so it runs with no Kafka and no check key. Open to new values.
-SchedulerRole = Literal["full", "connections"]
+# and nothing else, so it runs with no Kafka and no check key; `insight` is
+# `scheduler-insight`, the AI role, which holds the AI key and nothing else (F3 AC41).
+SchedulerRole = Literal["full", "connections", "insight"]
 FULL_ROLE: Final = "full"
 CONNECTIONS_ROLE: Final = "connections"
+INSIGHT_ROLE: Final = "insight"
 LogLevel = Literal["debug", "info", "warn", "error"]
 LogFormat = Literal["json", "console"]
 
@@ -186,6 +188,15 @@ class Settings(BaseSettings):
     connection_secret_key: str = ""
     connection_secret_previous_keys: str = ""
 
+    # --- AI (F3) ----------------------------------------------------------------
+    # Opens an organization's sealed provider key, in `scheduler-insight` alone; the API
+    # seals with it (FD10). Required there in production; no other role holds it.
+    ai_secret_key: str = ""
+    ai_secret_previous_keys: str = ""
+    # The private addresses, with ports, an operator lets a provider connection reach
+    # (FR32, A23). Read as written until the connect-time guard parses it (plan T4.2).
+    ai_private_endpoints: str = ""
+
     # Where this process answers /healthz, /readyz and /metrics (`health.py`).
     # Internal: no edge routes it. Every role uses the same port in its own
     # container.
@@ -200,16 +211,21 @@ class Settings(BaseSettings):
 
         `full`: Kafka carries every check result, and a deployed prober opens check and
         channel secrets (readiness blocker 17). `connections`: production opens tracker
-        keys, and must not be handed Kafka or the check key to start."""
+        keys. `insight`: production opens provider keys. Neither narrow role must be
+        handed Kafka or the check key to start."""
+        production = self.env == "production"
         if self.scheduler_role == FULL_ROLE:
             if not self.kafka_brokers:
                 raise ValueError("KAFKA_BROKERS is not set; this role publishes to Kafka.")
-            if self.env == "production" and not self.check_secret_key:
+            if production and not self.check_secret_key:
                 raise ValueError("CHECK_SECRET_KEY is not set; production opens secrets with it.")
-        elif self.env == "production" and not self.connection_secret_key:
-            raise ValueError(
-                "CONNECTION_SECRET_KEY is not set; production opens connection keys with it."
-            )
+        elif self.scheduler_role == CONNECTIONS_ROLE:
+            if production and not self.connection_secret_key:
+                raise ValueError(
+                    "CONNECTION_SECRET_KEY is not set; production opens connection keys with it."
+                )
+        elif production and not self.ai_secret_key:
+            raise ValueError("AI_SECRET_KEY is not set; production opens provider keys with it.")
         return self
 
     @model_validator(mode="after")
@@ -274,6 +290,11 @@ class Settings(BaseSettings):
     def connection_secret_keys(self) -> ConfiguredKeys:
         """Tracker connections' keyring (F22). The API holds the same."""
         return ConfiguredKeys(self.connection_secret_key, self.connection_secret_previous_keys)
+
+    @property
+    def ai_secret_keys(self) -> ConfiguredKeys:
+        """Provider keys' keyring (F3). The API holds the same, to seal."""
+        return ConfiguredKeys(self.ai_secret_key, self.ai_secret_previous_keys)
 
     @property
     def email(self) -> EmailSettings | None:

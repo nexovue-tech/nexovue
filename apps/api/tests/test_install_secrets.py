@@ -18,6 +18,10 @@ import pytest
 from install_kit import run_kit_function
 
 KEY: Final = "CONNECTION_SECRET_KEY"
+# Sealing keys an upgrade adds: F22's, and F3's for AI provider keys.
+KEYS_ADDED_LATER: Final = (KEY, "AI_SECRET_KEY")
+# F3: the AI role's Postgres account, which `setup` sets at every start, so an upgrade may add it.
+INSIGHT_PASSWORD: Final = "POSTGRES_INSIGHT_PASSWORD"
 
 
 def _run(function: str, settings: Path, environment: dict[str, str] | None = None) -> str:
@@ -33,36 +37,56 @@ def _settings(path: Path) -> dict[str, str]:
     }
 
 
-def test_a_new_install_writes_a_sealing_key(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key", KEYS_ADDED_LATER)
+def test_a_new_install_writes_a_sealing_key(tmp_path: Path, key: str) -> None:
     settings = tmp_path / "nexovue.env"
     settings.touch()
 
     _run("write_secrets", settings)
 
-    written = _settings(settings)[KEY]
+    written = _settings(settings)[key]
     assert len(base64.urlsafe_b64decode(written)) == 32
 
 
-def test_an_upgrade_adds_the_key_to_settings_written_before_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key", KEYS_ADDED_LATER)
+def test_an_upgrade_adds_the_key_to_settings_written_before_it(tmp_path: Path, key: str) -> None:
     settings = tmp_path / "nexovue.env"
     settings.write_text("CHECK_SECRET_KEY='kept-check-key'\nPOSTGRES_PASSWORD='kept-password'\n")
 
     _run("add_missing_secrets", settings)
 
     upgraded = _settings(settings)
-    assert len(base64.urlsafe_b64decode(upgraded[KEY])) == 32
+    assert len(base64.urlsafe_b64decode(upgraded[key])) == 32
     assert upgraded["CHECK_SECRET_KEY"] == "kept-check-key"
     assert upgraded["POSTGRES_PASSWORD"] == "kept-password"
 
 
-def test_an_upgrade_never_replaces_a_key_that_exists(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key", KEYS_ADDED_LATER)
+def test_an_upgrade_never_replaces_a_key_that_exists(tmp_path: Path, key: str) -> None:
     """A new value would leave every sealed connection unopenable."""
     settings = tmp_path / "nexovue.env"
-    settings.write_text(f"{KEY}='existing-key'\n")
+    settings.write_text(f"{key}='existing-key'\n")
 
     _run("add_missing_secrets", settings)
 
-    assert _settings(settings)[KEY] == "existing-key"
+    assert _settings(settings)[key] == "existing-key"
+
+
+@pytest.mark.parametrize("function", ["write_secrets", "add_missing_secrets"])
+def test_the_ai_account_gets_a_password_at_install_and_at_upgrade(
+    tmp_path: Path, function: str
+) -> None:
+    """F3: `setup` creates `nexovue_insight` with it; an install upgraded from before F3 gets
+    one, and an existing one is kept, since `setup` sets it again at every start anyway."""
+    settings = tmp_path / "nexovue.env"
+    settings.write_text("POSTGRES_PASSWORD='kept-password'\n")
+
+    _run(function, settings)
+    first = _settings(settings)[INSIGHT_PASSWORD]
+    _run("add_missing_secrets", settings)
+
+    assert len(first) == 48 and int(first, 16) >= 0
+    assert _settings(settings)[INSIGHT_PASSWORD] == first
 
 
 # ------------------------------------------------------ NEXOVUE_CONNECTIONS (T3.12)

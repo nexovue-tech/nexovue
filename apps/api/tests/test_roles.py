@@ -29,6 +29,14 @@ def test_the_connections_role_takes_its_two_queues_and_its_own_tasks() -> None:
     ]
 
 
+def test_the_insight_role_takes_its_queue_and_its_own_tasks() -> None:
+    """F3: the AI role claims `insight` alone, on four children, loading its own tasks."""
+    assert roles.command_for("scheduler-insight", []) == [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--queues", "insight", "--concurrency", "4", "--tasks", "insight"),
+    ]
+
+
 def test_extra_arguments_reach_the_role() -> None:
     assert roles.command_for("scheduler-light", ["--concurrency", "2"])[-2:] == [
         "--concurrency",

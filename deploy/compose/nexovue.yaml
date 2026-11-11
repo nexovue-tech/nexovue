@@ -113,6 +113,15 @@ x-control-plane-env: &control-plane-env
   EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
   EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
 
+# F3: what `scheduler-insight` reads, and nothing else (AC41): no Kafka, no ClickHouse, no
+# check, channel or connection key, no mail, no object store. Not `control-plane-env`.
+x-insight-env: &insight-env
+  ENV: production
+  NEXOVUE_DEPLOYMENT: self-hosted
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  SCHEDULER_ROLE: insight
+
 services:
   # ---------- the setup step: runs to completion before anything else ----------
   # Postgres to the newest migration and the object store's bucket (nexovue_api.setup).
@@ -123,6 +132,9 @@ services:
     environment:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       <<: *object-store-env
+      # F3: the AI role's own Postgres account, which setup creates and grants after every
+      # migration (and so after every restore). `:-`: an install without it runs, with no AI.
+      POSTGRES_INSIGHT_PASSWORD: ${POSTGRES_INSIGHT_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -454,6 +466,36 @@ services:
           # A guess, copied from scheduler-deliveries (design, *Capacity*); F22 T4.9 measures it.
           memory: 384M
 
+  # F3. The AI role: provider calls and nothing else, idle until an organization turns AI on
+  # (FD6). Its own Postgres account, which holds no right on the job queue, and its own
+  # network, shared with Postgres alone (design, *The role*). `SCHEDULER_INSIGHT_REPLICAS=0`
+  # runs the install with no AI container at all (AC103).
+  scheduler-insight:
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-insight"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      <<: *insight-env
+      POSTGRES_DSN: postgresql+asyncpg://nexovue_insight:${POSTGRES_INSIGHT_PASSWORD:-}@postgres:5432/${POSTGRES_DB}
+      # Opens provider keys; held here and by the API alone (FD10). `:-`, never `:?`: a
+      # missing key must stop this role only, which refuses it itself (AC71).
+      AI_SECRET_KEY: ${AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${AI_SECRET_PREVIOUS_KEYS:-}
+      # Private addresses with ports an operator lets a provider connection reach (FR32).
+      AI_PRIVATE_ENDPOINTS: ${AI_PRIVATE_ENDPOINTS:-}
+    networks: [ai]
+    depends_on:
+      <<: *after-setup
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: ${SCHEDULER_INSIGHT_REPLICAS:-1}
+      resources:
+        limits:
+          # A guess (design, *Memory*): four children at 48 MiB each with the parent and
+          # forkserver. T3.10 reads a real run.
+          memory: 384M
+
   # ---------- the monitor, ready to connect (design.md §10) ----------
   # Opt-in: `--profile monitoring`. Scrapes every service's /metrics and evaluates the alerts in
   # deploy/monitoring/rules; Alertmanager sends them nowhere until deploy/monitoring/alertmanager.yml
@@ -466,6 +508,9 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
+    # On `ai` too, to scrape `scheduler-insight`, which sits on that network alone; its
+    # metrics carry no tenant (F3 design, *Network*).
+    networks: [default, ai]
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../monitoring/rules:/etc/prometheus/rules:ro

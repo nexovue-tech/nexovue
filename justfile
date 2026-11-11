@@ -9,6 +9,7 @@ go_modules := "apps/receiver apps/workers packages/contracts tools/gateseed tool
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.
 postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "15432") + "/nexovue")
+insight_dev_password := env("POSTGRES_INSIGHT_PASSWORD", "nexovue_insight_dev")
 # The setup command (apps/workers/cmd/setup) speaks ClickHouse's native protocol; its migration lock
 # lives in Postgres, which it reaches with the plain postgres:// form.
 clickhouse_dsn := env("CLICKHOUSE_SETUP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "/nexovue")
@@ -47,6 +48,12 @@ stack:
 # Production replica: the hosted install, from images built from this checkout
 dev-app:
     GIT_SHA=$(git rev-parse HEAD) docker compose -p nexovue-app --env-file {{compose}}/.env.replica -f {{compose}}/nexovue.yaml -f {{compose}}/nexovue.hosted.yaml -f {{compose}}/nexovue.build.yaml up -d --wait --build
+# F3 plan T3.11: build both images and a kit, install it under its own project, and try the AI
+# role's fence from inside (AC42), then back up, empty Postgres and restore (AC46). Needs Docker
+# with 12 GiB; slow, so its own CI job and never part of `just check`.
+# The AI role's fence, on a really installed kit
+insight-fence:
+    tools/insight-fence/fence.sh
 up:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
     -./tools/otel-demo/otel-demo.sh up
@@ -356,9 +363,11 @@ topics:
 # Apply all migrations: Postgres then ClickHouse
 migrate: migrate-pg migrate-ch
 
+# `POSTGRES_INSIGHT_PASSWORD`: the AI role's account, which setup creates (F3); the dev compose
+# file's `scheduler-insight` signs in with the same development value.
 # Postgres to the newest migration, and the object store's bucket: the deploy step's Python half.
 migrate-pg:
-    POSTGRES_DSN="{{postgres_dsn}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
+    POSTGRES_DSN="{{postgres_dsn}}" POSTGRES_INSIGHT_PASSWORD="{{insight_dev_password}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
 
 migrate-ch:
     {{setup_go}} clickhouse

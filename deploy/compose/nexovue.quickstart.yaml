@@ -45,3 +45,6 @@ services:
 
   scheduler-connections:
     environment: *laptop-control-plane
+
+  scheduler-insight:
+    environment: *laptop
