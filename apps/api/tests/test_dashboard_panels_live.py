@@ -46,6 +46,7 @@ from urllib.parse import urlsplit
 import clickhouse_connect
 import httpx
 import pytest
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 from sqlalchemy import select
@@ -84,6 +85,14 @@ WRITER_DSN: Final = os.environ.get(
 # compares to the digit.
 LATENCY_TOLERANCE: Final = 0.07
 SLOT_WAIT: Final = 5.0
+# Every table this suite inserts into, by tenant.
+SEEDED_TABLES: Final = (
+    "endpoint_stats_1m",
+    "metrics_gauge",
+    "service_edges_1m",
+    "web_vitals_1m",
+    "logs",
+)
 T2_8_READS: Final = 20
 
 require_stack(
@@ -128,7 +137,15 @@ async def reader() -> AsyncIterator[AsyncClient]:
 
 @pytest.fixture
 async def acme(db: AsyncSession) -> Team:  # noqa: F811
-    return await _team(db, f"Panels{uuid.uuid4().hex[:8]}")
+    return _cleaned_after_run(await _team(db, f"Panels{uuid.uuid4().hex[:8]}"))
+
+
+def _cleaned_after_run(team: Team) -> Team:
+    """The team's ClickHouse rows go when the run ends. They were left behind, and a
+    reader choosing "the busiest tenant" (`test_dbstats_live`) picked them up."""
+    for table in SEEDED_TABLES:
+        delete_after_run(table, str(team.org_id))
+    return team
 
 
 async def _seed(
@@ -1099,7 +1116,7 @@ async def test_ac14_ac22_ac95_a_check_chart_is_its_checks_trend_by_one_bound_sta
 ) -> None:
     from nexovue_api.synthetics.queries import CHECK_TREND_SQL
 
-    globex = await _team(db, f"Remote{uuid.uuid4().hex[:8]}")
+    globex = _cleaned_after_run(await _team(db, f"Remote{uuid.uuid4().hex[:8]}"))
     start = _hour_ago()
     login = await _check(db, acme, "Login")
     other = await _check(db, acme, "Search")
