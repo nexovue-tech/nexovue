@@ -28,9 +28,13 @@ every tenant's rows while containing the required text:
 deleted tenant's telemetry is the scheduler's, at night (ADR-014).
 """
 
+from __future__ import annotations
+
+import copy
 from typing import Any, Final
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.exceptions import Error as ClickHouseError
 from nexovue_platform import tenant_statements
 
 # The binding, the predicate check and the read limits are shared with the
@@ -41,6 +45,10 @@ TENANT_PREDICATE: Final = tenant_statements.TENANT_PREDICATE
 MAX_EXECUTION_SECONDS: Final = tenant_statements.MAX_EXECUTION_SECONDS
 MAX_RESULT_ROWS: Final = tenant_statements.MAX_RESULT_ROWS
 READ_SETTINGS: Final = tenant_statements.READ_SETTINGS
+# ClickHouse stops a read-only HTTP query when its client closes the connection (default
+# off). Sent only by a `bounded_by` repository, so an abandoned dashboard scan stops early
+# and the shared bounds every other read derives from stay as they are (F20 AC93).
+CANCEL_ON_CLIENT_CLOSE: Final = "cancel_http_readonly_queries_on_client_close"
 TenantFilterMissingError = tenant_statements.TenantFilterMissingError
 binds_tenant = tenant_statements.binds_tenant
 
@@ -56,6 +64,20 @@ class TenantScopedRepository:
         self._client = client
         self._tenant_id = tenant_id
         self._project_id = project_id
+        self._settings: dict[str, Any] = READ_SETTINGS
+
+    def bounded_by(self, seconds: int) -> TenantScopedRepository:
+        """The same tenant and project, each read stopped after `seconds` and cancelled
+        when its connection closes (F20, design section 6).
+
+        A copy rather than a new construction site, so "which tenant is this?" still has
+        one answer (`auth/dependencies.get_tenant_repository`). The limit can only be
+        lowered: `lowered_read_settings` refuses 0, and anything above the shared bound.
+        """
+        lowered = tenant_statements.lowered_read_settings(max_execution_time=seconds)
+        bounded = copy.copy(self)
+        bounded._settings = lowered | {CANCEL_ON_CLIENT_CLOSE: 1}
+        return bounded
 
     async def query(
         self, sql: str, parameters: dict[str, Any] | None = None
@@ -64,7 +86,7 @@ class TenantScopedRepository:
         bound: dict[str, Any] = {**(parameters or {}), "tenant_id": self._tenant_id}
         if self._project_id is not None:
             bound["project_id"] = self._project_id
-        return await _tenant_scoped_read(self._client, sql, bound)
+        return await _tenant_scoped_read(self._client, sql, bound, self._settings)
 
     async def query_one(
         self, sql: str, parameters: dict[str, Any] | None = None
@@ -74,12 +96,24 @@ class TenantScopedRepository:
         return rows[0] if rows else None
 
 
+def server_error_code(error: BaseException) -> int | None:
+    """ClickHouse's numeric error code for a failed read, when the server gave one.
+
+    Here because only this package may import the driver: a caller that must tell a
+    timeout from a refusal (F20, design section 6) asks this rather than the driver.
+    `clickhouse_connect` puts the code on its `Error` (read from its 1.11 source).
+    """
+    if isinstance(error, ClickHouseError) and isinstance(error.code, int):
+        return error.code
+    return None
+
+
 async def _tenant_scoped_read(
-    client: AsyncClient, sql: str, bound: dict[str, Any]
+    client: AsyncClient, sql: str, bound: dict[str, Any], settings: dict[str, Any]
 ) -> list[dict[str, Any]]:
     """One read through the binding."""
     if not binds_tenant(sql):
         raise TenantFilterMissingError(sql)
 
-    result = await client.query(sql, parameters=bound, settings=READ_SETTINGS)
+    result = await client.query(sql, parameters=bound, settings=settings)
     return [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]

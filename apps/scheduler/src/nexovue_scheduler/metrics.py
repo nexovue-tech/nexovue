@@ -7,7 +7,8 @@ whichever process asks: jobs ready per queue and how long the oldest has
 waited, alerts waiting to be delivered, erasures overdue, and detection's
 progress — how old the newest settled minute is, how many projects it has
 stopped judging, how long the stalest has waited, and the events it recorded
-about nexovue's own intake (F6, C8). Those are read from Postgres, not counted
+about nexovue's own intake (F6, C8), and whether a tracker connection is live
+(F22). Those are read from Postgres, not counted
 where they happen, because the sweep runs in a worker's child process, whose
 metrics no scrape sees.
 
@@ -23,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
 
+from nexovue_platform.connections import TRACKER_KINDS
 from nexovue_platform.detection import NOT_RUNNING_AFTER
 from prometheus_client import Counter, Gauge, disable_created_metrics
 from sqlalchemy import text
@@ -94,6 +96,17 @@ _DETECTION_EVENTS: Final = text(
     """
 )
 
+# F22: whether any tracker connection is live, as an EXISTS. F5's own App is not
+# `scheduler-connections`' sync, so it does not count (design, *Observability*).
+_CONNECTIONS_ACTIVE: Final = text(
+    """
+    SELECT EXISTS (
+        SELECT 1 FROM connections
+        WHERE state <> 'disconnected' AND kind = ANY(CAST(:kinds AS text[]))
+    )
+    """
+)
+
 LOOP_SILENT: Final = Gauge(
     "nexovue_scheduler_loop_silent_seconds", "Seconds since this process's loop last beat."
 )
@@ -144,6 +157,12 @@ DETECTION_EVENTS_RECENT: Final = Gauge(
     ["kind"],
 )
 
+CONNECTIONS_ACTIVE: Final = Gauge(
+    "nexovue_scheduler_connections_active",
+    "1 while a tracker connection is live and connections are on, else 0 (leader only). "
+    "Beat's, so a missing scheduler-connections can be told from one left out (F22).",
+)
+
 # How a worker's job ended — the label values JOBS_ENDED takes.
 FINISHED: Final = "finished"
 RETRIED: Final = "retried"
@@ -161,9 +180,21 @@ class QueueReadings:
     detection_projects_behind: int = 0
     detection_oldest_lag_seconds: float = 0.0
     detection_events_recent: dict[str, int] = field(default_factory=dict)
+    connections_active: int = 0
 
 
-async def read_queues(connection: AsyncConnection, *, now: datetime) -> QueueReadings:
+async def connections_live(connection: AsyncConnection, *, enabled: bool) -> bool:
+    """Whether a tracker connection is live and connections are on. Beat reads it for
+    `connections_active` and to decide whether `sweep_connections` is scheduled; with
+    connections turned off nothing is expected to run, whatever rows remain (AC118)."""
+    return enabled and bool(
+        await connection.scalar(_CONNECTIONS_ACTIVE, {"kinds": list(TRACKER_KINDS)})
+    )
+
+
+async def read_queues(
+    connection: AsyncConnection, *, now: datetime, connections_enabled: bool = True
+) -> QueueReadings:
     jobs = (await connection.execute(_JOBS_READY)).all()
     alerts = (await connection.execute(_ALERTS_WAITING)).one()
     overdue = await owed.overdue(connection, now=now)
@@ -175,6 +206,7 @@ async def read_queues(connection: AsyncConnection, *, now: datetime) -> QueueRea
         _DETECTION_EVENTS, {"recent_seconds": DETECTION_EVENTS_RECENT_SECONDS}
     )
     recent = dict.fromkeys(DETECTION_EVENT_KINDS, 0) | {row.kind: int(row.recent) for row in events}
+    connected = await connections_live(connection, enabled=connections_enabled)
     return QueueReadings(
         jobs_ready={row.queue: int(row.ready) for row in jobs},
         oldest_ready_seconds={row.queue: float(row.oldest) for row in jobs},
@@ -187,6 +219,7 @@ async def read_queues(connection: AsyncConnection, *, now: datetime) -> QueueRea
         detection_projects_behind=int(projects.behind),
         detection_oldest_lag_seconds=float(projects.oldest),
         detection_events_recent=recent,
+        connections_active=int(connected),
     )
 
 
@@ -206,6 +239,7 @@ def publish(readings: QueueReadings) -> None:
     DETECTION_OLDEST_LAG.set(readings.detection_oldest_lag_seconds)
     for kind, recent in readings.detection_events_recent.items():
         DETECTION_EVENTS_RECENT.labels(kind=kind).set(recent)
+    CONNECTIONS_ACTIVE.set(readings.connections_active)
 
 
 def forget_queues() -> None:
@@ -219,5 +253,6 @@ def forget_queues() -> None:
         DETECTION_SETTLED_AGE,
         DETECTION_PROJECTS_BEHIND,
         DETECTION_OLDEST_LAG,
+        CONNECTIONS_ACTIVE,
     ):
         single.set(0)

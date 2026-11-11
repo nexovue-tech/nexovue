@@ -16,9 +16,14 @@ from nexovue_api.data.postgres.models import (
     AlertRule,
     AlertRuleChannel,
     Check,
+    DeployEvent,
+    Finding,
+    FindingIncident,
     Incident,
     Notification,
     NotificationChannel,
+    Project,
+    SloTarget,
 )
 
 # How many incidents one read returns. Named so the service can say whether the
@@ -90,6 +95,84 @@ async def existing_check_ids(
         Check.org_id == org_id, Check.project_id == project_id, Check.id.in_(check_ids)
     )
     return set(await session.scalars(statement))
+
+
+async def live_target_ids(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, target_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    """The live reliability targets of this project among `target_ids` (F19)."""
+    statement = select(SloTarget.id).where(
+        SloTarget.org_id == org_id,
+        SloTarget.project_id == project_id,
+        SloTarget.deleted_at.is_(None),
+        SloTarget.id.in_(target_ids),
+    )
+    return set(await session.scalars(statement))
+
+
+async def project_zones(
+    session: AsyncSession, *, org_id: uuid.UUID, project_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not project_ids:
+        return {}
+    statement = select(Project.id, Project.timezone).where(
+        Project.org_id == org_id, Project.id.in_(project_ids)
+    )
+    rows = (await session.execute(statement)).tuples().all()
+    return dict(rows)
+
+
+async def findings_of_incident(
+    session: AsyncSession, *, org_id: uuid.UUID, incident_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str]]:
+    """The findings an incident joined, oldest first (F6 BR2, F19 FR20)."""
+    statement = (
+        select(Finding.id, Finding.title)
+        .join(
+            FindingIncident,
+            (FindingIncident.finding_id == Finding.id) & (FindingIncident.org_id == org_id),
+        )
+        .where(Finding.org_id == org_id, FindingIncident.incident_id == incident_id)
+        .order_by(Finding.started_at, Finding.id)
+    )
+    return [(finding_id, title) for finding_id, title in (await session.execute(statement)).all()]
+
+
+async def last_deploy_before(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service: str,
+    before: datetime,
+) -> datetime | None:
+    found: datetime | None = await session.scalar(
+        select(func.max(DeployEvent.deployed_at)).where(
+            DeployEvent.org_id == org_id,
+            DeployEvent.project_id == project_id,
+            DeployEvent.service_name == service,
+            DeployEvent.deployed_at < before,
+        )
+    )
+    return found
+
+
+async def deploys_connected(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> bool:
+    """Deploys reach this project: it has recorded at least one. Every project is created
+    with a webhook secret, so holding one says nothing about whether a sender uses it."""
+    recorded = select(DeployEvent.id).where(
+        DeployEvent.org_id == org_id, DeployEvent.project_id == project_id
+    )
+    return await session.scalar(recorded.limit(1)) is not None
+
+
+async def target_is_live(session: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID) -> bool:
+    statement = select(SloTarget.id).where(
+        SloTarget.org_id == org_id, SloTarget.id == target_id, SloTarget.deleted_at.is_(None)
+    )
+    return await session.scalar(statement) is not None
 
 
 async def replace_rule_channels(
@@ -228,6 +311,38 @@ async def close_subject(
 ) -> None:
     """Every rule's open incident on a subject that no longer exists."""
     await _close(session, org_id=org_id, at=at, where=[Incident.subject_key == subject_key])
+
+
+async def stop_watching_subject(
+    session: AsyncSession, *, org_id: uuid.UUID, subject_key: str, at: datetime
+) -> None:
+    """Every rule's open incident on a subject a person changed into something else, and
+    every rule's position there (F19 AC70): machines are told it closed, people are not,
+    because a person chose it."""
+    await _close(session, org_id=org_id, at=at, where=[Incident.subject_key == subject_key])
+    await session.execute(
+        delete(AlertEvaluation).where(
+            AlertEvaluation.org_id == org_id, AlertEvaluation.subject_key == subject_key
+        )
+    )
+
+
+async def burn_subjects_of_check(
+    session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID
+) -> list[str]:
+    """The subjects of open burns on targets counting this check (F19 AC70), by the
+    typed column a burn names its check in (ADR-034; founder decision 6, 2026-11-09)."""
+    statement = (
+        select(Incident.subject_key)
+        .where(
+            Incident.org_id == org_id,
+            Incident.condition_kind == "slo_burn",
+            Incident.resolved_at.is_(None),
+            Incident.about_check_id == check_id,
+        )
+        .distinct()
+    )
+    return list(await session.scalars(statement))
 
 
 async def close_project(

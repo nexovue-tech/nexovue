@@ -1,6 +1,6 @@
 module github.com/nexovue-tech/nexovue/tools/rebalanceprobe
 
-go 1.27.3
+go 1.27.4
 
 // packages/contracts is a workspace member, never published. The replace keeps
 // `go mod tidy` and any non-workspace build resolving it from the repo.

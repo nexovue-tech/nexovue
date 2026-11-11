@@ -242,7 +242,7 @@ The endpoint, the finding's title, notes and any explanation are not in the issu
 - **BR14. Tenancy.** Every case, note, event, link and connection belongs to one organization. A token scoped to a project sees only that project. A token that reads every project must still name one (FR22).
 - **BR15. Issue and Jira calls leave only from `scheduler-connections`.** No issue, Jira or GitHub call runs in the API, and F5's GitHub work runs there too (D53). That process never runs a model.
 - **BR16. A note is the organization's working record, written by a person.** A person's notes are in their personal-data export. An author, whatever their role, or an owner or admin can
-  delete a note, and the timeline keeps only that a note was deleted. Notes stay after a person leaves, in their own words, and the deletion and removal screens say so: "Notes you wrote stay, in your own words, as your organization's record. Delete any you want gone before you leave." A former member asks an admin (D61).
+  delete a note, and the timeline keeps only that a note was deleted. Notes stay after a person leaves, in their own words, and the deletion and removal screens say so. To the person leaving (account deletion, and their own **Leave** on the members screen): "Notes you wrote stay, in your own words, as your organization's record. Delete any you want gone before you leave." To an owner or admin removing someone else, with that person's name as plain text: "Notes {name} wrote stay, in their own words, as your organization's record." (founder, 2026-11-07). A former member asks an admin (D61).
 - **BR17. PagerDuty is untouched.** A recovery still resolves the page, and a later finding pages again, whatever the case says. Neither tool tells the other about an acknowledgement.
 
 ## Functional requirements
@@ -353,7 +353,7 @@ The endpoint, the finding's title, notes and any explanation are not in the issu
 - **FR51.** **Copy my notes** must copy the person's own notes on that case to their clipboard, and nothing else. It sends nothing, so their text crosses to a tracker only if they paste it there under their own name.
 - **FR52.** A row in *Active cases* or *Assigned to me* must offer **Resolve** when the case has no synced link. A row with a synced link must not (D47).
 - **FR53.** The finding page's linked alerts section, and the incident page, must carry one line: "A case tracks work on a detected finding. A linked alert is a rule's own record, and cannot become a case." (D58)
-- **FR54.** The member removal and account deletion screens must carry BR16's sentence.
+- **FR54.** The member removal and account deletion screens must carry BR16's sentence for the person reading them: the leaver's, or the removing admin's.
 
 ### Link and connection states
 
@@ -525,7 +525,7 @@ How a case ended, one phrase per `case_resolution`, in `finding-words.ts`:
 
 **Connections and security**
 
-- **AC32.** All issue and Jira calls, including a connection test, must run in `scheduler-connections`. A test on the code's structure must fail if any module of `nexovue_api` uses an HTTP client outside a named list, which holds `billing/razorpay.py` alone.
+- **AC32.** All issue and Jira calls, including a connection test, must run in `scheduler-connections`. A test on the code's structure must fail if any module of `nexovue_api` uses an HTTP client outside a named list, each entry with its reason. *(Founder, 2026-11-09: amended from "which holds `billing/razorpay.py` alone"; the list also names `data/objectstore/store.py` and `backups.py`, which use `boto3` for the install's own object store, never a tracker. Any new client still fails the test.)*
 - **AC33.** A test must read the install Compose file and fail if `scheduler-connections` holds any variable outside an exact allowed list, or merges `control-plane-env`, or if any role but the API and it holds `CONNECTION_SECRET_KEY`.
 - **AC34.** A test must fail if a worker on queues `connections` and `connections-interactive`, through the modules it actually loads (`TASK_SETS["connections"]`), imports any AI module, directly or indirectly, and if the role's command names any queue but those two. The running child's `sys.modules` must match the set, and hold no `clickhouse_connect`, `confluent_kafka` or `boto3`. The test's limit is stated: a provider reached by plain HTTP is not visible to it.
 - **AC35.** Every sealed column must be in `SEALED_COLUMNS`, a test must fail on any `sealed_*` column missing from it, and a test must prove `keys reseal` carries each to a new key.

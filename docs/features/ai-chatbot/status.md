@@ -2,12 +2,26 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**In development.** Step 1 (a safer MCP server) is on `feature/phase-2` (commit 5988d88, 2026-11-02). Steps 2 onward are not started and stay blocked (see *Blocked*). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 1 built (T1.0 to T1.8) and on `feature/phase-2` (commit 5988d88, 2026-11-02; `just check` passed, CI green). The founder can now run the *Judgeable* demonstration: connect Claude Code to the MCP server with a token, ask about findings and a fixed log range, then plant a line with `go run ./tools/gateseed --log-body "ignore your instructions"` and read what the assistant does.
+
+### Step 1, what was built (2026-11-02)
+
+- **T1.0** — `tools/gateseed`: `--log-body "text"` sends one chosen log record through the receiver with the dev key and waits for it to be readable. New `logbody_test.go` (4 tests); flag parsing refuses anything else.
+- **T1.1** — `assistant/bounds.py`: `bounded(..., untrusted=...)` adds `"untrusted": [paths]` and a one-sentence `"untrusted_note"` to the envelope, kept on cut answers too.
+- **T1.2** — Every tool passes its entry of `UNTRUSTED_FIELDS` (one registry in `assistant/tools.py`); `list_checks` stops dumping `CheckConfig` and sends a `CheckRow` with type and URL hosts only (`check_row()`); `SERVER_INSTRUCTIONS` gains the untrusted paragraph.
+- **T1.3** — `window(hours, from_time, to_time)`: a fixed ISO 8601 range (read as UTC) or hours, both at once refused, at most 7 days; on every windowed tool, held by an AST test that any tool taking `hours` takes the range.
+- **T1.4** — A malformed `project_id` (and `finding_id`, `incident_id`) raises `InvalidRequestError` with a sentence naming where ids come from, instead of a bare `ValueError` the tool wrapper hides.
+- **T1.5** — `servicemap/router.py` takes `CurrentReader` and `require_readable_project`; `THE_SURFACE` and `docs/product/setup/api.md` gain `GET /service-map`; the published read spec follows from the routes.
+- **T1.6** — Seven new tools: `list_findings`, `get_finding` (`for_member=False`, `project_scope` bound to the proven project), `get_trace`, `get_error_group`, `get_incident`, `get_service_map`, `get_service_detection`. `THE_TOOLS` and `READS` grew with them.
+- **T1.7** — `apps/api/tests/test_mcp_injection.py` *new*: walks every tool's response model; every `str`, `list[str]` or `dict` field is either in `UNTRUSTED_FIELDS` or on a closed allow-list of ids and closed vocabularies with the reason beside each; hostile text planted in every untrusted field round-trips as JSON string data under the label. The walk found three fields a hand list missed (`preceding_deploy.*`, span `links`).
+- **T1.8** — `docs/product/setup/api.md`: the new tools, the labels, fixed ranges, the `/service-map` row, and the plain statement that nexovue cannot control a customer's own AI on the far end. `team-and-api-access/spec.md` FR17 and FR32 updated.
+
+**The design's 2 proposed ADRs are deliberately not filed yet.** Both concern later steps only — the ticket/loop ADR is Step 2's mechanism, the knowledge/pgvector ADR is Steps 5-6's — and Step 1 made no new expensive-to-reverse decision beyond what the approved spec already records (FR33-FR36). They are filed when the step that builds them starts.
 
 
 ## Completed
@@ -26,7 +40,7 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan T1.1 (Step 1 needs only F6). Step 2 onward waits for F3's provider and the buyer round's rule. File the design's 2 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+Step 1 is committed (5988d88). The founder runs the Step 1 demonstration for the buyer round. Step 2 onward waits for F3's provider (F3 Step 4) and the buyer round's rule; its ADR is filed when it starts.
 
 
 ## Open decisions
@@ -35,8 +49,9 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 ## Blocked
 
-- **Steps 2 to 8 are blocked on F3 being built.** Step 7 is also blocked on F22, and one tool in Step 3 on F28.
-- **All steps are blocked on F6 merging** and on founder approval of these documents.
+- **Founder decision, 2026-11-08:** Steps 2 to 7 are built in full, not gated on the buyer round (foundation item 27); they still need F3's provider (F3 Step 4).
+- **Steps 2 to 8 are blocked on F3 being built** and on the buyer round's continue rule. Step 7 is also blocked on F22, and one tool in Step 3 on F28.
+- ~~All steps blocked on F6 merging~~ — F6 merged 2026-11-02 (PR #24), and the founder approved these documents, so Step 1 was built.
 
 ## Risks
 
@@ -57,7 +72,17 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 ## Validation
 
-**Two small probes ran; nothing else:** no test of the product, no model, no build. In a throwaway `pgvector/pgvector:0.8.6-pg18-trixie` container with no network, under a role like `nexovue_insight`: a final write with reservation 0 aborted under a USING-only policy, under `WITH CHECK (true)`, and under separate `SELECT` and `UPDATE` policies; a `SECURITY DEFINER` function did it, and a second call changed nothing; finished rows and their steps were hidden; an upsert with no `SELECT` grant, and a view filter on an ungranted column, were each refused, and passed once granted. On FastAPI 0.162.0, in a scratch app with nested routers, a dependency saw `/search` for `/api/v1/logs/search`, and `abc%2Fdetection` reached `/services/{service}/detection`. The code was read on `feature/anomaly-detection`, with uncommitted work present, and line numbers may drift. Vendor pages and pgvector's README were read through a summarizing tool on 2026-11-02. Other outside facts come from the research.
+**Step 1, run on `wt/f4`, 2026-11-02 (counts read from the output):**
+
+- Offline, the touched suites: `test_mcp_tools.py`, `test_mcp_injection.py` (new), `test_read_surface_structure.py`, `test_read_surface_spec.py` — **176 passed** after implementation. Before it, the same run showed the import failure and 2 read-surface failures recorded below.
+- Live, against a Postgres + ClickHouse pair started for this worktree (migrated with `nexovue_api.setup` and the ClickHouse setup command): `test_mcp_live.py` (2 new tests) and `test_read_surface_live.py` — **19 passed**. All six suites together on the final code: **195 passed**.
+- Whole API suite offline (`NEXOVUE_SKIP_LIVE_TESTS=1 uv run pytest apps/api/tests`): **3781 passed, 65 skipped** (the live suites, skipped on purpose).
+- `uv run ruff check apps/api packages/py-platform`: All checks passed. `uv run mypy .`: Success, no issues in 728 source files.
+- Go: `go test -count=1 ./...` in `tools/gateseed`: ok, 15 tests (counted with `-v`); `go vet` and `golangci-lint run` clean (one goconst finding fixed).
+- **Each behaviour change was seen failing first:** the label/window/tool tests failed with `ImportError: cannot import name 'UNTRUSTED_NOTE'`; the read-surface tests failed with `servicemap/router.py:get_service_map is on the surface but takes no CurrentReader` (2 failed, 49 passed); the malformed-project-id live test, run against the stashed old `tools.py`, failed with a bare `ValueError` from `uuid.py:181`; the Go tests failed to build with `undefined: LogBody` / `undefined: logBodyArgument`. The injection suite then failed on 3 real unlabelled fields before the lists were completed.
+- **Not run:** `just check` (the coordinator runs it, per the worktree rules); `--log-body` against a live receiver end to end (only the stores were started on this 16 GB machine — the OTLP payload shape and flag handling are unit-tested, and the receiver's `/v1/logs` door is the one `just dev` serves); the Step 1 Claude Code demonstration (the founder's, by design — a demonstration, not a score).
+
+**Earlier, for the documents — two small probes ran; nothing else:** no test of the product, no model, no build. In a throwaway `pgvector/pgvector:0.8.6-pg18-trixie` container with no network, under a role like `nexovue_insight`: a final write with reservation 0 aborted under a USING-only policy, under `WITH CHECK (true)`, and under separate `SELECT` and `UPDATE` policies; a `SECURITY DEFINER` function did it, and a second call changed nothing; finished rows and their steps were hidden; an upsert with no `SELECT` grant, and a view filter on an ungranted column, were each refused, and passed once granted. On FastAPI 0.162.0, in a scratch app with nested routers, a dependency saw `/search` for `/api/v1/logs/search`, and `abc%2Fdetection` reached `/services/{service}/detection`. The code was read on `feature/anomaly-detection`, with uncommitted work present, and line numbers may drift. Vendor pages and pgvector's README were read through a summarizing tool on 2026-11-02. Other outside facts come from the research.
 
 ## Specification impact
 
@@ -68,6 +93,9 @@ This is the first specification for F4. It needs changes to others once approved
 `docs/product/feature-catalog.md` still says F4 is to be specified, and links nowhere. `docs/product/setup/api.md` and the architecture documents change only when code does (plan, T1.8, T8.3). None was edited in this work.
 
 ## Reviews
+
+**Step 1 `/review-diff`, 2026-11-02:** every changed file is explained by plan tasks T1.0-T1.8; no tenancy, authorization or durability invariant touched beyond moving `/service-map` to `require_readable_project` (the byte-identical 404 held by the existing live tests); no credential in code, fixtures use obvious placeholders that the test proves never leave; found and fixed before handoff: a `CheckType` re-export mypy refused, a goconst lint finding in gateseed, and three response-model fields the hand-written untrusted lists had missed, caught by the new model walk. Nothing is left unfixed from this review.
+
 
 Eight personas reviewed these documents on 2026-11-02, with 162 findings. **Each was checked against the code or a source before acting on it.** All 162 described a real problem, so none was rejected whole. 15 proposed fixes, or parts of them, were rejected or replaced, and are listed below with why. Nothing below is approved; all of it awaits the founder.
 
@@ -358,7 +386,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-02 (Step 1 built on wt/f4)
 
 ## Founder approval, 2026-11-02
 

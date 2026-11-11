@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import Final
 
 import pytest
-from nexovue_platform import detection
+from nexovue_platform import cases, detection, slo
 from nexovue_platform.alerts import model
 
 import nexovue_api
@@ -73,6 +73,16 @@ def _values(quoted: str) -> tuple[str, ...]:
         ("_SHIFT_REASONS", detection.SHIFT_REASONS),
         ("_SENSITIVITIES", detection.SENSITIVITIES),
         ("_INTAKE_REFUSAL_REASONS", detection.INTAKE_REFUSAL_REASONS),
+        # F22: the case vocabulary, frozen by 0051.
+        ("_CASE_STATES", detection.CASE_STATES),
+        ("_CASE_RESOLUTIONS", detection.CASE_RESOLUTIONS),
+        ("_FINDING_EVENT_KINDS", detection.FINDING_EVENT_KINDS),
+        ("_EVENT_ACTOR_KINDS", cases.EVENT_ACTOR_KINDS),
+        ("_EMAIL_OWED_KINDS", cases.CASE_EMAIL_KINDS),
+        # F19: what a burn is about, frozen by its Step 4 migration.
+        ("_ABOUT_SIGNALS", slo.ABOUT_SIGNALS),
+        # F19 Step 5: why a notification was withheld, frozen by its migration.
+        ("_WITHHELD_REASONS", model.WITHHELD_REASONS),
     ],
 )
 def test_the_latest_migration_allows_exactly_the_vocabulary(
@@ -94,3 +104,11 @@ def test_the_backfilled_defaults_are_the_ones_signup_creates() -> None:
     condition = _frozen("_DEFAULT_RULE_CONDITION")
     assert isinstance(condition, str)
     assert json.loads(condition) == model.DEFAULT_RULE_CONDITION.model_dump(mode="json")
+
+
+def test_the_backfilled_reliability_rule_is_the_one_a_new_project_gets() -> None:
+    """F19 FR25, AC76: an existing project gains the rule a new one is created with."""
+    assert _frozen("_SLO_RULE_NAME") == model.SLO_RULE_NAME
+    condition = _frozen("_SLO_RULE_CONDITION")
+    assert isinstance(condition, str)
+    assert json.loads(condition) == model.SLO_RULE_CONDITION.model_dump(mode="json")

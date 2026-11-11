@@ -11,8 +11,9 @@
 - **F6 is merged.** Findings, `service_stats_1m`, `detection_sweep`, the settled minute and migrations 0041 to 0050 exist
   only on `feature/anomaly-detection` (`anomaly-detection/status.md`). No F28 branch starts before that.
 - **The specification and design are approved.** D1 no longer differs from the foundation (`phase-2-foundation.md:547`).
-- **The one round of customer conversations has been held before Step 1b,** as the founder approved on 2026-11-02
-  (foundation, *Founder decisions*, 8). F28's questions are in `spec.md`, *Founder decisions needed*.
+- ~~**The one round of customer conversations has been held before Step 1b,** as the founder approved on 2026-11-02
+  (foundation, *Founder decisions*, 8).~~ **Withdrawn by the founder, 2026-11-08 (foundation item 27):** the buyer round
+  is a validation milestone, not a gate; Step 1b is built without it, and its answers are read afterwards.
 - **Before Step 4:** the one browser-door change (foundation section 9, shared with F3 and F19's P2) has filtered browser-door SERVER and CONSUMER spans out of `service_stats_1m` and `service_versions_1m` at one point, with a test that sends such a span and finds it in neither (AC17, D55). No labelled-exposure path: the founder
   approved the change first (foundation, *Founder decisions*, 7; D58).
 - **Other features' documents agree** as of the reconciliation on 2026-11-02 (`status.md`).
@@ -108,52 +109,60 @@ demo tool. Nothing built on it has been written yet.
 *Judgeable:* Read the committed cost report: its pass or fail against each threshold, the absolute sizes, how often a small team would reach `side_by_side`, and the list of what
 disappears if the gate fails. Run a query and see the printed counts equal to `release-demo`'s.
 
-- [ ] **T1.1** — `deploy/clickhouse/migrations/000038_service_versions_1m.up.sql`, `.down.sql` (*new*) · table per design
+- [x] **T1.1** — `deploy/clickhouse/migrations/000038_service_versions_1m.up.sql`, `.down.sql` (*new*) · table per design
   · with `apps/scheduler/src/nexovue_scheduler/erasure/tables.py` `DERIVED_TABLES` and `erasure/statements.py`, in this
   same task, since the inventory fails otherwise · proved by `apps/scheduler/tests/test_erasure_inventory.py`,
   `test_erasure_live.py` (AC20)
-- [ ] **T1.2** — `apps/workers/internal/pipeline/derive/versions.go` (*new*), `counters.go`, `services.go` · `Span.Version`,
+- [x] **T1.2** — `apps/workers/internal/pipeline/derive/versions.go` (*new*), `counters.go`, `services.go` · `Span.Version`,
   `versions` map, all three caps, fold to `__other__`, `Derived.Versions`, `Disown`, `PendingVersions`, the Go side of the name check · proved by
   `derive/versions_test.go` (*new*: sum equals `service_stats_1m`'s for any mix; two `Counters` instances that fold differently; a junk burst before the real version; 25 versions in one
   drain; long and control-character versions; AC15, AC18). The real version's count landing in `__other__` is asserted here, and "Versions were combined" in T4.1's AC67, `disown_test.go`, `counters_order_test.go`
-- [ ] **T1.3** — `traceassembly/stages.go`, `flatten.go` · `countable` carries the version, empty for `DOOR_RUM` until the F6 change removes that branch · proved
+- [x] **T1.3** — `traceassembly/stages.go`, `flatten.go` · `countable` carries the version, empty for `DOOR_RUM` until the F6 change removes that branch · proved
   by `flatten_test.go` (AC17's before-the-change case)
-- [ ] **T1.4** — `derive/versionwriter.go` (*new*), `traceassembly/pipeline.go`, `consume/retry.go` · writer, token, insert last in `insertDerived`, with its own 30-second budget, step-over and 5-minute skip, no hold, never an error, log fields at `:289,:383` · proved by
+- [x] **T1.4** — `derive/versionwriter.go` (*new*), `traceassembly/pipeline.go`, `consume/retry.go` · writer, token, insert last in `insertDerived`, with its own 30-second budget, step-over and 5-minute skip, no hold, never an error, log fields at `:289,:383` · proved by
   `derive/versionwriter_test.go` (*new*), `traceassembly/refusal_test.go` (AC19; *new case with a fake writer that always returns a non-permanent error*: AC54), `restart_test.go`, `counterhandover_test.go` (AC16)
-- [ ] **T1.5** — `tools/release-demo/send.py`, `test_send.py` (*new*), `justfile`, `pyproject.toml` (`tools/release-demo` added to both `testpaths` and `pythonpath`, or `just test-py` never collects this folder) · sends OTLP through the receiver. Named modes: `rolling` (share, failure rate), `swap`, `no-version`, `rollback`, `exceptions`, `cold-start`, `churn`, `many-services`, and `--deploys N` for a webhook sender (from T2.2 on) · proved by `test_send.py`, and by the printed counts matching the store
-- [ ] **T1.6** — `tools/release-demo/release_measure.py` (*new*; `tools/detection-measure/measure.py` already holds that module name on `pythonpath`), `tools/detection-measure/scale.py` · the fixed run: baseline at the commit before T1.2, same traffic, 30 minutes, 3 repeats, a rollout an hour on every service, memory sampled, spread and peak · proved by `tools/release-demo/test_release_demo_measure.py` (*new*)
-- [ ] **T1.7** — `docs/research/release-rollup-cost-<date>.md` (*new*) · **the gate:** rows, disk, worker memory, on the
+- [x] **T1.5** — *Built 2026-11-07 without `--deploys N`, which the task gives from T2.2 on, when the new deploy body exists.* `tools/release-demo/send.py`, `test_send.py` (*new*), `justfile`, `pyproject.toml` (`tools/release-demo` added to both `testpaths` and `pythonpath`, or `just test-py` never collects this folder) · sends OTLP through the receiver. Named modes: `rolling` (share, failure rate), `swap`, `no-version`, `rollback`, `exceptions`, `cold-start`, `churn`, `many-services`, and `--deploys N` for a webhook sender (from T2.2 on) · proved by `test_send.py`, and by the printed counts matching the store
+- [x] **T1.6** — `tools/release-demo/release_measure.py` (*new*; `tools/detection-measure/measure.py` already holds that module name on `pythonpath`), `tools/detection-measure/scale.py` · the fixed run: baseline at the commit before T1.2, same traffic, 30 minutes, 3 repeats, a rollout an hour on every service, memory sampled, spread and peak · proved by `tools/release-demo/test_release_demo_measure.py` (*new*)
+- [x] **T1.7** — *Built 2026-11-07 as [`docs/research/release-rollup-cost-2026-11-07.md`](../../research/release-rollup-cost-2026-11-07.md): passed on demo data; the alert-delay row cannot be measured before Step 1b.* `docs/research/release-rollup-cost-<date>.md` (*new*) · **the gate:** rows, disk, worker memory, on the
   demo and with churn, against the design's thresholds, absolute figures per million requests, how often `side_by_side` is reached at small-team traffic, and an arithmetic estimate for a per-endpoint table · labelled demo throughout · proved by the report (AC21). **Stop here if it fails:** tighten the caps once, then bring the numbers to the founder, with the design's list of what disappears
 
 ### Step 1b — A release compared by version, on real traffic
 
-Only after the gate, and after the one round of customer conversations (foundation, *Founder decisions*, 8).
+Only after the gate. The buyer round no longer gates it (founder, 2026-11-08, foundation item 27).
 
 *Judgeable:* Run `just dev` and `tools/release-demo rolling`. Open `/releases`. Without any webhook, `release-demo` appears with two versions. Open the new one and read
 "Side by side over N minutes: failure share X% on v2 against Y% on v1", with the counts matching what the tool printed it sent. Run `swap` and read a before-and-after, with a block for since the rollout finished.
 
-- [ ] **T1.8** — `apps/api/migrations/versions/0051_releases.py` (*new*), `data/postgres/models.py`, `organizations/tables.py`,
+- [x] **T1.8** — *Built 2026-11-08 as `0054_releases.py`, the next free number (F22 and F19 took 0051 to 0053). `erasure/`
+  needs no change: the scheduler's erasure covers ClickHouse only, and Postgres deletion is `organizations/tables.py`.*
+  `apps/api/migrations/versions/0051_releases.py` (*new*), `data/postgres/models.py`, `organizations/tables.py`,
   `erasure/` · `releases`, `release_periods`, `release_sync_state` · proved by `test_deletion_live.py`,
   `test_postgres_tenancy_structure.py`
-- [ ] **T1.9** — `packages/py-platform/src/nexovue_platform/releases.py` (*new*), `scheduler/detection/method.py` · moves
+- [x] **T1.9** — *Built 2026-11-08. `LOG_EDGES` had already moved to `nexovue_platform/slo.py` with F19, so only
+  `bucket_p95` moves here, reading those edges; `method.py` re-exports it.* `packages/py-platform/src/nexovue_platform/releases.py` (*new*), `scheduler/detection/method.py` · moves
   `LOG_EDGES`, `bucket_p95`; adds `choose_method` as the design's ordered list, `compare_failure_share`, `compare_p95`, the four words, warm-up, and name check · proved by
   `packages/py-platform` tests (*new*: `test_platform_releases.py`, every row, both sides of z = 3, 0 of 20 against 5 of 20; AC32, AC33), `test_detection_method.py` unchanged and passing,
   `test_cross_service_contracts.py`
-- [ ] **T1.10** — `apps/scheduler/src/nexovue_scheduler/releases/__init__.py`, `sync.py`, `store.py` (*new*),
+- [x] **T1.10** — *Built 2026-11-08. The founder's 2026-11-08 answer added the gate's alert evaluation start delay to this
+  task: measured, and passed (cost report, *Addendum, Step 1b*). The sync reads the hour before its new minutes again,
+  not five minutes, since the 60-minute rule needs it (status, *Step 1b*).* `apps/scheduler/src/nexovue_scheduler/releases/__init__.py`, `sync.py`, `store.py` (*new*),
   `jobs/registry.py`, `jobs/worker.py` (`QUEUE_CAPS`), `__main__.py` (`worker_queues`), `deploy/compose/nexovue.yaml`, `beat.py` · `sweep:releases`, `observe_project`, own queue, expiry, lock, skip, per-minute walk, periods, first-version flag, per-row skip, `synced_through` rule, per-run bounds, cap and eviction · proved by
   `apps/scheduler/tests/test_release_sync.py`, `test_release_sync_live.py` (*new*: AC24, AC25, AC55, AC56, AC58, AC60, AC72, a late partition, a return during an outage, sparse two-version traffic, a quiet service's swap ending its period, one stray request opening no return, opposite-order writes, rollback's previous version), `test_beat_schedule.py`
-- [ ] **T1.11** — `apps/api/tests/test_tenant_chokepoint_structure.py` · add `releases.store` to `SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT`, and make `PROJECT_BOUND_PACKAGE` a tuple including `releases` · proved by that test, and `apps/scheduler/tests/test_release_store.py` (*new*) with `tenant_statements`
-- [ ] **T1.12** — `apps/scheduler/tests/test_detection_isolation.py` (*new*) · walks imports transitively, at module level and inside functions, from every `detection` module and from `alerts/` `sweeps`, `thresholds`, `new_errors`, `silence`, `check_state`, `incidents`, `rules`, `outbox` and `messages`. None may reach `nexovue_scheduler.releases` or read its tables. `alerts/delivery.py` and `alerts/tasks.py` are outside the roots, by name (AC42's structure half, D51) · proved by that test
-- [ ] **T1.13** — `apps/api/tests/test_scheduler_postgres_tenancy_structure.py` (exists, from F6; a second file of this name would stop collection, as these folders have no `__init__.py`) · `releases/` statements join what it reads, each cross-tenant one named with its reason · proved by that test, and `test_release_sync_live.py` with two organizations sharing a service and version (AC77)
-- [ ] **T1.14** — `apps/api/src/nexovue_api/releases/router.py`, `service.py`, `queries.py`, `schemas.py` (*new*), `main.py`,
+- [x] **T1.11** — *Built 2026-11-08 without adding `releases.store` to the raw-client list: like F19's `slos/store.py`, it reads
+  through `alerts.telemetry`'s reader and holds no driver, so the list stays as it was.* `apps/api/tests/test_tenant_chokepoint_structure.py` · add `releases.store` to `SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT`, and make `PROJECT_BOUND_PACKAGE` a tuple including `releases` · proved by that test, and `apps/scheduler/tests/test_release_store.py` (*new*) with `tenant_statements`
+- [x] **T1.12** — `apps/scheduler/tests/test_detection_isolation.py` (*new*) · walks imports transitively, at module level and inside functions, from every `detection` module and from `alerts/` `sweeps`, `thresholds`, `new_errors`, `silence`, `check_state`, `incidents`, `rules`, `outbox` and `messages`. None may reach `nexovue_scheduler.releases` or read its tables. `alerts/delivery.py` and `alerts/tasks.py` are outside the roots, by name (AC42's structure half, D51) · proved by that test
+- [x] **T1.13** — `apps/api/tests/test_scheduler_postgres_tenancy_structure.py` (exists, from F6; a second file of this name would stop collection, as these folders have no `__init__.py`) · `releases/` statements join what it reads, each cross-tenant one named with its reason · proved by that test, and `test_release_sync_live.py` with two organizations sharing a service and version (AC77)
+- [x] **T1.14** — *Built 2026-11-08. AC28's F6 half is recorded: F6 opened no finding on the 0.8% mixed figure (its minimum
+  change at normal sensitivity is 2 points), and a 30% control opened a critical one.* `apps/api/src/nexovue_api/releases/router.py`, `service.py`, `queries.py`, `schemas.py` (*new*), `main.py`,
   `ratelimit/policy.py` · `GET /releases` with its version filter and overlap window, `GET /releases/{id}`, `GET /releases/{id}/comparison` for `side_by_side` and
   `version_before_after`, with two blocks and `require_readable_project`, reading to the settled minute. Fixed paths are declared before `/{id}` · proved by
   `apps/api/tests/test_releases.py`, `test_releases_live.py` (*new*: AC26, AC28, AC31, AC35, AC62, AC63; AC28's mixed figure is computed directly from `service_stats_1m`, and it records F6's behaviour by running the project job), `test_ratelimit_coverage.py`,
   `test_read_surface_structure.py`
-- [ ] **T1.15** — `apps/web/src/features/releases/api.ts`, `ReleasesScreen.tsx`, `ReleaseScreen.tsx`, `comparison.ts` (*new*), `apps/web/src/shared/format/version.ts` (*new*),
+- [x] **T1.15** — `apps/web/src/features/releases/api.ts`, `ReleasesScreen.tsx`, `ReleaseScreen.tsx`, `comparison.ts` (*new*), `apps/web/src/shared/format/version.ts` (*new*),
   `app/router.tsx`, `app/routes/route-manifest.ts` · list and page: sentence, table, states, phone layout, zone, formatter · proved by
   `features/releases/comparison.test.ts` (AC66), `ReleasesScreen.test.ts` (*new*: AC27), `route-manifest.test.ts`
-- [ ] **T1.16** — timed check with `release-demo`, in the cost report's addendum · first settled span to visible release (AC22). One demo measurement, not a unit test
+- [x] **T1.16** — *Done 2026-11-08: about 60 seconds from the settled minute to the release row (cost report, *Addendum,
+  Step 1b*).* timed check with `release-demo`, in the cost report's addendum · first settled span to visible release (AC22). One demo measurement, not a unit test
 
 ### Step 2 — A person can set it up
 
@@ -163,22 +172,22 @@ The target is five minutes, unmeasured until here.
 or `curl` recipe, run it with `dry_run`, watch "last check received" change. Remove `dry_run`, and see the deploy on
 `/releases` beside what telemetry saw. Try it signed wrong and read the words. Send a bad field, and see it as the last refusal. Withdraw the secret and remove what it sent. Read the time recorded for a new person.
 
-- [ ] **T2.1** — `apps/api/migrations/versions/0052_deploy_envelope_and_sealed_secrets.py` (*new*), `models.py`, `organizations/tables.py` · new
+- [x] **T2.1** — *Built 2026-11-08 as `0057_deploy_envelope_and_sealed_secrets.py` (0055 and 0056 are held by parallel work; the coordinator re-chains it at commit). Adds two indexes the design did not list: `release_id`, for recalculating and for eviction's SET NULL, and `(webhook_secret_id, created_at)`, for removal since a time. Existing secrets and id-less deploys are deleted (pre-deployment); roll forward only.* `apps/api/migrations/versions/0052_deploy_envelope_and_sealed_secrets.py` (*new*), `models.py`, `organizations/tables.py` · new
   `deploy_events` columns with both `ON DELETE SET NULL` foreign keys, `ix_deploy_events_created_at`, `delivery_id NOT NULL` at 200, `sealed_secret NOT NULL`, `secret_hint`, `last_used_at`, `deploy_intake_state`, per design ·
   proved by `test_deploys_live.py`
-- [ ] **T2.2** — `deploys/schemas.py`, `deploys/service.py`, `deploys/router.py` (`MAX_BODY_BYTES` to 512 KiB and its message), `deploys/queries.py`, `nexovue_platform` name check and masking port, `ratelimit/limiter.py` (`cost` on `consume`, exact path, with a conditional update so a refused batch charges nothing), `ratelimit/policy.py` (exact quota, window 3600), `main.py` (limiter on `app.state`) · batch body, signed id, time bounds, field checks, sorted writes, `ON CONFLICT DO NOTHING`, `dry_run`, limit after signature, counting new items only, release and period upsert by the start rule, per-item answers, signed refusals recorded, `deploy_intake_state` · proved
+- [x] **T2.2** — *Built 2026-11-08. HMAC cost at 512 KiB measured: 5 openings and 5 HMACs, 1.8 ms median (status, *Step 2*). `main.py` needed no change: the lifespan already puts the limiter on `app.state`; the route reads it through a dependency.* `deploys/schemas.py`, `deploys/service.py`, `deploys/router.py` (`MAX_BODY_BYTES` to 512 KiB and its message), `deploys/queries.py`, `nexovue_platform` name check and masking port, `ratelimit/limiter.py` (`cost` on `consume`, exact path, with a conditional update so a refused batch charges nothing), `ratelimit/policy.py` (exact quota, window 3600), `main.py` (limiter on `app.state`) · batch body, signed id, time bounds, field checks, sorted writes, `ON CONFLICT DO NOTHING`, `dry_run`, limit after signature, counting new items only, release and period upsert by the start rule, per-item answers, signed refusals recorded, `deploy_intake_state` · proved
   by `test_deploys.py`, `test_deploys_live.py` (AC6 to AC14, AC51, AC52, AC53, AC57, AC59, including replaying one body 2,000 times, and a 100-item body at the limit), `test_ratelimit.py`. The missing-header test is removed on purpose, and replaced by one for a missing signed `delivery_id`. A measurement of HMAC cost at 512 KiB is reported
-- [ ] **T2.3** — `deploys/signatures.py`, `deploys/service.py`, `deploys/schemas.py` (`WebhookSecret.secret` removed, times and last refusal added), `deploys/queries.py`, `keys.py`, `packages/py-platform/src/nexovue_platform/checks/sealing.py` · reads `uuidv7()` first and sets the id, seal under a new purpose,
+- [x] **T2.3** — *Built 2026-11-08. Signup no longer mints a secret: one minted there could never be shown.* `deploys/signatures.py`, `deploys/service.py`, `deploys/schemas.py` (`WebhookSecret.secret` removed, times and last refusal added), `deploys/queries.py`, `keys.py`, `packages/py-platform/src/nexovue_platform/checks/sealing.py` · reads `uuidv7()` first and sets the id, seal under a new purpose,
   cap of 5, shown once, `last_used_at` · proved by `test_keys_live.py`, a new assertion that fails when the column
   leaves `SEALED_COLUMNS`, `test_deploys.py` (AC3, AC4, AC5, AC50)
-- [ ] **T2.4** — `audit/service.py`, `test_audit.py` · removes `deploy.webhook_secret_viewed`; `deploy.batch_recorded` with secret id, count and first deploy id; `deploy.removed` · proved by `test_audit.py`
-- [ ] **T2.5** — `ratelimit/policy.py` · corrects the comment · proved by `test_ratelimit.py`
-- [ ] **T2.6** — `apps/web/src/features/projects/DeploysSection.tsx`, `deploys-api.ts` (*new*), `ProjectSettings.tsx` · the
+- [x] **T2.4** — *Built 2026-11-08.* `audit/service.py`, `test_audit.py` · removes `deploy.webhook_secret_viewed`; `deploy.batch_recorded` with secret id, count and first deploy id; `deploy.removed` · proved by `test_audit.py`
+- [x] **T2.5** — *Built 2026-11-08.* `ratelimit/policy.py` · corrects the comment · proved by `test_ratelimit.py`
+- [x] **T2.6** — *Built 2026-11-08. Each service's current version is read from `GET /deploys/webhook-secrets`, the one endpoint the section polls. The "remove since" time is the browser's, not the project's zone (status, *Residual risks*). The release-summary opt-in is T5.6's.* `apps/web/src/features/projects/DeploysSection.tsx`, `deploys-api.ts` (*new*), `ProjectSettings.tsx` · the
   section: rotation steps, polling, `role=status`, last refusal, current versions, `UnsavedChanges`, sentence for others · proved by `DeploysSection.test.ts` (*new*: hidden for others, shown once), `test_deploys.py` (AC2's route refusals)
-- [ ] **T2.7** — `docs/product/setup/deploys.md` (*new*), `setup/index.md`, `setup/api.md`, `setup/troubleshooting.md`, `setup/platforms/kubernetes.md`, `setup/platforms/aws-ec2-and-bare-metal.md`, every language page, onboarding snippets, the `apps/web/src/features/onboarding` strings · recipes by FR14's list, `service.version` per platform, reachability, one project per environment, stored in clear text, pre-send sampling, the 7-day limit, a post-deploy pipeline recipe · proved by `apps/api/tests/test_deploy_recipes.py` (*new*: AC48, AC49: extracts each signing step and runs it against the API test client; secret by environment, none in arguments; exit 0; new id on a re-run), and a run against the dev stack. A hosted runner is tried once from a reachable address when one exists
-- [ ] **T2.8** — `tools/otel-demo/doors.py` · new body · proved by running `announce_deploys` on the dev stack
-- [ ] **T2.9** — `deploys/router.py`, `deploys/service.py`, `releases/service.py` · `DELETE /deploys/{id}`, secret removal since a time, recalculating releases and periods, `POLICY_OF` · proved by `test_deploys_live.py` (AC61), `test_authorization_coverage.py`
-- [ ] **T2.10** — timed observation · at least one real new person, up to three, on GitHub Actions, reported as observations in `status.md` (AC1). If it fails five minutes, ship a small first-party script instead of adding more text. If nobody can be found, record "not timed" and withdraw the five-minute claim, which AC1 allows, and Step 3 may proceed
+- [x] **T2.7** — *Built 2026-11-08. `setup/deploys.md` is new; `browser.md` also lost a fixed `serviceVersion`. The recipes run against a local stand-in and the webhook's own service, not against the dev stack; no hosted runner was tried, as no reachable address exists here (status).* `docs/product/setup/deploys.md` (*new*), `setup/index.md`, `setup/api.md`, `setup/troubleshooting.md`, `setup/platforms/kubernetes.md`, `setup/platforms/aws-ec2-and-bare-metal.md`, every language page, onboarding snippets, the `apps/web/src/features/onboarding` strings · recipes by FR14's list, `service.version` per platform, reachability, one project per environment, stored in clear text, pre-send sampling, the 7-day limit, a post-deploy pipeline recipe · proved by `apps/api/tests/test_deploy_recipes.py` (*new*: AC48, AC49: extracts each signing step and runs it against the API test client; secret by environment, none in arguments; exit 0; new id on a re-run), and a run against the dev stack. A hosted runner is tried once from a reachable address when one exists
+- [x] **T2.8** — *Built 2026-11-08: mints a secret for the run and withdraws it after, since secrets are shown once. Run twice against a locally started API on this machine's Postgres (not the full dev stack): both recorded, then both answered as repeats, no secret left.* `tools/otel-demo/doors.py` · new body · proved by running `announce_deploys` on the dev stack
+- [x] **T2.9** — *Built 2026-11-08.* `deploys/router.py`, `deploys/service.py`, `releases/service.py` · `DELETE /deploys/{id}`, secret removal since a time, recalculating releases and periods, `POLICY_OF` · proved by `test_deploys_live.py` (AC61), `test_authorization_coverage.py`
+- [ ] **T2.10** — *Not yet run, founder tests after Phase 2 (foundation item 28, 2026-11-08). The five-minute claim is not withdrawn here; that is the founder's call (AC1).* timed observation · at least one real new person, up to three, on GitHub Actions, reported as observations in `status.md` (AC1). If it fails five minutes, ship a small first-party script instead of adding more text. If nobody can be found, record "not timed" and withdraw the five-minute claim, which AC1 allows, and Step 3 may proceed
 
 ### Step 3 — Markers that can be read, on every chart, including the finding
 
@@ -186,22 +195,22 @@ or `curl` recipe, run it with `dry_run`, watch "last check received" change. Rem
 marker, click to pin, follow the link. Tab to the list. On a service with 60 deploys, move the window to last week and see last week's markers. Set a service
 with no versions and no deploys and read "We receive no deploy information". Open a phone-width window. Trigger a seeded finding and read the line in its notice.
 
-- [ ] **T3.0** — `tools/detection-seed/seed.py`, `test_seed.py` · also writes matching `service_versions_1m` rows, `releases`, `release_periods` and `deploy_events`, one release before its seeded finding, a project with 60 deploys, and a release older than the project's limit, which has Postgres rows only since the rollup's TTL removes older rows · proved by `test_seed.py`, asserting the seeded rows sum to `service_stats_1m`
-- [ ] **T3.1** — `releases/router.py`, `service.py`, `queries.py` · `markers_in_window`, Postgres only, behind `GET /releases/markers`, for F20 to call too; `GET /releases/coverage` with `at`; `coverage_of` in `nexovue_platform/releases.py`; the `none` list from `service_last_seen` · proved by `test_releases_live.py` (AC38, AC73)
-- [ ] **T3.2** — `apps/web/src/shared/deploy-markers.ts` · `service`, `source`, `state`, `release_id`, cluster function ·
+- [x] **T3.0** — *Built 2026-11-09. The busiest of the seeded services deploys 60 times, the last 30 minutes before the history ends; the release older than the limit is that service's first; the second-to-last service sends versions without reports and the last neither, for the coverage values. `release_sync_state` is set to the seed's end. Run against this session's stores: every minute's version rows equal `service_stats_1m`'s.* `tools/detection-seed/seed.py`, `test_seed.py` · also writes matching `service_versions_1m` rows, `releases`, `release_periods` and `deploy_events`, one release before its seeded finding, a project with 60 deploys, and a release older than the project's limit, which has Postgres rows only since the rollup's TTL removes older rows · proved by `test_seed.py`, asserting the seeded rows sum to `service_stats_1m`
+- [x] **T3.1** — *Built 2026-11-09. A reported period's start is not drawn apart from its deploy, which is the same moment. Both routes are on the read surface and in `setup/api.md`.* `releases/router.py`, `service.py`, `queries.py` · `markers_in_window`, Postgres only, behind `GET /releases/markers`, for F20 to call too; `GET /releases/coverage` with `at`; `coverage_of` in `nexovue_platform/releases.py`; the `none` list from `service_last_seen` · proved by `test_releases_live.py` (AC38, AC73)
+- [x] **T3.2** — *Built 2026-11-09: `releaseMarkers` replaces `deployMarkers`, with `markerTag`, `clusterMarkers` and the group's two sentences.* `apps/web/src/shared/deploy-markers.ts` · `service`, `source`, `state`, `release_id`, cluster function ·
   proved by `deploy-markers.test.ts`
-- [ ] **T3.3** — `shared/components/TrendChart.tsx`, `shared/components/ChartReleases.tsx`, `ReleaseHoverBox.tsx` (*new*) · one neutral dash, HTML strip by `valToPos`, hover as a React portal, click to pin, drag still selects, one list per chart group, always-visible line, failure line · proved by `ChartReleases.test.ts` (*new*; AC39), `ReleaseHoverBox.test.ts` (*new*: hostile strings; AC43), and Design QA, as canvas drawing has no unit test
+- [x] **T3.3** — *Built 2026-11-09. The hover and pin hang off the strip's tags (buttons), not off canvas hit-testing; the click pins. Design QA, which this task names, is not yet run (status).* `shared/components/TrendChart.tsx`, `shared/components/ChartReleases.tsx`, `ReleaseHoverBox.tsx` (*new*) · one neutral dash, HTML strip by `valToPos`, hover as a React portal, click to pin, drag still selects, one list per chart group, always-visible line, failure line · proved by `ChartReleases.test.ts` (*new*; AC39), `ReleaseHoverBox.test.ts` (*new*: hostile strings; AC43), and Design QA, as canvas drawing has no unit test
   here
-- [ ] **T3.4** — `features/overview/api.ts`, `OverviewScreen.tsx`, `features/servicedetail/api.ts`, `ServiceDetailScreen.tsx` ·
+- [x] **T3.4** — *Built 2026-11-09 with one shared read, `shared/releases/api.ts`, in place of a hook in each feature's `api.ts`; the old `GET /deploys` hooks are deleted. `service-detail.test.ts` needed no change: the service page's marks are proven by `deploy-markers.test.ts` and `ChartReleases.test.ts` (status).* `features/overview/api.ts`, `OverviewScreen.tsx`, `features/servicedetail/api.ts`, `ServiceDetailScreen.tsx` ·
   windowed read, `truncated` kept, cap sentence · proved by `OverviewView.test.ts`, `service-detail.test.ts`
-- [ ] **T3.5** — `findings/schemas.py`, `findings/service.py`, `findings/queries.py`, `releases/queries.py` · `FindingDetail` gains
+- [x] **T3.5** — *Built 2026-11-09.* `findings/schemas.py`, `findings/service.py`, `findings/queries.py`, `releases/queries.py` · `FindingDetail` gains
   `release_context`: preceding period, coverage as of the start, the last report's age, and releases elsewhere, with those it calls from `service_edges_1m` · proved by `test_findings_api_live.py`, `test_findings.py` (AC40, AC71, AC73), `test_tenant_chokepoint_structure.py`
-- [ ] **T3.6** — `features/findings/FindingScreen.tsx`, `api.ts`, `finding-page.ts` · section by the wording table, `markers`, link carrying the finding · proved by
+- [x] **T3.6** — *Built 2026-11-09. AC64's window is chosen on the release page (`releases/comparison.ts`, `search.ts`, `ReleaseScreen.tsx`), which the link's `finding` and `finding_at` reach; proved in `comparison.test.ts` and `ReleasesScreen.test.ts`. "One instant reading the same on both pages" waits for Design QA.* `features/findings/FindingScreen.tsx`, `api.ts`, `finding-page.ts` · section by the wording table, `markers`, link carrying the finding · proved by
   `FindingScreen.test.ts`, `finding-page.test.ts` (AC40, AC64, one instant reading the same on both pages)
-- [ ] **T3.7** — `features/errors/error-groups.ts`, `ErrorsScreen.tsx`, `ErrorGroupDetail.tsx`, `errorgroups/router.py`,
+- [x] **T3.7** — *Built 2026-11-09. A versions-only service's cell reads "none reported" (open decision in status).* `features/errors/error-groups.ts`, `ErrorsScreen.tsx`, `ErrorGroupDetail.tsx`, `errorgroups/router.py`,
   `errorgroups/schemas.py` · words in the cell, and the panel's sentence at every coverage value · proved by `error-groups.test.ts`, `ErrorsView.test.ts`, `test_errorgroups.py` (AC73)
-- [ ] **T3.8** — `apps/scheduler/src/nexovue_scheduler/releases/facts.py` (*new*, the coverage reads, `release_before` and `releases_near`, D56, for F3's T1.4 to call), `alerts/messages.py`, `alerts/delivery.py` · FR44's line, in `Subject.detail`, read after the claim commits on its own connection, one read per single-notice `opened` finding batch, 500 ms including the wait for a connection, left out on failure, in a grouped message and for a project finding (D51) · proved by `test_alert_messages.py`, `test_detection_isolation.py`, a live test (AC70), including a read that raises and a read that hangs, with the batch still claimed and sent; and `apps/scheduler/tests/test_release_facts_live.py` (*new*): `release_before` at any age, `releases_near` same service first and bounded to its lookback, both bound to one org and project (D56)
-- [ ] **T3.9** — `apps/scheduler/tests/test_detection_release_neutrality_live.py` (*new*) · runs the project job over the same seeded minutes with and without release and deploy rows, and compares findings, `detection_readings` and outbox rows, which must be equal, since FR44's line is never stored (AC42)
+- [x] **T3.8** — *Built 2026-11-09. `PeriodFact` carries `already_running` beside the design's fields, which FR44's line needs (status). A failure is a log line, not a metric: delivery runs in a job's child process (as Step 1b's sync).* `apps/scheduler/src/nexovue_scheduler/releases/facts.py` (*new*, the coverage reads, `release_before` and `releases_near`, D56, for F3's T1.4 to call), `alerts/messages.py`, `alerts/delivery.py` · FR44's line, in `Subject.detail`, read after the claim commits on its own connection, one read per single-notice `opened` finding batch, 500 ms including the wait for a connection, left out on failure, in a grouped message and for a project finding (D51) · proved by `test_alert_messages.py`, `test_detection_isolation.py`, a live test (AC70), including a read that raises and a read that hangs, with the batch still claimed and sent; and `apps/scheduler/tests/test_release_facts_live.py` (*new*): `release_before` at any age, `releases_near` same service first and bounded to its lookback, both bound to one org and project (D56)
+- [x] **T3.9** — *Built 2026-11-09.* `apps/scheduler/tests/test_detection_release_neutrality_live.py` (*new*) · runs the project job over the same seeded minutes with and without release and deploy rows, and compares findings, `detection_readings` and outbox rows, which must be equal, since FR44's line is never stored (AC42)
 
 ### Step 4 — The whole release page
 
@@ -274,8 +283,8 @@ no test server is rented (item 9). The whole-server fit on 16 GB waits for Oracl
 - [x] Design approval: 2026-11-02
 - [x] **Plan approval:** 2026-11-02
 - [ ] F6 merged
-- [ ] Step 1a cost gate
-- [ ] The one round of customer conversations held, before Step 1b (foundation item 8)
+- [x] Step 1a cost gate: passed on demo data, 2026-11-07 ([report](../../research/release-rollup-cost-2026-11-07.md)). Its alert evaluation start delay row was added to T1.10 by the founder's answer of 2026-11-08, measured there, and passed
+- [x] ~~The one round of customer conversations held, before Step 1b (foundation item 8)~~ No longer a gate (foundation item 27, 2026-11-08)
 - [ ] F6 browser-door change, before Step 4. F28 owns it (foundation item 22, approved 2026-11-02); its tasks are added when this plan is next revised
 - [ ] Implementation
 - [ ] Tests
@@ -313,4 +322,5 @@ being treated as a formality.
 
 ## Outcome
 
-Not started.
+Steps 1a, 1b and 2 built (Step 2 on 2026-11-08, awaiting commit; T2.10 waits for the founder's test after Phase 2).
+Steps 3 to 6 not started.

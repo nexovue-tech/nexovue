@@ -15,7 +15,7 @@ import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
 
-import type { FindingDetail } from "./api";
+import type { FindingDetail, FindingExplanation } from "./api";
 import { FindingScreen } from "./FindingScreen";
 import { FindingsScreen } from "./FindingsScreen";
 
@@ -77,6 +77,31 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
     ],
     incidents: [],
     services: [],
+    release_context: {
+      before: null,
+      coverage: "none",
+      last_reported_at: null,
+      first_heard_at: null,
+      nearby: [],
+      called_known: true,
+      affected: [],
+    },
+    case_state: null,
+    case_resolution: null,
+    case_opened_at: null,
+    case_resolved_at: null,
+    root_finding_id: null,
+    case_signal: "open",
+    case_severity: "warning",
+    open_joined_finding_id: null,
+    open_joined_since: null,
+    assignee_id: null,
+    assignee_name: null,
+    case_taken_at: null,
+    assignee_acted_since_join: null,
+    case_resolved_by_name: null,
+    project_has_pagerduty: false,
+    email_available: false,
     acknowledged_by: null,
     acknowledged_by_name: null,
     feedback_reason: null,
@@ -93,9 +118,11 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
 export interface ApiCall {
   method: string;
   path: string;
+  /** The query string as sent, `?case=mine`, or empty. */
+  search: string;
   body: unknown;
 }
-type Handler = (call: ApiCall) => Response | Promise<Response>;
+export type Handler = (call: ApiCall) => Response | Promise<Response>;
 
 export const json =
   (body: unknown, status = 200): Handler =>
@@ -110,6 +137,27 @@ export const problem =
       headers: { "content-type": "application/problem+json" },
     });
 
+/** F3: an explanation as the API returns it, read once, with nothing found. */
+export function explanation(overrides: Partial<FindingExplanation> = {}): FindingExplanation {
+  return {
+    finding_id: "f-1",
+    state: "read",
+    version: 1,
+    latest_version: 1,
+    read_at: minutesAgo(5),
+    reads_failed: 0,
+    facts: [],
+    likely_cause: null,
+    cause_held: false,
+    previous_cause: null,
+    shared_cause_count: 0,
+    wording_state: "off",
+    wording: null,
+    next_read_at: null,
+    ...overrides,
+  };
+}
+
 /** The page's reads for `found`, as `role`, with any action stubs added. */
 export function stubApi(
   found: FindingDetail | Handler,
@@ -119,7 +167,20 @@ export function stubApi(
   const handlers: Record<string, Handler> = {
     "GET /auth/me": json(identityFor(role)),
     "GET /findings/f-1": typeof found === "function" ? found : json(found),
+    "GET /findings/f-1/timeline": json({ events: [], next_before: null }),
+    // F3: the page polls the explanation; a test that cares stubs its own.
+    "GET /findings/f-1/explanation": json(explanation()),
     [`GET /projects/${PROJECT_ID}/detection`]: json({ sensitivity: "normal", timezone: "UTC" }),
+    "GET /releases/markers": json({ markers: [], truncated: false, cap: 500 }),
+    // F22 T6.3: the create panel's preselection; a test that cares stubs its own.
+    "GET /service-repositories": json({ mappings: [] }),
+    // F5: rungs 1 and 2; a test that cares stubs its own.
+    "GET /findings/f-1/fixes": json({
+      finding_id: "f-1",
+      deploy_line: null,
+      brief: null,
+      section: null,
+    }),
     ...extra,
   };
   vi.stubGlobal(
@@ -130,6 +191,7 @@ export function stubApi(
       const call = {
         method,
         path,
+        search: url.search,
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       };
       calls.push(call);
@@ -153,13 +215,17 @@ export function unmountAll() {
   vi.unstubAllGlobals();
 }
 
-export function mountFinding() {
-  return mountAt("/findings/f-1", placeholder("Feed"));
+/** The finding page; `search` is the feed filter it was opened from (AC128). */
+export function mountFinding(search = "") {
+  return mountAt(`/findings/f-1${search}`, placeholder("Feed"));
 }
 
-/** The feed itself, at `/findings`, with each finding's page a placeholder. */
-export function mountFeed() {
-  return mountAt("/findings", FindingsScreen, placeholder("Finding"));
+/**
+ * The feed itself, at `/` — the front door (FR1) — each finding's page a placeholder;
+ * `search` is the address's filter (`?case=mine`).
+ */
+export function mountFeed(search = "") {
+  return mountAt(`/${search}`, FindingsScreen, placeholder("Finding"));
 }
 
 const placeholder = (text: string) => () => createElement("p", null, text);
@@ -185,7 +251,7 @@ async function mountAt(
       }),
       createRoute({
         getParentRoute: () => shellRoute,
-        path: "/findings",
+        path: "/",
         component: feed,
       }),
       createRoute({
@@ -221,7 +287,8 @@ async function mountAt(
     ),
   );
   await settle();
-  return { container };
+  // The router too, so a test can read where a link or a choice took the page.
+  return { container, router };
 }
 
 export async function settle() {

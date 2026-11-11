@@ -435,3 +435,40 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
     }
 
     assert added <= set(registered())
+
+
+def test_the_api_s_connection_jobs_are_exactly_what_the_connections_worker_runs() -> None:
+    """F22: the API adds connection jobs by name with ids only (AC74); a renamed keyword
+    or task would leave a setup waiting on a job that fails every time it is claimed."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform import connections
+
+    from nexovue_scheduler.jobs.registry import TASK_SETS, registered
+
+    tasks = registered(TASK_SETS["connections"])
+    assert set(connections.CONNECTION_TASKS) <= set(tasks)
+    sent = {
+        connections.CONVERT_MANIFEST_TASK: connections.connection_job_arguments(
+            org_id="o", connection_id="c"
+        ),
+        connections.REFRESH_CONNECTION_TASK: connections.connection_job_arguments(
+            org_id="o", connection_id="c"
+        ),
+        connections.CHECK_CONNECTION_TASK: connections.connection_test_arguments(
+            org_id="o", connection_id="c", request_id="r"
+        ),
+    }
+    for task_name, kwargs in sent.items():
+        parameters = inspect.signature(tasks[task_name]).parameters.values()
+        accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+        assert required <= set(kwargs) <= accepted, task_name

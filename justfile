@@ -9,6 +9,7 @@ go_modules := "apps/receiver apps/workers packages/contracts tools/gateseed tool
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.
 postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "15432") + "/nexovue")
+insight_dev_password := env("POSTGRES_INSIGHT_PASSWORD", "nexovue_insight_dev")
 # The setup command (apps/workers/cmd/setup) speaks ClickHouse's native protocol; its migration lock
 # lives in Postgres, which it reaches with the plain postgres:// form.
 clickhouse_dsn := env("CLICKHOUSE_SETUP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "/nexovue")
@@ -47,6 +48,12 @@ stack:
 # Production replica: the hosted install, from images built from this checkout
 dev-app:
     GIT_SHA=$(git rev-parse HEAD) docker compose -p nexovue-app --env-file {{compose}}/.env.replica -f {{compose}}/nexovue.yaml -f {{compose}}/nexovue.hosted.yaml -f {{compose}}/nexovue.build.yaml up -d --wait --build
+# F3 plan T3.11: build both images and a kit, install it under its own project, and try the AI
+# role's fence from inside (AC42), then back up, empty Postgres and restore (AC46). Needs Docker
+# with 12 GiB; slow, so its own CI job and never part of `just check`.
+# The AI role's fence, on a really installed kit
+insight-fence:
+    tools/insight-fence/fence.sh
 up:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
     -./tools/otel-demo/otel-demo.sh up
@@ -104,12 +111,38 @@ detection-measure *args:
 detection-seed *args:
     uv run python tools/detection-seed/seed.py {{args}}
 
+# F22 plan T1.0: make one dev service read slower than normal (`--clear` to recover), so the real
+# project job opens and closes a finding - no row is inserted into findings.
+# Break or heal one dev service, for judging case management by hand
+detection-fault *args:
+    uv run python tools/detection-seed/fault.py {{args}}
+
+# F3 plan T1.12: write what one explanation rule reads, open a finding directly (detection does
+# not judge it, and the tool says so) and queue its facts' read. Rules 1, 3 and 4 send a signed
+# deploy through the dev webhook, so they need `--secret`.
+# Show one of F3's rules on a dev finding within minutes
+explain-demo *args:
+    uv run python tools/detection-seed/explain_demo.py {{args}}
+
 # F6 plan T8.2 (AC29): 200 projects, 2,000 services. In order: tenants, load (keep it running),
 # seed, then watch while the scheduler runs. `profile` times project jobs; `remove --yes` closes
 # the tenants. Each command's options: `just detection-scale <command> --help`.
 # Measure detection at its cost target (tenants, load, seed, watch, profile, remove)
 detection-scale *args:
     uv run python tools/detection-measure/scale.py {{args}}
+
+# F28 plan T1.5: releases through the real receiver, with `service.version` shaped by a mode (rolling,
+# swap, no-version, rollback, exceptions, cold-start, churn, many-services); `verify` reads the rollups
+# back against what was sent. Each command's options: `just release-demo <command> --help`.
+# Send demo releases through the receiver, and verify the rollups
+release-demo *args:
+    uv run python tools/release-demo/send.py {{args}}
+
+# F28 plan T1.6: the Step 1a cost run, against a baseline worker; writes JSON for the cost report.
+# Each command's options: `just release-measure <command> --help`.
+# Measure the version rollup's rows, disk and worker memory
+release-measure *args:
+    uv run python tools/release-demo/release_measure.py {{args}}
 
 # F6 plan T8.1: the demo's fault flags against detection, scored as AC36's table. A run takes about
 # 12 days after its warm-up; see tools/fault-bed/README.md. Needs NEXOVUE_TOKEN, a read API token.
@@ -171,6 +204,9 @@ lint-go:
     #!/usr/bin/env bash
     set -euo pipefail
     for m in {{go_modules}}; do (cd "$m" && golangci-lint run ./...); done
+    # Images build each module alone (GOWORK=off, as the pipeline image does), where go.work no
+    # longer lends a missing go.sum line; tidy here, outside the workspace, is that build's view.
+    for m in {{go_modules}}; do (cd "$m" && GOWORK=off go mod tidy -diff) || { echo "$m: run 'GOWORK=off go mod tidy' there"; exit 1; }; done
 
 lint-py:
     uv run ruff check .
@@ -330,9 +366,11 @@ topics:
 # Apply all migrations: Postgres then ClickHouse
 migrate: migrate-pg migrate-ch
 
+# `POSTGRES_INSIGHT_PASSWORD`: the AI role's account, which setup creates (F3); the dev compose
+# file's `scheduler-insight` signs in with the same development value.
 # Postgres to the newest migration, and the object store's bucket: the deploy step's Python half.
 migrate-pg:
-    POSTGRES_DSN="{{postgres_dsn}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
+    POSTGRES_DSN="{{postgres_dsn}}" POSTGRES_INSIGHT_PASSWORD="{{insight_dev_password}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
 
 migrate-ch:
     {{setup_go}} clickhouse

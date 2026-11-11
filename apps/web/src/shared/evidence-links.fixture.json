@@ -1,0 +1,122 @@
+{
+  "about": "F3 AC105: each callee shape a dependency fact can have, the traces search its link carries, and which of the seeded traces that search must find. Read by evidence-links.test.ts, which builds each search, and by apps/api/tests/test_evidence_link_traces_live.py, which runs it against the real trace search.",
+  "cases": [
+    {
+      "name": "reports for itself, failing",
+      "target": {
+        "kind": "dependency",
+        "caller": "checkout",
+        "callee": "payments",
+        "callee_attr": null,
+        "failure_share_before": 0.004,
+        "failure_share_during": 0.06,
+        "p95_before": 120,
+        "p95_during": 130
+      },
+      "label": "Traces through payments",
+      "search": { "service": "payments", "status": "ERROR" },
+      "finds": ["through-payments"]
+    },
+    {
+      "name": "reports for itself, slower",
+      "target": {
+        "kind": "dependency",
+        "caller": "checkout",
+        "callee": "payments",
+        "callee_attr": null,
+        "failure_share_before": 0.004,
+        "failure_share_during": 0.004,
+        "p95_before": 120,
+        "p95_during": 480
+      },
+      "label": "Traces through payments",
+      "search": { "service": "payments", "min_duration_ms": "120" },
+      "finds": ["through-payments-slow"]
+    },
+    {
+      "name": "named by service.peer.name",
+      "target": {
+        "kind": "dependency",
+        "caller": "checkout",
+        "callee": "(fraud)",
+        "callee_attr": "service.peer.name",
+        "failure_share_before": 0,
+        "failure_share_during": 0.2,
+        "p95_before": null,
+        "p95_during": null
+      },
+      "label": "Calls from checkout to fraud",
+      "search": {
+        "service": "checkout",
+        "attr": "service.peer.name",
+        "attr_value": "fraud",
+        "status": "ERROR"
+      },
+      "finds": ["named-by-service-peer-name"]
+    },
+    {
+      "name": "named by peer.service",
+      "target": {
+        "kind": "dependency",
+        "caller": "checkout",
+        "callee": "(ledger)",
+        "callee_attr": "peer.service",
+        "failure_share_before": 0,
+        "failure_share_during": 0.2,
+        "p95_before": null,
+        "p95_during": null
+      },
+      "label": "Calls from checkout to ledger",
+      "search": {
+        "service": "checkout",
+        "attr": "peer.service",
+        "attr_value": "ledger",
+        "status": "ERROR"
+      },
+      "finds": ["named-by-peer-service"]
+    },
+    {
+      "name": "named by server.address",
+      "target": {
+        "kind": "dependency",
+        "caller": "checkout",
+        "callee": "(db.internal)",
+        "callee_attr": "server.address",
+        "failure_share_before": 0,
+        "failure_share_during": 0.2,
+        "p95_before": null,
+        "p95_during": null
+      },
+      "label": "Calls from checkout to db.internal",
+      "search": {
+        "service": "checkout",
+        "attr": "server.address",
+        "attr_value": "db.internal",
+        "status": "ERROR"
+      },
+      "finds": ["named-by-server-address"]
+    },
+    {
+      "name": "no attribute that can match",
+      "target": {
+        "kind": "dependency",
+        "caller": "checkout",
+        "callee": "(opaque)",
+        "callee_attr": null,
+        "failure_share_before": 0,
+        "failure_share_during": 0.2,
+        "p95_before": null,
+        "p95_during": null
+      },
+      "label": "Calls from checkout, not narrowed to opaque",
+      "search": { "service": "checkout", "status": "ERROR" },
+      "finds": [
+        "through-payments",
+        "named-by-service-peer-name",
+        "named-by-peer-service",
+        "named-by-server-address",
+        "unnamed-callee"
+      ]
+    }
+  ]
+}

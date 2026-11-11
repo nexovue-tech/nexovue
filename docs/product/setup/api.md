@@ -52,6 +52,7 @@ and reach only the documented read API.**
 | `GET /projects` | The projects this token may read, with the ids the rest take |
 | `GET /services` | Every service in a window, worst first |
 | `GET /services/{name}` | One service's health in a window |
+| `GET /service-map` | Service dependencies in a window, busiest edges first: who calls whom, how often, and how often it fails |
 | `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200). The state says when a service is not judged and why: still learning, data delayed, detection not running, muted, `too_many_services` (the project is past the cap and the service is not among its busiest) or `no_incoming_requests` |
 | `GET /traces` | Traces matching filters, newest first (paged) |
 | `GET /traces/{trace_id}` | One trace and its spans |
@@ -65,13 +66,27 @@ and reach only the documented read API.**
 | `GET /findings` | Detected problems: open, then acknowledged, then closed; at most 200, muted ones apart |
 | `GET /findings/stats` | Findings opened and marked false alarms over the last 7 days (`days` up to 90), per service-week, and for each service with a finding in the window (`services`, most false alarms first; a project finding counts for the project alone) |
 | `GET /findings/{finding_id}` | One finding, its signals (each with its normal band and its evidence endpoint against the same time last week, both kept after the readings expire), each signal's readings against its normal band while they last (35 days), its linked incidents, and a project finding's services |
+| `GET /findings/{finding_id}/explanation` | The facts that line up with a finding: each frozen when read, numbered, with what it rests on (a signed record, a count from telemetry, or words in telemetry), and what could not be read. `?version=` reads an earlier reading. No likely cause is named yet: causes are held until their accuracy is measured. A token never reads AI wording |
+| `GET /slos` | A project's reliability targets, those needing attention first, each with its state, its figures over the window by whole days, what was not measured, and when it was last worked out; and the targets deleted in the last 30 days, without who deleted them |
+| `GET /slos/{slo_id}` | One reliability target and where it stands |
+| `GET /slos/{slo_id}/months` | One reliability target's months, newest first, up to 13: each month's figure against its objective, met, missed or not judged, and what it leaves out (coverage, quiet, lost and excluded time, outages, sharp falls in requests, and any exclusion removed too late for its days to be counted again) |
+| `GET /slos/{slo_id}/history` | Every change made to one reliability target, without who made it |
+| `GET /slo-readings/{slo_id}/burn` | One reliability target's burn rate over the last day, minute by minute, for the tier its status names, with the on-pace line; a minute whose window held no requests is a gap |
+| `GET /slos/{slo_id}/exclusions` | The time people left out of one reliability target, with each reason and when it was removed, without who entered or removed it |
+| `GET /slos/months` | One month across a project's reliability targets, last month by default: how many were met, missed and not judged, with a row per target, including targets deleted after the month ended |
+| `GET /slos/months.csv` | The same months as a CSV file, up to 13 complete months, each row with its fixed label |
 | `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings. The state is `data_delayed` while nexovue's pipeline holds back the minutes detection judges, such as one partition 3 minutes behind; `services_delayed` counts the services waiting. A project judges at most `judged_service_limit` services (500), its busiest; past that the state is `too_many_services` and `services_too_many` counts the rest |
 | `GET /projects/{project_id}/detection` | The project's detection sensitivity and the time zone its normal is read in |
 | `GET /checks` | Synthetic checks and their confirmed state |
 | `GET /checks/{check_id}` | One check |
 | `GET /synthetics/checks` | Check results in a window |
 | `GET /synthetics/checks/{check_id}/runs` | One check's recent runs |
-| `GET /deploys` | Recent deploys, newest first |
+| `GET /deploys` | Recent deploys, newest first. Sending them is a signed step in your pipeline, not a token: see [deploys.md](deploys.md) |
+| `GET /releases` | A project's releases with a period in the time window, newest first: each version of each service, when its period started, whether it was seen in traffic, reported by your CI, or both, and whether it is serving, replaced or idle. Filter by `service` and `version`; page with `cursor` |
+| `GET /releases/{release_id}` | One release: when it was first and last seen and reported, and each period it served, with the version it replaced and whether it came back |
+| `GET /releases/markers` | The releases to mark on a chart of the window, newest first, up to 500 (`truncated` says when more fell in it): each deploy your CI reported, with its state, and each version first seen in traffic. Filter by `service` |
+| `GET /releases/coverage` | For each service, what we hear about its deploys as of `at` (now if left out): deploys and versions, deploys only, versions only, or none, with when its last report was |
+| `GET /releases/{release_id}/comparison` | One period of a release against the version it replaced, over 1, 6 or 24 hours from its start (`window`), up to the last minute every part of the pipeline has counted: side by side during the rollout, before and after once it finished, each with its counts and a plain reading, or the reason it cannot compare. It compares numbers; it does not say why they moved |
 | `GET /llm/calls` | Every model call reported in a window, grouped by service, span and model |
 
 Most take `project_id` as a query parameter, and a window as `from` and `to`
@@ -318,19 +333,41 @@ the checkout errors started?"*, *"show me the slowest service this hour"*.
 
 The server offers these tools, and no others:
 
-`list_projects`, `list_services`, `get_service`, `list_traces`, `search_logs`,
-`list_error_groups`, `list_incidents`, `list_checks`, `list_deploys`.
+`list_projects`, `list_services`, `get_service`, `list_traces`, `get_trace`,
+`search_logs`, `list_error_groups`, `get_error_group`, `list_incidents`,
+`get_incident`, `list_checks`, `list_deploys`, `list_findings`, `get_finding`,
+`get_service_map`, `get_service_detection`.
 
-Three things are true of all of them:
+Five things are true of all of them:
 
 - **Every tool reads.** There is no tool that changes a check, an alert rule, a
   member or a setting. A model cannot alter your account through this.
 - **A tool sees exactly what the token sees.** Same project scope, same
   refusals, same rate limit. Revoking the token ends the assistant's access on
-  its next call.
+  its next call. A finding read here, like one read with the token directly,
+  carries no person fields: nobody's name, nobody's written reason.
 - **Answers are bounded** — at most 100 rows and 32 KB per call — and a cut
   answer says so and says how to narrow, so a model never treats a partial
   answer as the whole picture.
+- **A windowed tool reads the last hour by default, a number of `hours`, or an
+  exact past range** as `from_time` and `to_time` (ISO 8601, read as UTC, at
+  most 7 days) — so "yesterday from 14:00 to 14:30" is askable as itself.
+  Giving both forms at once is refused.
+- **Results label their untrusted fields.** Log bodies, attribute values,
+  service and endpoint names, error messages and check hosts are text written
+  by whoever can reach your services, so each result lists those fields under
+  `untrusted`, with the rule spelled out: data, never instructions. A check's
+  row names its probed host and never its full config, which can hold literal
+  URLs, query values and headers somebody typed.
 
 Every tool call counts against the token's rate limit and updates its *last
 used*, so the token list in the console shows you when an assistant last read.
+
+### What these labels cannot do
+
+The assistant on the other end of this protocol is **yours, not ours**. nexovue
+labels what is untrusted and keeps every tool read-only, but it cannot control
+what your AI tool does with the text it reads: whether it follows an
+instruction planted in a log line is decided by that tool and its model, on
+your side of the wire. Treat an assistant connected here like any other reader
+of your production logs, and prefer clients that let you review tool use.

@@ -47,6 +47,21 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     # test found; neither hangs off a person or a project.
     "jobs",
     "job_results",
+    # F22. Tracker connections belong to the organization. Before `users`, whom a
+    # setup names; their sealed keys go with the row.
+    "connections",
+    # F20. Dashboards belong to the organization, not a project (BR1), so a project's
+    # deletion leaves them. Before `users`, whom their owner and editor columns name.
+    "dashboards",
+    # F3. The rules an organization stopped from naming causes. Before `users`, whom
+    # `created_by` names.
+    "explanation_stopped_rules",
+    # F3. The AI connection, its months of tokens and its run records belong to the
+    # organization. Before `users`, whom consent and a run name, and before `projects`,
+    # which a run names.
+    "ai_connections",
+    "ai_usage_monthly",
+    "ai_runs",
     "users",
     "projects",
 )
@@ -89,6 +104,42 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # a finding's links to incidents go with the finding.
     "findings": "projects",
     "finding_incidents": "findings",
+    # F22. A case is columns on its finding; its timeline, notes and owed emails
+    # go with the finding, and the finding with the project.
+    "finding_events": "findings",
+    "finding_notes": "findings",
+    "finding_emails_owed": "findings",
+    # F22. What a connection reaches goes with the connection. A case's tracker
+    # issues go with its finding; a connection or place that goes leaves them as text.
+    "connection_repositories": "connections",
+    "finding_links": "findings",
+    # F22 T6.2. A service's repository mapping goes with its project (and with its
+    # repository, when the connection that reaches it goes).
+    "service_repositories": "projects",
+    # F3. A finding's explanation versions go with the finding; the hour's error-group
+    # read with its project (it also expires on its own after an hour).
+    "finding_explanations": "findings",
+    "evidence_error_group_reads": "projects",
+    # F3. A rating goes with the version it rates.
+    "finding_explanation_ratings": "finding_explanations",
+    # F3. A project's AI opt-out goes with the project.
+    "ai_project_opt_outs": "projects",
+    # F19. Targets and their change history go with the project; status and daily
+    # counts with their target. The history and a purged target's months have no key
+    # to the target, because they outlive its purge (FR31, D46).
+    "slo_targets": "projects",
+    "slo_status": "slo_targets",
+    "slo_daily_counts": "slo_targets",
+    "slo_target_changes": "projects",
+    "slo_deleted_months": "projects",
+    "slo_exclusions": "slo_targets",
+    # F28. Releases and how far the sync has read go with the project; periods with
+    # their release.
+    "releases": "projects",
+    "release_periods": "releases",
+    "release_sync_state": "projects",
+    # F28 T2.1: what the Deploys section shows of the project's intake.
+    "deploy_intake_state": "projects",
     "detection_state": "projects",
     "detection_project_runs": "projects",
     "detection_baselines": "projects",
@@ -101,6 +152,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # on purpose — `models.UserRecoveryCode` argues why — so it is reached here
     # through the person it belongs to, and `users` is deleted directly above.
     "user_recovery_codes": "users",
+    # F20. A dashboard's kept versions go with it.
+    "dashboard_versions": "dashboards",
     # F36. Keyed by token, carrying no `org_id`: the token it names carries one,
     # and the counters die with it.
     "api_token_usage_daily": "api_tokens",

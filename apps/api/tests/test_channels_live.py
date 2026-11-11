@@ -209,8 +209,12 @@ async def test_the_owners_channel_can_be_muted_but_not_deleted_or_reconfigured(
 ) -> None:
     listed = await service.list_channels(db, org_id=tenant.organization.id)
     [owners] = [channel for channel in listed.channels if channel.kind == "owners"]
-    # Both default rules send to it (F21 FR8, F6 FR29).
-    assert sorted(rule.name for rule in owners.rules) == ["Any check down", "Critical problems"]
+    # Every default rule sends to it (F21 FR8, F6 FR29, F19 FR25).
+    assert sorted(rule.name for rule in owners.rules) == [
+        "Any check down",
+        "Critical problems",
+        "Reliability targets",
+    ]
 
     with pytest.raises(ConflictError):
         await service.delete(
@@ -498,4 +502,33 @@ async def test_a_send_test_says_so_when_its_queue_cannot_be_reached(
     with pytest.raises(DependencyUnavailableError):
         await service.dispatch_test(
             db, _UnreachableQueue(), org_id=tenant.organization.id, channel_id=created.id
+        )
+
+
+async def test_a_channel_people_read_can_turn_the_follow_up_off_and_a_machine_cannot(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """F3 FR48, AC84's channel case: on by default, turned off by whoever edits channels;
+    PagerDuty and webhooks never receive it, so they have no switch."""
+    created = await _create(db, tenant, kind="slack", name="#incidents", secret=SLACK_URL)
+    assert created.sends_explained is True
+
+    off = await service.update(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        channel_id=created.id,
+        request=UpdateChannelRequest(sends_explained=False),
+        secret_keys=ConfiguredKeys(KEY),
+    )
+    assert off.sends_explained is False
+    pager = await _create(db, tenant, kind="pagerduty", name="PD", secret=ROUTING_KEY)
+    with pytest.raises(InvalidRequestError, match="PagerDuty"):
+        await service.update(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            channel_id=pager.id,
+            request=UpdateChannelRequest(sends_explained=False),
+            secret_keys=ConfiguredKeys(KEY),
         )

@@ -17,10 +17,11 @@ when, and nothing that grants access to anything.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
-from nexovue_platform import detection, erasure
+from nexovue_platform import cases, detection, erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -29,12 +30,12 @@ from nexovue_api.data.postgres.models import (
     ApiToken,
     AuditLogEntry,
     Check,
-    DeployEvent,
     Integration,
     NotificationChannel,
     Organization,
     Project,
     SiteKey,
+    SloTarget,
     User,
 )
 
@@ -71,6 +72,22 @@ DEPLOY_WEBHOOK_SECRET_CREATED: Final = "deploy.webhook_secret_created"
 DEPLOY_WEBHOOK_SECRET_REVOKED: Final = "deploy.webhook_secret_revoked"
 INTEGRATION_CREATED: Final = "integration.created"
 INTEGRATION_DELETED: Final = "integration.deleted"
+# F19. A reliability target and its figure are something people quote, so every
+# change to one is recorded, with ids only (AC34, AC88).
+SLO_CREATED: Final = "slo.created"
+SLO_TARGET_CHANGED: Final = "slo.target_changed"
+SLO_DELETED: Final = "slo.deleted"
+SLO_RESTORED: Final = "slo.restored"
+# F20 (FR27). A dashboard's title, panel count, version and a hash of its definition,
+# and the hosts its links point at: enough to match an entry to an exported file, and
+# never the definition, whose notes may hold a pasted secret (AC13).
+DASHBOARD_CREATED: Final = "dashboard.created"
+DASHBOARD_UPDATED: Final = "dashboard.updated"
+DASHBOARD_DELETED: Final = "dashboard.deleted"
+DASHBOARD_RESTORED: Final = "dashboard.restored"
+DASHBOARD_PURGED: Final = "dashboard.purged"
+SLO_EXCLUDED: Final = "slo.excluded"
+SLO_EXCLUSION_REMOVED: Final = "slo.exclusion_removed"
 CHECK_CREATED: Final = "check.created"
 CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
@@ -110,8 +127,9 @@ SESSION_DENIED: Final = "session.denied"
 # and failing to. A refusal is the more interesting of the two.
 ADMIN_MODE_ENTERED: Final = "admin_mode.entered"
 ADMIN_MODE_REFUSED: Final = "admin_mode.refused"
-DEPLOY_RECORDED: Final = "deploy.recorded"
-DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
+# F28: one entry per accepted webhook request, and one when a person removes deploys.
+DEPLOY_BATCH_RECORDED: Final = "deploy.batch_recorded"
+DEPLOY_REMOVED: Final = "deploy.removed"
 # The two halves of P1-77, both tenantless so they outlive the tenant. The
 # scheduler writes the second when the nightly erasure is proved (ADR-014).
 ORGANIZATION_DELETION_REQUESTED: Final = erasure.DELETION_REQUESTED_ACTION
@@ -130,7 +148,55 @@ PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"
 # a mute or snooze decides whether anyone is woken (FR19 to FR22). Each records
 # its reason, and adoption is recorded by the scheduler as the system (FR21).
 FINDING_ACKNOWLEDGED: Final = "finding.acknowledged"
+# F22. A case's acts, written through the shared statement so a person's row and
+# the scheduler's differ only in the actor (AC103). Deleting a note is audited
+# because it destroys text; writing one is the timeline's to record (FD9).
+CASE_STARTED: Final = "case.started"
+CASE_ASSIGNED: Final = "case.assigned"
+CASE_RESOLVED: Final = "case.resolved"
+CASE_REOPENED: Final = "case.reopened"
+CASE_NOTE_DELETED: Final = "note.deleted"
+# F22 Step 4. Requesting an issue sends data to a third party; removing a link changes
+# what the case follows (design, *Audit*). A retry repeats a recorded act: none.
+LINK_ISSUE_REQUESTED: Final = "link.issue_requested"
+LINK_REMOVED: Final = "link.removed"
+# F22 Step 6. Attaching a pasted issue changes what the case shows; promoting it lets a
+# tracker close the case and nexovue write to the issue (design, *Audit*).
+LINK_ADDED: Final = "link.added"
+LINK_PROMOTED: Final = "link.promoted"
+# F22. Connecting sends data to a third party, and a key replaced or a connection
+# removed changes who can write to a customer's tracker (design, *Audit*).
+CONNECTION_CREATED: Final = "connection.created"
+CONNECTION_CREDENTIAL_REPLACED: Final = "connection.credential_replaced"
+CONNECTION_DELETED: Final = "connection.deleted"
+# F22 Step 6. Allowing issues in a public repository makes what they say public (D12,
+# D31), and a mapping decides where a service's issues go by default.
+CONNECTION_PUBLIC_REPOSITORY_ALLOWED: Final = "connection.public_repository_allowed"
+CONNECTION_PUBLIC_REPOSITORY_WITHDRAWN: Final = "connection.public_repository_withdrawn"
+SERVICE_REPOSITORY_CHANGED: Final = "service_repository.changed"
 FINDING_FALSE_ALARM: Final = "finding.false_alarm"
+# F3 (design, *Audit*). An AI connection can send an organization's facts out, so each act
+# is recorded with the changed fields' names, never their values; the connection's acts and
+# consent also name the old and new scheme and host, never a path, which may hold a secret,
+# so a customer can learn after a takeover which address received their data (AC72).
+AI_CONNECTION_CHANGED: Final = "ai.connection_changed"
+AI_CONNECTION_DELETED: Final = "ai.connection_deleted"
+AI_CONNECTION_TESTED: Final = "ai.connection_tested"
+AI_DISCLOSURE_AGREED: Final = "ai.disclosure_agreed"
+AI_CONSENT_ENDED: Final = "ai.consent_ended"
+AI_KEY_REPLACED: Final = "ai.key_replaced"
+AI_TURNED_ON: Final = "ai.turned_on"
+AI_TURNED_OFF: Final = "ai.turned_off"
+AI_LIMIT_CHANGED: Final = "ai.limit_changed"
+AI_PROJECT_OPTED_OUT: Final = "ai.project_opted_out"
+AI_PROJECT_OPTED_IN: Final = "ai.project_opted_in"
+AI_CONNECTION_TARGET: Final = "ai_connection"
+# F3. A person's judgement of an explanation, and a rule an organization stopped from
+# naming causes, or started again (FR20, FR54). The reason is a closed-list word.
+FINDING_EXPLANATION_RATED: Final = "finding.explanation_rated"
+EXPLANATION_RULE_STOPPED: Final = "explanation.rule_stopped"
+EXPLANATION_RULE_RESUMED: Final = "explanation.rule_resumed"
+EXPLANATION_RULE_TARGET: Final = "explanation_rule"
 FINDING_NEW_NORMAL: Final = "finding.new_normal"
 FINDING_ADOPTED: Final = detection.ADOPTED_AUDIT_ACTION
 SERVICE_SNOOZED: Final = "service.snoozed"
@@ -171,6 +237,8 @@ API_KEY_TARGET: Final = "api_key"
 API_TOKEN_TARGET: Final = "api_token"
 SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
+SLO_TARGET: Final = "slo"
+DASHBOARD_TARGET: Final = "dashboard"
 CHECK_SECRET_TARGET: Final = "check_secret"
 MAINTENANCE_WINDOW_TARGET: Final = "maintenance_window"
 NOTIFICATION_CHANNEL_TARGET: Final = "notification_channel"
@@ -178,9 +246,9 @@ ALERT_RULE_TARGET: Final = "alert_rule"
 PROJECT_CHECKS_TARGET: Final = "project"
 INTEGRATION_TARGET: Final = "integration"
 WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
-DEPLOY_TARGET: Final = "deploy"
 PROJECT_TARGET: Final = "project"
 FINDING_TARGET: Final = detection.FINDING_AUDIT_TARGET
+CONNECTION_TARGET: Final = "connection"
 
 # A refused sign-in against an address matching no account. The address is not
 # recorded: it belongs to somebody who is not our customer, so storing it would
@@ -640,6 +708,181 @@ def _rule_event(db: AsyncSession, action: str, rule: AlertRule, actor_user_id: u
     )
 
 
+def _record_slo(
+    db: AsyncSession, action: str, *, target: SloTarget, actor_user_id: uuid.UUID
+) -> None:
+    """A target's act, by id: its project rides in the detail as an id, and no name,
+    description or definition, which a person may have filled with free text (AC88)."""
+    _add(
+        db,
+        org_id=target.org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(SLO_TARGET, target.id),
+        detail={"project_id": str(target.project_id)},
+    )
+
+
+def record_slo_created(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
+    _record_slo(db, SLO_CREATED, target=target, actor_user_id=actor_user_id)
+
+
+def record_slo_target_changed(
+    db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID
+) -> None:
+    _record_slo(db, SLO_TARGET_CHANGED, target=target, actor_user_id=actor_user_id)
+
+
+def record_slo_deleted(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
+    _record_slo(db, SLO_DELETED, target=target, actor_user_id=actor_user_id)
+
+
+def record_slo_restored(db: AsyncSession, *, target: SloTarget, actor_user_id: uuid.UUID) -> None:
+    _record_slo(db, SLO_RESTORED, target=target, actor_user_id=actor_user_id)
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardFacts:
+    """What a dashboard's audit entry says about it (FR27): never its definition."""
+
+    title: str
+    panel_count: int
+    version: int
+    definition_sha256: str
+    link_hosts: tuple[str, ...]
+
+
+def _record_dashboard(
+    db: AsyncSession,
+    action: str,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+    before: DashboardFacts | None = None,
+) -> None:
+    detail: dict[str, Any] = {
+        "title": facts.title,
+        "panel_count": facts.panel_count,
+        "version": facts.version,
+        "definition_sha256": facts.definition_sha256,
+    }
+    hosts_before = set(before.link_hosts) if before else set()
+    hosts_after = set(facts.link_hosts)
+    if added := sorted(hosts_after - hosts_before):
+        detail["link_hosts_added"] = added
+    if removed := sorted(hosts_before - hosts_after):
+        detail["link_hosts_removed"] = removed
+    if before is not None and before.title != facts.title:
+        detail["previous_title"] = before.title
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(DASHBOARD_TARGET, dashboard_id),
+        detail=detail,
+    )
+
+
+def record_dashboard_created(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+) -> None:
+    _record_dashboard(
+        db,
+        DASHBOARD_CREATED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+    )
+
+
+def record_dashboard_updated(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+    before: DashboardFacts,
+) -> None:
+    """A rename records the old title; links added or removed record their hosts."""
+    _record_dashboard(
+        db,
+        DASHBOARD_UPDATED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+        before=before,
+    )
+
+
+def record_dashboard_deleted(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+) -> None:
+    _record_dashboard(
+        db,
+        DASHBOARD_DELETED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+        before=facts,
+    )
+
+
+def record_slo_excluded(
+    db: AsyncSession, *, target: SloTarget, exclusion_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """Time left out of a target (FR29): ids only, never the reason (AC88)."""
+    _record_slo_exclusion(
+        db, SLO_EXCLUDED, target=target, exclusion_id=exclusion_id, actor_user_id=actor_user_id
+    )
+
+
+def record_slo_exclusion_removed(
+    db: AsyncSession, *, target: SloTarget, exclusion_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    _record_slo_exclusion(
+        db,
+        SLO_EXCLUSION_REMOVED,
+        target=target,
+        exclusion_id=exclusion_id,
+        actor_user_id=actor_user_id,
+    )
+
+
+def _record_slo_exclusion(
+    db: AsyncSession,
+    action: str,
+    *,
+    target: SloTarget,
+    exclusion_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> None:
+    _add(
+        db,
+        org_id=target.org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(SLO_TARGET, target.id),
+        detail={"project_id": str(target.project_id), "exclusion_id": str(exclusion_id)},
+    )
+
+
 def record_check_created(db: AsyncSession, *, check: Check, actor_user_id: uuid.UUID) -> None:
     """A new check exists, so our infrastructure will now fetch a URL somebody
     chose. That is worth a trail even though the check itself holds no secret:
@@ -749,41 +992,62 @@ def record_maintenance_window_changed(
     )
 
 
-def record_deploy_recorded(db: AsyncSession, *, event: DeployEvent) -> None:
-    """A deploy arrived over the public webhook.
-
-    No actor: the caller proved it holds the project's deploy secret, which says
-    the request came from that project's CI and nothing at all about which
-    person is behind it. Recorded anyway, because this is the one write in the
-    control plane the internet can reach, and a burst of them is worth seeing.
-
-    Only refused notifications are absent from this log: writing a row for every
-    unsigned POST would let anyone fill the table from outside.
-    """
-    _add(
-        db,
-        org_id=event.org_id,
-        actor_user_id=None,
-        action=DEPLOY_RECORDED,
-        target=_target(DEPLOY_TARGET, event.id),
-    )
-
-
-def record_deploy_webhook_secret_viewed(
-    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, actor_user_id: uuid.UUID
+def record_deploy_batch_recorded(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    secret_id: uuid.UUID,
+    count: int,
+    first_deploy_id: uuid.UUID,
 ) -> None:
-    """Somebody read a project's deploy secrets.
+    """A webhook request stored new deploys (F28 T2.4).
 
-    Reading a credential is worth a trail even though it changes nothing: it is
-    what an account takeover does before it starts forging deploys. The target
-    is the project — the secret itself is never recorded.
+    One entry per request rather than per deploy, naming the secret that signed it,
+    how many it stored and the first, so an investigation can find them again. No
+    actor: the caller proved it holds a deploy secret, which says nothing about which
+    person is behind it. A refused or repeated request writes nothing here, or anyone
+    on the internet could fill the table.
     """
     _add(
         db,
         org_id=org_id,
-        actor_user_id=actor_user_id,
-        action=DEPLOY_WEBHOOK_SECRET_VIEWED,
+        actor_user_id=None,
+        action=DEPLOY_BATCH_RECORDED,
         target=_target(PROJECT_TARGET, project_id),
+        detail={
+            "secret_id": str(secret_id),
+            "count": count,
+            "first_deploy_id": str(first_deploy_id),
+        },
+    )
+
+
+def record_deploys_removed(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    count: int,
+    deploy_id: uuid.UUID | None,
+    secret_id: uuid.UUID | None,
+    since: datetime | None,
+) -> None:
+    """A person removed deploys (F28 D37, AC61): one by id, or everything a withdrawn
+    secret signed since a time."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=DEPLOY_REMOVED,
+        target=_target(PROJECT_TARGET, project_id),
+        detail={
+            "count": count,
+            "deploy_id": None if deploy_id is None else str(deploy_id),
+            "secret_id": None if secret_id is None else str(secret_id),
+            "since": None if since is None else since.isoformat(),
+        },
     )
 
 
@@ -861,6 +1125,116 @@ def record_masking_rule_disabled(
     )
 
 
+def record_connection_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    action: str,
+    connection_id: uuid.UUID,
+    kind: str,
+) -> None:
+    """A connection made, its key replaced, or removed (F22). Names the kind, never a key."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(CONNECTION_TARGET, connection_id),
+        detail={"kind": kind},
+    )
+
+
+def record_place_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    action: str,
+    connection_id: uuid.UUID,
+    place_id: uuid.UUID,
+    place_key: str,
+) -> None:
+    """A public repository allowed, or the allowance withdrawn (F22, AC115). Names the
+    repository by its strict key, which is what became, or stopped being, writable."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(CONNECTION_TARGET, connection_id),
+        detail={"place_id": str(place_id), "repository": place_key},
+    )
+
+
+def record_service_repository_changed(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    place_id: uuid.UUID | None,
+) -> None:
+    """Where a service's issues go by default, set or removed (`place_id` None) (F22)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=SERVICE_REPOSITORY_CHANGED,
+        target=_target(PROJECT_TARGET, project_id),
+        detail={"service": service_name, "place_id": None if place_id is None else str(place_id)},
+    )
+
+
+def record_ai_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    action: str,
+    target_id: uuid.UUID,
+    detail: dict[str, Any] | None = None,
+    target_kind: str = AI_CONNECTION_TARGET,
+) -> None:
+    """An act on the organization's AI connection, switch or opt-outs (F3). `detail` holds
+    field names, hosts and closed words only, never a key or a URL's path."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(target_kind, target_id),
+        detail=detail,
+    )
+
+
+async def record_case_action(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    action: str,
+    finding_id: uuid.UUID,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """A case act (F22, AC77), in the caller's transaction, through the shared
+    statement the scheduler's sweeps also execute. `actor_user_id` is None when
+    the system acted, as the adoption entry already does."""
+    from sqlalchemy import text as sql_text
+
+    await db.execute(
+        sql_text(cases.RECORD_CASE_AUDIT_SQL),
+        cases.case_audit_parameters(
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            target=_target(FINDING_TARGET, finding_id),
+            detail=detail,
+        ),
+    )
+
+
 def record_finding_acknowledged(
     db: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, actor_user_id: uuid.UUID
 ) -> None:
@@ -911,6 +1285,42 @@ def record_finding_new_normal(
         action=FINDING_NEW_NORMAL,
         target=_target(FINDING_TARGET, finding_id),
         detail={"shifts": shifts},
+    )
+
+
+def record_explanation_rated(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    version: int,
+    helpful: bool,
+    reason: str | None,
+) -> None:
+    """Somebody said whether a finding's explanation was useful (F3 FR20)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=FINDING_EXPLANATION_RATED,
+        target=_target(FINDING_TARGET, finding_id),
+        detail={"version": version, "helpful": helpful, "reason": reason},
+    )
+
+
+def record_explanation_rule(
+    db: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID, rule: str, stopped: bool
+) -> None:
+    """A rule stopped from naming causes in this organization, or started again (F3 FR54).
+    The rule is one of nexovue's own names, never customer text."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=EXPLANATION_RULE_STOPPED if stopped else EXPLANATION_RULE_RESUMED,
+        target=f"{EXPLANATION_RULE_TARGET}:{rule}",
+        detail={"rule": rule},
     )
 
 

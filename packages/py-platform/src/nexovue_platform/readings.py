@@ -91,3 +91,49 @@ GROUP_ID_SQL: Final = f"""
         concat('{DERIVED_NAMESPACE}', exception_type, '\\n', message_template)
     ))))
 """
+
+
+# ------------------------------------------------------- a synthetic check's run
+#
+# The Synthetics screen's uptime and a check-based reliability target count the same
+# runs, so the rule for which runs count lives here once (F19 C3). Each reader splices
+# these into its own statement, under its own tenant chokepoint.
+
+# The reading every probe writes once a run: 1 for up, 0 for down.
+METRIC_STATUS: Final = "synthetic.check.status"
+UP_VALUE: Final = 1
+
+# ClickHouse's JSON type reads a dot as a path separator, so the OTLP key
+# `synthetic.check.id` is stored nested. The subcolumn is `Dynamic`, so each is cast.
+CHECK_ID: Final = "toString(resource_attrs.synthetic.check.id)"
+OUTCOME: Final = "toString(attrs.synthetic.check.outcome)"
+FINAL: Final = "toString(attrs.synthetic.check.final)"
+MAINTENANCE: Final = "toString(attrs.synthetic.check.maintenance)"
+
+# Outcomes that say nothing about the customer's service: the author's mistake,
+# or ours (BR7). Held out of uptime, and still listed as runs.
+UNMEASURED_OUTCOMES: Final = ("misconfigured", "prober_error")
+
+# **A run counts toward uptime only when it is the confirmed one.** An attempt a
+# retry overruled is visible in the run list and nowhere else (FR25), and a run
+# taken during a maintenance window changes nothing (AC23). Readings published
+# before these attributes existed carry none of them and count, as they did.
+# Over a row carrying `READING_ATTRIBUTES`.
+COUNTED_RUN: Final = (
+    "(final_flag != 'false' AND maintenance_flag != 'true' "
+    f"AND outcome NOT IN ({', '.join(repr(outcome) for outcome in UNMEASURED_OUTCOMES)}))"
+)
+
+# The per-reading attributes a statement carries up from its inner collapse. Taken
+# with `any()`: they are part of `attrs`, so part of the series.
+READING_ATTRIBUTES: Final = f"""
+        any({OUTCOME}) AS outcome,
+        any({FINAL}) AS final_flag,
+        any({MAINTENANCE}) AS maintenance_flag"""
+
+# **One stored row per reading.** A metric row is not unique: `metricwriting.Absorb`
+# takes a duplicate over a lost point and leaves the reader to collapse it. The key
+# names the check and the metric as well as the series, because `series_hash` is
+# `cityHash64(toJSONString(attrs))`: it cannot tell two checks apart (the check id is
+# in `resource_attrs`), nor two metrics whose attributes match.
+ONE_ROW_PER_READING: Final = "GROUP BY check_id, metric_name, series_hash, timestamp"

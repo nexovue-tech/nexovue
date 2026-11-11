@@ -93,6 +93,12 @@ type Metered struct {
 	// a payload holds a handful of resources, and a map per message would
 	// allocate on the hottest path this job has.
 	Services []string
+
+	// Heard is the services this payload marks as last heard from in
+	// `service_last_seen`: Services for every door but the browser's, and none
+	// for that one (see heardThrough). It shares Services' backing array and is
+	// only read.
+	Heard []string
 }
 
 // UnnamedService is the service a resource carrying no `service.name` is billed
@@ -278,7 +284,11 @@ func (s Signal) meter(message []byte) (*nexovuev1.Envelope, Metered, error) {
 	if err != nil {
 		return nil, Metered{}, consume.RejectedBy(envelope, err)
 	}
-	metered.BrowserBytes = browserBytesOf(envelope.GetDoor(), metered.Bytes)
+	door := envelope.GetDoor()
+	metered.BrowserBytes = browserBytesOf(door, metered.Bytes)
+	if heardThrough(door) {
+		metered.Heard = metered.Services
+	}
 	return envelope, metered, nil
 }
 
@@ -292,6 +302,24 @@ func browserBytesOf(door nexovuev1.Door, payloadBytes int64) int64 {
 		return payloadBytes
 	}
 	return 0
+}
+
+// heardThrough reports whether a message through this door may mark its
+// services as heard from in `service_last_seen`.
+//
+// The browser door's may not. Its site key is printed in the customer's page,
+// so anyone can send any `service.name` through it, and every reader of that
+// table takes a row as a server that is up: the *went silent* alert watches
+// each name in it, detection works on a project with a recent row, and an SLO
+// target may only name a service that has one. A forged name would become a
+// critical silence incident ten minutes later, and a forged refresh would keep
+// a stopped server looking alive. No reader can use a browser name: detection
+// and SLOs judge the rollups, which the browser door already stays out of
+// (traceassembly.countsInRollups), and no screen offers a browser app as a
+// silence rule's service. A browser service is still billed and its usage
+// still counted (docs/changes/browser-door-last-seen).
+func heardThrough(door nexovuev1.Door) bool {
+	return door != nexovuev1.Door_DOOR_RUM
 }
 
 // countSpans counts the spans in one OTLP trace export, and the services they

@@ -15,6 +15,7 @@ from fastapi import APIRouter, FastAPI
 from nexovue_platform.telemetry.logging import configure_logging
 
 from nexovue_api.admin import router as admin_router
+from nexovue_api.ai import router as ai_router
 from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.apitokens import router as apitokens_router
@@ -31,11 +32,17 @@ from nexovue_api.checkruns import router as check_runs_router
 from nexovue_api.checks import router as checks_router
 from nexovue_api.checksecrets import router as check_secrets_router
 from nexovue_api.clientlogs import router as client_logs_router
+from nexovue_api.connections import router as connections_router
+from nexovue_api.connections import test_router as connection_tests_router
+from nexovue_api.dashboardpanels import router as dashboard_panels_router
+from nexovue_api.dashboardpanels.service import PanelReads
+from nexovue_api.dashboards import router as dashboards_router
 from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.detection import router as detection_router
 from nexovue_api.errorgroups import router as error_groups_router
 from nexovue_api.errors.handlers import install_error_handlers
+from nexovue_api.explanations import router as explanations_router
 from nexovue_api.findings import router as findings_router
 from nexovue_api.health import router as health_router
 from nexovue_api.heartbeats import router as heartbeats_router
@@ -53,11 +60,14 @@ from nexovue_api.profile import router as profile_router
 from nexovue_api.profiles import router as profiles_router
 from nexovue_api.projects import router as projects_router
 from nexovue_api.readsurface import router as read_spec_router
+from nexovue_api.releases import router as releases_router
 from nexovue_api.rum import router as rum_router
 from nexovue_api.servicemap import router as service_map_router
 from nexovue_api.services import router as services_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
 from nexovue_api.signup import router as signup_router
+from nexovue_api.slos import router as slos_router
+from nexovue_api.slos.readings import router as slo_readings_router
 from nexovue_api.sourcemaps import router as source_maps_router
 from nexovue_api.support import router as support_router
 from nexovue_api.synthetics import router as synthetics_router
@@ -97,6 +107,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Dependencies read configuration from here, so a test that builds the app
     # with explicit settings gets those and not whatever the environment holds.
     app.state.settings = settings
+    # F20: the dashboard batch's process caps and kept answers, in memory and per
+    # process like the limiter's counts. A share per organization only where more than
+    # one can exist (D26).
+    app.state.dashboard_reads = PanelReads.for_install(
+        shared_by_organizations=settings.is_hosted or settings.signup_enabled
+    )
 
     install_middleware(app, settings)
     install_error_handlers(app)
@@ -141,11 +157,23 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(maintenance_router.router)
     versioned.include_router(alerts_router.router)
     versioned.include_router(findings_router.router)
+    versioned.include_router(explanations_router.router)
+    versioned.include_router(slos_router.router)
+    versioned.include_router(slo_readings_router.router)
+    # F20: Postgres-only on the default tier, and the batch on the telemetry tier, under
+    # separate prefixes so no route order is load-bearing (D41).
+    versioned.include_router(dashboards_router.router)
+    versioned.include_router(dashboard_panels_router.router)
     versioned.include_router(detection_router.router)
     versioned.include_router(channels_router.router)
     versioned.include_router(channel_tests_router.router)
+    versioned.include_router(connections_router.router)
+    versioned.include_router(connections_router.service_repositories_router)
+    versioned.include_router(connection_tests_router.router)
+    versioned.include_router(ai_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
+    versioned.include_router(releases_router.router)
     versioned.include_router(integrations_router.router)
     versioned.include_router(services_router.router)
     versioned.include_router(service_map_router.router)

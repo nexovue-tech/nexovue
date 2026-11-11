@@ -53,3 +53,7 @@ echo
 echo "postgres restored from $snapshot"
 echo "  alembic revision: $(pg_scalar 'SELECT version_num FROM alembic_version')"
 echo "check it with: just backup-verify $(basename "$snapshot")"
+# The dump is restored with --no-privileges, so the AI role's account has lost its grants and
+# its functions are anyone's again until `setup` runs (F3). `nexovue restore` runs it itself.
+echo "next: run setup (\`nexovue setup\`, or \`just migrate-pg\` in development), which grants"
+echo "      the AI role's account again; until then scheduler-insight cannot claim its jobs"

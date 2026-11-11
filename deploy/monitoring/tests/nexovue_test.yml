@@ -277,3 +277,46 @@ tests:
       - eval_time: 5m
         alertname: NexovueDetectionStalled
         exp_alerts: []
+
+  # F22 AC123. `scheduler-connections` is optional, so its absence alone says nothing: beat's
+  # `connections_active` says whether one is expected. Absent and expected pages; absent and not
+  # expected stays quiet; present stays quiet.
+  - name: the connections role absent with no connection is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="leader"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueConnectionsMissing
+        exp_alerts: []
+
+  - name: the connections role absent with a connection live pages
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="leader"}'
+        values: "1x10"
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="follower"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NexovueConnectionsMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NexovueConnectionsMissing
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "a tracker connection is live and no scheduler-connections is running"
+
+  - name: the connections role present with a connection live is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="leader"}'
+        values: "1x10"
+      - series: 'up{job="scheduler-connections", instance="g"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueConnectionsMissing
+        exp_alerts: []

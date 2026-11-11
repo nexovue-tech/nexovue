@@ -121,10 +121,17 @@ TOKEN_TIER: Final = Tier(
 
 # The one unauthenticated write in the control plane. It shared the default tier,
 # which meant anything on the internet could consume the quota signed-in users
-# need. Its own, tighter allowance: a deploy is an occasional event, and no CI
-# system pushes sixty a minute.
+# need. Its own, tighter allowance, per address and counted before anything is
+# verified: sixty requests a minute. A request now carries up to 100 deploys (F28
+# FR6), so this bounds requests, not deploys; deploys are bounded by the quota below.
 WEBHOOK_PREFIX: Final = "/api/v1/deploys/webhook/"
 WEBHOOK_TIER: Final = Tier(quota=Quota(name="deploy-webhook", limit=60, window_seconds=60))
+# F28 FR13: newly stored deploys per project per clock hour, counted in Postgres by the
+# route once the signature has held, and only for new items, so neither an outsider nor
+# a replayed capture spends a project's allowance. A starting guess.
+DEPLOYS_ACCEPTED: Final = Quota(
+    name="deploy-accepted", limit=1_000, window_seconds=3_600, exact=True
+)
 
 # F18. Each of these makes our infrastructure do work somebody else chose, so each
 # has its own allowance rather than a share of the one signed-in screens need.
@@ -139,6 +146,21 @@ RUN_NOW_TIER: Final = Tier(quota=Quota(name="check-run-now", limit=30, window_se
 # testing a channel sends a handful, and anything more is using us to post.
 SEND_TEST_PREFIX: Final = "/api/v1/channel-tests"
 SEND_TEST_TIER: Final = Tier(quota=Quota(name="channel-send-test", limit=10, window_seconds=60))
+# F22. A connection test makes our infrastructure call a tracker on the caller's word,
+# so it is a send test's kind of request, with the same tight allowance.
+CONNECTION_TEST_PREFIX: Final = "/api/v1/connection-tests"
+CONNECTION_TEST_TIER: Final = Tier(
+    quota=Quota(name="connection-tests", limit=10, window_seconds=60)
+)
+# F22 T5.1. A tracker's webhook is unauthenticated until its signature holds, like the
+# deploy webhook, so it is counted per address before anything is verified, apart from the
+# `/connections` routes signed-in people use. 120 a minute, a guess (design, *Webhook
+# handling*): a busy repository's deliveries, and a refused one costs nothing, since
+# polling is the base.
+CONNECTION_WEBHOOK_PREFIX: Final = "/api/v1/connections/webhook/"
+CONNECTION_WEBHOOK_TIER: Final = Tier(
+    quota=Quota(name="connection-webhook", limit=120, window_seconds=60)
+)
 # Parsing an OpenAPI description or a Postman collection is CPU the caller chose.
 CHECK_IMPORT_PREFIX: Final = "/api/v1/check-imports"
 CHECK_IMPORT_TIER: Final = Tier(quota=Quota(name="check-import", limit=20, window_seconds=60))
@@ -151,8 +173,10 @@ HEARTBEAT_PREFIX: Final = "/api/v1/heartbeat/"
 HEARTBEAT_TIER: Final = Tier(quota=Quota(name="heartbeat", limit=120, window_seconds=60))
 
 _OWN_TIERS: Final = (
+    (CONNECTION_WEBHOOK_PREFIX, CONNECTION_WEBHOOK_TIER),
     (RUN_NOW_PREFIX, RUN_NOW_TIER),
     (SEND_TEST_PREFIX, SEND_TEST_TIER),
+    (CONNECTION_TEST_PREFIX, CONNECTION_TEST_TIER),
     (CHECK_IMPORT_PREFIX, CHECK_IMPORT_TIER),
     (CHECK_FILE_PREFIX, CHECK_FILE_TIER),
     (HEARTBEAT_PREFIX, HEARTBEAT_TIER),
@@ -246,7 +270,35 @@ TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/usage",
     f"{API_PREFIX}/llm",
     f"{API_PREFIX}/findings",
+    # F19 D59: the SLO suggestion and burn line. Not `/slos`, which reads Postgres only
+    # and must answer while ClickHouse is down (AC40).
+    f"{API_PREFIX}/slo-readings",
+    # F28: the comparison reads the version rollup. The list and a release read Postgres,
+    # and share the tier as one prefix (design, *Rate limits*).
+    f"{API_PREFIX}/releases",
+    # F20 D41: the dashboard batch, on a prefix of its own, so `/dashboards`, which reads
+    # Postgres only and must answer while ClickHouse is down, stays on the default tier.
+    f"{API_PREFIX}/dashboard-panels",
 )
+
+# F20. One dashboard is one request and many scans, each charged (`ratelimit/charge.py`),
+# so its limits are counted in scans. Every value here is a guess until plan T5.7
+# measures it (design, *Performance and scale*).
+#
+# The most scans one batch read may run. A definition whose worst case is over it is
+# refused at save, and a stored one over a lowered cap reads `over_limit` past it.
+MAX_SCANS_PER_READ: Final = 40
+# The fastest a dashboard refreshes: rollups change by the minute (`rollup.py`).
+REFRESH_FLOOR_SECONDS: Final = 30
+# The processes an install is sized for. The limiter gives each its share
+# (`limiter.py`), and a dashboard at the cap and floor must fit one person's (NFR3).
+LARGEST_SUPPORTED_API_INSTANCES: Final = 2
+# A batch's whole budget, counted from the request's arrival: slot waits, Postgres,
+# process-cap waits and scans (D25). The margin covers assembling and the network,
+# and the console aborts at their sum.
+PANEL_READ_DEADLINE_SECONDS: Final = 20
+PANEL_READ_MARGIN_SECONDS: Final = 5
+PANEL_READ_CLIENT_TIMEOUT_SECONDS: Final = PANEL_READ_DEADLINE_SECONDS + PANEL_READ_MARGIN_SECONDS
 
 # Probes must answer while the API is being hammered; that is the whole point
 # of them. They are also what an orchestrator uses to decide to restart us.

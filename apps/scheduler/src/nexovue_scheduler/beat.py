@@ -41,6 +41,7 @@ from nexovue_platform.checks.task import (
     probe_queue,
     time_limits_for,
 )
+from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.deployment import HOSTED
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
@@ -48,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
+from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.detection import (
     DETECTION_QUEUE,
@@ -60,6 +62,7 @@ from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.pollers.integrations import IntegrationDefinition, load_active_integrations
+from nexovue_scheduler.releases import RELEASES_QUEUE, SWEEP_RELEASES_TASK
 from nexovue_scheduler.settings import Settings
 
 # Task names come from the shared contract rather than imports, so beat does not
@@ -94,6 +97,21 @@ BASELINE_SWEEP_ENTRY: Final = "sweep:detection-baselines"
 # The rows that lapse rather than being removed (ADR-020): sessions, links, results, jobs.
 EXPIRY_SWEEP_SECONDS: Final = 60
 EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
+
+# F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
+CASES_SWEEP_SECONDS: Final = 300
+CASES_SWEEP_ENTRY: Final = "sweep:cases"
+
+# F22 T4.5: due tracker links and each connection's hourly refresh, handed to
+# `scheduler-connections` every 30 seconds (a guess), and only while a connection is live
+# and connections are on (AC118), so no job waits for a role that is not running.
+CONNECTIONS_SWEEP_SECONDS: Final = 30
+CONNECTIONS_SWEEP_ENTRY: Final = "sweep:connections"
+
+# F28: releases seen in traffic, synced from the version rollup each minute on their own
+# capped queue (D31), so a slow read never takes an alert sweep's slot.
+RELEASE_SWEEP_SECONDS: Final = 60
+RELEASE_SWEEP_ENTRY: Final = "sweep:releases"
 
 # A payment's grace period is days long; an hour late ending it costs nothing.
 GRACE_SWEEP_SECONDS: Final = 3600
@@ -179,6 +197,8 @@ class Beat:
         self._measure_due_at = 0.0
         self._entries: dict[str, Entry] = {}
         self._refresh_due_at = 0.0
+        # Whether a tracker connection is live, read with the schedule (F22 T4.5).
+        self.connections_live = False
 
         # What the heartbeat reports. Counters rather than gauges, because the
         # question that matters is "is it still moving", and a number that has
@@ -260,7 +280,11 @@ class Beat:
         self._measure_due_at = now + metrics.MEASURE_SECONDS
         try:
             async with self._engine.connect() as connection:
-                readings = await metrics.read_queues(connection, now=datetime.now(UTC))
+                readings = await metrics.read_queues(
+                    connection,
+                    now=datetime.now(UTC),
+                    connections_enabled=self._settings.connections_enabled,
+                )
         except Exception:
             # A missed reading leaves the last one standing; the next tick tries again.
             logger.warning("beat could not read the queues for its metrics")
@@ -308,6 +332,10 @@ class Beat:
                 self._engine, all_locations=self._settings.probe_locations
             )
             integrations = await load_active_integrations(self._engine)
+            async with self._engine.connect() as connection:
+                self.connections_live = await metrics.connections_live(
+                    connection, enabled=self._settings.connections_enabled
+                )
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
             # the entries we already hold are still correct, and dropping them
@@ -412,7 +440,15 @@ class Beat:
             BASELINE_SWEEP_ENTRY: (SWEEP_BASELINES_TASK, BASELINE_SWEEP_SECONDS, DETECTION_QUEUE),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
+            CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
+            RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
         }
+        if self.connections_live:
+            wanted[CONNECTIONS_SWEEP_ENTRY] = (
+                SWEEP_CONNECTIONS_TASK,
+                CONNECTIONS_SWEEP_SECONDS,
+                CONNECTIONS_INTERACTIVE_QUEUE,
+            )
         # A customer's own install charges nobody, so no payment has a grace period to end.
         if self._settings.nexovue_deployment == HOSTED:
             wanted[GRACE_SWEEP_ENTRY] = (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE)

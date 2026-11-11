@@ -95,7 +95,7 @@ class BillingEvent:
     # webhook is required to carry. Opaque: nothing parses or branches on it.
     subscription_ref: str
     # Unique per delivery, so a replayed webhook is detectable — the same
-    # property `X-GitHub-Delivery` gives door 4a.
+    # property the signed `delivery_id` gives door 4a.
     delivery_id: str
     # What the customer was actually debited, when the event carries it.
     #

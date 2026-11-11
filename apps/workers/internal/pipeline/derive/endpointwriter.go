@@ -70,14 +70,14 @@ func newEndpointBlock() *endpointBlock {
 	b := &endpointBlock{latencyMS: proto.NewArray[float64](new(proto.ColFloat64))}
 	b.columns = proto.Input{
 		{Name: columnTenantID, Data: &b.tenantID},
-		{Name: "derived_retention_days", Data: &b.retentionDays},
+		{Name: columnRetentionDays, Data: &b.retentionDays},
 		{Name: columnProjectID, Data: &b.projectID},
 		{Name: columnServiceName, Data: &b.serviceName},
 		{Name: "span_kind", Data: &b.spanKind},
 		{Name: "span_name", Data: &b.spanName},
-		{Name: "minute", Data: &b.minute},
-		{Name: "request_count", Data: &b.requestCount},
-		{Name: "error_count", Data: &b.errorCount},
+		{Name: columnMinute, Data: &b.minute},
+		{Name: columnRequestCount, Data: &b.requestCount},
+		{Name: columnErrorCount, Data: &b.errorCount},
 		{Name: "latency_ms", Data: b.latencyMS},
 	}
 	return b

@@ -23,6 +23,18 @@ groups:
         annotations:
           summary: "no {{ $labels.job }} is running to be scraped"
 
+      # F22. `scheduler-connections` is optional (`NEXOVUE_CONNECTIONS`), so it is not in the rule
+      # above, which would page for ever on an install without it. Beat's `connections_active`
+      # says whether one is expected: a live connection and no role running pages (AC123).
+      - alert: NexovueConnectionsMissing
+        expr: |
+          max(nexovue_scheduler_connections_active) > 0
+          unless on() (up{job="scheduler-connections"} == 1)
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "a tracker connection is live and no scheduler-connections is running"
+
       - alert: NexovuePipelineCheckFailing
         expr: nexovue_worker_check_up == 0
         for: 2m

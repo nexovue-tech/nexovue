@@ -20,14 +20,39 @@ class Action(StrEnum):
     OPERATE_CHECKS = "operate_checks"
     # Alert rules (including muting) and maintenance windows.
     OPERATE_ALERTS = "operate_alerts"
+    # Working a case on a finding (F22, FR34): take, assign, note, resolve,
+    # reopen, link an issue.
+    OPERATE_CASES = "operate_cases"
     UPLOAD_SOURCE_MAPS = "upload_source_maps"
+    # Reliability targets (F19, D20): create, change, disable, delete, restore.
+    # Every change is visible to all and a deletion can be undone for 30 days.
+    CONFIGURE_SLOS = "configure_slos"
+    # Dashboards (F20, BR7): create, change, delete, restore, and read a draft.
+    # Any working role may change any dashboard, because a version remains to go back to.
+    EDIT_DASHBOARDS = "edit_dashboards"
+    # A finding's explanation (F3, A20): read its facts again now, and later ask for
+    # plainer wording. Not alert operation: wording spends the customer's money.
+    REQUEST_EXPLANATION = "request_explanation"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
+    # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
+    # disconnect GitHub or Jira. They hold repository access, so not day-to-day work.
+    MANAGE_CONNECTIONS = "manage_connections"
+    # An organization's AI provider (F3, foundation FD8): the connection, its key and test,
+    # the limit, the switch and project opt-outs. It can send facts out, so not day-to-day.
+    MANAGE_AI = "manage_ai"
     MANAGE_CHECK_SECRETS = "manage_check_secrets"
     CONFIGURE_PROJECTS = "configure_projects"
     # Anomaly detection's sensitivity, mutes and new normals, and every *anomaly
     # finding* alert rule (F6 FR23, D11): what decides whether detection is heard.
     CONFIGURE_DETECTION = "configure_detection"
+    # Deleting another person's case note (F22, BR16). An author may always
+    # delete their own, even as a viewer: the one exception to the viewer rule,
+    # checked by the service on the route itself.
+    DELETE_ANY_CASE_NOTE = "delete_any_case_note"
+    # Removing a dashboard or one of its versions at once, past every way back (F20,
+    # FR68, D47): the answer to a pasted secret, so it is an administrator's.
+    PURGE_DASHBOARDS = "purge_dashboards"
     # Ingest keys, site keys, deploy webhook secrets and integrations.
     MANAGE_CREDENTIALS = "manage_credentials"
     # Read tokens for the organization's own data (F36, BR9).
@@ -38,6 +63,9 @@ class Action(StrEnum):
     READ_AUDIT = "read_audit"
     # Letting nexovue support view the console as a person (F31, BR14).
     GRANT_SUPPORT = "grant_support"
+    # Agreeing to send telemetry facts to an AI provider (F3 FR26): the account holder's
+    # own act, like the bill and support access.
+    CONSENT_AI_DISCLOSURE = "consent_ai_disclosure"
     COMMIT_SPEND = "commit_spend"
     END_ORGANIZATION = "end_organization"
 
@@ -50,11 +78,19 @@ _OWNERS: Final = frozenset({"owner"})
 ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.OPERATE_CHECKS: _EVERYONE_WHO_WORKS,
     Action.OPERATE_ALERTS: _EVERYONE_WHO_WORKS,
+    Action.OPERATE_CASES: _EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: _EVERYONE_WHO_WORKS,
+    Action.CONFIGURE_SLOS: _EVERYONE_WHO_WORKS,
+    Action.EDIT_DASHBOARDS: _EVERYONE_WHO_WORKS,
+    Action.REQUEST_EXPLANATION: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
+    Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
+    Action.MANAGE_AI: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: _ADMINISTRATORS,
+    Action.DELETE_ANY_CASE_NOTE: _ADMINISTRATORS,
+    Action.PURGE_DASHBOARDS: _ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: _ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: _ADMINISTRATORS,
     Action.MANAGE_MEMBERS: _ADMINISTRATORS,
@@ -67,6 +103,8 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.MANAGE_OWNERS: _OWNERS,
     # Consent to be viewed as is the account holder's, like the bill.
     Action.GRANT_SUPPORT: _OWNERS,
+    # An admin who could agree could send the organization's facts anywhere (F3 AC32).
+    Action.CONSENT_AI_DISCLOSURE: _OWNERS,
 }
 
 

@@ -46,10 +46,12 @@ defaults nobody tested:
 - your user, with the **owner** role and the address already verified
 - a project called **`production`**
 - an **ingest key**, for sending telemetry
-- a **deploy webhook secret**
 - a notification channel, **"Organization owners"**
 - two alert rules wired to that channel: **"Any check down"**, and **"Critical
   problems"**, which sends every critical anomaly-detection finding
+
+No deploy secret is created: one is shown once, so an owner mints it under **Settings →
+Projects → Deploys** when connecting CI ([`setup/deploys.md`](../product/setup/deploys.md)).
 
 That channel and those rules are the point: the first check that goes down, and the
 first critical finding, email you, with nothing to set up.

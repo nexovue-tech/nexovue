@@ -218,6 +218,14 @@ services:
       # in development, which is how customer TOTP went untried here until now.
       CREDENTIAL_ENCRYPTION_KEY: ${DEV_CREDENTIAL_ENCRYPTION_KEY:-1tru1EuwOqD39XZm1z-sb2mrRHEFmbD_vreXaw2YZE8=}
       CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${DEV_CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
+      # Seals tracker connections' keys (F22). A dev constant; `scheduler-connections`
+      # holds the same.
+      CONNECTION_SECRET_KEY: ${DEV_CONNECTION_SECRET_KEY:-Wm3n0P1oYHk2s1Yx7c5lQ0mJd8h6rT4vB9eA2uFgK0s=}
+      CONNECTION_SECRET_PREVIOUS_KEYS: ${DEV_CONNECTION_SECRET_PREVIOUS_KEYS:-}
+      # Seals AI provider keys (F3); `scheduler-insight` holds the same. Empty by default, so
+      # `/settings/ai` says AI is unavailable until a developer sets DEV_AI_SECRET_KEY.
+      AI_SECRET_KEY: ${DEV_AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${DEV_AI_SECRET_PREVIOUS_KEYS:-}
       PROBE_LOCATIONS: local
       # Where a browser lands: the **app**, never this API. Verification links,
       # password resets and the return from a payment all point at a screen,
@@ -455,12 +463,13 @@ services:
     # Docker on Linux (CI's runner) only when asked. Probes, deliveries and the model reach it here.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # No --queues: the default is light, light.<region> and detection, with at most two
-    # detection jobs at once (F6, C23). Naming queues here would drop the region's probes.
+    # No --queues: the default is light, light.<region>, detection, the three SLO queues and
+    # releases, each capped, and all capped queues together under the floor of 4 (F6 C23,
+    # F3 A56, F19 D66, F28 D31). Naming queues here would drop the region's probes.
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      python -m nexovue_scheduler worker --concurrency 8
+      python -m nexovue_scheduler worker --concurrency 8 --uncapped-floor 4
     # The loop's pulse (readiness blocker 7), through the mounted virtualenv.
     healthcheck:
       test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
@@ -564,6 +573,48 @@ services:
         limits:
           memory: 384M
 
+  # F22. Every tracker call, on its own narrow settings (D80): no Kafka, no check key, no
+  # object store. The development stack is the hosted product, where connections are not
+  # offered yet, so the console refuses a setup here; run the API self-hosted to try one.
+  scheduler-connections:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: >-
+      uv run --package nexovue-scheduler
+      watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
+      python -m nexovue_scheduler worker --queues connections,connections-interactive
+      --concurrency 3 --tasks connections
+    healthcheck:
+      test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    environment:
+      ENV: development
+      NEXOVUE_DEPLOYMENT: hosted
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      SCHEDULER_ROLE: connections
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
+      APP_BASE_URL: http://localhost:${WEB_HOST_PORT:-15173}
+      CONNECTION_SECRET_KEY: ${DEV_CONNECTION_SECRET_KEY:-Wm3n0P1oYHk2s1Yx7c5lQ0mJd8h6rT4vB9eA2uFgK0s=}
+      CONNECTION_SECRET_PREVIOUS_KEYS: ${DEV_CONNECTION_SECRET_PREVIOUS_KEYS:-}
+    depends_on:
+      python-deps:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
   # ---------- tools ----------
   # The hand-written demo shop is gone. It was three services we controlled, and
   # being tidy was exactly its problem: it never produced the messy polyglot
@@ -583,51 +634,53 @@ services:
   # published port. It measures budgets, which is a thing you invoke, not a
   # thing you leave running.
 
-  # ---------- intelligence (Phase 2, `insight` profile) ----------
-  # Not part of `just dev`: apps/insight does not exist until F3/F6. Defined
-  # here so the dev stack can grow into it without a compose redesign.
-  insight:
-    profiles: ["insight"]
+  # ---------- the AI role (F3) ----------
+  # Idle until an organization turns AI on. Its own Postgres account, which `just migrate-pg`
+  # creates with the development password below, and the `ai` network, shared with Postgres
+  # alone (compose.infra.yaml): no Kafka, ClickHouse or object store by name.
+  scheduler-insight:
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
-    # The development host by name: Docker Desktop provides host.docker.internal on its own, plain
-    # Docker on Linux (CI's runner) only when asked. Probes, deliveries and the model reach it here.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: >-
-      uv run --package nexovue-insight
-      watchmedo auto-restart --directory apps/insight/src --pattern '*.py' --recursive --
-      python -m nexovue_insight
+      uv run --package nexovue-scheduler
+      watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
+      python -m nexovue_scheduler worker --queues insight --concurrency 4 --tasks insight
+    healthcheck:
+      test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - python-venv:/workspace/.venv
     environment:
       ENV: development
-      # The development stack is the hosted product: billing, the operator console.
       NEXOVUE_DEPLOYMENT: hosted
       LOG_LEVEL: debug
       LOG_FORMAT: console
-      POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
-      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
+      SCHEDULER_ROLE: insight
+      POSTGRES_DSN: ${DEV_INSIGHT_POSTGRES_DSN:-postgresql+asyncpg://nexovue_insight:nexovue_insight_dev@postgres:5432/nexovue}
+      # The API's key (DEV_AI_SECRET_KEY), empty unless a developer sets one; production needs one.
+      AI_SECRET_KEY: ${DEV_AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${DEV_AI_SECRET_PREVIOUS_KEYS:-}
+      AI_PRIVATE_ENDPOINTS: ${DEV_AI_PRIVATE_ENDPOINTS:-}
+    networks: [ai]
     depends_on:
       python-deps:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      clickhouse:
-        condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 384M
 
   # Only for developers who want a container rather than a native install.
   # On macOS prefer running Ollama natively: Docker has no Metal passthrough,
-  # so this is CPU-only here, which is why LLM_BASE_URL above defaults to the
-  # host rather than to this service.
+  # so this is CPU-only here.
   ollama:
     profiles: ["ollama"]
     image: ollama/ollama:0.12.11

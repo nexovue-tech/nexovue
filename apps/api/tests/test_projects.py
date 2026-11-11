@@ -103,7 +103,10 @@ class Tenant:
         ]
         self.webhook_secrets = [
             ProjectWebhookSecret(
-                org_id=self.organization.id, project_id=self.project.id, secret="s" * 32
+                org_id=self.organization.id,
+                project_id=self.project.id,
+                sealed_secret=b"\x02sealed",
+                secret_hint="ssss",
             )
         ]
         for door in self.api_keys + self.site_keys + self.webhook_secrets:
@@ -453,9 +456,9 @@ async def test_creating_a_project_records_who_created_it(
 
     entry, *default_rules = db.entries
     assert entry.action == audit.PROJECT_CREATED
-    # F21, F6 FR29: every project starts with two default alert rules, recorded in the
-    # same name.
-    assert [rule.action for rule in default_rules] == [audit.ALERT_RULE_CREATED] * 2
+    # F21, F6 FR29, F19 FR25: every project starts with three default alert rules,
+    # recorded in the same name.
+    assert [rule.action for rule in default_rules] == [audit.ALERT_RULE_CREATED] * 3
     assert {rule.actor_user_id for rule in default_rules} == {acme.user.id}
     assert entry.org_id == acme.organization.id
     assert entry.actor_user_id == acme.user.id

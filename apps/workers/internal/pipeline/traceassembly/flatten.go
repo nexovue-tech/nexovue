@@ -287,11 +287,13 @@ func rpcStatusText(attributes []*commonpb.KeyValue) string {
 // Every span is read, not only the caller-side ones. Which kinds can open an
 // edge is the graph's business, and this file's job is to say what arrived.
 func peerOf(attributes []*commonpb.KeyValue, rpcSystem string) serviceedges.Peer {
+	serviceAttr, service := firstPresentKey(attributes, attrPeerServiceCurrent, attrPeerServiceLegacy)
 	return serviceedges.Peer{
-		Service:   firstPresent(attributes, attrPeerServiceCurrent, attrPeerServiceLegacy),
-		Address:   otlpvalue.StringOrEmpty(attributes, attrServerAddress),
-		System:    peerSystem(attributes),
-		Transport: rpcSystem,
+		Service:     service,
+		ServiceAttr: serviceAttr,
+		Address:     otlpvalue.StringOrEmpty(attributes, attrServerAddress),
+		System:      peerSystem(attributes),
+		Transport:   rpcSystem,
 	}
 }
 
@@ -308,12 +310,18 @@ func peerSystem(attributes []*commonpb.KeyValue) string {
 }
 
 func firstPresent(attributes []*commonpb.KeyValue, keys ...string) string {
+	_, value := firstPresentKey(attributes, keys...)
+	return value
+}
+
+// firstPresentKey is firstPresent, also naming the key the value came from.
+func firstPresentKey(attributes []*commonpb.KeyValue, keys ...string) (key, value string) {
 	for _, key := range keys {
 		if value := otlpvalue.StringOrEmpty(attributes, key); value != "" {
-			return value
+			return key, value
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // clampStatus keeps a nonsensical status out of the UInt16 column, where it

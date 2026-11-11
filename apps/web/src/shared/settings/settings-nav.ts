@@ -16,6 +16,9 @@ export type SettingsPath =
   | "/settings/audit"
   | "/settings/support"
   | "/settings/channels"
+  | "/settings/ai"
+  | "/settings/explanations"
+  | "/settings/connections"
   | "/settings/projects"
   | "/settings/billing"
   | "/settings/usage";
@@ -119,6 +122,38 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
           "email",
           "on-call",
         ],
+      },
+      {
+        // F3: open to everyone, since its first sentence answers "is AI on here?"; owners
+        // and admins set it up there (design, *AI settings*).
+        path: "/settings/ai",
+        title: "AI wording",
+        keywords: [
+          "ai",
+          "model",
+          "provider",
+          "ollama",
+          "claude",
+          "openai",
+          "bedrock",
+          "limit",
+          "tokens",
+        ],
+      },
+      {
+        // F3 FR54: rating and rule counts, and stopping a rule naming causes. Not an AI
+        // screen: it stands with AI off.
+        path: "/settings/explanations",
+        title: "Explanations",
+        requires: "configure_detection",
+        keywords: ["explanation", "likely cause", "rule", "rating", "useful", "evidence"],
+      },
+      {
+        path: "/settings/connections",
+        title: "Connections",
+        // F22: GitHub (and, once Atlassian answers, Jira, which nothing names until then).
+        requires: "manage_connections",
+        keywords: ["github", "issues", "tracker", "app", "repository", "integration"],
       },
       {
         path: "/settings/projects",

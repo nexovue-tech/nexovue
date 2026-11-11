@@ -113,6 +113,15 @@ x-control-plane-env: &control-plane-env
   EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
   EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
 
+# F3: what `scheduler-insight` reads, and nothing else (AC41): no Kafka, no ClickHouse, no
+# check, channel or connection key, no mail, no object store. Not `control-plane-env`.
+x-insight-env: &insight-env
+  ENV: production
+  NEXOVUE_DEPLOYMENT: self-hosted
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  SCHEDULER_ROLE: insight
+
 services:
   # ---------- the setup step: runs to completion before anything else ----------
   # Postgres to the newest migration and the object store's bucket (nexovue_api.setup).
@@ -123,6 +132,9 @@ services:
     environment:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       <<: *object-store-env
+      # F3: the AI role's own Postgres account, which setup creates and grants after every
+      # migration (and so after every restore). `:-`: an install without it runs, with no AI.
+      POSTGRES_INSIGHT_PASSWORD: ${POSTGRES_INSIGHT_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -287,6 +299,21 @@ services:
       # enable two-factor sign-in, and production refuses to start.
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
       CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
+      # F22. Seals a tracker connection's App key, webhook secret and manifest code, and
+      # re-seals them on a rotation. Held here and by `scheduler-connections` alone (FD10,
+      # AC33); never through `control-plane-env`. `nexovue upgrade` adds one when missing.
+      CONNECTION_SECRET_KEY: ${CONNECTION_SECRET_KEY:?set CONNECTION_SECRET_KEY}
+      CONNECTION_SECRET_PREVIOUS_KEYS: ${CONNECTION_SECRET_PREVIOUS_KEYS:-}
+      # Whether tracker connections run on this install (AC118): the same setting that
+      # starts `scheduler-connections` (`deploy/nexovue`) and that beat reads.
+      NEXOVUE_CONNECTIONS: ${NEXOVUE_CONNECTIONS:-yes}
+      # F3. Seals an organization's AI provider key; held here and by `scheduler-insight`
+      # alone (FD10). `:-`, never `:?`: without it AI is unavailable and nothing else stops
+      # (AC71). The replica count is the AI role's own, so `/settings/ai` can say when no AI
+      # container runs (AC103).
+      AI_SECRET_KEY: ${AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${AI_SECRET_PREVIOUS_KEYS:-}
+      SCHEDULER_INSIGHT_REPLICAS: ${SCHEDULER_INSIGHT_REPLICAS:-1}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # What the console hands a customer to export to: the edge's ingest name.
@@ -335,6 +362,9 @@ services:
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      # F22: beat says whether a connection is live (`connections_active`), and none is
+      # while connections are turned off, so nothing pages for a role left out.
+      NEXOVUE_CONNECTIONS: ${NEXOVUE_CONNECTIONS:-yes}
     depends_on:
       <<: *after-setup
       seaweedfs:
@@ -348,8 +378,10 @@ services:
 
   scheduler-light:
     <<: [*service-defaults, *nexovue-image]
-    # Probes, the alert sweeps and anomaly detection: `light`, `light.<region>` and `detection`,
-    # with at most two detection jobs at once of its eight slots (F6, C23, D32).
+    # Probes, the alert sweeps, anomaly detection, reliability targets and the release sync:
+    # `light`, `light.<region>`, `detection`, `slo`, `slo_counts`, `slo_history` and `releases`.
+    # The capped queues together hold at most 4 of its eight slots, so probes and alert sweeps
+    # keep 4 (F6 D32, F3 A56, F19 D66, F28 D31).
     command: ["scheduler-light"]
     healthcheck: *scheduler-healthcheck
     environment:
@@ -407,6 +439,70 @@ services:
         limits:
           memory: 384M
 
+  # F22. Every GitHub (and later Jira) call, and nothing else: a slow tracker holds one of
+  # these slots, never a probe's or an alert's (foundation section 6). Optional, behind the
+  # `connections` profile that `NEXOVUE_CONNECTIONS=yes` turns on (AC118); hosted has none
+  # until founder decision 3. Narrow settings, not `control-plane-env` (D80, AC33): the
+  # tracker key and Postgres, and no Kafka, check key, mail or object store.
+  scheduler-connections:
+    <<: [*service-defaults, *nexovue-image]
+    profiles: ["connections"]
+    command: ["scheduler-connections"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      ENV: production
+      NEXOVUE_DEPLOYMENT: self-hosted
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      SCHEDULER_ROLE: connections
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # The link back in an issue, and the App's own addresses (design, *Issue text*).
+      APP_BASE_URL: https://${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
+      CONNECTION_SECRET_KEY: ${CONNECTION_SECRET_KEY:?set CONNECTION_SECRET_KEY}
+      CONNECTION_SECRET_PREVIOUS_KEYS: ${CONNECTION_SECRET_PREVIOUS_KEYS:-}
+    depends_on:
+      <<: *after-setup
+      # Its job queue and everything it writes are in Postgres.
+      postgres:
+        condition: service_healthy
+      scheduler-beat:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          # A guess, copied from scheduler-deliveries (design, *Capacity*); F22 T4.9 measures it.
+          memory: 384M
+
+  # F3. The AI role: provider calls and nothing else, idle until an organization turns AI on
+  # (FD6). Its own Postgres account, which holds no right on the job queue, and its own
+  # network, shared with Postgres alone (design, *The role*). `SCHEDULER_INSIGHT_REPLICAS=0`
+  # runs the install with no AI container at all (AC103).
+  scheduler-insight:
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-insight"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      <<: *insight-env
+      POSTGRES_DSN: postgresql+asyncpg://nexovue_insight:${POSTGRES_INSIGHT_PASSWORD:-}@postgres:5432/${POSTGRES_DB}
+      # Opens provider keys; held here and by the API alone (FD10). `:-`, never `:?`: a
+      # missing key must stop this role only, which refuses it itself (AC71).
+      AI_SECRET_KEY: ${AI_SECRET_KEY:-}
+      AI_SECRET_PREVIOUS_KEYS: ${AI_SECRET_PREVIOUS_KEYS:-}
+      # Private addresses with ports an operator lets a provider connection reach (FR32).
+      AI_PRIVATE_ENDPOINTS: ${AI_PRIVATE_ENDPOINTS:-}
+    networks: [ai]
+    depends_on:
+      <<: *after-setup
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: ${SCHEDULER_INSIGHT_REPLICAS:-1}
+      resources:
+        limits:
+          # A guess (design, *Memory*): four children at 48 MiB each with the parent and
+          # forkserver. T3.10 reads a real run.
+          memory: 384M
+
   # ---------- the monitor, ready to connect (design.md §10) ----------
   # Opt-in: `--profile monitoring`. Scrapes every service's /metrics and evaluates the alerts in
   # deploy/monitoring/rules; Alertmanager sends them nowhere until deploy/monitoring/alertmanager.yml
@@ -419,6 +515,9 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
+    # On `ai` too, to scrape `scheduler-insight`, which sits on that network alone; its
+    # metrics carry no tenant (F3 design, *Network*).
+    networks: [default, ai]
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../monitoring/rules:/etc/prometheus/rules:ro

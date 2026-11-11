@@ -1,6 +1,6 @@
 module github.com/nexovue-tech/nexovue/packages/contracts
 
-go 1.27.3
+go 1.27.4
 
 require (
 	go.opentelemetry.io/proto/otlp v1.11.1

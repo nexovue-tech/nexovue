@@ -158,6 +158,26 @@ ORDER BY service_name, bucket
 """
 
 
+# The few services a dashboard's top-N chart draws (F20, `top_services_trend`), chosen
+# in the store: the services list's own ranking, worst or slowest, with its `LIMIT`, as
+# the inner statement, and the trend of only those. Trimming every service's trend
+# afterwards is the mistake `SLOWEST_FIRST` warns about. **The inner statement repeats
+# the tenant and project predicates** through `_ENDPOINT_STATS_IN_WINDOW`, so another
+# project's noisier services can never be chosen under this project's heading (AC26).
+TOP_SERVICES_TREND_SQL: Final = f"""
+SELECT
+    service_name,
+    toStartOfInterval(minute, INTERVAL {{bucket_seconds:UInt32}} SECOND) AS bucket,
+    sum(request_count) AS request_count,
+    sum(error_count) AS error_count,
+    {_LATENCY_MS}
+{_ENDPOINT_STATS_IN_WINDOW}
+  AND service_name IN (SELECT service_name FROM ({_SERVICES_TEMPLATE}))
+GROUP BY service_name, bucket
+ORDER BY service_name, bucket
+"""
+
+
 def _narrowed(
     template: str,
     *,
@@ -204,6 +224,11 @@ def trend_sql(*, one_service: bool) -> str:
     rows the ranking already chose.
     """
     return _narrowed(TREND_SQL, one_service=one_service)
+
+
+def top_services_trend_sql(*, order: str) -> str:
+    """The top-N trend statement, its ranking ordered worst or slowest first."""
+    return _narrowed(TOP_SERVICES_TREND_SQL, one_service=False, order=order)
 
 
 def endpoints_sql(

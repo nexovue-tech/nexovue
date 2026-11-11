@@ -84,7 +84,13 @@ type edgeKey struct {
 	// offsets would produce a different block on replay, and the store's insert
 	// deduplication would stop recognising a retry.
 	serverPeerKind string
-	edgeKind       string
+	// serverPeerAttr follows serverPeerKind: a property of the call, keyed so a
+	// replay of the same offsets builds the same block.
+	serverPeerAttr string
+	// door is part of the row's identity, so a browser's forged calls can never
+	// merge into a server-door row.
+	door     string
+	edgeKind string
 	// Constant for a given project, but carried here because it sits in the
 	// target table's partition key.
 	retentionDays uint16
@@ -121,6 +127,10 @@ func (c countedEdge) before(other countedEdge) bool {
 		return c.serverService < other.serverService
 	case c.serverPeerKind != other.serverPeerKind:
 		return c.serverPeerKind < other.serverPeerKind
+	case c.serverPeerAttr != other.serverPeerAttr:
+		return c.serverPeerAttr < other.serverPeerAttr
+	case c.door != other.door:
+		return c.door < other.door
 	case c.edgeKind != other.edgeKind:
 		return c.edgeKind < other.edgeKind
 	case c.retentionDays != other.retentionDays:
@@ -211,8 +221,9 @@ func participates(span Span) bool {
 // without — into its minute bucket.
 func (a *Accumulator) record(resolved resolution) {
 	caller := resolved.caller.span
-	var serverService, serverPeerKind string
+	var serverService, serverPeerKind, serverPeerAttr string
 	errored := caller.Errored
+	fromBrowser := caller.FromBrowserDoor
 	if resolved.paired {
 		// A callee that reported for itself names itself; what the caller
 		// believed about it is not needed and could disagree.
@@ -220,9 +231,11 @@ func (a *Accumulator) record(resolved resolution) {
 		// Either end is enough to call the request failed: an SDK that maps a
 		// 500 to an unset client status still made a call that did not work.
 		errored = errored || resolved.callee.Errored
+		fromBrowser = fromBrowser || resolved.callee.FromBrowserDoor
 	} else {
 		serverService = calleeOf(caller.Peer)
 		serverPeerKind = caller.Peer.Kind()
+		serverPeerAttr = calleeAttr(caller.Peer)
 		a.stats.Unanswered++
 		if serverService == UninstrumentedService {
 			a.stats.Unidentified++
@@ -237,6 +250,8 @@ func (a *Accumulator) record(resolved resolution) {
 			clientService:  serviceOf(caller),
 			serverService:  serverService,
 			serverPeerKind: serverPeerKind,
+			serverPeerAttr: serverPeerAttr,
+			door:           doorOf(fromBrowser),
 			edgeKind:       resolved.edgeKind,
 			retentionDays:  caller.RetentionDays,
 		},
@@ -255,6 +270,13 @@ func (a *Accumulator) record(resolved resolution) {
 	// Latency is the caller's own duration: what the caller experienced,
 	// network included. The callee's view of itself is in `endpoint_stats_1m`.
 	totals.latency.Observe(latencysample.Weigh(caller.TraceID, caller.SpanID), caller.DurationMS)
+}
+
+func doorOf(fromBrowser bool) string {
+	if fromBrowser {
+		return DoorBrowser
+	}
+	return DoorServer
 }
 
 // Drained reports whether every edge for a minute has already been written. A
@@ -346,6 +368,8 @@ func (k edgeKey) edge(summed edgeTotals) Edge {
 		ClientService:  k.clientService,
 		ServerService:  k.serverService,
 		ServerPeerKind: k.serverPeerKind,
+		ServerPeerAttr: k.serverPeerAttr,
+		Door:           k.door,
 		Kind:           k.edgeKind,
 		CallCount:      summed.calls,
 		ErrorCount:     summed.errors,
@@ -417,6 +441,10 @@ func (e Edge) less(other Edge) bool {
 		return e.ServerService < other.ServerService
 	case e.ServerPeerKind != other.ServerPeerKind:
 		return e.ServerPeerKind < other.ServerPeerKind
+	case e.ServerPeerAttr != other.ServerPeerAttr:
+		return e.ServerPeerAttr < other.ServerPeerAttr
+	case e.Door != other.Door:
+		return e.Door < other.Door
 	default:
 		return e.Kind < other.Kind
 	}

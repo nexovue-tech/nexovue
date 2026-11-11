@@ -2,12 +2,83 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement once Preconditions 1 and 2 are met.** The founder approved the specification, design and plan on 2026-11-02, and kept that approval after the same day's later decisions (below). No code exists yet.
+**Step 1 built and committed 2026-11-11.** The founder approved the specification, design and plan on 2026-11-02. Step 1 (the deploy line and the brief, T1.1 to T1.5) is on `feature/phase-2`. T1.6's Playwright spec is written and not run (deferred to the hardening pass). Steps 2 onward are not started.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 1 awaits the founder's review of the diff and a commit (`F5 Step 1: the deploy line and the brief`). Then the founder's *Judgeable* for Step 1 (plan), on the demo stack.
+
+## Step 1, built 2026-11-11
+
+**What it ships.** On the finding page, with AI off and no model, GitHub or consent:
+
+- **Rung 1, inside F28's *Release before this* row** (FR1, T1.2). F28's sentence is unchanged; after it, F5 adds "`<version>` ran before it.", with "CI's last report on it said it failed." (or "rolled back") when CI said so, a link to that release, and past F3's 30-minute look-back, "Longer before this than Nexovue looks for a likely cause." With no earlier version: "No earlier version of this service is known." Nothing is added where F28's own sentence is all there is: no release before, one already running, a release a day or more old, a project finding. Read by a new F28 reader, `releases/queries.py` `period_preceding` (the period of another version before this one, on the same service), from `findings/fix_facts.py`.
+- **Rung 2, the brief, one line directly under it** (FR2 to FR5a, T1.1, T1.4). Built by `nexovue_platform/fixes/brief.py` from F3's stored facts: the opening line first, the start time, each signal's numbers, each endpoint under FR3's route rule, the likely cause in its rule's fixed words **only once F3 releases that rule** (as the explanation's own read), the last deploy's version only from a signed deploy in a short version or hash shape, each linked error group's exception type under FR3's shape with a console link at the finding's window, and the repository line. No exception message, log or stack text is read. Copy, the warning sentence, and a native disclosure with the text `select-all`; **when the clipboard write fails, the disclosure opens and the text takes focus** (`CopyButton`'s new `onUnavailable`). Not shown for `false_alarm` or `service_gone`.
+- **`GET /findings/{id}/fixes`** (T1.3), on `CurrentIdentity`: a token gets 403 below the route, and it is off `THE_SURFACE`. Postgres only. On hosted, the brief has no repository line and there is no section.
+- **The *Suggested fix* section and its jump link** (D54, T1.4): full width below the split, with "Suggested fix ↓" beside *Evidence* in the header, rendered only when this person has a line. **In Step 1 no role has a line**, so no section, heading or jump link renders (AC37e's "no heading" row; see *Open decisions*, 1).
+- **No AI module is reachable** from rungs 1 and 2 (T1.5). `lifespan.py` already types the MCP server as a Protocol (F20 D38 landed first), so no change was needed there.
+
+**A shared point touched, and why.** F3's `DEPLOY_LOOKBACK` (30 minutes) was defined in the scheduler's `evidence/rules.py`, which the API cannot import, and FR1's wording uses the same window. It now lives once in F3's shared contract, `nexovue_platform/evidence/__init__.py`, and `rules.py` and `reads.py` import it from there; F3's rules tests pass unchanged (52). F3 Step 4 (`wt/f3s4`) may need a one-line rebase there.
+
+**Files.** New: `packages/py-platform/src/nexovue_platform/fixes/__init__.py`, `fixes/brief.py`; `apps/api/src/nexovue_api/findings/fix_facts.py`, `fix_read.py`, `fix_schemas.py`; `apps/web/src/features/findings/FixSection.tsx`, `fix-page.ts`; `tools/e2e/tests/fix-section.spec.ts`. Changed: `findings/router.py`, `releases/queries.py`, `nexovue_platform/evidence/__init__.py`, scheduler `evidence/rules.py` and `reads.py`, web `findings/api.ts`, `FindingScreen.tsx`, `render-harness.test-util.ts` (a default stub for the new read), `shared/components/CopyButton.tsx`. No migration, no ADR.
+
+### Tests, each seen failing
+
+Each was written with its code, then proved by removing the behaviour from the file (a saved copy, the change, the run, the copy restored, `diff` showing it restored). Counts are what the run printed.
+
+| Test | Behaviour removed | Result |
+|---|---|---|
+| `packages/py-platform/tests/test_fix_brief.py` (64) | Endpoint rule (route shape) | 18 failed |
+| | Host-shaped word check | 1 failed |
+| | More-than-three joined words check | 2 failed |
+| | Exception type shape | 6 failed |
+| | Last dotted segment | 4 failed |
+| | Version named only when signed | 1 failed |
+| | Opening line | 5 failed |
+| | "No explanation has been read yet" | 1 failed |
+| | Project finding line | 1 failed |
+| | No repository line on hosted | 1 failed |
+| | Error group id shape in the link | 1 failed |
+| | Cap of 3 error groups | 1 failed |
+| | Em dash for a missing reading | 1 failed |
+| | Unknown rule points to the console | 1 failed |
+| `apps/api/tests/test_fix_facts.py` (20, AC34) | CI's failed or rolled-back words | 2 failed |
+| | Look-back sentence | 3 failed |
+| | 24-hour bound | 2 failed |
+| | Already-running rule | 1 failed |
+| | No-earlier-version sentence | 1 failed |
+| | Version as a name segment | 1 failed |
+| `apps/api/tests/test_fix_routes.py` (2, AC3) | Route takes `CurrentReader` | both failed, and `test_read_surface_structure.py` failed too |
+| `apps/api/tests/test_fix_routes_live.py` (11) | Held-cause gate | 1 failed |
+| | No brief for `false_alarm`, `service_gone` | 2 failed |
+| | No repository line on hosted | 1 failed |
+| | Earlier version bound to the service | 1 failed |
+| `apps/api/tests/test_fix_facts_hold_no_ai.py` (3, AC33's import half) | An `import nexovue_platform.ai` added to `brief.py` | 1 failed |
+| `apps/web/src/features/findings/FixSection.test.ts` (16) | Rung 1 extras not drawn | 1 failed |
+| | Brief moved off the deploy line (D54) | 3 failed |
+| | Failed copy does not open the brief | 1 failed |
+| | Load failure not shown | 1 failed |
+| | Jump link always shown | 4 failed |
+| | Heading always rendered | 1 failed |
+| | Section not rendered | 2 failed |
+| `apps/web/src/features/findings/fix-page.test.ts` (5) | Release match | 1 failed (and 1 in `FixSection.test.ts`) |
+| `apps/web/src/shared/components/CopyButton.test.ts` (4) | `onUnavailable` never called | 2 failed (and 1 in `FixSection.test.ts`) |
+
+**Not proven failing, and why:** AC11a's "a viewer's and member's page does not mention AI" holds trivially in Step 1, since no AI words exist on this branch; it becomes a real test with the first line (T2b.7). The clocks of every new test are fixed (Python: fixed datetimes; web: `vi.setSystemTime` on `Date` only).
+
+### Validation, 2026-11-11
+
+- This feature's Python tests, one run: **191 passed** (`test_fix_brief.py`, `test_fix_facts.py`, `test_fix_routes.py`, `test_fix_routes_live.py`, `test_fix_facts_hold_no_ai.py`, `test_read_surface_structure.py`). The live suite ran against its own Postgres container (`f5s1-pg`, `pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, migrated to `0069` with alembic), with every row inside a rolled-back transaction; it reads no scheduler-written table.
+- Gates near the new route: `test_authorization_coverage.py`, `test_ratelimit_coverage.py`, `test_read_surface_spec.py` (**150 passed**), `test_postgres_tenancy_structure.py` (**2,307 passed**), F3's `test_evidence_rules.py` after the constant moved (**52 passed**).
+- `uv run mypy .`: no issues in 938 files. `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,311 files formatted. Biome on `apps/web/src/features/findings`, `apps/web/src/shared/components`, `tools/e2e/tests`: no errors; 4 warnings, all in untouched e2e files. `pnpm -r --if-present run typecheck`: passed.
+- The whole web suite, after the review's fixes: **172 files, 2,107 tests passed**, `app/status-interpretation.test.ts` among them (only `shared/api-client.ts` reads HTTP statuses).
+- **Not run:** `just check`, other features' live suites (the coordinator's full CI covers them), T1.6's Playwright spec, and the founder's *Judgeable*.
+
+### Deferred to F5's hardening pass (founder, 2026-11-11)
+
+- **T1.6, `tools/e2e/tests/fix-section.spec.ts`:** written, not run. It walks the brief closed and open at 375 and 1280 px with a 200-character endpoint and a long version, asserting `scrollWidth <= clientWidth` and a 44 px copy target.
+- Browser and phone checks of the brief's disclosure, focus and copy on a plain-HTTP install; Design QA of the row and the brief against D54; any customer page (none in Step 1).
 
 
 ## Completed
@@ -21,12 +92,28 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+The founder reviews and commits Step 1, then runs its *Judgeable* on the demo stack. Step 2 (the checks) is next; it needs no other feature. Before then, the open decisions below.
+
+**Earlier text, kept for the record:** start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
 
 
 ## Open decisions
 
-**None blocking for the founder.** All five were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The write-access go is still given at T6.5, against the approved rule.
+**From Step 1's build, 2026-11-11.** None blocks Step 2. Each is built as recommended where something had to be built.
+
+1. **AC11a's owner and admin line, "AI is off. An admin sets it up, then an owner agrees."** It needs F3's AI state (`ai_connections`, F3 Step 3, on `wt/f3s3`, not on this branch) and F3's `MANAGE_AI` action (FD8; not yet in `auth/permissions.py`). Without either, any line would be a guess about who may act and whether AI is on. **Built:** no role has a line in Step 1, so no section renders; the API's `section` field and the page's heading-less line are ready and tested with a stubbed line. **Recommendation:** add the line at T2b.7 with FR9's first eligibility, reading `ai_connections.enabled` and `off_reason`, shown to roles with `MANAGE_AI`. AC11a's viewer and member half holds now; its owner and admin half is unproven until then.
+2. **FR1's heading and its over-24-hours sentence disagree with F28's built row.** FR1 says the heading is "Last deploy before this" and, past 24 hours, "No deploy in the 24 hours before this. The last was N days ago." F28's code, approved and on the branch, heads the row "Release before this" and says "The last known release was N earlier.", dimmed. FR1 also says F5 adds no second sentence about the same deploy. **Built:** F28's heading and sentence unchanged; F5 adds nothing past 24 hours. AC34's templates for "deploy", "no coverage", "came back", "failed", "over 24 hours" and "project finding" are therefore F28's, tested in F28's `finding-page.test.ts`; F5's own templates are tested in `test_fix_facts.py`. **Recommendation:** keep F28's words, and amend FR1 and AC34 to say F28 words those rows. Your wording call (foundation decision 2).
+3. **T1.6's 44 px target.** The shared `CopyButton` is about 24 px tall, so the spec's 44 px check (AC37d) is expected to fail when it runs. **Recommendation:** decide in Design QA whether the brief's copy control grows (a size option on `CopyButton`) or AC37d's target excludes small copy controls everywhere.
+4. **The section's own loading and failed rows.** The design puts a skeleton and `InlineFailure` under the "Suggested fix" heading. With no line for any role in Step 1, that skeleton would show and then vanish. **Built:** loading and failure show once, at the brief's line, and the rest of the page works. **Recommendation:** T2b.8 adds the section's own rows when a role first has a line.
+
+**To confirm (guesses, each named in code):**
+
+- **No service name in the brief until Step 3.** FR3 names a service only from the customer's own settings, which are code locations (Step 3). Until then the brief names none, and its repository line says the repository is not known. This makes the Step 1 brief thinner for the founder's judging; loosening it would weaken D19.
+- **The host-shaped word rule** (`brief.py`, `_HOST_SHAPED`) also withholds file-shaped routes such as `/app.js`: the safe side, a guess.
+- **The version shape** (a short version such as `v2.1.0-rc1`, or a 7 to 40 character hex hash) and **three error groups at most** in the brief: guesses.
+- **The console link uses `APP_BASE_URL`**; with it unset, no link is built rather than one to a guessed host.
+
+**Before Step 1's build (2026-11-02):** **none blocking for the founder.** All five were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The write-access go is still given at T6.5, against the approved rule.
 
 **Not decisions, but still to happen:** the shared buyer round (approved, foundation decision 8) and the GitHub trial (approved 2026-11-02). Both were to block design approval; the founder approved the design first, and decided on 2026-11-02 that both block Step 1 instead, and that **a result that changes the design comes back to him** (spec D64).
 
@@ -41,8 +128,9 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Step 1 no longer waits on the buyer round or the GitHub trial (foundation items 27, 28; changes D64). GitHub checks run against a simulated GitHub; the founder runs the real trial after Phase 2.
 - **Everything in the plan is blocked** on F6 merging, then F28, F3, F22 and F4 being built.
-- **Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64). Design approval is no longer blocked: the founder approved it first.
+- ~~**Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64).~~ Unblocked by the founder's decision of 2026-11-08 (above); built 2026-11-11.
 - **Step 2b is blocked** on F3's provider (F3 Step 4) and on F3's consent screen naming rung 2b.
 - **Step 3 is blocked** on F3's evidence holding a group id and window.
 - **Step 7 is blocked** on T6.5: the safety gates, the founder's go, and the buyers' answer.
@@ -399,6 +487,8 @@ Each was checked against the documents and code before anything changed. All 15 
 
 ## Validation
 
+**Step 1, 2026-11-11:** see *Step 1, built 2026-11-11*, *Validation*, above. What follows is the documents' own validation of 2026-11-02.
+
 **Nothing was run:** no model, no GitHub call, no test, no build. Code was read at the paths cited. On 2026-11-02 these were read through a tool that summarizes pages, so check any quote against the live page before publishing it: OneUptime's AI agent page and README; Better Stack's error pull requests page; Datadog's Bits Code page; Grafana's what's-new entry of 2026-10-19; Middleware's OpsAI overview; Sentry's Autofix page; Aurora's README; GitHub's skip-runs, events and pull requests API pages; and PostgreSQL's JSON types page. Two searches of GitHub's docs were made, for draft plans and for custom models. Older competitor claims are carried from `research.md`, where they say so.
 
 **One check did run,** by hand, over these documents, with a throwaway script: every FR, UR, BR, NFR and AC in `spec.md` has a place in *What proves what* (179 of 179), every task named there and in `design.md` exists in `plan.md`, and every acceptance criterion is named by a plan task. **That count treats a criterion as covered if it is named once, so it hid parts with no task** (*Second review*, below). It was re-run after those fixes, and also looks for criteria named only as a half; the result is in that section. T2.11 makes this a real check.
@@ -431,7 +521,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-11 (Step 1 committed)
 
 ## Founder approval, 2026-11-02
 

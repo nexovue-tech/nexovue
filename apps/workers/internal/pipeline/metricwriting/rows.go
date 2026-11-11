@@ -1,6 +1,10 @@
 package metricwriting
 
-import "time"
+import (
+	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
+)
 
 // point is what every metric row carries whatever its shape: who sent it, when,
 // what the metric is called, and the attributes that identify its series.
@@ -126,4 +130,14 @@ type rows struct {
 	histogram    []histogramRow
 	expHistogram []expHistogramRow
 	summary      []summaryRow
+
+	// syntheticRefused is the points left out because they claimed to be a
+	// synthetic check's reading from a door other than the prober's, kept so
+	// the drop is logged, never silent.
+	syntheticRefused proberdoor.Refusals
+}
+
+// points is how many rows this holds across the five tables.
+func (r rows) points() int {
+	return len(r.gauge) + len(r.sum) + len(r.histogram) + len(r.expHistogram) + len(r.summary)
 }

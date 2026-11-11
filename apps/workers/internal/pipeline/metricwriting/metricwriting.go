@@ -26,6 +26,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 )
 
@@ -102,6 +103,10 @@ type Pipeline struct {
 	// alreadyStored counts messages a replay offered whose rows the store had
 	// already acknowledged.
 	alreadyStored uint64
+	// syntheticRefused counts points dropped for claiming to be a synthetic
+	// check's reading from a door other than the prober's. Flat is normal;
+	// climbing names someone forging a check's readings.
+	syntheticRefused uint64
 
 	// maxRows caps how many rows are held across the five blocks before they
 	// are inserted, and with it the memory one batch costs. The batch's message
@@ -195,6 +200,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("messages_already_stored", p.alreadyStored),
 		slog.Uint64("messages_parked", p.parked),
 		slog.Uint64("values_masked", p.masked),
+		slog.Uint64("synthetic_points_refused", p.syntheticRefused),
 	}
 }
 
@@ -228,6 +234,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 
 	p.resetBlocks()
 	messages, points := 0, 0
+	var refused proberdoor.Refusals
 	// held is exactly the records whose rows are in the blocks, each with its own
 	// rows, which is what a refusal is narrowed over.
 	var held []heldMetric
@@ -248,6 +255,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 			p.parked++
 			continue
 		}
+		refused.Merge(batch.syntheticRefused)
 		p.appendRows(batch)
 		held = append(held, heldMetric{record: record, rows: batch})
 		messages++
@@ -268,12 +276,27 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 		return stored{}, err
 	}
 	points += inserted
+	p.reportSyntheticRefused(ctx, refused)
 
 	p.log.DebugContext(ctx, "batch absorbed",
 		slog.Int("messages", messages),
 		slog.Int("metric_points", points),
 	)
 	return stored{}, nil
+}
+
+// reportSyntheticRefused says once per batch that points claiming to be a
+// synthetic check's readings were dropped, naming who sent the first. Once per
+// batch rather than per point, so a forger cannot turn the drop into a flood of
+// log lines.
+func (p *Pipeline) reportSyntheticRefused(ctx context.Context, refused proberdoor.Refusals) {
+	if refused.Count <= 0 {
+		return
+	}
+	p.syntheticRefused += countOf(refused.Count)
+	p.log.LogAttrs(ctx, slog.LevelWarn,
+		"dropped metric points claiming to be a synthetic check's readings; only the prober's door may send them",
+		refused.Attrs()...)
 }
 
 // writeChunk inserts what has accumulated across the five blocks, then records

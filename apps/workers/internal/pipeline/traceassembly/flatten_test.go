@@ -47,6 +47,8 @@ type spanOptions struct {
 	events       []*tracepb.Span_Event
 	startNano    uint64
 	endNano      uint64
+	// door is the receiver door the envelope came through; unset is DOOR_OTLP.
+	door nexovuev1.Door
 }
 
 // marshalEnvelope builds the bytes a Kafka message would carry.
@@ -58,6 +60,9 @@ func marshalEnvelope(t *testing.T, semconv string, options spanOptions) []byte {
 	}
 	if options.endNano == 0 {
 		options.endNano = options.startNano + 1_500_000 // 1.5 ms
+	}
+	if options.door == nexovuev1.Door_DOOR_UNSPECIFIED {
+		options.door = nexovuev1.Door_DOOR_OTLP
 	}
 
 	request := &tracesvc.ExportTraceServiceRequest{
@@ -90,7 +95,7 @@ func marshalEnvelope(t *testing.T, semconv string, options spanOptions) []byte {
 	message, err := proto.Marshal(&nexovuev1.Envelope{
 		TenantId:       "tenant-a",
 		ProjectId:      "project-a",
-		Door:           nexovuev1.Door_DOOR_OTLP,
+		Door:           options.door,
 		Signal:         nexovuev1.Signal_SIGNAL_SPANS,
 		SemconvVersion: semconv,
 		Payload:        payload,

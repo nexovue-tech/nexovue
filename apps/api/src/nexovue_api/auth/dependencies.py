@@ -180,6 +180,18 @@ class Reader:
     def is_token(self) -> bool:
         return self.token_id is not None
 
+    @property
+    def is_person(self) -> bool:
+        """F3 (A68, BR10): a signed-in person, not a token. A token reads an explanation's
+        facts and never a model's words; F22 and F4 build on this one helper."""
+        return self.identity is not None
+
+    @property
+    def is_real_person(self) -> bool:
+        """F22 FR20: only a reader with a real session and no support view counts
+        as a person — the one gate for notes, event detail and the copy source."""
+        return self.is_person and self.identity is not None and self.identity.impersonation is None
+
     def may_read_project(self, project_id: uuid.UUID) -> bool:
         """Whether this caller's scope covers a project. A person's covers all."""
         return self.project_scope is None or self.project_scope == project_id

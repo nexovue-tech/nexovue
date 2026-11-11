@@ -13,14 +13,23 @@ Discord with a colour, Teams as a card, PagerDuty as an event (FR17).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from nexovue_platform.alerts.model import SEVERITY_RANK
+from nexovue_platform.alerts.model import EXPLAINED, SEVERITY_RANK
 from nexovue_platform.detection import ADOPTION_AFTER_DAYS
+from nexovue_platform.evidence import deploy_rate_words, display_name
 
-from nexovue_scheduler.alerts.outbox import Notice, Subject, one_line
+from nexovue_scheduler.alerts import slo_words as _slo_words
+from nexovue_scheduler.alerts.outbox import (
+    EXPLAINED_CAUSE,
+    EXPLAINED_LAST_IN_WINDOW,
+    Notice,
+    Subject,
+    one_line,
+)
 from nexovue_scheduler.detection.lifecycle import times
 
 _STATE_WORDS: Final = {
@@ -42,6 +51,18 @@ class AlertMessage:
     link: str
     rule_name: str
     manage_link: str | None
+    # F22 FR47: a finding that is part of a case says so, to people only. Kept out
+    # of `details`, which every machine payload carries byte for byte.
+    case_line: str | None = None
+    # F3: a chat channel may expand the links a message holds into previews. The
+    # follow-up names customer text, so it turns that off (AC27).
+    unfurl: bool = True
+
+    def for_people(self) -> AlertMessage:
+        """The message as a channel people read shows it: with its case line."""
+        if self.case_line is None:
+            return self
+        return replace(self, details=(*self.details, self.case_line), case_line=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +77,11 @@ class _Said:
     recovered: str
     # Lines under the first, while it is open.
     facts: tuple[str, ...]
+
+
+class UnwritableNoticeError(ValueError):
+    """A notification that cannot be put into words: dropped alone, with why, so the
+    rest of its batch still goes (AC27, AC78)."""
 
 
 def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
@@ -79,6 +105,10 @@ def _compose_incident(notice: Notice, *, app_base_url: str) -> AlertMessage:
     if notice.kind == "resolved":
         summary = f"[resolved] {label} {said.recovered}"
         lines = [f"{label} {said.recovered}."]
+    elif notice.kind == "closed" and subject.detail.get("closed_why") == "source_silent":
+        # F19 FR17: a burn whose source stopped, told to everyone told of it.
+        summary = f"[closed] {label} is no longer judged"
+        lines = [_slo_words.source_silent(subject.detail)]
     elif notice.kind == "closed":
         # Sent only to machines that were told of the opening, so they stop too.
         summary = f"[closed] {label} is no longer watched"
@@ -134,6 +164,14 @@ def _compose_incident(notice: Notice, *, app_base_url: str) -> AlertMessage:
 def _said(subject: Subject) -> _Said:
     detail = subject.detail
     match subject.condition_kind:
+        case "slo_burn":
+            words = _slo_words.said(detail, at=subject.opened_at)
+            return _Said(
+                happening=words.happening,
+                still=words.still,
+                recovered=words.recovered,
+                facts=words.facts,
+            )
         case "service_error_rate" | "service_latency_p95":
             reading = str(detail.get("reading") or "reading")
             unit = str(detail.get("unit") or "")
@@ -204,33 +242,49 @@ def _number(value: object, unit: str) -> str:
 def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMessage:
     """Several notifications as one message: the shape a shared outage (FR13), a
     quiet-hours digest (FR15) and a burst summary (FR12) all take. One line each,
-    worst first, and the link to the Alerts screen that lists them all."""
+    worst first, and the link to the Alerts screen that lists them all.
+
+    F3's follow-up is never an alert (FR22): it is left out of the count, the worst
+    severity and whether anything is still open, so recoveries with a follow-up still
+    read as recovered, and follow-ups alone have their own summary."""
     if len(notices) == 1:
         return compose(notices[0], app_base_url=app_base_url)
     messages = [compose(notice, app_base_url=app_base_url) for notice in notices]
+    alerts = [message for message in messages if message.kind != EXPLAINED]
+    unfurl = all(message.unfurl for message in messages)
+    if not alerts:
+        return _follow_ups_alone(messages, app_base_url=app_base_url)
+    if len(alerts) == 1:
+        # One alert with follow-ups beside it reads as that alert.
+        return _with_follow_up_lines(alerts[0], messages, unfurl=unfurl)
+    alert_notices = [notice for notice in notices if notice.kind != EXPLAINED]
     worst = max(
-        (message for message in messages if message.kind != "resolved"),
+        (message for message in alerts if message.kind != "resolved"),
         key=lambda message: SEVERITY_RANK.get(message.severity, 0),
-        default=messages[0],
+        default=alerts[0],
     )
-    still_open = sum(1 for message in messages if message.kind != "resolved")
-    opened = [notice for notice in notices if notice.kind == "opened"]
+    still_open = sum(1 for message in alerts if message.kind != "resolved")
+    opened = [notice for notice in alert_notices if notice.kind == "opened"]
     if (
-        len(opened) == len(notices)
+        len(opened) == len(alert_notices)
         and all(notice.subject.condition_kind == "check_state" for notice in opened)
         and len({notice.subject.detail.get("state") for notice in opened}) == 1
     ):
         # The shape of a shared outage: the same thing happening to several at once.
         state = str(opened[0].subject.detail.get("state") or "failing")
-        summary = f"[{worst.severity}] {len(notices)} checks are {state}"
+        summary = f"[{worst.severity}] {len(alerts)} checks are {state}"
     elif still_open == 0:
-        summary = f"[resolved] {len(notices)} incidents recovered"
+        summary = f"[resolved] {len(alerts)} incidents recovered"
     else:
-        summary = f"[{worst.severity}] {len(notices)} alerts"
-    rules = {message.rule_name for message in messages}
+        summary = f"[{worst.severity}] {len(alerts)} alerts"
+    rules = {message.rule_name for message in alerts}
     ordered = sorted(
         messages,
-        key=lambda message: (message.kind == "resolved", -SEVERITY_RANK.get(message.severity, 0)),
+        key=lambda message: (
+            message.kind == EXPLAINED,
+            message.kind == "resolved",
+            -SEVERITY_RANK.get(message.severity, 0),
+        ),
     )
     return AlertMessage(
         kind="opened" if still_open else "resolved",
@@ -240,7 +294,30 @@ def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMes
         link=f"{app_base_url.rstrip('/')}/alerts",
         rule_name=rules.pop() if len(rules) == 1 else f"{len(rules)} rules",
         manage_link=None,
+        unfurl=unfurl,
     )
+
+
+def _follow_ups_alone(messages: list[AlertMessage], *, app_base_url: str) -> AlertMessage:
+    """Only follow-ups are due: one line each, under a summary that is not an alarm."""
+    return AlertMessage(
+        kind=EXPLAINED,
+        severity=messages[0].severity,
+        summary=f"{len(messages)} findings have a likely place to look",
+        details=tuple(message.summary for message in messages),
+        link=f"{app_base_url.rstrip('/')}/",
+        rule_name="",
+        manage_link=None,
+        unfurl=False,
+    )
+
+
+def _with_follow_up_lines(
+    alert: AlertMessage, messages: list[AlertMessage], *, unfurl: bool
+) -> AlertMessage:
+    """One alert as it is, with each follow-up beside it as one more line."""
+    follow_ups = tuple(message.summary for message in messages if message.kind == EXPLAINED)
+    return replace(alert, details=(*alert.details, *follow_ups), unfurl=unfurl)
 
 
 # How a closed finding is said, after its subject (FR13, FR20, FR21, FR32, D20).
@@ -272,11 +349,96 @@ _PROJECT_NOTICE_WORDS: Final = {
 }
 
 
+# F28 FR44: the release before an opened finding, put in its subject's `detail` by
+# delivery after the claim (D51) and never stored. Plain values: this module may not
+# reach `nexovue_scheduler.releases` (AC42).
+RELEASE_FACTS: Final = "release_before"
+_NO_DEPLOY_INFORMATION: Final = "none"
+
+
+def _release_line(detail: dict[str, Any], opened_at: datetime) -> str | None:
+    """ "Most recent release on this service: v2.1, 6 min before this. Order only, not
+    cause", or coverage `none`'s words; nothing for a version already running when
+    counting began, which is not a release, or when nothing is known before."""
+    facts = detail.get(RELEASE_FACTS)
+    if not isinstance(facts, dict):
+        return None
+    version, started = facts.get("version"), facts.get("started_at")
+    if isinstance(version, str) and isinstance(started, str) and not facts.get("already_running"):
+        gap = describe_duration(datetime.fromisoformat(started), opened_at)
+        return (
+            f"Most recent release on this service: {one_line(version)}, {gap} before this. "
+            "Order only, not cause."
+        )
+    if facts.get("coverage") == _NO_DEPLOY_INFORMATION:
+        return "We receive no deploy information for this service."
+    return None
+
+
+# F3: a name in a follow-up is shown only if it reads as a plain identifier; anything
+# else is told as what it is (design, *Data path*). Messages only: the page shows names.
+_PLAIN_NAME: Final = re.compile(r"[A-Za-z0-9._-]{1,80}")
+_A_SERVICE: Final = "a service"
+_A_VERSION: Final = "a version"
+_LOOK_ON_THE_PAGE: Final = "See the finding's page for the current reading."
+_MORE_ON_THE_FEED: Final = "More findings have a likely place to look; see the feed."
+
+
+def _plain_name(value: object, fallback: str) -> str:
+    """Judged on the name as sent, so a hidden character never makes a name pass."""
+    if not isinstance(value, str) or not _PLAIN_NAME.fullmatch(value):
+        return fallback
+    return display_name(value)
+
+
+def _compose_explained(notice: Notice, *, app_base_url: str) -> AlertMessage:
+    """F3's follow-up (FR21): the likely place to look, by rule, with the deploy's base
+    rate, which F28's opening line does not say. Written from facts by template: it takes
+    no wording, repeats no signal and is never an alarm (FR22, AC27)."""
+    base = app_base_url.rstrip("/")
+    subject = notice.subject
+    if subject.closed_at is not None:
+        # FR21: never once the finding has closed, even if it closed after the row was written.
+        raise UnwritableNoticeError("the finding closed before its follow-up was sent")
+    cause = subject.detail.get(EXPLAINED_CAUSE)
+    if not isinstance(cause, dict):
+        raise UnwritableNoticeError("no likely cause stands for this finding any more")
+    try:
+        deployed_at = datetime.fromisoformat(str(cause["at"]))
+        rate = deploy_rate_words(int(cause["deploys_last_7_days"]), int(cause["days_of_records"]))
+    except (KeyError, TypeError, ValueError) as malformed:
+        raise UnwritableNoticeError("the explanation's deploy fact is malformed") from malformed
+    label = _plain_name(subject.label, _A_SERVICE)
+    service = _plain_name(cause.get("service"), _A_SERVICE)
+    version = _plain_name(cause.get("version"), _A_VERSION)
+    gap = describe_duration(deployed_at, subject.opened_at)
+    lines = [
+        f"A likely place to look on {label}: the deploy of {service} {version}, {gap} "
+        f"before this ({rate}).",
+        _LOOK_ON_THE_PAGE,
+    ]
+    if subject.detail.get(EXPLAINED_LAST_IN_WINDOW) is True:
+        lines.append(_MORE_ON_THE_FEED)
+    lines.append(f"Started: {_moment(subject.opened_at)}.")
+    return AlertMessage(
+        kind=EXPLAINED,
+        severity=notice.severity,
+        summary=f"A likely place to look on {label}: the deploy of {service} {version}",
+        details=tuple(lines),
+        link=f"{base}/findings/{subject.id}",
+        rule_name="",
+        manage_link=None,
+        unfurl=False,
+    )
+
+
 def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """A finding's words (FR17): its title, which already names the project's zone, and
     one line for each signal. Service and endpoint names are telemetry text: each is
     one line, the subject's from `Subject` and the rest through `one_line` here, and
     the channel escapes them after."""
+    if notice.kind == EXPLAINED:
+        return _compose_explained(notice, app_base_url=app_base_url)
     base = app_base_url.rstrip("/")
     subject = notice.subject
     detail = subject.detail
@@ -312,6 +474,9 @@ def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
         lines = [f"{title}."]
     if notice.kind not in ("resolved", "adopted", "flapping"):
         lines.extend(_signal_lines(detail.get("signals") or []))
+    released = _release_line(detail, subject.opened_at) if notice.kind == "opened" else None
+    if released is not None:
+        lines.append(released)
     lines.append(f"Started: {_moment(subject.opened_at)}.")
     if subject.closed_at is not None:
         lines.append(f"Lasted: {describe_duration(subject.opened_at, subject.closed_at)}.")
@@ -325,6 +490,12 @@ def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
         link=f"{base}/findings/{subject.id}",
         rule_name=rule_name,
         manage_link=f"{base}/alerts/rules/{subject.rule_id}" if subject.rule_id else None,
+        case_line=None
+        if subject.case is None
+        else (
+            f"Part of a case started {_moment(subject.case.opened_at)}. "
+            f"Open it: {base}/findings/{subject.case.root_id}"
+        ),
     )
 
 
@@ -375,7 +546,9 @@ def _compose_project(notice: Notice, *, app_base_url: str) -> AlertMessage:
         severity=notice.severity,
         summary=f"[{'resolved' if notice.kind == 'running_again' else notice.severity}] {summary}",
         details=(sentence.format(**words),),
-        link=f"{base}/findings",
+        # The feed is the front door (F20 Step 1, FR1): the project's notice lands
+        # on `/`, and `test_alert_links.py` holds every link to the console's routes.
+        link=f"{base}/",
         rule_name="",
         manage_link=None,
     )

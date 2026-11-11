@@ -7,12 +7,19 @@ and the queue the worker that runs them takes.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import itertools
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from types import SimpleNamespace
+from typing import Any, Final
 
+import pytest
+from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
+from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE
+
+from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE, JUDGE_PROJECT_TASK
 from nexovue_scheduler.detection.baselines import AHEAD, BASELINE_SPREAD, hourly_requests
@@ -100,9 +107,25 @@ def test_one_projects_hourly_baseline_is_due_at_once() -> None:
 def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> None:
     """C23, D32: `scheduler-light` runs `worker` with no queues named, so its default
     is what takes detection. Naming queues replaces it, as `scheduler-deliveries` does."""
-    assert worker_queues("", region="mumbai") == ["light", "light.mumbai", DETECTION_QUEUE]
+    assert worker_queues("", region="mumbai") == [
+        "light",
+        "light.mumbai",
+        DETECTION_QUEUE,
+        # F3: a finding's facts are gathered beside detection, under the same floor.
+        EVIDENCE_QUEUE,
+        *slos.QUEUES,
+        *releases.QUEUES,
+    ]
     assert worker_queues("deliveries", region="mumbai") == ["deliveries"]
-    assert QUEUE_CAPS == {DETECTION_QUEUE: DETECTION_CONCURRENCY}
+    # F22: `scheduler-connections`' sync queue is capped too, in its own worker (F5's D40).
+    assert QUEUE_CAPS == {
+        DETECTION_QUEUE: DETECTION_CONCURRENCY,
+        EVIDENCE_QUEUE: EVIDENCE_CONCURRENCY,
+        **slos.QUEUE_CAPS,
+        **releases.QUEUE_CAPS,
+        CONNECTIONS_QUEUE: CONNECTIONS_QUEUE_CAP,
+    }
+    assert EVIDENCE_CONCURRENCY == 2
     assert DETECTION_CONCURRENCY == 2
 
 
@@ -167,3 +190,44 @@ def test_a_drop_the_guard_holds_never_opens_and_one_after_it_does() -> None:
     assert trouble.keeps_traffic_out(SETTLED + MINUTE, SETTLED + timedelta(hours=1), SETTLED)
     after = FELL.last + MINUTE
     assert not trouble.keeps_traffic_out(after, after + 4 * MINUTE, after + 4 * MINUTE)
+
+
+def test_ac95d_a_failure_queueing_slo_jobs_leaves_detection_queued_and_the_sweep_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F19 AC95(d): the SLO hand-out shares the sweep's minute, and its failure must
+    change nothing about detection's jobs or the sweep recording itself."""
+    from nexovue_scheduler.detection import coordinator, holds
+    from nexovue_scheduler.detection.project_job import NO_TROUBLE
+    from nexovue_scheduler.slos import job as slo_jobs
+
+    seen: dict[str, object] = {}
+
+    async def decide(*_: object) -> holds.Decision:
+        return holds.Decision(minute=SETTLED, trouble=NO_TROUBLE)
+
+    async def queue_projects(_engine: object, settled: datetime, *_: object, **__: object) -> int:
+        seen["detection"] = settled
+        return 3
+
+    async def queue_slos(*_: object, **__: object) -> int:
+        raise RuntimeError("slo_targets could not be read")
+
+    async def record(_engine: object, settled: datetime | None) -> None:
+        seen["recorded"] = settled
+
+    def run(work: Any) -> Any:
+        return asyncio.run(work(object()))
+
+    monkeypatch.setattr(coordinator, "with_engine", run)
+    monkeypatch.setattr(coordinator, "_report_stopped", lambda: None)
+    monkeypatch.setattr(coordinator, "_settled", lambda: SimpleNamespace(now=SETTLED))
+    monkeypatch.setattr(coordinator, "_intake", lambda _now: None)
+    monkeypatch.setattr(holds, "decide", decide)
+    monkeypatch.setattr(coordinator, "queue_project_jobs", queue_projects)
+    monkeypatch.setattr(slo_jobs, "queue_jobs", queue_slos)
+    monkeypatch.setattr(coordinator, "_record", record)
+
+    coordinator.sweep()
+
+    assert seen == {"detection": SETTLED, "recorded": SETTLED}

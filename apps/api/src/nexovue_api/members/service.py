@@ -37,6 +37,7 @@ from nexovue_api.errors.exceptions import (
     NotFoundError,
     PermissionDeniedError,
 )
+from nexovue_api.findings import cases
 from nexovue_api.members import queries
 from nexovue_api.members.schemas import (
     MemberListResponse,
@@ -44,6 +45,7 @@ from nexovue_api.members.schemas import (
     MemberSummary,
     Role,
 )
+from nexovue_api.slos import personal as slo_personal
 
 logger = structlog.get_logger(__name__)
 
@@ -161,6 +163,10 @@ async def change_role(
             await _refuse_leaving_no_owner(db, organization=organization, leaving=member)
         before = member.role
         member.role = role
+        if role == "viewer":
+            # F22 FR4, AC10: a viewer cannot hold a case. A row the detection job
+            # holds right now is skipped and healed by the next sweep.
+            await cases.clear_assignee(db, org_id=member.org_id, user_id=member.id, now=now)
         audit.record_member_role_changed(db, member=member, actor_user_id=actor.id, before=before)
         await db.flush()
     return describe(member, now=now, invited_by=None, last_signed_in_at=None)
@@ -192,6 +198,9 @@ async def scrub(db: AsyncSession, *, member: User, now: datetime) -> None:
     removal is never kinder to history than leaving (personal-data spec, BR4).
     The row stays, because the audit log and "muted by" point at it.
     """
+    # F22 FR8, AC10: removal and account deletion clear them from every active
+    # case first, with an event, through the same code as a demotion.
+    await cases.clear_assignee(db, org_id=member.org_id, user_id=member.id, now=now)
     address, name = member.email, member.name
     target = audit.person_target(member.id)
     # Every entry naming them now names their id; the entries themselves stay,
@@ -206,6 +215,10 @@ async def scrub(db: AsyncSession, *, member: User, now: datetime) -> None:
             replacement=str(member.id),
         )
     await queries.end_sessions_of(db, org_id=member.org_id, user_id=member.id)
+    # F19 AC88: inside reliability targets' free text too, whoever wrote it.
+    await slo_personal.scrub_person(
+        db, org_id=member.org_id, address=address, name=name, replacement=FORMER_MEMBER_NAME
+    )
 
     member.removed_at = now
     # The epoch as well as the rows: a session minted mid-request is refused too.

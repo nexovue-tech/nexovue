@@ -1,6 +1,7 @@
 package logwriting
 
 import (
+	"bytes"
 	"log/slog"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
 )
 
 const maskedText = "[redacted]"
@@ -64,7 +66,8 @@ func TestMaskingRunsBeforeRowsAreBuilt(t *testing.T) {
 	masker := &blankingMasker{}
 	pipeline := testPipeline(masker, fixedRetention{raw: 7})
 
-	rows, _, masked, err := pipeline.absorbMessage(receivedAt, logMessage(t))
+	out, masked, err := pipeline.absorbMessage(receivedAt, logMessage(t))
+	rows := out.rows
 	if err != nil {
 		t.Fatalf("absorbMessage: %v", err)
 	}
@@ -99,7 +102,8 @@ func TestMaskingRunsBeforeRowsAreBuilt(t *testing.T) {
 func TestRetentionFallsBackToTheDeploymentDefault(t *testing.T) {
 	pipeline := testPipeline(&blankingMasker{}, staticRetention{raw: 30})
 
-	rows, _, _, err := pipeline.absorbMessage(receivedAt, logMessage(t))
+	out, _, err := pipeline.absorbMessage(receivedAt, logMessage(t))
+	rows := out.rows
 	if err != nil {
 		t.Fatalf("absorbMessage: %v", err)
 	}
@@ -112,7 +116,8 @@ func TestRetentionFallsBackToTheDeploymentDefault(t *testing.T) {
 func TestReceivedAtComesFromTheEnvelope(t *testing.T) {
 	pipeline := testPipeline(&blankingMasker{}, staticRetention{raw: 30})
 
-	rows, _, _, err := pipeline.absorbMessage(time.Unix(0, 1).UTC(), logMessage(t))
+	out, _, err := pipeline.absorbMessage(time.Unix(0, 1).UTC(), logMessage(t))
+	rows := out.rows
 	if err != nil {
 		t.Fatalf("absorbMessage: %v", err)
 	}
@@ -159,4 +164,30 @@ func logMessage(t *testing.T) []byte {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 	return message
+}
+
+// A forged evidence record is dropped, never silently: the batch's drops are
+// counted for the heartbeat and named in one warning (browser-door decision 5).
+func TestDroppedSyntheticEvidenceIsCountedInALogLine(t *testing.T) {
+	var captured bytes.Buffer
+	pipeline := testPipeline(&blankingMasker{}, staticRetention{raw: 30})
+	pipeline.log = slog.New(slog.NewJSONHandler(&captured, nil))
+
+	pipeline.reportSyntheticRefused(t.Context(), proberdoor.Refusals{
+		Count: 2, TenantID: "tenant-a", ProjectID: "project-a", Door: nexovuev1.Door_DOOR_OTLP,
+	})
+	pipeline.reportSyntheticRefused(t.Context(), proberdoor.Refusals{})
+
+	if pipeline.syntheticRefused != 2 {
+		t.Errorf("synthetic_records_refused = %d, want 2", pipeline.syntheticRefused)
+	}
+	lines := strings.Split(strings.TrimSpace(captured.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("logged %d lines, want one warning for the batch that dropped records: %q", len(lines), lines)
+	}
+	for _, want := range []string{`"level":"WARN"`, `"refused":2`, `"tenant_id":"tenant-a"`, `"door":"DOOR_OTLP"`} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("the warning %s does not carry %s", lines[0], want)
+		}
+	}
 }

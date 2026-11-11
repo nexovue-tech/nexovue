@@ -579,6 +579,8 @@ async def test_an_organization_cannot_revoke_another_organizations_key(db: Async
         audit.ORGANIZATION_CREATED,
         audit.API_KEY_CREATED,
         audit.NOTIFICATION_CHANNEL_CREATED,
+        # The project's three default rules (F21, F6 FR29, F19 FR25), as `test_projects.py`.
+        audit.ALERT_RULE_CREATED,
         audit.ALERT_RULE_CREATED,
         audit.ALERT_RULE_CREATED,
     ]

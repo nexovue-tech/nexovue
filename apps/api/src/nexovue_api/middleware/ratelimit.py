@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
 from typing import Any, Final
 
 from nexovue_platform.telemetry.logging import get_logger
@@ -33,12 +32,12 @@ from nexovue_api.auth.sessions import (
 from nexovue_api.errors import problems
 from nexovue_api.errors.handlers import problem_response
 from nexovue_api.ratelimit import headers as ratelimit_headers
+from nexovue_api.ratelimit.charge import Counted, Identity, record_arrival, record_counted
 from nexovue_api.ratelimit.limiter import Decision, RateLimiter
 from nexovue_api.ratelimit.policy import (
     AUTH_TIER,
     TOKEN_TIER,
     PlanLimits,
-    Quota,
     Tier,
     tier_for,
 )
@@ -71,23 +70,6 @@ TOO_MANY_REQUESTS_DETAIL: Final = "Too many requests. Retry after the interval i
 TOO_MANY_CONCURRENT_DETAIL: Final = (
     "Too many queries in flight for this caller. Retry when one finishes."
 )
-
-Identity = tuple[str, str]
-
-
-@dataclass(frozen=True, slots=True)
-class Counted:
-    """One bucket a request is counted in: whose, how many, and how many at once.
-
-    No quota is a bucket that only caps what is in flight.
-    """
-
-    identity: Identity
-    quota: Quota | None
-    max_concurrent: int | None
-    # The tier the bucket belongs to. In-flight slots are counted per tier, so an
-    # organization's tokens and its people do not share one ceiling (group 9, D5).
-    pool: str
 
 
 async def _wait_for_slot(
@@ -126,6 +108,10 @@ class RateLimitMiddleware:
         self._trusted_proxy_count = trusted_proxy_count
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == _HTTP_SCOPE:
+            # Before any wait, and with limits off too: a batch read's deadline counts
+            # from here, so every wait below shortens its scans (F20 D25).
+            record_arrival(scope, time.monotonic())
         presented = self._presented(scope)
         tier = self._tier_for(scope, presented)
         limiter, plan_limits = self._dependencies(scope)
@@ -164,6 +150,9 @@ class RateLimitMiddleware:
         counted: list[Counted],
     ) -> None:
         """Spend every bucket this request falls in, then serve it."""
+        # A route that runs more than one scan charges the rest to these same buckets
+        # (`ratelimit/charge.py`), so the two cannot disagree about whose place pays.
+        record_counted(scope, counted)
         decision: Decision | None = None
         for bucket in counted:
             if bucket.quota is None:

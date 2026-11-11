@@ -15,7 +15,9 @@ from datetime import datetime, timedelta
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from nexovue_scheduler.detection.method import BUCKET_COUNT, Minute
+from nexovue_platform.slo import BUCKET_COUNT
+
+from nexovue_scheduler.detection.method import Minute
 
 MINUTE: Final = timedelta(minutes=1)
 # A steady latency shape over 11 adjacent buckets, in percent: its p95 is near bucket 27.

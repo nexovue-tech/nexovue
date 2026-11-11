@@ -14,6 +14,12 @@ ADR-022):
 - the webhook schema becomes version 2;
 - PagerDuty's `dedup_key` names its subject's kind.
 
+**Amended 2026-11-09** with F3 Step 2 (`docs/features/ai-insights/`, spec FR21, FR22, FR48): one new
+notification kind, `explained`, a finding's single follow-up naming a signed deploy as its likely place to
+look, written from facts by template. It goes only to channels people read that were told the finding and
+have not turned it off (`notification_channels.sends_explained`), never to PagerDuty or a webhook; it tells
+no news (`FINDING_TOLD_KINDS`), and in a grouped message it is not counted as an open alert.
+
 ## Problem
 
 nexovue watches everything and tells nobody.

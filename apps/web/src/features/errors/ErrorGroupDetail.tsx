@@ -11,9 +11,8 @@ import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import type { ErrorGroupDetail, ErrorGroupSummary, ErrorOccurrence } from "./api";
 import { GROUPED_BY_SDK } from "./api";
 import {
-  DEPLOY_IS_NOT_A_CAUSE,
+  deployLines,
   describeOccurrences,
-  describePrecedingDeploy,
   describeServices,
   firstWithStacktrace,
   stackFrames,
@@ -120,7 +119,8 @@ export function ErrorGroupPanel({
 }
 
 /**
- * What shipped last before this started — the first thing anybody checks.
+ * What shipped last before this started — the first thing anybody checks — or why
+ * nothing can be named, at every coverage value (F28 D23).
  *
  * **The caveat is rendered, not left to the reader.** The product knows an ordering
  * and nothing more: a deploy four minutes earlier is the most recent change we were
@@ -128,19 +128,19 @@ export function ErrorGroupPanel({
  * from a change that sent no notification at all. Somebody who reads this as blame
  * reverts a release that was never the problem, so the sentence saying what this is
  * not sits beside the fact rather than in a tooltip.
- *
- * Absent when no deploy precedes the group, which is most of them — a project that
- * posts no deploy notifications has nothing here, and a section explaining that it
- * has nothing would be on every panel in the product.
  */
 function PrecedingDeploySection({ group }: { group: ErrorGroupSummary }) {
-  const afterDeploy = describePrecedingDeploy(group);
-  if (afterDeploy === undefined) return null;
+  const [first, ...rest] = deployLines(group);
+  if (first === undefined) return null;
 
   return (
     <Section title="Deploy before">
-      <p className="break-words text-ink text-sm">First seen {afterDeploy}.</p>
-      <p className="mt-1 text-ink-dim text-xs leading-relaxed">{DEPLOY_IS_NOT_A_CAUSE}</p>
+      <p className="break-words text-ink text-sm">{first}</p>
+      {rest.map((line) => (
+        <p key={line} className="mt-1 text-ink-dim text-xs leading-relaxed">
+          {line}
+        </p>
+      ))}
     </Section>
   );
 }

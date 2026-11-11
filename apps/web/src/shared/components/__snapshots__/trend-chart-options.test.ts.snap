@@ -1,0 +1,272 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`TrendChart's options with no new prop > equal the snapshot recorded before any new prop existed (AC43) > oneLine 1`] = `
+{
+  "hooks": {
+    "draw": 0,
+    "drawClear": 1,
+    "setSelect": 0,
+  },
+  "plain": {
+    "axes": [
+      {
+        "border": {
+          "stroke": "probed-grid",
+          "width": 1,
+        },
+        "font": "11px mono",
+        "grid": {
+          "stroke": "probed-grid",
+          "width": 1,
+        },
+        "size": 40,
+        "space": 90,
+        "stroke": "probed-axis",
+        "ticks": {
+          "show": false,
+        },
+      },
+      {
+        "font": "11px mono",
+        "grid": {
+          "stroke": "probed-grid",
+          "width": 1,
+        },
+        "size": 52,
+        "space": 32,
+        "stroke": "probed-axis",
+        "ticks": {
+          "show": false,
+        },
+        "values": "ƒ values",
+      },
+    ],
+    "cursor": {
+      "drag": {
+        "setScale": false,
+        "x": false,
+        "y": false,
+      },
+      "points": {
+        "show": false,
+      },
+      "y": false,
+    },
+    "height": 132,
+    "hooks": {
+      "draw": [],
+      "drawClear": [
+        "ƒ anonymous",
+      ],
+      "setSelect": [],
+    },
+    "legend": {
+      "live": false,
+      "show": false,
+    },
+    "padding": [
+      8,
+      24,
+      0,
+      0,
+    ],
+    "scales": {
+      "x": {
+        "time": true,
+      },
+      "y": {
+        "range": "ƒ range",
+      },
+    },
+    "series": [
+      {},
+      {
+        "label": "Requests/min",
+        "points": {
+          "fill": "probed-line",
+          "show": false,
+          "size": 5,
+        },
+        "stroke": "probed-line",
+        "width": 1.5,
+      },
+    ],
+    "width": 480,
+  },
+  "tzDate": null,
+  "yRange": [
+    [
+      0,
+      1.1,
+    ],
+    [
+      0,
+      11,
+    ],
+    [
+      0,
+      55.00000000000001,
+    ],
+    [
+      0,
+      8.8,
+    ],
+  ],
+  "yValues": [
+    "0 ms",
+    "1500 ms",
+  ],
+}
+`;
+
+exports[`TrendChart's options with no new prop > equal the snapshot recorded before any new prop existed (AC43) > threeLines 1`] = `
+{
+  "hooks": {
+    "draw": 1,
+    "drawClear": 1,
+    "setSelect": 1,
+  },
+  "plain": {
+    "axes": [
+      {
+        "border": {
+          "stroke": "probed-grid",
+          "width": 1,
+        },
+        "font": "11px mono",
+        "grid": {
+          "stroke": "probed-grid",
+          "width": 1,
+        },
+        "size": 40,
+        "space": 90,
+        "stroke": "probed-axis",
+        "ticks": {
+          "show": false,
+        },
+      },
+      {
+        "font": "11px mono",
+        "grid": {
+          "stroke": "probed-grid",
+          "width": 1,
+        },
+        "size": 52,
+        "space": 32,
+        "stroke": "probed-axis",
+        "ticks": {
+          "show": false,
+        },
+        "values": "ƒ values",
+      },
+    ],
+    "cursor": {
+      "drag": {
+        "setScale": false,
+        "x": true,
+        "y": false,
+      },
+      "points": {
+        "show": false,
+      },
+      "y": false,
+    },
+    "height": 132,
+    "hooks": {
+      "draw": [
+        "ƒ anonymous",
+      ],
+      "drawClear": [
+        "ƒ anonymous",
+      ],
+      "setSelect": [
+        "ƒ anonymous",
+      ],
+    },
+    "legend": {
+      "live": false,
+      "show": true,
+    },
+    "padding": [
+      8,
+      24,
+      0,
+      0,
+    ],
+    "scales": {
+      "x": {
+        "time": true,
+      },
+      "y": {
+        "range": "ƒ range",
+      },
+    },
+    "series": [
+      {},
+      {
+        "label": "p50",
+        "points": {
+          "fill": "probed-line",
+          "show": true,
+          "size": 5,
+        },
+        "stroke": "probed-line",
+        "width": 1.5,
+      },
+      {
+        "dash": [
+          4,
+          3,
+        ],
+        "label": "p95",
+        "points": {
+          "fill": "probed-line",
+          "show": true,
+          "size": 5,
+        },
+        "stroke": "probed-line",
+        "width": 1,
+      },
+      {
+        "dash": [
+          1,
+          3,
+        ],
+        "label": "p99",
+        "points": {
+          "fill": "probed-line",
+          "show": true,
+          "size": 5,
+        },
+        "stroke": "probed-line",
+        "width": 1,
+      },
+    ],
+    "tzDate": "ƒ tzDate",
+    "width": 480,
+  },
+  "tzDate": 19800000,
+  "yRange": [
+    [
+      0,
+      1.1,
+    ],
+    [
+      0,
+      11,
+    ],
+    [
+      0,
+      55.00000000000001,
+    ],
+    [
+      0,
+      8.8,
+    ],
+  ],
+  "yValues": [
+    "0 ms",
+    "1500 ms",
+  ],
+}
+`;

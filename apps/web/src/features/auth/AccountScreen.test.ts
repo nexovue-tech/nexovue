@@ -13,6 +13,8 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { NOTES_STAY } from "@/shared/case-words";
+
 import { AccountScreen } from "./AccountScreen";
 import { ACCOUNT_DELETED, parseLoginSearch, SIGNED_OUT_EVERYWHERE } from "./search";
 
@@ -466,6 +468,13 @@ describe("your data", () => {
 
     expect(container.textContent).toContain("Removes you from Dev Co.");
     expect(container.textContent).toContain("without your name or address");
+  });
+
+  it("says the notes the person wrote stay, and to delete any first (F22 BR16, AC122)", async () => {
+    stubApi();
+    const { container } = await mountProfile();
+
+    expect(container.textContent).toContain(NOTES_STAY);
   });
 
   it("deletes with the password and lands on sign-in saying so", async () => {

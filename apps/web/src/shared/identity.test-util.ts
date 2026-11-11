@@ -10,13 +10,25 @@ import type { Action, Session } from "./identity";
 
 export type TestRole = "owner" | "admin" | "member" | "viewer";
 
-const WORK: Action[] = ["operate_checks", "operate_alerts", "upload_source_maps"];
+const WORK: Action[] = [
+  "operate_checks",
+  "operate_alerts",
+  "operate_cases",
+  "upload_source_maps",
+  "configure_slos",
+  "edit_dashboards",
+  "request_explanation",
+];
 const ADMINISTER: Action[] = [
   ...WORK,
   "manage_channels",
+  "manage_connections",
+  "manage_ai",
   "manage_check_secrets",
   "configure_projects",
   "configure_detection",
+  "delete_any_case_note",
+  "purge_dashboards",
   "manage_credentials",
   "manage_api_tokens",
   "manage_members",
@@ -24,7 +36,14 @@ const ADMINISTER: Action[] = [
 ];
 
 export const PERMISSIONS_OF: Record<TestRole, Action[]> = {
-  owner: [...ADMINISTER, "manage_owners", "grant_support", "commit_spend", "end_organization"],
+  owner: [
+    ...ADMINISTER,
+    "manage_owners",
+    "grant_support",
+    "consent_ai_disclosure",
+    "commit_spend",
+    "end_organization",
+  ],
   admin: ADMINISTER,
   member: WORK,
   viewer: [],

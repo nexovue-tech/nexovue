@@ -418,6 +418,50 @@ async def test_a_finding_s_notification_is_claimed_with_the_finding_as_its_subje
     assert not notice.noted
 
 
+async def test_a_finding_s_case_is_read_at_the_claim_and_a_detached_one_has_none(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F22 FR47, AC120: whether a message names a case is decided from the row when
+    it is composed, so a finding that left its case after its notification was
+    written, and before it was sent, carries no line."""
+    now = future()
+    _, finding = await _finding_on(engine, tenant, "slack", now)
+    case_opened = now - timedelta(hours=3)
+    async with engine.begin() as connection:
+        root = await add_finding(
+            connection,
+            tenant,
+            started_at=now - timedelta(hours=4),
+            closed_at=now - timedelta(hours=2),
+        )
+        await connection.execute(
+            text(
+                "UPDATE findings SET case_state = 'investigating', case_opened_at = :at, "
+                "case_activity_at = :at WHERE org_id = :org_id AND id = :id"
+            ),
+            {"org_id": tenant.org_id, "id": root, "at": case_opened},
+        )
+        await connection.execute(
+            text("UPDATE findings SET root_finding_id = :root WHERE org_id = :org_id AND id = :id"),
+            {"org_id": tenant.org_id, "id": finding, "root": root},
+        )
+
+    [joined] = _mine(await _claim(engine, tenant, now), tenant)
+    assert joined.notices[0].subject.case == outbox.CaseOfSubject(
+        root_id=root, opened_at=case_opened
+    )
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE findings SET root_finding_id = NULL WHERE org_id = :org_id AND id = :id"),
+            {"org_id": tenant.org_id, "id": finding},
+        )
+    [detached] = _mine(
+        await _claim(engine, tenant, now + outbox.LEASE + timedelta(seconds=1)), tenant
+    )
+    assert detached.notices[0].subject.case is None
+
+
 async def test_a_finding_s_close_waits_for_its_opening_s_retry(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:

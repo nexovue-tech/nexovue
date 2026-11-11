@@ -22,17 +22,36 @@ OWNERS = {"owner"}
 FR1 = {
     Action.OPERATE_CHECKS: EVERYONE_WHO_WORKS,
     Action.OPERATE_ALERTS: EVERYONE_WHO_WORKS,
+    # F22 FR34: working a case — take, assign, note, resolve, reopen, link an issue.
+    Action.OPERATE_CASES: EVERYONE_WHO_WORKS,
     Action.UPLOAD_SOURCE_MAPS: EVERYONE_WHO_WORKS,
+    # F19 D20: reliability targets — create, change, disable, delete, restore.
+    Action.CONFIGURE_SLOS: EVERYONE_WHO_WORKS,
+    # F20 BR7: dashboards — create, change, delete, restore, and read a draft.
+    Action.EDIT_DASHBOARDS: EVERYONE_WHO_WORKS,
+    # F3 A20: reading a finding's facts again; later, asking for plainer wording.
+    Action.REQUEST_EXPLANATION: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
+    # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
+    Action.MANAGE_CONNECTIONS: ADMINISTRATORS,
+    # F3: the AI provider, its key, test, limit, switch and opt-outs (foundation FD8).
+    Action.MANAGE_AI: ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: ADMINISTRATORS,
     Action.CONFIGURE_DETECTION: ADMINISTRATORS,
+    # F22 BR16: deleting another person's note. An author deletes their own
+    # through the route's own check, whatever their role, so no row covers that.
+    Action.DELETE_ANY_CASE_NOTE: ADMINISTRATORS,
+    # F20 FR68, D47: removing a dashboard or one version at once, for a pasted secret.
+    Action.PURGE_DASHBOARDS: ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: ADMINISTRATORS,
     Action.MANAGE_MEMBERS: ADMINISTRATORS,
     Action.READ_AUDIT: ADMINISTRATORS,
     Action.MANAGE_OWNERS: OWNERS,
     Action.GRANT_SUPPORT: OWNERS,
+    # F3 FR26, AC32: sending facts to a provider is the owner's own act.
+    Action.CONSENT_AI_DISCLOSURE: OWNERS,
     Action.COMMIT_SPEND: OWNERS,
     Action.END_ORGANIZATION: OWNERS,
 }

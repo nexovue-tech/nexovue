@@ -13,7 +13,8 @@ muted, and nothing about it is ever sent — not when it opens, escalates or
 resolves — because a person who silenced a rule has said they will look.
 
 **An incident on a service with an open finding is linked to it** (F6 BR2, AC20),
-in the transaction that opens it: detection and a threshold rule watching one
+and so is a reliability target's burn on that service (F19 FR20), in the transaction
+that opens it: detection and a threshold rule watching one
 service are one problem with two records, never two problems. The project job
 links in the other direction when the finding comes second.
 
@@ -94,10 +95,12 @@ _INSERT_INCIDENT: Final = text(
     """
     INSERT INTO incidents
         (org_id, project_id, rule_id, rule_name, condition_kind, subject_key, subject_label,
-         severity, opened_at, muted, flapping, detail)
+         severity, opened_at, muted, flapping, detail,
+         about_key, about_signal, about_endpoint, about_check_id)
     VALUES
         (:org_id, :project_id, :rule_id, :rule_name, :condition_kind, :subject_key,
-         :subject_label, :severity, :at, :muted, :flapping, CAST(:detail AS jsonb))
+         :subject_label, :severity, :at, :muted, :flapping, CAST(:detail AS jsonb),
+         :about_key, :about_signal, :about_endpoint, :about_check_id)
     ON CONFLICT (rule_id, subject_key) WHERE resolved_at IS NULL DO NOTHING
     RETURNING id
     """
@@ -165,6 +168,29 @@ _INSERT_NOTIFICATIONS: Final = text(
     RETURNING id
     """
 )
+# F19: an open incident's figures, kept current each minute a burn is judged, because
+# `fire` at the same severity writes nothing and `_RESOLVE` writes only `resolved_at`
+# (design, *What each job does*). Only an open one: a closed incident keeps its last.
+_REFRESH_DETAIL: Final = text(
+    """
+    UPDATE incidents SET detail = CAST(:detail AS jsonb)
+    WHERE org_id = :org_id AND rule_id = :rule_id AND subject_key = :subject_key
+      AND resolved_at IS NULL
+    """
+)
+# F19's notices (design, *Notices*): an event, closed as it opens, under the first rule
+# covering its target by name, or none. It never conflicts with an open incident's key.
+_INSERT_NOTICE: Final = text(
+    """
+    INSERT INTO incidents
+        (org_id, project_id, rule_id, rule_name, condition_kind, subject_key, subject_label,
+         severity, opened_at, resolved_at, is_event, detail)
+    VALUES
+        (:org_id, :project_id, :rule_id, :rule_name, :condition_kind, :subject_key,
+         :subject_label, :severity, :at, :at, true, CAST(:detail AS jsonb))
+    RETURNING id
+    """
+)
 # Across organizations on purpose: one sweep serves every rule with a repeat set.
 # Each row carries its own `org_id`, and the notifications written name it.
 _DUE_REPEATS: Final = text(
@@ -197,10 +223,25 @@ _DUE_REPEATS: Final = text(
 
 @dataclass(frozen=True, slots=True)
 class Subject:
-    """What an incident is about: its key for identity, its label for people."""
+    """What an incident is about: its key for identity, its label for people.
+
+    A burn's key is its target, so `about_*` say what the target watches, for its links
+    and for what it may withhold (F19, ADR-034): `about_key` is `service:<name>`, or
+    `check:<id>` for a check target naming no service; `about_signal` is availability
+    or latency. Null for every other kind."""
 
     key: str
     label: str
+    about_key: str | None = None
+    about_signal: str | None = None
+    about_endpoint: str | None = None
+    about_check_id: uuid.UUID | None = None
+
+    @property
+    def service(self) -> str | None:
+        """The service a finding would be linked through, if this names one."""
+        named = self.key if self.about_key is None else self.about_key
+        return named.removeprefix(SERVICE_PREFIX) if named.startswith(SERVICE_PREFIX) else None
 
 
 async def fire(
@@ -284,6 +325,116 @@ async def clear(
     )
 
 
+async def refresh_detail(
+    connection: AsyncConnection, rule: Rule, subject: Subject, *, detail: dict[str, Any]
+) -> None:
+    """Make an open incident's figures current, so a repeat, the recovery and the
+    incident page read this minute's, not the opening's (F19 FR18, AC19, AC104)."""
+    await connection.execute(
+        _REFRESH_DETAIL,
+        {
+            "org_id": rule.org_id,
+            "rule_id": rule.id,
+            "subject_key": subject.key,
+            "detail": json.dumps(detail),
+        },
+    )
+
+
+async def close_unjudged(
+    connection: AsyncConnection,
+    rule: Rule,
+    subject: Subject,
+    *,
+    at: datetime,
+    detail: dict[str, Any],
+) -> int:
+    """Close an open burn whose source stopped feeding it (F19 FR17): no tier can judge
+    again without new events, so it would otherwise stay open for ever. Unlike a person
+    closing it, nobody chose this, so every channel told of it is told it ended, as
+    `closed`, with why in its detail. Returns how many notifications were written."""
+    keys = {"org_id": rule.org_id, "rule_id": rule.id, "subject_key": subject.key}
+    current = (await connection.execute(_OPEN_INCIDENT, keys)).first()
+    if current is None:
+        return 0
+    await refresh_detail(connection, rule, subject, detail=detail)
+    await connection.execute(_RESOLVE, {"org_id": rule.org_id, "incident_id": current.id, "at": at})
+    told = await _told_channels(connection, rule.org_id, current.id)
+    if current.flapping or current.muted or rule.muted_at(at):
+        told = {channel: kind for channel, kind in told.items() if kind not in READ_BY_PEOPLE}
+    return await _notify(
+        connection,
+        rule,
+        current.id,
+        tuple(told),
+        kind="closed",
+        severity=current.severity,
+        at=at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NoticeTo:
+    """Where a notice goes: the rule it is filed under, if any, and its channels."""
+
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    rule_id: uuid.UUID | None
+    rule_name: str
+    channel_ids: tuple[uuid.UUID, ...]
+
+
+async def fire_notice(
+    connection: AsyncConnection,
+    to: NoticeTo,
+    subject: Subject,
+    *,
+    condition_kind: str,
+    severity: str,
+    at: datetime,
+    detail: dict[str, Any],
+) -> int:
+    """F19's event notices, *Nothing left* and *Exclusion* (design, *Notices*): one
+    incident, closed as it opens, and one `opened` row per channel of the union the
+    caller names, however many rules name each. A channel's own mute still drops its row
+    at delivery. Returns how many notifications were written."""
+    incident_id = (
+        await connection.execute(
+            _INSERT_NOTICE,
+            {
+                "org_id": to.org_id,
+                "project_id": to.project_id,
+                "rule_id": to.rule_id,
+                "rule_name": to.rule_name,
+                "condition_kind": condition_kind,
+                "subject_key": subject.key,
+                "subject_label": subject.label,
+                "severity": severity,
+                "at": at,
+                "detail": json.dumps(detail),
+            },
+        )
+    ).scalar_one()
+    if not to.channel_ids:
+        return 0
+    written = await connection.execute(
+        _INSERT_NOTIFICATIONS,
+        {
+            "org_id": to.org_id,
+            "project_id": to.project_id,
+            "incident_id": incident_id,
+            "channel_ids": list(to.channel_ids),
+            "kind": "opened",
+            "sequence": 0,
+            "severity": severity,
+            "at": at,
+            "group_wait": 0,
+            "human_kinds": _HUMAN_KINDS,
+        },
+    )
+    return len(written.fetchall())
+
+
 async def renotify_due(
     connection: AsyncConnection, *, now: datetime, org_id: uuid.UUID | None = None
 ) -> int:
@@ -351,17 +502,22 @@ async def _open(
                 "muted": muted,
                 "flapping": flapping,
                 "detail": json.dumps(detail | ({"openings": earlier + 1} if flapping else {})),
+                "about_key": subject.about_key,
+                "about_signal": subject.about_signal,
+                "about_endpoint": subject.about_endpoint,
+                "about_check_id": subject.about_check_id,
             },
         )
     ).scalar_one_or_none()
-    if incident_id is not None and rule.condition_kind in SERVICE_KINDS:
+    linked_service = _linked_service(rule, subject)
+    if incident_id is not None and linked_service is not None:
         await connection.execute(
             _LINK_FINDING,
             {
                 "org_id": rule.org_id,
                 "project_id": rule.project_id,
                 "incident_id": incident_id,
-                "service_name": subject.key.removeprefix(SERVICE_PREFIX),
+                "service_name": linked_service,
             },
         )
     if incident_id is None or muted or still_flapping:
@@ -384,6 +540,14 @@ async def _open(
             else 0
         ),
     )
+
+
+def _linked_service(rule: Rule, subject: Subject) -> str | None:
+    """The service whose open finding this incident joins (F6 BR2; F19 FR20): a service
+    rule's subject, or what a burn's target watches. None for anything else."""
+    if rule.condition_kind in SERVICE_KINDS or subject.about_key is not None:
+        return subject.service
+    return None
 
 
 async def _told_channels(

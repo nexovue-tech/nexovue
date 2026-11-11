@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
+from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 
-from nexovue_scheduler.alerts.messages import compose, compose_batch, describe_duration
-from nexovue_scheduler.alerts.outbox import Notice, Subject
+from nexovue_scheduler.alerts import payloads
+from nexovue_scheduler.alerts.dispatch import message_for
+from nexovue_scheduler.alerts.messages import (
+    RELEASE_FACTS,
+    UnwritableNoticeError,
+    compose,
+    compose_batch,
+    describe_duration,
+)
+from nexovue_scheduler.alerts.outbox import CaseOfSubject, Notice, Subject
 
 OPENED_AT = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
 CHECK_ID = uuid.uuid4()
 RULE_ID = uuid.uuid4()
+BASE = "https://app.nexovue.test"
 
 
 def _notice(
@@ -413,7 +426,455 @@ def test_detection_stopping_and_running_again_name_the_project() -> None:
         "nexovue's anomaly detection has not judged Production for 15 minutes, as of "
         "2026-09-19 14:03 UTC. No finding can open until it runs again.",
     )
-    assert message.link == "https://app.nexovue.test/findings"
+    # The feed is the front door now (F20 Step 1, FR1): the notice links to `/`.
+    assert message.link == "https://app.nexovue.test/"
     again = compose(dataclasses.replace(stopped, kind="running_again"), app_base_url="")
     assert again.summary == "[resolved] Detection is running again for Production"
     assert again.kind == "resolved"
+
+
+# ------------------------------------------------- part of a case (F22 FR47, AC120)
+
+CASE_OPENED_AT = datetime(2026, 10, 31, 14, 2, tzinfo=UTC)
+ROOT_ID = uuid.uuid4()
+JOINED_FINDING_ID = uuid.uuid4()
+APP = "https://app.nexovue.test/"
+
+
+def _case_notice(kind: str = "opened", *, joined: bool) -> Notice:
+    return Notice(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind=kind,
+        severity="warning",
+        created_at=OPENED_AT,
+        attempts=0,
+        pagerduty_key="finding:key",
+        subject=Subject(
+            kind="finding",
+            id=JOINED_FINDING_ID,
+            key="service:checkout",
+            label="checkout",
+            opened_at=OPENED_AT,
+            closed_at=None,
+            rule_id=RULE_ID,
+            rule_name="Findings",
+            condition_kind="anomaly_finding",
+            detail={"title": "checkout is 4x slower than normal since 14:02 UTC", "signals": []},
+            case=CaseOfSubject(root_id=ROOT_ID, opened_at=CASE_OPENED_AT) if joined else None,
+        ),
+    )
+
+
+def test_a_joined_finding_s_message_names_its_case_for_people_only() -> None:
+    """FR47: one fixed line, the case's start in the message's UTC form and a link
+    nexovue built, read from the row when composed. It is the people's line: the
+    message's own details, which machines receive, are the same with or without."""
+    joined = compose(_case_notice(joined=True), app_base_url=APP)
+    alone = compose(_case_notice(joined=False), app_base_url=APP)
+
+    line = f"Part of a case started 2026-10-31 14:02 UTC. Open it: {APP}findings/{ROOT_ID}"
+    assert joined.case_line == line
+    assert joined.details == alone.details
+    assert joined.for_people().details == (*alone.details, line)
+    assert alone.case_line is None and alone.for_people() == alone
+
+
+@pytest.mark.parametrize("kind", sorted(READ_BY_PEOPLE))
+def test_every_channel_people_read_carries_the_line(kind: str) -> None:
+    """AC120: the rendered line on each people-read channel."""
+    message = compose(_case_notice(joined=True), app_base_url=APP)
+    rendered = message_for(kind, message)
+    assert rendered.details[-1].startswith("Part of a case started 2026-10-31 14:02 UTC.")
+    if kind in ("slack", "discord", "teams"):
+        body = getattr(payloads, kind)(rendered).decode()
+        escaped = getattr(payloads, f"{kind}_text")(rendered.details[-1])
+        assert json.dumps(escaped, ensure_ascii=False)[1:-1] in body
+
+
+def test_pagerduty_and_webhooks_are_byte_equal_with_and_without_a_case() -> None:
+    """AC120, FR47: no machine's payload changes by a byte because of a case."""
+    bodies = []
+    for joined in (True, False):
+        message = compose(_case_notice(joined=joined), app_base_url=APP)
+        bodies.append(
+            (
+                payloads.pagerduty(
+                    message_for("pagerduty", message),
+                    routing_key="routing",
+                    dedup_key="finding:key",
+                    subject="checkout",
+                    app_base_url=APP,
+                ),
+                payloads.webhook(
+                    message_for("webhook", message),
+                    subject_kind="finding",
+                    subject_id="same",
+                    subject="checkout",
+                    opened_at=OPENED_AT,
+                    resolved_at=None,
+                    sent_at=OPENED_AT,
+                ),
+            )
+        )
+    assert bodies[0] == bodies[1]
+
+
+# ------------------------------------------------------------ F19: burns (T4.9)
+
+_BURN_KINDS = {
+    "service_availability": ("checkout availability, 99.9% over 28 days", "failures"),
+    "service_latency": ("checkout latency under 487.2 ms, 99.9% over 28 days", "slow requests"),
+    "check_availability": ("Payment check availability, 99.9% over 28 days", "failed runs"),
+}
+
+
+def _burn_notice(
+    kind: str = "service_availability", *, notice_kind: str = "opened", **detail: object
+) -> Notice:
+    label, _ = _BURN_KINDS[kind]
+    since = OPENED_AT - timedelta(minutes=20)
+    return _about(
+        _notice(notice_kind),
+        key=f"slo:{uuid.uuid4()}",
+        label=label,
+        rule_name="Reliability targets",
+        condition_kind="slo_burn",
+        detail={
+            "slo_id": str(uuid.uuid4()),
+            "kind": kind,
+            "service": None if kind == "check_availability" else "checkout",
+            "endpoint": None,
+            "check_id": str(CHECK_ID) if kind == "check_availability" else None,
+            "objective_percent": "99.9",
+            "window_days": 28,
+            "holding": True,
+            "tier": "fast",
+            "rate": 14.7,
+            "hours_left": 50.0,
+            "since": since.isoformat(),
+            "allowed": 672,
+            "left": 312,
+            "zone": "Asia/Kolkata",
+            "as_of": OPENED_AT.isoformat(),
+            "exclusions": [],
+        }
+        | detail,
+    )
+
+
+def test_a_burn_says_how_fast_how_long_what_is_left_lasts_and_since_when() -> None:
+    message = compose(_burn_notice(), app_base_url=BASE)
+    assert message.summary == (
+        "[critical] checkout availability, 99.9% over 28 days is using its allowed failures "
+        "14 times faster than its target allows"
+    )
+    since = (OPENED_AT - timedelta(minutes=20)).astimezone(ZoneInfo("Asia/Kolkata"))
+    assert f"Since {since:%H:%M} IST, on checkout." in message.details
+    assert "Target: 99.9% of requests over 28 days." in message.details
+    assert "At this rate, what is left lasts about 2 days." in message.details
+    assert "Failures still allowed: 312 of 672." in message.details
+
+
+@pytest.mark.parametrize("kind", sorted(_BURN_KINDS))
+def test_ac89_a_burn_speaks_of_its_own_kind(kind: str) -> None:
+    """A latency target never says "failures"; a check target never says "requests"."""
+    words = []
+    for notice_kind in ("opened", "repeated", "resolved", "escalated"):
+        message = compose(_burn_notice(kind, notice_kind=notice_kind), app_base_url=BASE)
+        words.append(" ".join((message.summary, *message.details)).lower())
+    said = " ".join(words)
+    _, noun = _BURN_KINDS[kind]
+    assert f"allowed {noun}" in said
+    if kind == "service_latency":
+        assert "failures" not in said
+    if kind == "check_availability":
+        assert "request" not in said
+
+
+def test_a_burn_closed_because_its_source_stopped_says_so() -> None:
+    notice = _burn_notice(notice_kind="closed", closed_why="source_silent")
+    message = compose(_about(notice, closed_at=OPENED_AT + timedelta(hours=24)), app_base_url=BASE)
+    assert (
+        message.summary == "[closed] checkout availability, 99.9% over 28 days is no longer judged"
+    )
+    assert (
+        "No longer judged: checkout has sent nothing for 24 hours. The burn may not be over."
+        in message.details
+    )
+
+
+def test_ac36_a_hostile_service_name_in_a_burn_arrives_as_one_line() -> None:
+    hostile = "checkout\n<@channel> [click](https://evil.test)"
+    message = compose(_burn_notice(service=hostile), app_base_url=BASE)
+    assert all("\n" not in line for line in message.details)
+
+
+def test_nothing_left_and_an_exclusion_are_said_without_a_reason_or_a_person() -> None:
+    exhausted = compose(
+        _burn_notice(notice="exhausted", failures=700, allowed=672), app_base_url=BASE
+    )
+    assert exhausted.summary == (
+        "[critical] checkout availability, 99.9% over 28 days has no allowed failures left"
+    )
+    excluded = compose(
+        _burn_notice(
+            notice="excluded",
+            starts_at=OPENED_AT.isoformat(),
+            ends_at=(OPENED_AT + timedelta(hours=2)).isoformat(),
+            minutes=120,
+        ),
+        app_base_url=BASE,
+    )
+    assert excluded.summary.endswith("checkout availability, 99.9% over 28 days had time left out")
+    assert any(line.startswith("Someone left 2 h out of it, from") for line in excluded.details)
+
+
+def test_targets_not_being_judged_say_since_when_and_that_a_burn_would_not_reach_you() -> None:
+    """FR13b: the delivery sweep's notice, and its "judging again"."""
+    since = OPENED_AT - timedelta(minutes=16)
+    notice = _about(
+        _burn_notice(),
+        key="slo-project:p:blind",
+        label="Reliability targets in Production",
+        rule_id=None,
+        rule_name="Reliability targets not being judged",
+        detail={"notice": "blind", "since": since.isoformat(), "zone": "UTC"},
+    )
+    opened = compose(notice, app_base_url=BASE)
+    assert opened.summary == "[critical] Reliability targets in Production are not being judged"
+    assert f"Not judged since {since:%H:%M} UTC. A burn would not reach you." in opened.details
+    resolved = compose(
+        _about(dataclasses.replace(notice, kind="resolved"), closed_at=OPENED_AT),
+        app_base_url=BASE,
+    )
+    assert resolved.summary.endswith("are being judged again")
+
+
+# --------------------------------------------- F28 FR44: the release before (T3.8)
+
+RELEASED_AT = OPENED_AT - timedelta(minutes=6)
+ORDER_LINE = "Most recent release on this service: v2.1, 6 min before this. Order only, not cause."
+NONE_LINE = "We receive no deploy information for this service."
+
+
+def _released(version: str = "v2.1", *, already_running: bool = False) -> dict[str, Any]:
+    return {
+        RELEASE_FACTS: {
+            "version": version,
+            "started_at": RELEASED_AT.isoformat(),
+            "already_running": already_running,
+            "coverage": "deploys_and_versions",
+        }
+    }
+
+
+def test_an_opened_finding_carries_the_release_before_it_as_order() -> None:
+    """FR44, AC70: one template line, before when it started, on every channel."""
+    message = compose(_finding_notice("opened", **_released()), app_base_url="")
+    assert message.details[-3:] == (
+        ORDER_LINE,
+        "Started: 2026-09-19 14:03 UTC.",
+        "Rule: Critical problems.",
+    )
+
+
+def test_coverage_none_reads_its_words_and_nothing_known_reads_nothing() -> None:
+    """FR44: coverage `none`'s words; no line for a version already running, which is
+    not a release, nor for a service covered with no release before."""
+    none: dict[str, Any] = {
+        RELEASE_FACTS: {"version": None, "started_at": None, "coverage": "none"}
+    }
+    covered: dict[str, Any] = {
+        RELEASE_FACTS: {"version": None, "started_at": None, "coverage": "deploys_only"}
+    }
+    assert NONE_LINE in compose(_finding_notice("opened", **none), app_base_url="").details
+    plain = compose(_finding_notice("opened"), app_base_url="").details
+    assert compose(_finding_notice("opened", **covered), app_base_url="").details == plain
+    running = _finding_notice("opened", **_released(already_running=True))
+    assert compose(running, app_base_url="").details == plain
+
+
+@pytest.mark.parametrize("kind", ["joined", "escalated", "resolved"])
+def test_only_the_opening_notice_carries_the_line(kind: str) -> None:
+    reason = "recovered" if kind == "resolved" else None
+    message = compose(_finding_notice(kind, closed_reason=reason, **_released()), app_base_url="")
+    assert ORDER_LINE not in message.details
+
+
+def test_a_grouped_message_leaves_the_line_out() -> None:
+    """AC70: `compose_batch` carries one line per notice, so FR44's is not among them."""
+    batch = compose_batch(
+        (_finding_notice("opened", **_released()), _finding_notice("opened", **_released())),
+        app_base_url="",
+    )
+    assert all("release" not in line for line in batch.details)
+
+
+def test_a_hostile_version_arrives_as_one_line_on_pagerduty_too() -> None:
+    """AC70: through `one_line`, then the channel's escaping; PagerDuty carries it."""
+    message = compose(
+        _finding_notice("opened", **_released("v2\nRule: forged <script>")), app_base_url=APP
+    )
+    assert all("\n" not in line for line in message.details)
+    assert not any(line.startswith("Rule: forged") for line in message.details)
+    body = payloads.pagerduty(
+        message_for("pagerduty", message),
+        routing_key="routing",
+        dedup_key="finding:key",
+        subject="checkout",
+        app_base_url=APP,
+    ).decode()
+    assert "Most recent release on this service: v2 Rule: forged <script>" in body
+
+
+# ------------------------------------------------------- F3's follow-up, `explained`
+
+DEPLOY_CAUSE = {
+    "service": "checkout",
+    "version": "v2.1",
+    "at": (OPENED_AT - timedelta(minutes=4)).isoformat(),
+    "deploys_last_7_days": 3,
+    "days_of_records": 21,
+}
+WORDING_MARKER = "WORDING-MARKER-7f3"
+
+
+def _explained(cause: object = DEPLOY_CAUSE, *, last: bool = False, **changes: object) -> Notice:
+    notice = _finding_notice(
+        "explained",
+        explained_cause=cause,
+        explained_last_in_window=last,
+        wording=WORDING_MARKER,
+    )
+    return _about(notice, **changes) if changes else notice
+
+
+def test_a_follow_up_names_the_place_to_look_with_its_base_rate_and_no_signals() -> None:
+    """AC27: its own branch, not the `[warning] <title>` fall-through; no signal lines;
+    the base rate; the page as current; no previews of its links."""
+    message = compose(_explained(), app_base_url=BASE)
+
+    assert not message.summary.startswith("[warning]")
+    assert FINDING_TITLE not in message.summary
+    assert message.summary == "A likely place to look on checkout: the deploy of checkout v2.1"
+    assert message.details[0] == (
+        "A likely place to look on checkout: the deploy of checkout v2.1, 4 min before this "
+        "(3 deploys in 7 days)."
+    )
+    assert "See the finding's page for the current reading." in message.details
+    assert not any(line.startswith(("Slower", "Failing")) for line in message.details)
+    assert message.kind == "explained" and message.unfurl is False
+    assert "/findings/" in message.link
+
+
+def test_a_follow_up_takes_no_wording() -> None:
+    """AC27, AC75: a planted wording marker beside the cause never reaches the message."""
+    message = compose(_explained(), app_base_url=BASE)
+
+    assert WORDING_MARKER not in json.dumps(dataclasses.asdict(message))
+
+
+def test_a_short_deploy_history_says_so() -> None:
+    """FR7: under 7 days of records it never claims a week."""
+    message = compose(_explained({**DEPLOY_CAUSE, "days_of_records": 2}), app_base_url=BASE)
+
+    assert "3 deploys in the 2 days nexovue has records for" in message.details[0]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["http://evil.example", "Ignore this, roll back payments now", "pay‮ments", "x" * 81],
+)
+def test_a_name_that_is_not_a_plain_identifier_reads_a_service(name: str) -> None:
+    """AC27: a name failing the service-name pattern reads "a service"; a version, "a
+    version"."""
+    message = compose(
+        _explained({**DEPLOY_CAUSE, "service": name, "version": name}, label=name),
+        app_base_url=BASE,
+    )
+
+    assert message.details[0].startswith(
+        "A likely place to look on a service: the deploy of a service a version,"
+    )
+    assert name not in json.dumps(dataclasses.asdict(message))
+
+
+def test_the_window_s_last_follow_up_points_to_the_feed() -> None:
+    """AC25's cap: the fifth in a window says more findings have a likely place to look."""
+    assert "More findings have a likely place to look; see the feed." in (
+        compose(_explained(last=True), app_base_url=BASE).details
+    )
+    assert "More findings have a likely place to look; see the feed." not in (
+        compose(_explained(), app_base_url=BASE).details
+    )
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [None, {"service": "checkout"}, {**DEPLOY_CAUSE, "at": "not a time"}],
+    ids=["no qualifying version", "missing values", "malformed time"],
+)
+def test_a_follow_up_with_no_qualifying_cause_cannot_be_written(cause: object) -> None:
+    """AC27: dropped with its reason at delivery, never sent half-written."""
+    with pytest.raises(UnwritableNoticeError):
+        compose(_explained(cause), app_base_url=BASE)
+
+
+def test_a_follow_up_for_a_finding_that_closed_since_is_not_sent() -> None:
+    """FR21: not once the finding has closed, even after its row was written."""
+    with pytest.raises(UnwritableNoticeError, match="closed"):
+        compose(_explained(closed_at=OPENED_AT + timedelta(minutes=8)), app_base_url=BASE)
+
+
+@pytest.mark.parametrize(
+    ("batch", "summary", "kind", "severity"),
+    [
+        (
+            ("explained", "explained"),
+            "2 findings have a likely place to look",
+            "explained",
+            "warning",
+        ),
+        (
+            ("explained", "resolved", "resolved"),
+            "[resolved] 2 incidents recovered",
+            "resolved",
+            "critical",
+        ),
+        (("explained", "opened", "opened"), "[critical] 2 checks are down", "opened", "critical"),
+        (("explained", "resolved"), "[resolved] Checkout API recovered", "resolved", "critical"),
+    ],
+    ids=["alone", "with recoveries", "with openings", "with one recovery"],
+)
+def test_a_follow_up_is_never_an_open_alert_in_a_batch(
+    batch: tuple[str, ...], summary: str, kind: str, severity: str
+) -> None:
+    """AC27, FR22: `explained` leaves the count, the worst severity and whether anything
+    is still open; recoveries with one follow-up still read as recovered."""
+    notices = tuple(
+        _explained() if each == "explained" else _notice(each, resolved=each == "resolved")
+        for each in batch
+    )
+
+    message = compose_batch(notices, app_base_url=BASE)
+
+    assert (message.summary, message.kind, message.severity) == (summary, kind, severity)
+    assert message.unfurl is False
+    follow_up = compose(_explained(), app_base_url=BASE).summary
+    assert follow_up in message.details or follow_up in "\n".join(message.details)
+
+
+def test_a_batch_without_a_follow_up_keeps_its_previews() -> None:
+    """AC78's guard: only a message carrying a follow-up turns previews off."""
+    message = compose_batch((_notice("opened"), _notice("opened")), app_base_url=BASE)
+
+    assert message.unfurl is True
+    assert "unfurl_links" not in json.loads(payloads.slack(message))
+
+
+def test_slack_never_previews_a_follow_up_s_links() -> None:
+    """AC27: Slack's unfurling is off for a message carrying a follow-up."""
+    body = json.loads(payloads.slack(compose(_explained(), app_base_url=BASE)))
+
+    assert body["unfurl_links"] is False and body["unfurl_media"] is False

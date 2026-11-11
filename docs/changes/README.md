@@ -6,6 +6,7 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 
 ## Records
 
+- [Overview newest bucket reads low](overview-newest-bucket-reads-low/bug.md) — on a live window the newest point of Overview's rate charts divides a bucket still filling by its whole length, so a steady service seems to fall at the right edge; recorded by F20 Step 4, not yet fixed.
 - [Console findings review](console-findings-review/bug.md) — a screen's reads wait rather than being refused; titles, snooze state, units, chart zone and the seed's rates corrected.
 - [Live tests on a Mac](live-tests-on-a-mac/bug.md) — five live tests failed on a machine outside UTC or outside Linux, or while the dev stack's own scheduler ran.
 - [Detection false delayed](detection-false-delayed/bug.md) — Findings said nexovue was behind on a healthy stack, because a sweep just before the worker's once-a-minute write reads 2 minutes short.
@@ -60,3 +61,6 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 - [Security and dependencies](security-and-dependencies/change.md) — the Security tab after going public (2 secret and 13 CodeQL alerts) and Dependabot's #10-#12: gRPC-Go 1.84 answered through the receiver's own codec, jsonpath 2.0's lost hook restored, TypeScript 7, Vitest 5, Biome 2.6, react-virtual unpinned, and the flaky deliveries-queue test made deterministic; built 2026-10-30.
 - [Trace list split traces](trace-list-split-traces/bug.md) — a trace whose root arrived after its first summary, or whose span was replayed, was listed twice, once as a partial trace.
 - [Chat message escaping](chat-message-escaping/bug.md) — a service, error or rule name, which anyone can send through telemetry, became a ping, a disguised link or a fake line in Slack, Teams and Discord alerts; names are now one line of plain words in every channel.
+- [Browser door](browser-door/change.md) — anyone holding a page's public site key can forge server spans that count in the rollups, evict real services past the cap with minted names, and fake a check's `synthetic.*` readings; browser-door spans now stay out of `service_stats_1m`, `endpoint_stats_1m` and `service_versions_1m`, the cap keeps the busiest, going over it is recorded, and `synthetic.*` readings come only from the prober's door.
+- [Browser door last seen](browser-door-last-seen/change.md) — the usage meter wrote service names that arrived through the browser door into `service_last_seen`, so a site-key holder could add names the *went silent* alert watches or keep a stopped server looking alive; the browser door is still metered and billed but no longer marks a service as heard.
+- [Setup-wait sampler](setup-wait-sampler/bug.md) — `test_setup_live.py` failed at random under load because it counted SQLAlchemy's opening server checks, a transaction that waits on nothing, as the setup waiting for the migration lock; it now samples from the first call for the lock.

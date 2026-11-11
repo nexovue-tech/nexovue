@@ -128,3 +128,37 @@ def test_the_concurrency_cap_clears_what_one_screen_asks_for() -> None:
         f"the cap is {TELEMETRY_TIER.max_concurrent} and one screen asks for "
         f"{LARGEST_SCREEN_FANOUT} reads at once, so that screen loads incomplete"
     )
+
+
+def test_a_dashboard_at_its_scan_cap_and_refresh_floor_fits_a_persons_quota() -> None:
+    """F20 NFR3: a dashboard's request count is one, so `LARGEST_SCREEN_FANOUT` cannot
+    judge it. Its scans can: a dashboard at the scan cap, refreshed at the floor, must fit
+    one person's share at the largest supported number of API processes. At three
+    processes this fails on purpose, and the caps must be reconsidered (design section 6).
+    """
+    from nexovue_api.ratelimit.policy import (
+        LARGEST_SUPPORTED_API_INSTANCES,
+        MAX_SCANS_PER_READ,
+        REFRESH_FLOOR_SECONDS,
+    )
+
+    scans_a_minute = MAX_SCANS_PER_READ * 60 / REFRESH_FLOOR_SECONDS
+    share = TELEMETRY_TIER.quota.limit // LARGEST_SUPPORTED_API_INSTANCES
+
+    assert scans_a_minute <= share, (
+        f"{scans_a_minute:.0f} scans a minute against a share of {share}"
+    )
+
+
+def test_the_batch_reads_deadline_and_margin_are_the_consoles_timeout() -> None:
+    """D25: the deadline counts from arrival, and the console waits that plus a margin
+    for assembling and the network. The web test holds the console to the same number."""
+    from nexovue_api.ratelimit.policy import (
+        PANEL_READ_CLIENT_TIMEOUT_SECONDS,
+        PANEL_READ_DEADLINE_SECONDS,
+        PANEL_READ_MARGIN_SECONDS,
+    )
+
+    assert PANEL_READ_DEADLINE_SECONDS + PANEL_READ_MARGIN_SECONDS == (
+        PANEL_READ_CLIENT_TIMEOUT_SECONDS
+    )

@@ -16,8 +16,17 @@ from stretching. Passwords, typed by humans, use argon2.
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Final
 
+from nexovue_platform import slo
+from nexovue_platform.ai_records import CALL_SECONDS_DEFAULT as AI_CALL_SECONDS_DEFAULT
+from nexovue_platform.ai_records import CALL_SECONDS_MAX as AI_CALL_SECONDS_MAX
+from nexovue_platform.ai_records import CALL_SECONDS_MIN as AI_CALL_SECONDS_MIN
+from nexovue_platform.ai_records import OFF_REASONS as AI_OFF_REASONS
+from nexovue_platform.ai_records import RUN_OUTCOMES as AI_RUN_OUTCOMES
+from nexovue_platform.ai_records import RUN_PURPOSES as AI_RUN_PURPOSES
+from nexovue_platform.ai_records import WIRE_FORMATS as AI_WIRE_FORMATS
 from nexovue_platform.alerts.model import (
     ATTEMPT_KINDS,
     ATTEMPT_OUTCOMES,
@@ -29,11 +38,26 @@ from nexovue_platform.alerts.model import (
     NOTIFICATION_STATES,
     PROJECT_NOTIFICATION_KINDS,
     SEVERITIES,
+    WITHHELD_REASONS,
+)
+from nexovue_platform.cases import CASE_EMAIL_KINDS, EVENT_ACTOR_KINDS, NOTE_MAX_LENGTH
+from nexovue_platform.connections import (
+    COMMENT_KINDS,
+    CONNECTION_FAILURES,
+    CONNECTION_KINDS,
+    CONNECTION_STATES,
+    ISSUE_STATES,
+    LINK_FAILURES,
+    LINK_ROLES,
+    LINK_STATUSES,
 )
 from nexovue_platform.detection import (
+    CASE_RESOLUTIONS,
+    CASE_STATES,
     CLOSED_REASONS,
     DEFAULT_SENSITIVITY,
     DEFAULT_TIMEZONE,
+    FINDING_EVENT_KINDS,
     FINDING_SCOPES,
     FINDING_STATES,
     INTAKE_REFUSAL_REASONS,
@@ -41,6 +65,13 @@ from nexovue_platform.detection import (
     SHIFT_REASONS,
     SIGNALS,
 )
+from nexovue_platform.evidence import (
+    CAUSE_RULES,
+    RATING_REASONS,
+    WORDING_REASONS,
+    WORDING_STATES,
+)
+from nexovue_platform.releases import DEPLOY_STATES, OTHER_VERSION, START_BASES
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -49,9 +80,11 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -130,6 +163,8 @@ TIMEZONE_NAME_LENGTH: Final = 64
 # truncates to this before writing, so an absurd name is stored as a service
 # rather than failing the flush that carried it.
 SERVICE_NAME_LENGTH: Final = 255
+# The last characters of a deploy secret, shown so one can be told from another.
+SECRET_HINT_LENGTH: Final = 8
 
 # A receiver's hostname, which names it in `intake_refusals`; DNS allows 253.
 RECEIVER_ID_LENGTH: Final = 255
@@ -278,6 +313,9 @@ class User(Base):
 
     __table_args__ = (
         Index("ix_users_org_id", "org_id"),
+        # So other tables can key on (org_id, id) and the database refuses a
+        # cross-tenant assignee, actor or author outright (F22, D34).
+        UniqueConstraint("org_id", "id", name="uq_users_org_id_id"),
         CheckConstraint(
             "(totp_secret IS NULL) = (totp_confirmed_at IS NULL)",
             name="totp_secret_and_confirmation_agree",
@@ -389,6 +427,8 @@ class Project(Base):
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_projects_org_id_slug"),
         Index("ix_projects_org_id", "org_id"),
+        # F22: what later tables key on, so the database refuses a cross-tenant key (0068).
+        Index("uq_projects_org_id_id", "org_id", "id", unique=True),
         CheckConstraint(
             f"detection_sensitivity IN ({_quoted(SENSITIVITIES)})",
             name="detection_sensitivity_is_known",
@@ -782,7 +822,9 @@ class Integration(Base):
 
 class DeployEvent(Base):
     """Door 4a lands here, not in ClickHouse: volume is tiny and the insight
-    engine joins these against findings and cases."""
+    engine joins these against findings and cases. F28's envelope (0057): each item
+    signs its own id and time, says how the rollout went, and names the release it
+    filed under and the secret that signed it."""
 
     __tablename__ = "deploy_events"
 
@@ -797,32 +839,45 @@ class DeployEvent(Base):
     # a foreign key.
     version: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # The sender's claim, bounded at the door (FR8); `created_at` is when it arrived.
     deployed_at: Mapped[RequiredTimestamp]
     source: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
-    # The sender's own id for this delivery. Unique per project under a partial
-    # index, which is what makes a replayed request fail rather than store a
-    # second deploy — GitHub's signature scheme carries no timestamp, so a
-    # captured request stays valid forever without this.
-    delivery_id: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
+    # The sender's own id for this item, inside the signed body (D6), unique per
+    # project: a captured body sent again stores nothing, whatever its headers say.
+    delivery_id: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     # `metadata` is taken on a declarative class, so the attribute differs from
-    # the column name.
+    # the column name. Masked before it is stored (FR9).
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    state: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'finished'")
+    )
+    # Lower-case hex, 40 or 64 characters, checked at the door.
+    commit_sha: Mapped[str | None] = mapped_column(String(SHA256_HEX_LENGTH), nullable=True)
+    # https only, no credentials, query or fragment; rendered, never fetched.
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Kept when the release is evicted or the secret goes, so the deploy outlives both.
+    release_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("releases.id", ondelete="SET NULL"), nullable=True
+    )
+    webhook_secret_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("project_webhook_secrets.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (
-        # Migration 0007's, declared here so the model and the schema agree.
-        Index(
-            "uq_deploy_events_project_id_delivery_id",
-            "project_id",
-            "delivery_id",
-            unique=True,
-            postgresql_where=text("delivery_id IS NOT NULL"),
-        ),
+        Index("uq_deploy_events_project_id_delivery_id", "project_id", "delivery_id", unique=True),
         Index(
             "ix_deploy_events_org_id_project_id_deployed_at", "org_id", "project_id", "deployed_at"
         ),
+        # The retention sweep's (design 3), which would otherwise scan the table.
+        Index("ix_deploy_events_created_at", "created_at"),
+        # A release's deploys, for recalculating it, and its eviction's SET NULL.
+        Index("ix_deploy_events_release_id", "release_id"),
+        # What one secret signed since a time (D37).
+        Index("ix_deploy_events_webhook_secret_id_created_at", "webhook_secret_id", "created_at"),
+        CheckConstraint(f"state IN ({_quoted(DEPLOY_STATES)})", name="state_is_known"),
     )
 
 
@@ -834,8 +889,10 @@ class ProjectWebhookSecret(Base):
     silently stop deploys arriving. Many rows per project, so a rotation can
     overlap — create the new one, update CI, revoke the old.
 
-    Stored as it will be used. HMAC verification has to recompute the digest CI
-    computed, so there is no hashing here that would still allow that.
+    Sealed (F28 D7): HMAC verification needs the value itself, so it is encrypted
+    rather than hashed, under the credential key, bound to this project and this
+    row's id (`deploy_webhook_owner`). Shown once, at creation; afterwards only its
+    last characters, so a person can tell one from another.
     """
 
     __tablename__ = "project_webhook_secrets"
@@ -847,12 +904,41 @@ class ProjectWebhookSecret(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    sealed_secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    secret_hint: Mapped[str] = mapped_column(String(SECRET_HINT_LENGTH), nullable=False)
     created_at: Mapped[CreatedAt]
+    last_used_at: Mapped[OptionalTimestamp]
     revoked_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         Index("ix_webhook_secrets_project_id_revoked_at", "project_id", "revoked_at"),
+    )
+
+
+class DeployIntakeState(Base):
+    """What the Deploys section shows of a project's intake (F28 design 2, D22): when a
+    deploy and a dry-run check last arrived, and the last refusal a signed sender
+    earned. One small row per project. An unsigned refusal is never recorded, or an
+    outsider could fill it."""
+
+    __tablename__ = "deploy_intake_state"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    last_check_at: Mapped[OptionalTimestamp]
+    last_deploy_at: Mapped[OptionalTimestamp]
+    last_refusal_at: Mapped[OptionalTimestamp]
+    # 1-based, as the refusal named it; null for a refusal of the whole body.
+    last_refusal_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_refusal_field: Mapped[str | None] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=True
+    )
+    last_refusal_secret_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("project_webhook_secrets.id", ondelete="SET NULL"), nullable=True
     )
 
 
@@ -1237,6 +1323,10 @@ class NotificationChannel(Base):
     failing_since: Mapped[OptionalTimestamp]
     last_delivered_at: Mapped[OptionalTimestamp]
     failing_reported_at: Mapped[OptionalTimestamp]
+    # F3 FR48: a channel people read gets a finding's `explained` follow-up unless off.
+    sends_explained: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     created_at: Mapped[CreatedAt]
     updated_at: Mapped[CreatedAt]
 
@@ -1370,11 +1460,21 @@ class Incident(Base):
     detail: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
+    # What a burn is about (F19, design *The link to findings*): typed, apart from its
+    # identity, so links, withholding and PagerDuty compare columns, not JSON. Null for
+    # every other kind.
+    about_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    about_signal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    about_endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    about_check_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
 
     __table_args__ = (
         CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
         CheckConstraint(
             f"condition_kind IN ({_quoted(CONDITION_KINDS)})", name="condition_is_known"
+        ),
+        CheckConstraint(
+            f"about_signal IN ({_quoted(slo.ABOUT_SIGNALS)})", name="about_signal_is_known"
         ),
         CheckConstraint(
             "resolved_at IS NULL OR resolved_at >= opened_at", name="resolves_after_it_opens"
@@ -1393,6 +1493,17 @@ class Incident(Base):
             postgresql_where=text("resolved_at IS NULL"),
         ),
         Index("ix_incidents_rule_id_subject_key_opened_at", "rule_id", "subject_key", "opened_at"),
+        # F19 FR13b, D58: one open "not being judged" notice per project, filed under no
+        # rule. Limited to its own subjects, so deleting rules with open burns still works.
+        Index(
+            "uq_incidents_blind_open",
+            "project_id",
+            "subject_key",
+            unique=True,
+            postgresql_where=text(
+                "rule_id IS NULL AND resolved_at IS NULL AND subject_key LIKE 'slo-project:%'"
+            ),
+        ),
     )
 
 
@@ -1438,6 +1549,13 @@ class Notification(Base):
     # The PagerDuty alert this row went to, fixed at its subject's first claim on the
     # channel, so a finding and a linked incident share one alert (D29, D35).
     dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # F19 (FR22, FR23, FR26): why a `dropped` row was withheld, the subject that had told
+    # the channel the same news, and when it stopped being held. No foreign keys: the
+    # withholding subject stays a fact of this row, and one that has gone withholds nothing.
+    withheld_why: Mapped[str | None] = mapped_column(Text, nullable=True)
+    withheld_by_incident_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    withheld_by_finding_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    released_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         UniqueConstraint("incident_id", "channel_id", "kind", "sequence"),
@@ -1472,6 +1590,15 @@ class Notification(Base):
             postgresql_where=text("dedup_key IS NOT NULL"),
         ),
         Index("ix_notifications_batch_id", "batch_id"),
+        CheckConstraint(
+            f"withheld_why IN ({_quoted(WITHHELD_REASONS)})", name="withheld_why_is_known"
+        ),
+        Index(
+            "ix_notifications_withheld_unreleased",
+            "org_id",
+            "channel_id",
+            postgresql_where=text("withheld_why IS NOT NULL AND released_at IS NULL"),
+        ),
     )
 
 
@@ -1565,6 +1692,28 @@ class Finding(Base):
     closed_at: Mapped[OptionalTimestamp]
     updated_at: Mapped[CreatedAt]
 
+    # ---- the case (F22, BR1, BR2): whether people are working, apart from `state`.
+    # Null means no case; there is no separate case record, by design.
+    case_state: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    case_resolution: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    # Composite keys to `users (org_id, id)`: a cross-tenant assignee is refused
+    # by the database itself (D34), and a deleted user clears only the column.
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    case_opened_at: Mapped[OptionalTimestamp]
+    case_resolved_at: Mapped[OptionalTimestamp]
+    # Who resolved it; null for the system or a tracker.
+    case_resolved_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # The last person's act, or entry to `investigating` by any route (D42, D74).
+    case_activity_at: Mapped[OptionalTimestamp]
+    # The first act beyond taking: a note, a link, a reassign, a reopen (FR49).
+    case_worked_at: Mapped[OptionalTimestamp]
+    # The assignee's last act, starting at the assignment (FR12's "has not acted").
+    assignee_acted_at: Mapped[OptionalTimestamp]
+    # When the 14-day idle warning started; null when none, reset by activity.
+    case_warned_at: Mapped[OptionalTimestamp]
+    # The case this finding joined (FR9); a finding holds a case or joins one.
+    root_finding_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+
     __table_args__ = (
         CheckConstraint(f"scope IN ({_quoted(FINDING_SCOPES)})", name="scope_is_known"),
         CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
@@ -1622,6 +1771,95 @@ class Finding(Base):
             "closed_at",
             postgresql_where=text("state = 'closed'"),
         ),
+        # ---- the case (F22, migration 0051).
+        UniqueConstraint("org_id", "id", name="uq_findings_org_id_id"),
+        UniqueConstraint("org_id", "project_id", "id", name="uq_findings_org_id_project_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "assignee_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (assignee_id)",
+            name="fk_findings_assignee_id_users",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "case_resolved_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (case_resolved_by)",
+            name="fk_findings_case_resolved_by_users",
+        ),
+        # A root is a finding of the same organization and project (AC72).
+        ForeignKeyConstraint(
+            ["org_id", "project_id", "root_finding_id"],
+            ["findings.org_id", "findings.project_id", "findings.id"],
+            ondelete="SET NULL (root_finding_id)",
+            name="fk_findings_root_finding_id_findings",
+        ),
+        CheckConstraint(
+            f"case_state IS NULL OR case_state IN ({_quoted(CASE_STATES)})",
+            name="case_state_is_known",
+        ),
+        CheckConstraint(
+            f"case_resolution IS NULL OR case_resolution IN ({_quoted(CASE_RESOLUTIONS)})",
+            name="case_resolution_is_known",
+        ),
+        CheckConstraint("(case_state IS NULL) = (case_opened_at IS NULL)", name="case_is_dated"),
+        CheckConstraint(
+            "(case_state IS NULL) = (case_activity_at IS NULL)", name="case_activity_is_dated"
+        ),
+        CheckConstraint(
+            "(case_state IS NOT DISTINCT FROM 'resolved') = (case_resolved_at IS NOT NULL)",
+            name="case_resolved_says_when",
+        ),
+        CheckConstraint(
+            "(case_state IS NOT DISTINCT FROM 'resolved') = (case_resolution IS NOT NULL)",
+            name="case_resolved_says_how",
+        ),
+        CheckConstraint(
+            "assignee_id IS NULL OR case_state IS NOT NULL", name="assignee_needs_a_case"
+        ),
+        # A finding holds a case or joins one, never both (BR1, BR7).
+        CheckConstraint(
+            "case_state IS NULL OR root_finding_id IS NULL", name="holds_or_joins_never_both"
+        ),
+        CheckConstraint("root_finding_id IS DISTINCT FROM id", name="never_its_own_root"),
+        # BR7, D21: one active case per service and one per project.
+        Index(
+            "uq_findings_project_service_active_case",
+            "project_id",
+            "service_name",
+            unique=True,
+            postgresql_where=text("scope = 'service' AND case_state = 'investigating'"),
+        ),
+        Index(
+            "uq_findings_project_active_case",
+            "project_id",
+            unique=True,
+            postgresql_where=text("scope = 'project' AND case_state = 'investigating'"),
+        ),
+        # The case filters read across the organization (FR22), the sweep reads
+        # active cases, and the open-joined rank reads by root.
+        Index(
+            "ix_findings_org_id_assignee_id",
+            "org_id",
+            "assignee_id",
+            postgresql_where=text("assignee_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_findings_org_id_case_resolved_at",
+            "org_id",
+            text("case_resolved_at DESC"),
+            postgresql_where=text("case_state = 'resolved'"),
+        ),
+        Index(
+            "ix_findings_org_id_active_case",
+            "org_id",
+            postgresql_where=text("case_state = 'investigating'"),
+        ),
+        Index(
+            "ix_findings_org_id_root_finding_id",
+            "org_id",
+            "root_finding_id",
+            postgresql_where=text("root_finding_id IS NOT NULL"),
+        ),
     )
 
 
@@ -1641,6 +1879,708 @@ class FindingIncident(Base):
     )
 
     __table_args__ = (Index("ix_finding_incidents_incident_id", "incident_id"),)
+
+
+class FindingExplanation(Base):
+    """One version of a finding's frozen evidence (F3, design *Data and migration impact*).
+
+    A gather writes a new version only when what is known changed (FR43): identities and
+    conclusions, never moved counts. `evidence` holds names and numbers and never a log
+    body or error text (A47); `model_input` holds only what a model may be sent, and
+    `aliases` the real names behind it, apart (A19). The wording columns stay `off`
+    until AI wording exists (plan Step 5).
+    """
+
+    __tablename__ = "finding_explanations"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    read_at: Mapped[CreatedAt]
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    reads_failed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    aliases: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    likely_cause: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    model_input: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    wording: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    wording_state: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'off'"))
+    wording_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    wording_changed_at: Mapped[OptionalTimestamp]
+    wording_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wording_from_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A person's last "Read the facts again" (FR41: once a minute per finding).
+    read_again_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_finding_explanations_org_id_id"),
+        UniqueConstraint("finding_id", "version", name="uq_finding_explanations_version"),
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_explanations_finding",
+        ),
+        CheckConstraint("version >= 1", name="version_counts_from_one"),
+        CheckConstraint("reads_failed >= 0", name="reads_failed_count_up"),
+        CheckConstraint(
+            f"wording_state IN ({_quoted(WORDING_STATES)})", name="wording_state_is_known"
+        ),
+        CheckConstraint(
+            f"wording_reason IS NULL OR wording_reason IN ({_quoted(WORDING_REASONS)})",
+            name="wording_reason_is_known",
+        ),
+        CheckConstraint("wording_generation >= 0", name="wording_generation_counts_up"),
+    )
+
+
+class FindingExplanationRating(Base):
+    """ "Was this useful?" (F3 FR20): one per person per version. A reason from a closed
+    list, never free text (A21). Kept with no name when the person is deleted."""
+
+    __tablename__ = "finding_explanation_ratings"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    explanation_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    helpful: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "explanation_id"],
+            ["finding_explanations.org_id", "finding_explanations.id"],
+            ondelete="CASCADE",
+            name="fk_finding_explanation_ratings_explanation",
+        ),
+        UniqueConstraint("explanation_id", "user_id", name="uq_finding_explanation_ratings_person"),
+        CheckConstraint(
+            f"reason IS NULL OR reason IN ({_quoted(RATING_REASONS)})", name="reason_is_known"
+        ),
+        CheckConstraint("helpful = (reason IS NULL)", name="reason_only_when_not_helpful"),
+        Index("ix_finding_explanation_ratings_org_id", "org_id"),
+    )
+
+
+class ExplanationStoppedRule(Base):
+    """A rule an organization stopped from naming causes (F3 FR54, A64). Its facts stay."""
+
+    __tablename__ = "explanation_stopped_rules"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    rule: Mapped[str] = mapped_column(Text, primary_key=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (CheckConstraint(f"rule IN ({_quoted(CAUSE_RULES)})", name="rule_is_known"),)
+
+
+class EvidenceErrorGroupRead(Base):
+    """The hour's "error groups not seen in the hour before", per project and minute (F3
+    A62): read once in a wide outage, and holding no message text (A47)."""
+
+    __tablename__ = "evidence_error_group_reads"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    read_minute: Mapped[datetime] = mapped_column(TimestampTz, primary_key=True)
+    groups: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (Index("ix_evidence_error_group_reads_created_at", "created_at"),)
+
+
+class AIConnection(Base):
+    """An organization's AI provider (F3 FR30 to FR33, design *Data and migration impact*).
+
+    The `scheduler-insight` account reads it through column grants and may change only the
+    check's three columns (`insight_account.INSIGHT_GRANTS`). The key is sealed under the
+    `ai` ring (`keys.SEALED_COLUMNS`), bound to this address (migration 0071). Turning it on
+    needs a limit and an owner's consent to this very address, which the database holds too.
+    """
+
+    __tablename__ = "ai_connections"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    wire_format: Mapped[str] = mapped_column(Text, nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    region_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Under `AI_SECRET_KEY`, purpose `ai-connection`; empty for a local server with none.
+    sealed_key: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # New on each saved key; a re-seal keeps it (design, *The two fingerprints*).
+    key_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    call_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=str(AI_CALL_SECONDS_DEFAULT)
+    )
+    monthly_token_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Per million tokens, as typed; only an estimate is ever shown (FR29).
+    price_input: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    price_output: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    off_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_at: Mapped[OptionalTimestamp]
+    checked_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    checked_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    consented_at: Mapped[OptionalTimestamp]
+    consented_base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consented_schema: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "consented_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (consented_by)",
+            name="fk_ai_connections_consented_by",
+        ),
+        CheckConstraint(
+            f"wire_format IN ({_quoted(AI_WIRE_FORMATS)})", name="wire_format_is_known"
+        ),
+        CheckConstraint(
+            f"call_seconds BETWEEN {AI_CALL_SECONDS_MIN} AND {AI_CALL_SECONDS_MAX}",
+            name="call_seconds_in_range",
+        ),
+        CheckConstraint(
+            "monthly_token_limit IS NULL OR monthly_token_limit > 0", name="limit_is_positive"
+        ),
+        CheckConstraint(
+            "(price_input IS NULL OR price_input >= 0) "
+            "AND (price_output IS NULL OR price_output >= 0)",
+            name="prices_are_not_negative",
+        ),
+        CheckConstraint(
+            f"off_reason IS NULL OR off_reason IN ({_quoted(AI_OFF_REASONS)})",
+            name="off_reason_is_known",
+        ),
+        # On only with a limit and an owner's consent to this very address (FR30, FR33).
+        CheckConstraint(
+            "NOT enabled OR (monthly_token_limit IS NOT NULL AND consented_at IS NOT NULL "
+            "AND consented_base_url = base_url AND consented_fingerprint IS NOT NULL "
+            "AND consented_schema IS NOT NULL)",
+            name="on_only_with_limit_and_consent",
+        ),
+    )
+
+
+class AIProjectOptOut(Base):
+    """A project the organization's AI wording leaves alone (FD5)."""
+
+    __tablename__ = "ai_project_opt_outs"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[CreatedAt]
+
+
+class AIUsageMonth(Base):
+    """An organization's tokens in one calendar month: spent, and held by runs in flight
+    (FD7, design *Limits, in order, at the point of spending*)."""
+
+    __tablename__ = "ai_usage_monthly"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The month's first day.
+    month: Mapped[date] = mapped_column(Date, primary_key=True)
+    used_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+
+    __table_args__ = (
+        CheckConstraint(
+            "used_tokens >= 0 AND reserved_tokens >= 0", name="tokens_are_not_negative"
+        ),
+        CheckConstraint("extract(day FROM month) = 1", name="month_is_its_first_day"),
+    )
+
+
+class AIRun(Base):
+    """One model call (FR39): who, where, how many tokens, how it ended. Never its content
+    (FD9), only the names of the fields sent. `scheduler-insight` may insert one and change
+    only its outcome, tokens and finish (AC72); the address it went to stays as written."""
+
+    __tablename__ = "ai_runs"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    # The person on a click; null on an automatic run (AC72).
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # No foreign key: the run outlives the finding's explanations (design, *Data*).
+    explanation_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wire_format: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    region_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Scheme and host, never a path (AC72).
+    provider_host: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_sha256: Mapped[str | None] = mapped_column(String(SHA256_HEX_LENGTH), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tokens_estimated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    started_at: Mapped[CreatedAt]
+    finished_at: Mapped[OptionalTimestamp]
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, server_default="started")
+    fields_sent: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+    __table_args__ = (
+        CheckConstraint(f"purpose IN ({_quoted(AI_RUN_PURPOSES)})", name="purpose_is_known"),
+        CheckConstraint(f"outcome IN ({_quoted(AI_RUN_OUTCOMES)})", name="outcome_is_known"),
+        CheckConstraint(
+            f"wire_format IN ({_quoted(AI_WIRE_FORMATS)})", name="wire_format_is_known"
+        ),
+        CheckConstraint(
+            "request_sha256 IS NULL OR request_sha256 ~ '^[0-9a-f]{64}$'",
+            name="request_sha256_is_hex",
+        ),
+        CheckConstraint(
+            "coalesce(input_tokens, 0) >= 0 AND coalesce(output_tokens, 0) >= 0 "
+            "AND reserved_tokens >= 0",
+            name="tokens_are_not_negative",
+        ),
+        CheckConstraint("attempt >= 1", name="attempt_counts_from_one"),
+        Index("ix_ai_runs_org_id_started_at", "org_id", text("started_at DESC")),
+        Index("ix_ai_runs_subject_id_started_at", "subject_id", "started_at"),
+    )
+
+
+class FindingEvent(Base):
+    """The timeline (F22, FR16): what happened to one finding, append-only.
+
+    `detail` is written only through `nexovue_platform.cases
+    .finding_event_parameters`, which admits enums, ids and numbers and refuses
+    free text (BR9, AC24). A person reads all of it; a token reads kinds and
+    times alone (FR20).
+    """
+
+    __tablename__ = "finding_events"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Where it happened: a joined finding's events merge into its root's timeline.
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    actor_kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_events_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "actor_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (actor_id)",
+            name="fk_finding_events_actor",
+        ),
+        CheckConstraint(f"kind IN ({_quoted(FINDING_EVENT_KINDS)})", name="kind_is_known"),
+        CheckConstraint(
+            f"actor_kind IN ({_quoted(EVENT_ACTOR_KINDS)})", name="actor_kind_is_known"
+        ),
+        Index(
+            "ix_finding_events_org_id_finding_id_at",
+            "org_id",
+            "finding_id",
+            text("at DESC"),
+            text("id DESC"),
+        ),
+    )
+
+
+class FindingNote(Base):
+    """What a person wrote on a case (F22, FR14): the organization's working record
+    (BR16). Shown as plain text, deletable by its author or an admin, never edited.
+    A delete is a real DELETE: a pasted secret must actually go."""
+
+    __tablename__ = "finding_notes"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Always the root: a note written on a joined finding's page lands here (FR12).
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    # Kept when a member is scrubbed; the screen reads *Former member*.
+    author_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_notes_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "author_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (author_id)",
+            name="fk_finding_notes_author",
+        ),
+        CheckConstraint(f"length(body) <= {NOTE_MAX_LENGTH}", name="a_note_is_not_a_document"),
+        Index(
+            "ix_finding_notes_org_id_finding_id_created_at",
+            "org_id",
+            "finding_id",
+            "created_at",
+        ),
+        # The personal-data export reads a person's own notes.
+        Index("ix_finding_notes_org_id_author_id", "org_id", "author_id"),
+    )
+
+
+class FindingEmailOwed(Base):
+    """One owed case email (F22, D90): the sweep deletes the row, commits, then
+    sends, so a crash loses an email and can never repeat one. A row per email,
+    because one column would lose a second email owed before the sweep runs. It
+    holds no name, address or text."""
+
+    __tablename__ = "finding_emails_owed"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_emails_owed_finding",
+        ),
+        CheckConstraint(f"kind IN ({_quoted(CASE_EMAIL_KINDS)})", name="kind_is_known"),
+        Index("ix_finding_emails_owed_at", "at"),
+    )
+
+
+class Connection(Base):
+    """A tracker connection (F22, FR28): one live row per organization and kind. On a
+    self-hosted install a GitHub connection is the organization's own private App,
+    whose key and webhook secret are sealed under `CONNECTION_SECRET_KEY` and opened
+    only by `scheduler-connections` (FD10). Every sealed column is in
+    `keys.SEALED_COLUMNS`. `github_fix` is F5's App, which F22 ignores."""
+
+    __tablename__ = "connections"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    sealed_credential: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    sealed_webhook_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # GitHub's one-hour manifest code, between the redirect and its conversion (AC74).
+    sealed_manifest_code: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # SHA-256 of a setup's one-time `state`, in hex like every other token hash; the raw
+    # value is never stored. Not binary: every binary column holds a sealed value (0062).
+    setup_state_hash: Mapped[str | None] = mapped_column(String(SHA256_HEX_LENGTH), nullable=True)
+    setup_expires_at: Mapped[OptionalTimestamp]
+    setup_user_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    github_app_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    github_app_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    jira_site: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    sync_lease_until: Mapped[OptionalTimestamp]
+    paused_until: Mapped[OptionalTimestamp]
+    last_ok_at: Mapped[OptionalTimestamp]
+    failing_since: Mapped[OptionalTimestamp]
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    last_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_failure_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    failure_told_at: Mapped[OptionalTimestamp]
+    expiry_told_at: Mapped[OptionalTimestamp]
+    repositories_read_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_connections_org_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "setup_user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (setup_user_id)",
+            name="fk_connections_setup_user",
+        ),
+        CheckConstraint(f"kind IN ({_quoted(CONNECTION_KINDS)})", name="kind_is_known"),
+        CheckConstraint(f"state IN ({_quoted(CONNECTION_STATES)})", name="state_is_known"),
+        CheckConstraint(
+            f"last_failure IS NULL OR last_failure IN ({_quoted(CONNECTION_FAILURES)})",
+            name="failure_is_known",
+        ),
+        Index(
+            "uq_connections_org_id_kind_live",
+            "org_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("state <> 'disconnected'"),
+        ),
+        Index(
+            "uq_connections_github_installation",
+            "github_app_id",
+            "github_installation_id",
+            unique=True,
+        ),
+    )
+
+
+class ConnectionRepository(Base):
+    """What a connection reaches: a GitHub repository or a Jira project, by its strict
+    key, never its free-text name. A *place* in code (F22, design *Connections*)."""
+
+    __tablename__ = "connection_repositories"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    public_allowed_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    public_allowed_at: Mapped[OptionalTimestamp]
+    public_told_at: Mapped[OptionalTimestamp]
+    jira_issue_type_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jira_done_transition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jira_reopen_transition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_reachable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_connection_repositories_org_id_id"),
+        UniqueConstraint(
+            "connection_id", "external_id", name="uq_connection_repositories_external_id"
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "connection_id"],
+            ["connections.org_id", "connections.id"],
+            ondelete="CASCADE",
+            name="fk_connection_repositories_connection",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "public_allowed_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (public_allowed_by)",
+            name="fk_connection_repositories_public_allowed_by",
+        ),
+    )
+
+
+class ServiceRepository(Base):
+    """Which repository a project's service sends its issues to: the create panel
+    preselects it (F22, T6.2), and F5 reads it to find the service's code. Optional."""
+
+    __tablename__ = "service_repositories"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    place_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    changed_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_service_repositories_project",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "place_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="CASCADE",
+            name="fk_service_repositories_place",
+        ),
+        CheckConstraint("length(service_name) > 0", name="service_is_named"),
+        Index("ix_service_repositories_org_id_place_id", "org_id", "place_id"),
+    )
+
+
+class FindingLink(Base):
+    """A case's tracker issue (F22, FR35 to FR41): the one synced issue whose status
+    follows the case, or a reference shown beside it. No address is stored (D81): the
+    console builds it from `external_key`, which a strict pattern holds. `seen_state`
+    and `wanted_state` are what the reconcile compares (design, *The comparison*)."""
+
+    __tablename__ = "finding_links"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Always the case's root.
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    place_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    sync_status: Mapped[str] = mapped_column(Text, nullable=False)
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seen_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wanted_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment_wanted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comment_written_at: Mapped[OptionalTimestamp]
+    # The one idle-warning comment this link may carry in its case's life (BR10).
+    idle_warning_at: Mapped[OptionalTimestamp]
+    # Closed in the tracker while the case signal was open: a hold (D73).
+    tracker_closed_at: Mapped[OptionalTimestamp]
+    # The preview's facts, while the issue is being created (AC83). `None` is SQL NULL,
+    # not JSON `null`, or the check that facts live only while creating would refuse it.
+    frozen_facts: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    first_attempt_at: Mapped[OptionalTimestamp]
+    next_sync_at: Mapped[OptionalTimestamp]
+    last_synced_at: Mapped[OptionalTimestamp]
+    gone_at: Mapped[OptionalTimestamp]
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
+    last_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_failure_field: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_finding_links_org_id_id"),
+        UniqueConstraint(
+            "finding_id", "connection_id", "external_id", name="uq_finding_links_issue_per_case"
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_links_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "connection_id"],
+            ["connections.org_id", "connections.id"],
+            ondelete="SET NULL (connection_id)",
+            name="fk_finding_links_connection",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "place_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="SET NULL (place_id)",
+            name="fk_finding_links_place",
+        ),
+        CheckConstraint(f"role IN ({_quoted(LINK_ROLES)})", name="role_is_known"),
+        CheckConstraint(f"sync_status IN ({_quoted(LINK_STATUSES)})", name="status_is_known"),
+        CheckConstraint(
+            f"(seen_state IS NULL OR seen_state IN ({_quoted(ISSUE_STATES)})) "
+            f"AND (wanted_state IS NULL OR wanted_state IN ({_quoted(ISSUE_STATES)}))",
+            name="issue_states_are_known",
+        ),
+        CheckConstraint(
+            f"comment_wanted IS NULL OR comment_wanted IN ({_quoted(COMMENT_KINDS)})",
+            name="comment_is_known",
+        ),
+        CheckConstraint(
+            f"last_failure IS NULL OR last_failure IN ({_quoted(LINK_FAILURES)})",
+            name="failure_is_known",
+        ),
+        CheckConstraint(
+            "(sync_status = 'creating') = (frozen_facts IS NOT NULL)",
+            name="facts_frozen_while_creating",
+        ),
+        CheckConstraint(
+            "sync_status <> 'creating' OR role = 'synced'", name="only_a_synced_link_is_created"
+        ),
+        CheckConstraint(
+            "sync_status IN ('creating', 'refused', 'stopped') OR external_key IS NOT NULL",
+            name="a_link_names_its_issue",
+        ),
+        CheckConstraint("failures >= 0", name="failures_count_up"),
+        Index(
+            "uq_finding_links_one_synced_per_case",
+            "finding_id",
+            unique=True,
+            postgresql_where=text("role = 'synced' AND sync_status <> 'stopped'"),
+        ),
+        Index(
+            "uq_finding_links_synced_once",
+            "connection_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("role = 'synced' AND sync_status <> 'stopped'"),
+        ),
+        Index(
+            "ix_finding_links_due",
+            "connection_id",
+            "next_sync_at",
+            postgresql_where=text("next_sync_at IS NOT NULL"),
+        ),
+        Index("ix_finding_links_org_id_finding_id", "org_id", "finding_id"),
+    )
 
 
 # `org_id` leads the key of every table below that is upserted, so no conflict
@@ -2031,7 +2971,8 @@ class ApiTokenUsageDaily(Base):
 # SHA-256, hex, of a token, ticket, challenge or code — never the value itself.
 TOKEN_FINGERPRINT_LENGTH: Final = 64
 ONE_TIME_TOKEN_PURPOSES: Final = ("verify_email", "reset_password", "change_email")
-JOB_RESULT_KINDS: Final = ("check_run", "channel_test")
+# `ai_check` is written only by `scheduler-insight`, through `insight_store_check_result` (F3).
+JOB_RESULT_KINDS: Final = ("check_run", "channel_test", "connection_test", "ai_check")
 
 
 class SessionRecord(Base):
@@ -2261,4 +3202,533 @@ class Job(Base):
         ),
         Index("ix_jobs_queue_run_after", "queue", "run_after"),
         Index("ix_jobs_org_id", "org_id"),
+    )
+
+
+class SloTarget(Base):
+    """A reliability target (F19): one thing measured over one window (BR1).
+
+    Soft-deleted for 30 days, so a deletion can be undone and still shows on the
+    list (FR31). The name and description are free text a person typed: shown on
+    console pages only, never copied into an incident or a notification (FR33)."""
+
+    __tablename__ = "slo_targets"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    service_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    endpoint_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    check_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("checks.id", ondelete="SET NULL"), nullable=True
+    )
+    objective_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    window_days: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    boundary_index: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    asked_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    left_out_endpoints: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    upstream_sampling: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    definition_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # A change of what is counted raises the first; the history read catches the
+    # second up, and runs again if they still differ at its end (AC64).
+    definition_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    history_read_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    history_read_through: Mapped[date | None] = mapped_column(Date, nullable=True)
+    first_event_at: Mapped[OptionalTimestamp]
+    exhausted_warned_at: Mapped[OptionalTimestamp]
+    exhausted_armed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+    deleted_at: Mapped[OptionalTimestamp]
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_slo_targets_org_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_slo_targets_created_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "deleted_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (deleted_by)",
+            name="fk_slo_targets_deleted_by",
+        ),
+        Index(
+            "uq_slo_targets_live_name",
+            "org_id",
+            "project_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_slo_targets_live_definition",
+            "org_id",
+            "project_id",
+            "definition_key",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_slo_targets_org_id_project_id_created_at", "org_id", "project_id", "created_at"),
+    )
+
+
+class SloStatus(Base):
+    """Where a target stood at the last minute the job worked it out (F19, D26)."""
+
+    __tablename__ = "slo_status"
+
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    evaluated_minute: Mapped[RequiredTimestamp]
+    tiers: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    last_event_minute: Mapped[OptionalTimestamp]
+    burning_since: Mapped[OptionalTimestamp]
+    last_held_minute: Mapped[OptionalTimestamp]
+    unjudged_since: Mapped[OptionalTimestamp]
+    longest_quiet_7d: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "slo_id"],
+            ["slo_targets.org_id", "slo_targets.id"],
+            ondelete="CASCADE",
+            name="fk_slo_status_target",
+        ),
+        Index(
+            "ix_slo_status_org_id_project_id_evaluated_minute",
+            "org_id",
+            "project_id",
+            "evaluated_minute",
+        ),
+    )
+
+
+class SloDailyCount(Base):
+    """One target's local day (F19, D2): rewritten until 7 days old, then final."""
+
+    __tablename__ = "slo_daily_counts"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    good: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    failures: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    quiet_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    lost_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    excluded_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    quiet_leading_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    quiet_trailing_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    longest_quiet_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    expected_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    missed_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maintenance_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    loss_known: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    definition_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    final: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    computed_at: Mapped[RequiredTimestamp]
+    changed_at: Mapped[OptionalTimestamp]
+    changed_why: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "slo_id"],
+            ["slo_targets.org_id", "slo_targets.id"],
+            ondelete="CASCADE",
+            name="fk_slo_daily_counts_target",
+        ),
+    )
+
+
+class SloTargetChange(Base):
+    """One change to a target, for its history (F19, FR30). Kept when the target is
+    purged, so a past report stays true (D46); it goes with the project."""
+
+    __tablename__ = "slo_target_changes"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    at: Mapped[CreatedAt]
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    what: Mapped[str] = mapped_column(Text, nullable=False)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "actor_user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (actor_user_id)",
+            name="fk_slo_target_changes_actor",
+        ),
+        Index("ix_slo_target_changes_org_id_slo_id_at", "org_id", "slo_id", "at"),
+        Index("ix_slo_target_changes_org_id_actor_user_id", "org_id", "actor_user_id"),
+    )
+
+
+class SloDeletedMonth(Base):
+    """A purged target's month result (F19, FR31, D46): written before its daily figures
+    go, so a past month still counts it. It goes with the project."""
+
+    __tablename__ = "slo_deleted_months"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    month: Mapped[date] = mapped_column(Date, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    objective_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    figure_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    good: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    coverage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quiet_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    longest_quiet_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    lost_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    excluded_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    missed_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    maintenance_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    days_held: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    days_in_month: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    loss_known: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    upstream_sampling: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        Index("ix_slo_deleted_months_org_id_project_id_month", "org_id", "project_id", "month"),
+    )
+
+
+class SloExclusion(Base):
+    """A stretch of time a person left out of one target's figure, with a reason (F19,
+    FR29). Removed by a mark, never deleted, so its history stays (BR6, BR7). The reason
+    is free text: it never enters an incident or a notification (FR33)."""
+
+    __tablename__ = "slo_exclusions"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    slo_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    starts_at: Mapped[RequiredTimestamp]
+    ends_at: Mapped[RequiredTimestamp]
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    created_at: Mapped[CreatedAt]
+    removed_at: Mapped[OptionalTimestamp]
+    removed_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # Null while the days it touches wait for the scheduler's recount (FR29).
+    counted_at: Mapped[OptionalTimestamp]
+    removal_not_recounted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "slo_id"],
+            ["slo_targets.org_id", "slo_targets.id"],
+            ondelete="CASCADE",
+            name="fk_slo_exclusions_target",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_slo_exclusions_created_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "removed_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (removed_by)",
+            name="fk_slo_exclusions_removed_by",
+        ),
+        CheckConstraint("ends_at > starts_at", name="ends_after_it_starts"),
+        CheckConstraint(
+            f"length(reason) BETWEEN {slo.EXCLUSION_REASON_SHORTEST} "
+            f"AND {slo.EXCLUSION_REASON_LONGEST}",
+            name="a_reason_is_given",
+        ),
+        CheckConstraint(
+            "removed_at IS NULL OR removed_at >= created_at", name="removed_after_created"
+        ),
+        Index("ix_slo_exclusions_org_id_slo_id_starts_at", "org_id", "slo_id", "starts_at"),
+    )
+
+
+class Release(Base):
+    """One version of one service in a project, from either door: counted in the version
+    rollup, or reported by a sender (F28, design 2, D2). Stored rather than derived, so
+    its first-seen time and id outlive the rollup's 35 days. Written by the scheduler's
+    sync (`releases/sync.py`) and, from Step 2, the deploy webhook."""
+
+    __tablename__ = "releases"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    version: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    first_seen_at: Mapped[OptionalTimestamp]
+    last_seen_at: Mapped[OptionalTimestamp]
+    first_reported_at: Mapped[OptionalTimestamp]
+    last_reported_at: Mapped[OptionalTimestamp]
+    report_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_state: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    # The latest arrival of a report or a count, never a sender's claim: retention reads it.
+    last_activity_at: Mapped[datetime] = mapped_column(
+        TimestampTz, nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_releases_org_id_id"),
+        UniqueConstraint(
+            "project_id", "service_name", "version", name="uq_releases_project_service_version"
+        ),
+        CheckConstraint(f"version NOT IN ('', '{OTHER_VERSION}')", name="version_is_a_release"),
+        CheckConstraint("service_name <> ''", name="service_is_named"),
+        CheckConstraint(
+            "first_seen_at IS NOT NULL OR first_reported_at IS NOT NULL", name="seen_or_reported"
+        ),
+        CheckConstraint("report_count >= 0", name="report_count_is_not_negative"),
+        CheckConstraint(f"last_state IN ({_quoted(DEPLOY_STATES)})", name="last_state_is_known"),
+        Index("ix_releases_last_activity_at", "last_activity_at"),
+    )
+
+
+class ReleasePeriod(Base):
+    """One stretch a release served (F28, D15, FR19). A past period only ever gains an
+    end; a version that comes back opens a new one."""
+
+    __tablename__ = "release_periods"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    release_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # The first counted minute once known, else the reported time (FR42).
+    started_at: Mapped[RequiredTimestamp]
+    start_basis: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    ended_at: Mapped[OptionalTimestamp]
+    previous_version: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
+    already_running: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    is_return: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    last_reading: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    mixed_environments: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "release_id"],
+            ["releases.org_id", "releases.id"],
+            ondelete="CASCADE",
+            name="fk_release_periods_release",
+        ),
+        UniqueConstraint(
+            "org_id", "release_id", "started_at", name="uq_release_periods_release_start"
+        ),
+        CheckConstraint(f"start_basis IN ({_quoted(START_BASES)})", name="start_basis_is_known"),
+        CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ended_after_started"),
+        CheckConstraint(
+            f"previous_version NOT IN ('', '{OTHER_VERSION}')",
+            name="previous_version_is_a_release",
+        ),
+        CheckConstraint(
+            "NOT (already_running AND is_return)", name="a_return_was_not_already_running"
+        ),
+        Index(
+            "uq_release_periods_one_open",
+            "org_id",
+            "release_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        Index(
+            "ix_release_periods_org_id_project_id_started_at",
+            "org_id",
+            "project_id",
+            text("started_at DESC"),
+            "id",
+        ),
+        Index(
+            "ix_release_periods_org_id_project_id_service_name_started_at",
+            "org_id",
+            "project_id",
+            "service_name",
+            text("started_at DESC"),
+        ),
+        Index(
+            "ix_release_periods_open",
+            "org_id",
+            "project_id",
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+    )
+
+
+class ReleaseSyncState(Base):
+    """How far the release sync has read a project's version rollup (F28, design 3,
+    step 10): the last minute read, never moved backwards."""
+
+    __tablename__ = "release_sync_state"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    synced_through: Mapped[RequiredTimestamp]
+
+
+# F20. What a dashboard may hold is checked by `dashboards/definition.py`, the one way
+# a definition enters; these are the bounds the database also holds.
+DASHBOARD_TITLE_MAX_LENGTH: Final = 120
+DASHBOARD_DESCRIPTION_MAX_LENGTH: Final = 500
+
+
+class Dashboard(Base):
+    """A saved dashboard (F20, BR1): one checked JSON definition, owned by the organization
+    and shown against whichever project the reader names.
+
+    Soft-deleted for 30 days (FR51). `panel_count`, `service_names` and `uses_picker` are
+    written at save from the compiled definition, so lists never read the JSON (AC96).
+    `created_by` and `updated_by` survive a member's removal, which scrubs the person
+    rather than deleting the row, so the owner reads "Former member" (FR38)."""
+
+    __tablename__ = "dashboards"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # The optimistic lock: a save names the version it was based on (FR19).
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    # Written by a batch read at most hourly, never by a support view (FR37).
+    last_viewed_at: Mapped[OptionalTimestamp]
+    panel_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    service_names: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    uses_picker: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    panels_not_reading: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+    deleted_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_dashboards_org_id_id"),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_dashboards_created_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "updated_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (updated_by)",
+            name="fk_dashboards_updated_by",
+        ),
+        CheckConstraint("jsonb_typeof(definition) = 'object'", name="definition_is_an_object"),
+        CheckConstraint(
+            f"char_length(title) BETWEEN 1 AND {DASHBOARD_TITLE_MAX_LENGTH}",
+            name="title_length",
+        ),
+        CheckConstraint(
+            f"char_length(description) <= {DASHBOARD_DESCRIPTION_MAX_LENGTH}",
+            name="description_length",
+        ),
+        # BR12: no two live dashboards share a title, ignoring case.
+        Index(
+            "uq_dashboards_live_title",
+            "org_id",
+            text("lower(title)"),
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_dashboards_org_id_last_viewed_at", "org_id", "last_viewed_at"),
+        Index("ix_dashboards_service_names", "service_names", postgresql_using="gin"),
+    )
+
+
+class DashboardVersion(Base):
+    """A version a save replaced (F20, FR51): who saved it and when, so "Restore this
+    version" is an ordinary save. Trimmed only past the newest 20 and older than 30 days."""
+
+    __tablename__ = "dashboard_versions"
+
+    dashboard_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    saved_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    saved_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "dashboard_id"],
+            ["dashboards.org_id", "dashboards.id"],
+            ondelete="CASCADE",
+            name="fk_dashboard_versions_dashboard",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "saved_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (saved_by)",
+            name="fk_dashboard_versions_saved_by",
+        ),
+        CheckConstraint("jsonb_typeof(definition) = 'object'", name="definition_is_an_object"),
     )

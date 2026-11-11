@@ -1,0 +1,14 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as summarised by web search on 2026-11-08 (docs.github.com could not be fetched from the build session). UNVERIFIED against real GitHub until the founder's run after Phase 2 (F22 T3.0, T4.8, foundation item 28); T4.8 replaces these with sanitized real responses. Values are made up. Page: 'List repositories accessible to the app installation', GET /installation/repositories; one element of `repositories`. The response is {total_count, repository_selection, repositories}; `full_name` and `private` are from general knowledge of GitHub's repository object, not confirmed by the search.",
+  "id": 4000001,
+  "node_id": "R_kgAAAAAA",
+  "name": "api",
+  "full_name": "acme/api",
+  "private": true,
+  "owner": {
+    "login": "acme",
+    "id": 2000001,
+    "type": "Organization"
+  },
+  "html_url": "https://github.com/acme/api"
+}

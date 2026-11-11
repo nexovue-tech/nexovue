@@ -1,0 +1,1680 @@
+{
+  "finding.adopted.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 16224265,
+        "description": "checkout's new level became its normal. Adopted after 7 days.\nNobody marked this finding, so the change became the normal by itself. If it is not normal, open the finding and mark it.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 42 min.\nOpen in nexovue: https://console.example.test/findings/<id-1>",
+        "title": "\\[warning\\] checkout has a new normal",
+        "url": "https://console.example.test/findings/<id-1>"
+      }
+    ]
+  },
+  "finding.adopted.owners": {
+    "body": "checkout's new level became its normal. Adopted after 7 days.\nNobody marked this finding, so the change became the normal by itself. If it is not normal, open the finding and mark it.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.",
+    "link": "https://console.example.test/findings/<id-1>",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[warning] checkout has a new normal"
+  },
+  "finding.adopted.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "finding:<id-1>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/findings/<id-1>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "checkout",
+      "custom_details": {
+        "details": [
+          "checkout's new level became its normal. Adopted after 7 days.",
+          "Nobody marked this finding, so the change became the normal by itself. If it is not normal, open the finding and mark it.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 42 min."
+        ]
+      },
+      "group": "",
+      "severity": "warning",
+      "source": "nexovue",
+      "summary": "[warning] checkout has a new normal"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "finding.adopted.slack": {
+    "attachments": [
+      {
+        "color": "#f79009",
+        "fallback": "[warning] checkout has a new normal",
+        "text": "checkout's new level became its normal. Adopted after 7 days.\nNobody marked this finding, so the change became the normal by itself. If it is not normal, open the finding and mark it.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.\n<https://console.example.test/findings/<id-1>|Open in nexovue>"
+      }
+    ],
+    "text": "[warning] checkout has a new normal"
+  },
+  "finding.adopted.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/findings/<id-1>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Warning",
+              "size": "Medium",
+              "text": "\\[warning\\] checkout has a new normal",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "checkout's new level became its normal. Adopted after 7 days.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Nobody marked this finding, so the change became the normal by itself. If it is not normal, open the finding and mark it.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 42 min.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "finding.adopted.webhook": {
+    "data": {
+      "details": [
+        "checkout's new level became its normal. Adopted after 7 days.",
+        "Nobody marked this finding, so the change became the normal by itself. If it is not normal, open the finding and mark it.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 42 min."
+      ],
+      "link": "https://console.example.test/findings/<id-1>",
+      "rule": null,
+      "subject": {
+        "id": "<id-1>",
+        "kind": "finding",
+        "label": "checkout",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:42:00+00:00",
+        "severity": "warning"
+      },
+      "summary": "[warning] checkout has a new normal"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "finding.adopted",
+    "version": 2
+  },
+  "finding.escalated.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 14232864,
+        "description": "checkout is 4x slower than normal since 14:02 UTC.\nThis finding is now critical.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 42 min.\nOpen in nexovue: https://console.example.test/findings/<id-1>",
+        "title": "\\[critical\\] Now critical: checkout is 4x slower than normal since 14:02 UTC",
+        "url": "https://console.example.test/findings/<id-1>"
+      }
+    ]
+  },
+  "finding.escalated.owners": {
+    "body": "checkout is 4x slower than normal since 14:02 UTC.\nThis finding is now critical.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.",
+    "link": "https://console.example.test/findings/<id-1>",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[critical] Now critical: checkout is 4x slower than normal since 14:02 UTC"
+  },
+  "finding.escalated.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "finding:<id-1>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/findings/<id-1>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "checkout",
+      "custom_details": {
+        "details": [
+          "checkout is 4x slower than normal since 14:02 UTC.",
+          "This finding is now critical.",
+          "Slower: 412 ms at worst, against 110 ms normally.",
+          "Failing, /pay: 6% at worst, against 0.4% normally.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 42 min."
+        ]
+      },
+      "group": "",
+      "severity": "critical",
+      "source": "nexovue",
+      "summary": "[critical] Now critical: checkout is 4x slower than normal since 14:02 UTC"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "finding.escalated.slack": {
+    "attachments": [
+      {
+        "color": "#d92d20",
+        "fallback": "[critical] Now critical: checkout is 4x slower than normal since 14:02 UTC",
+        "text": "checkout is 4x slower than normal since 14:02 UTC.\nThis finding is now critical.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.\n<https://console.example.test/findings/<id-1>|Open in nexovue>"
+      }
+    ],
+    "text": "[critical] Now critical: checkout is 4x slower than normal since 14:02 UTC"
+  },
+  "finding.escalated.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/findings/<id-1>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Attention",
+              "size": "Medium",
+              "text": "\\[critical\\] Now critical: checkout is 4x slower than normal since 14:02 UTC",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "checkout is 4x slower than normal since 14:02 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "This finding is now critical.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Slower: 412 ms at worst, against 110 ms normally.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Failing, /pay: 6% at worst, against 0.4% normally.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 42 min.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "finding.escalated.webhook": {
+    "data": {
+      "details": [
+        "checkout is 4x slower than normal since 14:02 UTC.",
+        "This finding is now critical.",
+        "Slower: 412 ms at worst, against 110 ms normally.",
+        "Failing, /pay: 6% at worst, against 0.4% normally.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 42 min."
+      ],
+      "link": "https://console.example.test/findings/<id-1>",
+      "rule": null,
+      "subject": {
+        "id": "<id-1>",
+        "kind": "finding",
+        "label": "checkout",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:42:00+00:00",
+        "severity": "critical"
+      },
+      "summary": "[critical] Now critical: checkout is 4x slower than normal since 14:02 UTC"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "finding.escalated",
+    "version": 2
+  },
+  "finding.flapping.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 16224265,
+        "description": "Detection has opened a finding on checkout five times in the last hour. Further findings are not sent until it has stayed normal for 30 minutes.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 42 min.\nOpen in nexovue: https://console.example.test/findings/<id-1>",
+        "title": "\\[warning\\] checkout is flapping",
+        "url": "https://console.example.test/findings/<id-1>"
+      }
+    ]
+  },
+  "finding.flapping.owners": {
+    "body": "Detection has opened a finding on checkout five times in the last hour. Further findings are not sent until it has stayed normal for 30 minutes.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.",
+    "link": "https://console.example.test/findings/<id-1>",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[warning] checkout is flapping"
+  },
+  "finding.flapping.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "finding:<id-1>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/findings/<id-1>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "checkout",
+      "custom_details": {
+        "details": [
+          "Detection has opened a finding on checkout five times in the last hour. Further findings are not sent until it has stayed normal for 30 minutes.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 42 min."
+        ]
+      },
+      "group": "",
+      "severity": "warning",
+      "source": "nexovue",
+      "summary": "[warning] checkout is flapping"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "finding.flapping.slack": {
+    "attachments": [
+      {
+        "color": "#f79009",
+        "fallback": "[warning] checkout is flapping",
+        "text": "Detection has opened a finding on checkout five times in the last hour. Further findings are not sent until it has stayed normal for 30 minutes.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.\n<https://console.example.test/findings/<id-1>|Open in nexovue>"
+      }
+    ],
+    "text": "[warning] checkout is flapping"
+  },
+  "finding.flapping.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/findings/<id-1>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Warning",
+              "size": "Medium",
+              "text": "\\[warning\\] checkout is flapping",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "Detection has opened a finding on checkout five times in the last hour. Further findings are not sent until it has stayed normal for 30 minutes.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 42 min.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "finding.flapping.webhook": {
+    "data": {
+      "details": [
+        "Detection has opened a finding on checkout five times in the last hour. Further findings are not sent until it has stayed normal for 30 minutes.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 42 min."
+      ],
+      "link": "https://console.example.test/findings/<id-1>",
+      "rule": null,
+      "subject": {
+        "id": "<id-1>",
+        "kind": "finding",
+        "label": "checkout",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:42:00+00:00",
+        "severity": "warning"
+      },
+      "summary": "[warning] checkout is flapping"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "finding.flapping",
+    "version": 2
+  },
+  "finding.joined.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 16224265,
+        "description": "checkout is 4x slower than normal since 14:02 UTC.\nAnother signal or endpoint joined this finding.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 42 min.\nOpen in nexovue: https://console.example.test/findings/<id-1>",
+        "title": "\\[warning\\] More is unusual: checkout is 4x slower than normal since 14:02 UTC",
+        "url": "https://console.example.test/findings/<id-1>"
+      }
+    ]
+  },
+  "finding.joined.owners": {
+    "body": "checkout is 4x slower than normal since 14:02 UTC.\nAnother signal or endpoint joined this finding.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.",
+    "link": "https://console.example.test/findings/<id-1>",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[warning] More is unusual: checkout is 4x slower than normal since 14:02 UTC"
+  },
+  "finding.joined.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "finding:<id-1>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/findings/<id-1>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "checkout",
+      "custom_details": {
+        "details": [
+          "checkout is 4x slower than normal since 14:02 UTC.",
+          "Another signal or endpoint joined this finding.",
+          "Slower: 412 ms at worst, against 110 ms normally.",
+          "Failing, /pay: 6% at worst, against 0.4% normally.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 42 min."
+        ]
+      },
+      "group": "",
+      "severity": "warning",
+      "source": "nexovue",
+      "summary": "[warning] More is unusual: checkout is 4x slower than normal since 14:02 UTC"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "finding.joined.slack": {
+    "attachments": [
+      {
+        "color": "#f79009",
+        "fallback": "[warning] More is unusual: checkout is 4x slower than normal since 14:02 UTC",
+        "text": "checkout is 4x slower than normal since 14:02 UTC.\nAnother signal or endpoint joined this finding.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.\n<https://console.example.test/findings/<id-1>|Open in nexovue>"
+      }
+    ],
+    "text": "[warning] More is unusual: checkout is 4x slower than normal since 14:02 UTC"
+  },
+  "finding.joined.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/findings/<id-1>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Warning",
+              "size": "Medium",
+              "text": "\\[warning\\] More is unusual: checkout is 4x slower than normal since 14:02 UTC",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "checkout is 4x slower than normal since 14:02 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Another signal or endpoint joined this finding.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Slower: 412 ms at worst, against 110 ms normally.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Failing, /pay: 6% at worst, against 0.4% normally.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 42 min.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "finding.joined.webhook": {
+    "data": {
+      "details": [
+        "checkout is 4x slower than normal since 14:02 UTC.",
+        "Another signal or endpoint joined this finding.",
+        "Slower: 412 ms at worst, against 110 ms normally.",
+        "Failing, /pay: 6% at worst, against 0.4% normally.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 42 min."
+      ],
+      "link": "https://console.example.test/findings/<id-1>",
+      "rule": null,
+      "subject": {
+        "id": "<id-1>",
+        "kind": "finding",
+        "label": "checkout",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:42:00+00:00",
+        "severity": "warning"
+      },
+      "summary": "[warning] More is unusual: checkout is 4x slower than normal since 14:02 UTC"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "finding.joined",
+    "version": 2
+  },
+  "finding.opened.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 16224265,
+        "description": "checkout is 4x slower than normal since 14:02 UTC.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 42 min.\nOpen in nexovue: https://console.example.test/findings/<id-1>",
+        "title": "\\[warning\\] checkout is 4x slower than normal since 14:02 UTC",
+        "url": "https://console.example.test/findings/<id-1>"
+      }
+    ]
+  },
+  "finding.opened.owners": {
+    "body": "checkout is 4x slower than normal since 14:02 UTC.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.",
+    "link": "https://console.example.test/findings/<id-1>",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[warning] checkout is 4x slower than normal since 14:02 UTC"
+  },
+  "finding.opened.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "finding:<id-1>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/findings/<id-1>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "checkout",
+      "custom_details": {
+        "details": [
+          "checkout is 4x slower than normal since 14:02 UTC.",
+          "Slower: 412 ms at worst, against 110 ms normally.",
+          "Failing, /pay: 6% at worst, against 0.4% normally.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 42 min."
+        ]
+      },
+      "group": "",
+      "severity": "warning",
+      "source": "nexovue",
+      "summary": "[warning] checkout is 4x slower than normal since 14:02 UTC"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "finding.opened.slack": {
+    "attachments": [
+      {
+        "color": "#f79009",
+        "fallback": "[warning] checkout is 4x slower than normal since 14:02 UTC",
+        "text": "checkout is 4x slower than normal since 14:02 UTC.\nSlower: 412 ms at worst, against 110 ms normally.\nFailing, /pay: 6% at worst, against 0.4% normally.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.\n<https://console.example.test/findings/<id-1>|Open in nexovue>"
+      }
+    ],
+    "text": "[warning] checkout is 4x slower than normal since 14:02 UTC"
+  },
+  "finding.opened.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/findings/<id-1>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Warning",
+              "size": "Medium",
+              "text": "\\[warning\\] checkout is 4x slower than normal since 14:02 UTC",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "checkout is 4x slower than normal since 14:02 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Slower: 412 ms at worst, against 110 ms normally.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Failing, /pay: 6% at worst, against 0.4% normally.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 42 min.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "finding.opened.webhook": {
+    "data": {
+      "details": [
+        "checkout is 4x slower than normal since 14:02 UTC.",
+        "Slower: 412 ms at worst, against 110 ms normally.",
+        "Failing, /pay: 6% at worst, against 0.4% normally.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 42 min."
+      ],
+      "link": "https://console.example.test/findings/<id-1>",
+      "rule": null,
+      "subject": {
+        "id": "<id-1>",
+        "kind": "finding",
+        "label": "checkout",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:42:00+00:00",
+        "severity": "warning"
+      },
+      "summary": "[warning] checkout is 4x slower than normal since 14:02 UTC"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "finding.opened",
+    "version": 2
+  },
+  "finding.resolved.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 1226602,
+        "description": "checkout is back to normal.\nIt was: checkout is 4x slower than normal since 14:02 UTC.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 42 min.\nOpen in nexovue: https://console.example.test/findings/<id-1>",
+        "title": "\\[resolved\\] checkout is back to normal",
+        "url": "https://console.example.test/findings/<id-1>"
+      }
+    ]
+  },
+  "finding.resolved.owners": {
+    "body": "checkout is back to normal.\nIt was: checkout is 4x slower than normal since 14:02 UTC.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.",
+    "link": "https://console.example.test/findings/<id-1>",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[resolved] checkout is back to normal"
+  },
+  "finding.resolved.pagerduty": {
+    "dedup_key": "finding:<id-1>",
+    "event_action": "resolve",
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "finding.resolved.slack": {
+    "attachments": [
+      {
+        "color": "#12b76a",
+        "fallback": "[resolved] checkout is back to normal",
+        "text": "checkout is back to normal.\nIt was: checkout is 4x slower than normal since 14:02 UTC.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 42 min.\n<https://console.example.test/findings/<id-1>|Open in nexovue>"
+      }
+    ],
+    "text": "[resolved] checkout is back to normal"
+  },
+  "finding.resolved.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/findings/<id-1>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Good",
+              "size": "Medium",
+              "text": "\\[resolved\\] checkout is back to normal",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "checkout is back to normal.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "It was: checkout is 4x slower than normal since 14:02 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 42 min.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "finding.resolved.webhook": {
+    "data": {
+      "details": [
+        "checkout is back to normal.",
+        "It was: checkout is 4x slower than normal since 14:02 UTC.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 42 min."
+      ],
+      "link": "https://console.example.test/findings/<id-1>",
+      "rule": null,
+      "subject": {
+        "id": "<id-1>",
+        "kind": "finding",
+        "label": "checkout",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:42:00+00:00",
+        "severity": "warning"
+      },
+      "summary": "[resolved] checkout is back to normal"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "finding.resolved",
+    "version": 2
+  },
+  "incident.closed.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 14232864,
+        "description": "Checkout API had not recovered, but nothing watches it any more: its rule or its check was removed, or the rule stopped covering it.\nStarted: 2099\\-01\\-05 10:00 UTC.\nOpen for: 17 min.\nRule: Checkout API down.\nOpen in nexovue: https://console.example.test/alerts/incidents/<id-2>",
+        "title": "\\[closed\\] Checkout API is no longer watched",
+        "url": "https://console.example.test/alerts/incidents/<id-2>"
+      }
+    ]
+  },
+  "incident.closed.owners": {
+    "body": "Checkout API had not recovered, but nothing watches it any more: its rule or its check was removed, or the rule stopped covering it.\nStarted: 2099-01-05 10:00 UTC.\nOpen for: 17 min.\nRule: Checkout API down.",
+    "link": "https://console.example.test/alerts/incidents/<id-2>",
+    "manage_link": null,
+    "rule_name": "Checkout API down",
+    "subject": "[closed] Checkout API is no longer watched"
+  },
+  "incident.closed.pagerduty": {
+    "dedup_key": "incident:<id-2>",
+    "event_action": "resolve",
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "incident.closed.slack": {
+    "attachments": [
+      {
+        "color": "#d92d20",
+        "fallback": "[closed] Checkout API is no longer watched",
+        "text": "Checkout API had not recovered, but nothing watches it any more: its rule or its check was removed, or the rule stopped covering it.\nStarted: 2099-01-05 10:00 UTC.\nOpen for: 17 min.\nRule: Checkout API down.\n<https://console.example.test/alerts/incidents/<id-2>|Open in nexovue>"
+      }
+    ],
+    "text": "[closed] Checkout API is no longer watched"
+  },
+  "incident.closed.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/alerts/incidents/<id-2>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Attention",
+              "size": "Medium",
+              "text": "\\[closed\\] Checkout API is no longer watched",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "Checkout API had not recovered, but nothing watches it any more: its rule or its check was removed, or the rule stopped covering it.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Open for: 17 min.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Rule: Checkout API down.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "incident.closed.webhook": {
+    "data": {
+      "details": [
+        "Checkout API had not recovered, but nothing watches it any more: its rule or its check was removed, or the rule stopped covering it.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Open for: 17 min.",
+        "Rule: Checkout API down."
+      ],
+      "link": "https://console.example.test/alerts/incidents/<id-2>",
+      "rule": {
+        "name": "Checkout API down"
+      },
+      "subject": {
+        "id": "<id-2>",
+        "kind": "incident",
+        "label": "Checkout API",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:17:00+00:00",
+        "severity": "critical"
+      },
+      "summary": "[closed] Checkout API is no longer watched"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "incident.closed",
+    "version": 2
+  },
+  "incident.escalated.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 14232864,
+        "description": "Checkout API is now down.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\nOpen in nexovue: https://console.example.test/alerts/incidents/<id-2>",
+        "title": "\\[critical\\] Checkout API is now down",
+        "url": "https://console.example.test/alerts/incidents/<id-2>"
+      }
+    ]
+  },
+  "incident.escalated.owners": {
+    "body": "Checkout API is now down.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.",
+    "link": "https://console.example.test/alerts/incidents/<id-2>",
+    "manage_link": null,
+    "rule_name": "Checkout API down",
+    "subject": "[critical] Checkout API is now down"
+  },
+  "incident.escalated.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "incident:<id-2>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/alerts/incidents/<id-2>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "Checkout API",
+      "custom_details": {
+        "details": [
+          "Checkout API is now down.",
+          "Why: connection timed out.",
+          "Seen from: local.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 17 min.",
+          "Rule: Checkout API down."
+        ]
+      },
+      "group": "Checkout API down",
+      "severity": "critical",
+      "source": "nexovue",
+      "summary": "[critical] Checkout API is now down"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "incident.escalated.slack": {
+    "attachments": [
+      {
+        "color": "#d92d20",
+        "fallback": "[critical] Checkout API is now down",
+        "text": "Checkout API is now down.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\n<https://console.example.test/alerts/incidents/<id-2>|Open in nexovue>"
+      }
+    ],
+    "text": "[critical] Checkout API is now down"
+  },
+  "incident.escalated.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/alerts/incidents/<id-2>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Attention",
+              "size": "Medium",
+              "text": "\\[critical\\] Checkout API is now down",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "Checkout API is now down.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Why: connection timed out.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Seen from: local.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 17 min.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Rule: Checkout API down.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "incident.escalated.webhook": {
+    "data": {
+      "details": [
+        "Checkout API is now down.",
+        "Why: connection timed out.",
+        "Seen from: local.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 17 min.",
+        "Rule: Checkout API down."
+      ],
+      "link": "https://console.example.test/alerts/incidents/<id-2>",
+      "rule": {
+        "name": "Checkout API down"
+      },
+      "subject": {
+        "id": "<id-2>",
+        "kind": "incident",
+        "label": "Checkout API",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:17:00+00:00",
+        "severity": "critical"
+      },
+      "summary": "[critical] Checkout API is now down"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "incident.escalated",
+    "version": 2
+  },
+  "incident.opened.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 14232864,
+        "description": "Checkout API is down.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\nOpen in nexovue: https://console.example.test/alerts/incidents/<id-2>",
+        "title": "\\[critical\\] Checkout API is down",
+        "url": "https://console.example.test/alerts/incidents/<id-2>"
+      }
+    ]
+  },
+  "incident.opened.owners": {
+    "body": "Checkout API is down.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.",
+    "link": "https://console.example.test/alerts/incidents/<id-2>",
+    "manage_link": null,
+    "rule_name": "Checkout API down",
+    "subject": "[critical] Checkout API is down"
+  },
+  "incident.opened.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "incident:<id-2>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/alerts/incidents/<id-2>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "Checkout API",
+      "custom_details": {
+        "details": [
+          "Checkout API is down.",
+          "Why: connection timed out.",
+          "Seen from: local.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 17 min.",
+          "Rule: Checkout API down."
+        ]
+      },
+      "group": "Checkout API down",
+      "severity": "critical",
+      "source": "nexovue",
+      "summary": "[critical] Checkout API is down"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "incident.opened.slack": {
+    "attachments": [
+      {
+        "color": "#d92d20",
+        "fallback": "[critical] Checkout API is down",
+        "text": "Checkout API is down.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\n<https://console.example.test/alerts/incidents/<id-2>|Open in nexovue>"
+      }
+    ],
+    "text": "[critical] Checkout API is down"
+  },
+  "incident.opened.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/alerts/incidents/<id-2>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Attention",
+              "size": "Medium",
+              "text": "\\[critical\\] Checkout API is down",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "Checkout API is down.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Why: connection timed out.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Seen from: local.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 17 min.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Rule: Checkout API down.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "incident.opened.webhook": {
+    "data": {
+      "details": [
+        "Checkout API is down.",
+        "Why: connection timed out.",
+        "Seen from: local.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 17 min.",
+        "Rule: Checkout API down."
+      ],
+      "link": "https://console.example.test/alerts/incidents/<id-2>",
+      "rule": {
+        "name": "Checkout API down"
+      },
+      "subject": {
+        "id": "<id-2>",
+        "kind": "incident",
+        "label": "Checkout API",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:17:00+00:00",
+        "severity": "critical"
+      },
+      "summary": "[critical] Checkout API is down"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "incident.opened",
+    "version": 2
+  },
+  "incident.repeated.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 14232864,
+        "description": "Checkout API is still down, open for 1 min.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\nOpen in nexovue: https://console.example.test/alerts/incidents/<id-2>",
+        "title": "\\[critical\\] Checkout API is still down",
+        "url": "https://console.example.test/alerts/incidents/<id-2>"
+      }
+    ]
+  },
+  "incident.repeated.owners": {
+    "body": "Checkout API is still down, open for 1 min.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.",
+    "link": "https://console.example.test/alerts/incidents/<id-2>",
+    "manage_link": null,
+    "rule_name": "Checkout API down",
+    "subject": "[critical] Checkout API is still down"
+  },
+  "incident.repeated.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "incident:<id-2>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/alerts/incidents/<id-2>",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "Checkout API",
+      "custom_details": {
+        "details": [
+          "Checkout API is still down, open for 1 min.",
+          "Why: connection timed out.",
+          "Seen from: local.",
+          "Started: 2099-01-05 10:00 UTC.",
+          "Lasted: 17 min.",
+          "Rule: Checkout API down."
+        ]
+      },
+      "group": "Checkout API down",
+      "severity": "critical",
+      "source": "nexovue",
+      "summary": "[critical] Checkout API is still down"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "incident.repeated.slack": {
+    "attachments": [
+      {
+        "color": "#d92d20",
+        "fallback": "[critical] Checkout API is still down",
+        "text": "Checkout API is still down, open for 1 min.\nWhy: connection timed out.\nSeen from: local.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\n<https://console.example.test/alerts/incidents/<id-2>|Open in nexovue>"
+      }
+    ],
+    "text": "[critical] Checkout API is still down"
+  },
+  "incident.repeated.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/alerts/incidents/<id-2>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Attention",
+              "size": "Medium",
+              "text": "\\[critical\\] Checkout API is still down",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "Checkout API is still down, open for 1 min.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Why: connection timed out.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Seen from: local.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 17 min.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Rule: Checkout API down.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "incident.repeated.webhook": {
+    "data": {
+      "details": [
+        "Checkout API is still down, open for 1 min.",
+        "Why: connection timed out.",
+        "Seen from: local.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 17 min.",
+        "Rule: Checkout API down."
+      ],
+      "link": "https://console.example.test/alerts/incidents/<id-2>",
+      "rule": {
+        "name": "Checkout API down"
+      },
+      "subject": {
+        "id": "<id-2>",
+        "kind": "incident",
+        "label": "Checkout API",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:17:00+00:00",
+        "severity": "critical"
+      },
+      "summary": "[critical] Checkout API is still down"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "incident.repeated",
+    "version": 2
+  },
+  "incident.resolved.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 1226602,
+        "description": "Checkout API recovered.\nStarted: 2099\\-01\\-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\nOpen in nexovue: https://console.example.test/alerts/incidents/<id-2>",
+        "title": "\\[resolved\\] Checkout API recovered",
+        "url": "https://console.example.test/alerts/incidents/<id-2>"
+      }
+    ]
+  },
+  "incident.resolved.owners": {
+    "body": "Checkout API recovered.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.",
+    "link": "https://console.example.test/alerts/incidents/<id-2>",
+    "manage_link": null,
+    "rule_name": "Checkout API down",
+    "subject": "[resolved] Checkout API recovered"
+  },
+  "incident.resolved.pagerduty": {
+    "dedup_key": "incident:<id-2>",
+    "event_action": "resolve",
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "incident.resolved.slack": {
+    "attachments": [
+      {
+        "color": "#12b76a",
+        "fallback": "[resolved] Checkout API recovered",
+        "text": "Checkout API recovered.\nStarted: 2099-01-05 10:00 UTC.\nLasted: 17 min.\nRule: Checkout API down.\n<https://console.example.test/alerts/incidents/<id-2>|Open in nexovue>"
+      }
+    ],
+    "text": "[resolved] Checkout API recovered"
+  },
+  "incident.resolved.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/alerts/incidents/<id-2>"
+            }
+          ],
+          "body": [
+            {
+              "color": "Good",
+              "size": "Medium",
+              "text": "\\[resolved\\] Checkout API recovered",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "Checkout API recovered.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Started: 2099-01-05 10:00 UTC.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Lasted: 17 min.",
+              "type": "TextBlock",
+              "wrap": true
+            },
+            {
+              "text": "Rule: Checkout API down.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "incident.resolved.webhook": {
+    "data": {
+      "details": [
+        "Checkout API recovered.",
+        "Started: 2099-01-05 10:00 UTC.",
+        "Lasted: 17 min.",
+        "Rule: Checkout API down."
+      ],
+      "link": "https://console.example.test/alerts/incidents/<id-2>",
+      "rule": {
+        "name": "Checkout API down"
+      },
+      "subject": {
+        "id": "<id-2>",
+        "kind": "incident",
+        "label": "Checkout API",
+        "opened_at": "2099-01-05T10:00:00+00:00",
+        "resolved_at": "2099-01-05T10:17:00+00:00",
+        "severity": "critical"
+      },
+      "summary": "[resolved] Checkout API recovered"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "incident.resolved",
+    "version": 2
+  },
+  "project.running_again.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 1226602,
+        "description": "nexovue's anomaly detection is judging Production again, as of 2099\\-01\\-05 10:01 UTC. It starts from the latest complete minute; what happened while it was stopped is not judged.\nOpen in nexovue: https://console.example.test/",
+        "title": "\\[resolved\\] Detection is running again for Production",
+        "url": "https://console.example.test/"
+      }
+    ]
+  },
+  "project.running_again.owners": {
+    "body": "nexovue's anomaly detection is judging Production again, as of 2099-01-05 10:01 UTC. It starts from the latest complete minute; what happened while it was stopped is not judged.",
+    "link": "https://console.example.test/",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[resolved] Detection is running again for Production"
+  },
+  "project.running_again.pagerduty": {
+    "dedup_key": "project:<id-3>",
+    "event_action": "resolve",
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "project.running_again.slack": {
+    "attachments": [
+      {
+        "color": "#12b76a",
+        "fallback": "[resolved] Detection is running again for Production",
+        "text": "nexovue's anomaly detection is judging Production again, as of 2099-01-05 10:01 UTC. It starts from the latest complete minute; what happened while it was stopped is not judged.\n<https://console.example.test/|Open in nexovue>"
+      }
+    ],
+    "text": "[resolved] Detection is running again for Production"
+  },
+  "project.running_again.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/"
+            }
+          ],
+          "body": [
+            {
+              "color": "Good",
+              "size": "Medium",
+              "text": "\\[resolved\\] Detection is running again for Production",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "nexovue's anomaly detection is judging Production again, as of 2099-01-05 10:01 UTC. It starts from the latest complete minute; what happened while it was stopped is not judged.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "project.running_again.webhook": {
+    "data": {
+      "details": [
+        "nexovue's anomaly detection is judging Production again, as of 2099-01-05 10:01 UTC. It starts from the latest complete minute; what happened while it was stopped is not judged."
+      ],
+      "link": "https://console.example.test/",
+      "rule": null,
+      "subject": {
+        "id": "<id-3>",
+        "kind": "project",
+        "label": "Production",
+        "opened_at": "2099-01-05T10:01:00+00:00",
+        "resolved_at": null,
+        "severity": "warning"
+      },
+      "summary": "[resolved] Detection is running again for Production"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "project.resolved",
+    "version": 2
+  },
+  "project.stopped.discord": {
+    "allowed_mentions": {
+      "parse": []
+    },
+    "embeds": [
+      {
+        "color": 16224265,
+        "description": "nexovue's anomaly detection has not judged Production for 15 minutes, as of 2099\\-01\\-05 10:01 UTC. No finding can open until it runs again.\nOpen in nexovue: https://console.example.test/",
+        "title": "\\[warning\\] Detection stopped for Production",
+        "url": "https://console.example.test/"
+      }
+    ]
+  },
+  "project.stopped.owners": {
+    "body": "nexovue's anomaly detection has not judged Production for 15 minutes, as of 2099-01-05 10:01 UTC. No finding can open until it runs again.",
+    "link": "https://console.example.test/",
+    "manage_link": null,
+    "rule_name": "",
+    "subject": "[warning] Detection stopped for Production"
+  },
+  "project.stopped.pagerduty": {
+    "client": "nexovue",
+    "client_url": "https://console.example.test",
+    "dedup_key": "project:<id-3>",
+    "event_action": "trigger",
+    "links": [
+      {
+        "href": "https://console.example.test/",
+        "text": "Open in nexovue"
+      }
+    ],
+    "payload": {
+      "component": "Production",
+      "custom_details": {
+        "details": [
+          "nexovue's anomaly detection has not judged Production for 15 minutes, as of 2099-01-05 10:01 UTC. No finding can open until it runs again."
+        ]
+      },
+      "group": "",
+      "severity": "warning",
+      "source": "nexovue",
+      "summary": "[warning] Detection stopped for Production"
+    },
+    "routing_key": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  },
+  "project.stopped.slack": {
+    "attachments": [
+      {
+        "color": "#f79009",
+        "fallback": "[warning] Detection stopped for Production",
+        "text": "nexovue's anomaly detection has not judged Production for 15 minutes, as of 2099-01-05 10:01 UTC. No finding can open until it runs again.\n<https://console.example.test/|Open in nexovue>"
+      }
+    ],
+    "text": "[warning] Detection stopped for Production"
+  },
+  "project.stopped.teams": {
+    "attachments": [
+      {
+        "content": {
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          "actions": [
+            {
+              "title": "Open in nexovue",
+              "type": "Action.OpenUrl",
+              "url": "https://console.example.test/"
+            }
+          ],
+          "body": [
+            {
+              "color": "Warning",
+              "size": "Medium",
+              "text": "\\[warning\\] Detection stopped for Production",
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "wrap": true
+            },
+            {
+              "text": "nexovue's anomaly detection has not judged Production for 15 minutes, as of 2099-01-05 10:01 UTC. No finding can open until it runs again.",
+              "type": "TextBlock",
+              "wrap": true
+            }
+          ],
+          "type": "AdaptiveCard",
+          "version": "1.4"
+        },
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "contentUrl": null
+      }
+    ],
+    "type": "message"
+  },
+  "project.stopped.webhook": {
+    "data": {
+      "details": [
+        "nexovue's anomaly detection has not judged Production for 15 minutes, as of 2099-01-05 10:01 UTC. No finding can open until it runs again."
+      ],
+      "link": "https://console.example.test/",
+      "rule": null,
+      "subject": {
+        "id": "<id-3>",
+        "kind": "project",
+        "label": "Production",
+        "opened_at": "2099-01-05T10:01:00+00:00",
+        "resolved_at": null,
+        "severity": "warning"
+      },
+      "summary": "[warning] Detection stopped for Production"
+    },
+    "timestamp": "2099-01-05T11:00:00+00:00",
+    "type": "project.stopped",
+    "version": 2
+  }
+}

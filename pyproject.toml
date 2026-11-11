@@ -104,11 +104,14 @@ ignore_errors = true
 asyncio_mode = "auto"
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
-pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed"]
+pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval"]
 # Test tenants' ClickHouse rows are deleted once at the end of the run: a mutation
 # per test held thousands of superseded parts in memory (tests/helpers/clickhouse_cleanup.py).
-addopts = "-p clickhouse_cleanup"
-testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed"]
+# `insight_fence` suites need an installed kit (F3 AC42, AC46); `just insight-fence` runs them with
+# `-m insight_fence`, which replaces this one, and `just check` never collects them.
+addopts = "-p clickhouse_cleanup -m 'not insight_fence'"
+markers = ["insight_fence: needs the installed kit `just insight-fence` builds (F3 plan T3.11)"]
+testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval"]
 
 [tool.uv.sources]
 nexovue-platform = { workspace = true }

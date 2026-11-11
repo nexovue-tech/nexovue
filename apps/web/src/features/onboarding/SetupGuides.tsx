@@ -96,7 +96,9 @@ export function SetupGuides() {
       <Disclosure summary="My service is not instrumented yet">
         <p className="mb-4 max-w-prose text-ink-dim text-sm leading-relaxed">
           Every language also wants OTEL_SERVICE_NAME. Without it each unnamed service you run is
-          grouped into one row called (unknown).
+          grouped into one row called (unknown). Set service.version too, in
+          OTEL_RESOURCE_ATTRIBUTES, from your build id — an image tag or a commit, never a fixed
+          value such as latest: it is how each release appears on its own.
         </p>
         <dl className="space-y-4">
           {LANGUAGE_STARTS.map(({ language, commands, note }) => (

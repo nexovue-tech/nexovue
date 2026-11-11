@@ -154,10 +154,12 @@ const addServices = `
 	ON CONFLICT (org_id, project_id, day, service_name) DO NOTHING`
 
 // markServicesSeen records when each service in the flush was last heard, for
-// the alert that fires when one goes silent (F21). The flush's newest receive
-// time stands for every service in it: the meter knows which services a flush
-// carried, not the instant each one's message arrived, and ten seconds is finer
-// than any silence a rule may ask about.
+// the alert that fires when one goes silent (F21). It is given the services a
+// row was heard from (lastSeenOf), not every billed one: a name that arrived
+// only through the browser door neither creates nor refreshes a row here. The
+// flush's newest receive time stands for every service in it: the meter knows
+// which services a flush carried, not the instant each one's message arrived,
+// and ten seconds is finer than any silence a rule may ask about.
 //
 // GREATEST, so a flush that counted only an older partition's backlog never
 // moves a service's time backwards. GROUP BY, because a flush that crossed
@@ -334,14 +336,14 @@ func (s *PostgresStore) addServices(ctx context.Context, tx pgx.Tx, rows []Row) 
 	return int(tag.RowsAffected()), nil
 }
 
-// markServicesSeen moves each flushed service's last-seen time forward.
+// markServicesSeen moves each heard service's last-seen time forward.
 func (s *PostgresStore) markServicesSeen(
 	ctx context.Context,
 	tx pgx.Tx,
 	rows []Row,
 	received time.Time,
 ) error {
-	seen := servicesOf(rows)
+	seen := lastSeenOf(rows)
 	if len(seen.names) == 0 || received.IsZero() {
 		// Nothing readable was counted, so nothing was heard.
 		return nil
@@ -415,9 +417,19 @@ type services struct {
 }
 
 func servicesOf(rows []Row) services {
+	return namesOf(rows, func(row Row) []string { return row.Services })
+}
+
+// lastSeenOf is the same for the services each row was heard from, which
+// leaves out what came only through the browser door (see heardThrough).
+func lastSeenOf(rows []Row) services {
+	return namesOf(rows, func(row Row) []string { return row.Heard })
+}
+
+func namesOf(rows []Row, names func(Row) []string) services {
 	var flattened services
 	for _, row := range rows {
-		for _, name := range row.Services {
+		for _, name := range names(row) {
 			flattened.orgIDs = append(flattened.orgIDs, row.OrgID)
 			flattened.projectIDs = append(flattened.projectIDs, row.ProjectID)
 			flattened.days = append(flattened.days, row.Day)

@@ -23,13 +23,14 @@ import socket
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Final, cast
 from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
 from nexovue_platform import erasure
+from nexovue_platform.evidence import CAUSE_RULES
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -37,6 +38,10 @@ from nexovue_api.auth.queries import load_identity
 from nexovue_api.billing import BillingError, CancellationOutcome, ConfiguredProcessor
 from nexovue_api.checkfiles.service import object_key as check_file_key
 from nexovue_api.data.postgres.models import (
+    AIConnection,
+    AIProjectOptOut,
+    AIRun,
+    AIUsageMonth,
     AlertEvaluation,
     AlertRule,
     AlertRuleChannel,
@@ -50,14 +55,24 @@ from nexovue_api.data.postgres.models import (
     CheckState,
     CheckStateChange,
     CheckVariable,
+    Connection,
+    ConnectionRepository,
+    Dashboard,
+    DashboardVersion,
     DeployEvent,
+    DeployIntakeState,
     DetectionBaseline,
     DetectionProjectRun,
     DetectionState,
     ErrorGroupSeen,
     ErrorGroupWatermark,
+    EvidenceErrorGroupRead,
+    ExplanationStoppedRule,
     Finding,
+    FindingExplanation,
+    FindingExplanationRating,
     FindingIncident,
+    FindingLink,
     Incident,
     Integration,
     Job,
@@ -69,6 +84,7 @@ from nexovue_api.data.postgres.models import (
     NotificationChannel,
     Organization,
     PlanGrant,
+    ProjectWebhookSecret,
     ServiceDetectionSettings,
     ServiceLastSeen,
     SessionRecord,
@@ -141,6 +157,7 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "integrations",
     "deploy_events",
     "project_webhook_secrets",
+    "deploy_intake_state",
     "source_maps",
     "usage_daily",
     "usage_daily_services",
@@ -166,15 +183,33 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "view_as_tickets",
     "jobs",
     "job_results",
+    "connections",
+    "connection_repositories",
+    # F20: dashboards belong to the organization, and their versions go with them.
+    "dashboards",
+    "dashboard_versions",
+    "finding_links",
+    # F3: each finding's explanation, and the project's hour of error-group reads.
+    "finding_explanations",
+    "evidence_error_group_reads",
+    # F3 Step 2: ratings of each explanation, and the rules the organization stopped.
+    "finding_explanation_ratings",
+    "explanation_stopped_rules",
+    # F3 Step 3: the AI connection, its opt-outs, months of tokens and run records.
+    "ai_connections",
+    "ai_project_opt_outs",
+    "ai_usage_monthly",
+    "ai_runs",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
 # time. Written out because it is the "before" half of the evidence: a fixture
 # that quietly stopped writing to a table would make the deletion of that table
-# unprovable while every assertion still passed. `users`, `projects`, `api_keys`
-# and `project_webhook_secrets` are one each because `provision_tenant` makes
-# one of each; `audit_log` is four because it records the organization, the
-# minted key, the owners channel and the default alert rule — all under the
+# unprovable while every assertion still passed. `users`, `projects` and `api_keys`
+# are one each because `provision_tenant` makes one of each; `project_webhook_secrets`
+# and `deploy_intake_state` one each, written below; `audit_log` is four because it
+# records the organization, the minted key, the owners channel and the default alert
+# rule — all under the
 # tenant, so all deleted; the request's own entry is tenantless. Alert channels, rules
 # and their links are one more than written, for the same reason: every tenant is
 # created with an owners channel and a default rule sending to it (F21).
@@ -188,12 +223,12 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "website_payments": 1,
     "plan_grants": 1,
     "support_access_grants": 1,
-    # Signup's audit rows: one more for F6's second default rule.
-    "audit_log": 5,
+    # Signup's audit rows: one more for F6's second default rule, one for F19's third.
+    "audit_log": 6,
     "notification_channels": 1 + ROWS_PER_TABLE,
-    # Signup's two default rules (F21 FR8, F6 FR29), and the fixture's.
-    "alert_rules": 2 + ROWS_PER_TABLE,
-    "alert_rule_channels": 2 + ROWS_PER_TABLE,
+    # Signup's three default rules (F21 FR8, F6 FR29, F19 FR25), and the fixture's.
+    "alert_rules": 3 + ROWS_PER_TABLE,
+    "alert_rule_channels": 3 + ROWS_PER_TABLE,
     "alert_evaluations": ROWS_PER_TABLE,
     "incidents": ROWS_PER_TABLE,
     # One per incident and one per finding, and the project's *detection stopped* (D24).
@@ -224,6 +259,7 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "organizations": 1,
     "project_first_traces": 1,
     "project_webhook_secrets": 1,
+    "deploy_intake_state": 1,
     "projects": 1,
     "site_keys": ROWS_PER_TABLE,
     "source_maps": MAPS_PER_TENANT,
@@ -236,6 +272,26 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "view_as_tickets": 1,
     "jobs": 1,
     "job_results": 1,
+    # F22: the organization's GitHub connection, holding a sealed key, and what it reaches.
+    "connections": 1,
+    "connection_repositories": ROWS_PER_TABLE,
+    # F20 (AC12): live dashboards and one deleted one, each with a kept version.
+    "dashboards": ROWS_PER_TABLE,
+    "dashboard_versions": ROWS_PER_TABLE,
+    # F22 Step 4: each finding's synced issue, on the connection and one of its places.
+    "finding_links": ROWS_PER_TABLE,
+    # F3: one explanation per finding, and one error-group read per finding's minute.
+    "finding_explanations": ROWS_PER_TABLE,
+    "evidence_error_group_reads": ROWS_PER_TABLE,
+    # F3 Step 2: a person's rating of each explanation, and one stopped rule per finding.
+    "finding_explanation_ratings": ROWS_PER_TABLE,
+    "explanation_stopped_rules": ROWS_PER_TABLE,
+    # F3 Step 3: one connection per organization (unique) consented by its person, the
+    # one project opted out, months of tokens, and runs on the project by that person.
+    "ai_connections": 1,
+    "ai_project_opt_outs": 1,
+    "ai_usage_monthly": ROWS_PER_TABLE,
+    "ai_runs": ROWS_PER_TABLE,
 }
 
 
@@ -413,6 +469,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
                     service_name="checkout",
                     deployed_at=datetime.now(UTC),
                     source="manual",
+                    delivery_id=f"delivery-{index}",
                 ),
                 UsageDaily(
                     org_id=tenant.org_id,
@@ -479,6 +536,9 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
     for index in range(ROWS_PER_TABLE):
         await _write_alert_rows(db, tenant, index, now)
     await _write_detection_project_rows(db, tenant, now)
+    await _write_connection_rows(db, tenant)
+    await _write_dashboard_rows(db, tenant, now)
+    await _write_ai_rows(db, tenant, now)
     db.add_all(
         [
             *(
@@ -561,6 +621,25 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
                 expires_at=later,
             ),
         ]
+    )
+
+    # F28: signup mints no deploy secret (it is shown once, when a person mints it), so
+    # one is written here; and the intake row the Deploys section reads.
+    secret = ProjectWebhookSecret(
+        org_id=tenant.org_id,
+        project_id=tenant.project_id,
+        sealed_secret=b"\x02sealed",
+        secret_hint="abcd",
+    )
+    db.add(secret)
+    await db.flush()
+    db.add(
+        DeployIntakeState(
+            org_id=tenant.org_id,
+            project_id=tenant.project_id,
+            last_check_at=later,
+            last_refusal_secret_id=secret.id,
+        )
     )
 
     # No model declares this table, so it is written the way the worker does.
@@ -654,6 +733,7 @@ async def _write_detection_rows(
     person, linked to the incident and told to the channel, and the service's state,
     normal, shift and settings."""
     finding_id, service = uuid.uuid4(), f"checkout-{index}"
+    explanation_id = uuid.uuid4()
     db.add(
         Finding(
             id=finding_id,
@@ -710,6 +790,33 @@ async def _write_detection_rows(
                 muted_until=now + timedelta(days=1),
                 muted_by=tenant.user_id,
             ),
+            FindingExplanation(
+                id=explanation_id,
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                finding_id=finding_id,
+                version=1,
+                fingerprint="0" * 64,
+                evidence={"items": []},
+                aliases={"names": {"service_1": service}, "facts": {}},
+                summary={},
+            ),
+            FindingExplanationRating(
+                org_id=tenant.org_id,
+                explanation_id=explanation_id,
+                user_id=tenant.user_id,
+                helpful=False,
+                reason="not_useful",
+            ),
+            ExplanationStoppedRule(
+                org_id=tenant.org_id, rule=CAUSE_RULES[index], created_by=tenant.user_id
+            ),
+            EvidenceErrorGroupRead(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                read_minute=now.replace(second=0, microsecond=0) + timedelta(minutes=index),
+                groups=[],
+            ),
         ]
     )
     await db.flush()
@@ -742,6 +849,122 @@ async def _write_detection_project_rows(db: AsyncSession, tenant: Tenant, now: d
             ),
         ]
     )
+    await db.flush()
+
+
+async def _write_connection_rows(db: AsyncSession, tenant: Tenant) -> None:
+    """F22: a working GitHub connection started by the tenant's person, with a sealed
+    key (ciphertext stand-in), the repositories it reaches, and each finding's synced
+    issue on one of them."""
+    connection_id = uuid.uuid4()
+    db.add(
+        Connection(
+            id=connection_id,
+            org_id=tenant.org_id,
+            kind="github",
+            state="working",
+            sealed_credential=b"sealed-stand-in",
+            setup_user_id=tenant.user_id,
+            github_app_id=int(tenant.org_id.int % 10**9),
+            github_installation_id=1,
+        )
+    )
+    await db.flush()
+    db.add_all(
+        [
+            ConnectionRepository(
+                org_id=tenant.org_id,
+                connection_id=connection_id,
+                external_id=str(index),
+                key=f"acme/repository-{index}",
+                is_private=True,
+            )
+            for index in range(ROWS_PER_TABLE)
+        ]
+    )
+    await db.flush()
+    findings = (await db.scalars(select(Finding.id).where(Finding.org_id == tenant.org_id))).all()
+    place = await db.scalar(
+        select(ConnectionRepository.id).where(ConnectionRepository.org_id == tenant.org_id)
+    )
+    db.add_all(
+        [
+            FindingLink(
+                org_id=tenant.org_id,
+                finding_id=finding_id,
+                connection_id=connection_id,
+                place_id=place,
+                role="synced",
+                sync_status="in_sync",
+                external_id=str(1000 + index),
+                external_key=f"acme/repository-0#{index + 1}",
+                seen_state="open",
+            )
+            for index, finding_id in enumerate(findings)
+        ]
+    )
+    await db.flush()
+
+
+async def _write_dashboard_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """F20 (AC12): dashboards hang off the organization alone, so a project's deletion
+    leaves them; the last is deleted, which must not save it from the organization's."""
+    for index in range(ROWS_PER_TABLE):
+        dashboard = Dashboard(
+            org_id=tenant.org_id,
+            title=f"dashboard {index}",
+            definition={"schema_version": 1, "panels": []},
+            version=2,
+            created_by=tenant.user_id,
+            updated_by=tenant.user_id,
+            deleted_at=now if index == ROWS_PER_TABLE - 1 else None,
+        )
+        db.add(dashboard)
+        await db.flush()
+        db.add(
+            DashboardVersion(
+                dashboard_id=dashboard.id,
+                org_id=tenant.org_id,
+                version=1,
+                title=dashboard.title,
+                definition={"schema_version": 1, "panels": []},
+                saved_by=tenant.user_id,
+                saved_at=now,
+            )
+        )
+
+
+async def _write_ai_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """F3 Step 3: rows naming the tenant's person and project, so `SET NULL` on either could
+    not hide a row the organization's deletion left behind."""
+    db.add(
+        AIConnection(
+            org_id=tenant.org_id,
+            wire_format="openai_chat",
+            base_url="https://models.example.com/v1",
+            model="a-model",
+            consented_by=tenant.user_id,
+            consented_at=now,
+        )
+    )
+    db.add(
+        AIProjectOptOut(
+            org_id=tenant.org_id, project_id=tenant.project_id, created_by=tenant.user_id
+        )
+    )
+    for index in range(ROWS_PER_TABLE):
+        db.add(AIUsageMonth(org_id=tenant.org_id, month=date(2026, 1 + index, 1), used_tokens=10))
+        db.add(
+            AIRun(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                requested_by=tenant.user_id,
+                purpose="explain",
+                wire_format="openai_chat",
+                model="a-model",
+                provider_host="https://models.example.com",
+            )
+        )
     await db.flush()
 
 

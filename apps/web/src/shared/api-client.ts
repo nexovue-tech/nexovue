@@ -56,6 +56,8 @@ export class ApiError extends Error {
 
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
+const HTTP_UNPROCESSABLE = 422;
+const HTTP_TOO_MANY_REQUESTS = 429;
 
 /**
  * True when the API answered "no such resource in this organization".
@@ -76,6 +78,23 @@ export function isNotFound(error: unknown): boolean {
  */
 export function isConflict(error: unknown): boolean {
   return error instanceof ApiError && error.status === HTTP_CONFLICT;
+}
+
+/**
+ * True when the API refused what was sent as not valid: its problem names each field and
+ * why, which a screen shows in its own summary (F20's draft preview, T3.3).
+ */
+export function isInvalid(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_UNPROCESSABLE;
+}
+
+/**
+ * True when the API refused the request for the caller's limits. A screen that says so in
+ * its own words, as a dashboard does (F20, FR45), recognises one here; what to do about it
+ * everywhere else is `app/query-client.ts`'s.
+ */
+export function isRateLimited(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_TOO_MANY_REQUESTS;
 }
 
 export interface RequestOptions {

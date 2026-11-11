@@ -1,0 +1,833 @@
+"""The batch read against real Postgres and real ClickHouse (F20, T2.8, T2.12).
+
+AC14 for Step 2's kinds: over a fixed window, a `project_trend` panel's counts equal
+`/services/overview`'s points and a `service_trend` panel's equal `/services/trend`'s, to
+the digit, and latency within the tolerance T2.8's measurement recorded. T2.8 itself:
+a window holding more than 8,192 samples read twice through one route. AC8's read half
+(a support view reads and moves no "last opened"). AC21's rule over the rows the usage
+meter and the rollup write (the path through ingest is not run here: see
+`status.md`). AC84's two cases, with real slots held in the real limiter behind the
+real middleware: slots that free just before each 5 s wait ends give a 200 with panels
+inside the console's 25 s; a bucket that stays full gives a 429 at the end of its wait,
+and the handler never runs.
+
+Step 4 (T4.1, T4.2, T4.9): a `top_services_trend` panel chooses its lines in the store
+and from the displayed project alone, each line equal to that service's trend (AC26,
+AC14); a `node_trend` panel for a host late in the alphabet, on a fleet past the fleet
+read's row cap, draws from one statement bound to that node (AC58); and a live window's
+newest bucket, still filling, is marked so a steady line has no dip at its right edge at
+1 and 24 hours (AC114).
+
+The fixture writes its own rows to `endpoint_stats_1m` and `metrics_gauge`, under its own
+tenant, as the workers do, so nothing depends on demo traffic.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, Final
+from urllib.parse import urlsplit
+
+import clickhouse_connect
+import httpx
+import pytest
+from clickhouse_connect.driver.asyncclient import AsyncClient
+from live import require_stack
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from test_findings_cases_live import Team, _client, _reachable, _team, db  # noqa: F401
+
+from nexovue_api.auth.dependencies import get_tenant_repository
+from nexovue_api.auth.sessions import Session
+from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.data.postgres.models import Dashboard, ServiceLastSeen, User
+from nexovue_api.middleware.ratelimit import SCOPE_ORGANIZATION, SCOPE_SESSION
+from nexovue_api.ratelimit.limiter import RateLimiter
+from nexovue_api.ratelimit.policy import (
+    PANEL_READ_CLIENT_TIMEOUT_SECONDS,
+    TELEMETRY_TIER,
+    FixedPlanLimits,
+)
+from nexovue_api.settings import API_PREFIX
+
+READER_DSN: Final = os.environ.get(
+    "NEXOVUE_CLICKHOUSE_READER_DSN",
+    "clickhouse://nexovue_reader:nexovue_reader_dev@localhost:18123/nexovue",
+)
+WRITER_DSN: Final = os.environ.get(
+    "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
+)
+# The latency tolerance AC14 uses past 8,192 samples, set by T2.8 (below and `status.md`).
+# `quantilesMerge` keeps a reservoir of 8,192; merging more samples than that draws from
+# each state, and a read whose stored parts are not yet merged merges them in parallel,
+# in whatever order its threads finish, so two reads of one window can disagree. The
+# bound is that sampling error: for this fixture's p50 (30,000 samples, 0 to 996 ms) one
+# read's standard error is 0.95%, and 20 reads, taken as independent draws (which
+# overstates it), span more than 6.65% once in 10,000 runs. Measured: 2.6% over 450
+# parallel reads with merges held, 0.6% in CI run 42650457940. p95 and p99 sit tighter,
+# so one figure covers all three. At or under 8,192 samples none is dropped, and AC14
+# compares to the digit.
+LATENCY_TOLERANCE: Final = 0.07
+SLOT_WAIT: Final = 5.0
+T2_8_READS: Final = 20
+
+require_stack(
+    reachable=_reachable(READER_DSN.replace("clickhouse://", "http://"), 8123),
+    suite="apps/api/tests/test_dashboard_panels_live.py",
+    remedy="ClickHouse is not reachable — run `just dev`",
+)
+
+FIXTURE_INSERT: Final = """
+INSERT INTO endpoint_stats_1m
+    (tenant_id, project_id, service_name, span_kind, span_name, minute,
+     request_count, error_count, latency_quantiles)
+SELECT
+    {tenant:String}, {project:String}, {service:String}, 'SERVER', 'GET /orders',
+    toDateTime({start:DateTime}) + toIntervalMinute(intDiv(number, {per_minute:UInt32})) AS minute,
+    count(), countIf(number % 20 = 0),
+    quantilesState(0.5, 0.95, 0.99)(toFloat64(number % 997))
+FROM numbers({total:UInt32})
+GROUP BY minute
+"""
+
+
+async def _connect(dsn: str) -> AsyncClient:
+    parts = urlsplit(dsn)
+    return await clickhouse_connect.get_async_client(
+        host=parts.hostname or "localhost",
+        port=parts.port or 8123,
+        username=parts.username or "",
+        password=parts.password or "",
+        database=parts.path.lstrip("/"),
+    )
+
+
+@pytest.fixture
+async def reader() -> AsyncIterator[AsyncClient]:
+    client = await _connect(READER_DSN)
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+@pytest.fixture
+async def acme(db: AsyncSession) -> Team:  # noqa: F811
+    return await _team(db, f"Panels{uuid.uuid4().hex[:8]}")
+
+
+async def _seed(
+    team: Team,
+    service: str,
+    start: datetime,
+    *,
+    minutes: int,
+    per_minute: int,
+    project: str | None = None,
+) -> None:
+    writer = await _connect(WRITER_DSN)
+    try:
+        await writer.command(
+            FIXTURE_INSERT,
+            parameters={
+                "tenant": str(team.org_id),
+                "project": project or str(team.project_id),
+                "service": service,
+                "start": start.replace(tzinfo=None),
+                "per_minute": per_minute,
+                "total": minutes * per_minute,
+            },
+        )
+    finally:
+        await writer.close()
+
+
+def _hour_ago() -> datetime:
+    """A window that ended before the fixture's newest minute: settled, so comparable."""
+    return (datetime.now(UTC) - timedelta(hours=3)).replace(second=0, microsecond=0)
+
+
+def _definition(*panels: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "refresh_seconds": 60,
+        "default_range": None,
+        "service_picker": False,
+        "links": [],
+        "panels": list(panels),
+    }
+
+
+def _panel(panel_id: str, kind: str, **settings: Any) -> dict[str, Any]:
+    return {
+        "id": panel_id,
+        "kind": kind,
+        "title": None,
+        "width": 4,
+        "height": "medium",
+        "settings": settings,
+    }
+
+
+async def _dashboard(db: AsyncSession, team: Team, *panels: dict[str, Any]) -> Dashboard:  # noqa: F811
+    row = Dashboard(
+        org_id=team.org_id, title=f"Live {uuid.uuid4().hex[:6]}", definition=_definition(*panels)
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+def _app_client(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    person: User,
+    reader: AsyncClient,
+    *,
+    support_view: bool = False,
+) -> httpx.AsyncClient:
+    client, _ = _client(db, team, person, support_view=support_view)
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.dependency_overrides[get_tenant_repository] = lambda: TenantScopedRepository(
+        reader, tenant_id=str(team.org_id)
+    )
+    return client
+
+
+# -------------------------------------------------------------------- T2.8
+
+
+async def test_t2_8_a_merge_of_over_8192_samples_read_twice_differs_within_tolerance(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """ClickHouse calls `quantile` non-deterministic past its 8,192-sample reservoir, so
+    one route read twice can disagree. This records by how much (`status.md`)."""
+    start = _hour_ago()
+    # One insert a minute, so the window spans ten stored parts, read in parallel.
+    for minute in range(10):
+        await _seed(
+            acme, "checkout", start + timedelta(minutes=minute), minutes=1, per_minute=3_000
+        )
+    window = f"from={start.isoformat()}&to={(start + timedelta(minutes=10)).isoformat()}"
+    path = f"{API_PREFIX}/services/overview?project_id={acme.project_id}&{window}"
+
+    readings = []
+    for _ in range(T2_8_READS):
+        async with _app_client(db, acme, acme.member, reader) as client:
+            readings.append((await client.get(path.replace("+00:00", "Z"))).json()["totals"])
+
+    assert {reading["request_count"] for reading in readings} == {30_000}
+    for quantile in ("p50_ms", "p95_ms", "p99_ms"):
+        values = [reading[quantile] for reading in readings]
+        spread = (max(values) - min(values)) / max(values)
+        print(f"T2.8 {quantile}: {values} spread {spread:.5f}")  # noqa: T201
+        assert spread <= LATENCY_TOLERANCE
+
+
+# ------------------------------------------------------------------- AC14
+
+
+async def test_ac14_panels_equal_the_routes_they_came_from_over_a_fixed_window(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    start = _hour_ago()
+    await _seed(acme, "checkout", start, minutes=40, per_minute=50)
+    await _seed(acme, "payment", start, minutes=40, per_minute=30)
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_rate", "project_trend", signal="rate"),
+        _panel("p_errors", "project_trend", signal="errors"),
+        _panel("p_latency", "project_trend", signal="latency"),
+        _panel("p_checkout", "service_trend", service="checkout", signal="rate"),
+        _panel("p_checkout_errors", "service_trend", service="checkout", signal="errors"),
+    )
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="checkout",
+            last_seen_at=start,
+        )
+    )
+    await db.flush()
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=30)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        batch = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+        overview = (await client.get(f"{API_PREFIX}/services/overview", params=window)).json()
+        trend = (
+            await client.get(
+                f"{API_PREFIX}/services/trend", params=window | {"service_name": "checkout"}
+            )
+        ).json()
+
+    panels = batch["panels"]
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    assert _line(panels["p_rate"], "requests_per_minute") == [
+        point["requests_per_minute"] for point in overview["points"]
+    ]
+    assert _line(panels["p_errors"], "error_rate") == [
+        point["error_rate"] for point in overview["points"]
+    ]
+    # 2,400 samples in the window: under the reservoir, so to the digit (AC14).
+    for quantile in ("p50_ms", "p95_ms", "p99_ms"):
+        assert _line(panels["p_latency"], quantile) == [
+            point[quantile] for point in overview["points"]
+        ]
+    [checkout] = trend["services"]
+    assert _line(panels["p_checkout"], "requests_per_minute") == [
+        point["requests_per_minute"] for point in checkout["points"]
+    ]
+    assert _line(panels["p_checkout_errors"], "error_rate") == [
+        point["error_rate"] for point in checkout["points"]
+    ]
+    assert batch["window_start"] == overview["window_start"]
+
+
+def _line(panel: dict[str, Any], label: str) -> list[float]:
+    [series] = [series for series in panel["series"] if series["label"] == label]
+    return [value for _, value in series["points"]]
+
+
+# ------------------------------------------------------------------ AC21
+
+
+async def test_ac21_never_reported_reads_not_in_project_and_quiet_reads_empty(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """The rule over what the meter writes (`service_last_seen`) and the rollup holds."""
+    seen = datetime.now(UTC) - timedelta(hours=5)
+    await _seed(acme, "quiet", seen.replace(second=0, microsecond=0), minutes=1, per_minute=5)
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id, project_id=acme.project_id, service_name="quiet", last_seen_at=seen
+        )
+    )
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_quiet", "service_trend", service="quiet", signal="rate"),
+        _panel("p_never", "service_trend", service="never-reported", signal="rate"),
+    )
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        batch = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params={
+                    "dashboard_id": str(dashboard.id),
+                    "project_id": str(acme.project_id),
+                    "range": "1h",
+                },
+            )
+        ).json()
+
+    assert batch["panels"]["p_quiet"]["state"] == "empty"
+    assert batch["panels"]["p_quiet"]["last_seen_at"] is not None
+    assert batch["panels"]["p_never"] == {"state": "not_in_project", "kind": "service_trend"}
+
+
+# ------------------------------------------------------------------- AC8
+
+
+async def test_ac8_a_support_view_reads_the_panels_and_moves_no_last_opened(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    dashboard = await _dashboard(db, acme, _panel("p_rate", "project_trend", signal="rate"))
+    params = {"dashboard_id": str(dashboard.id), "project_id": str(acme.project_id), "range": "1h"}
+
+    async with _app_client(db, acme, acme.owner, reader, support_view=True) as client:
+        viewed = await client.get(f"{API_PREFIX}/dashboard-panels/read", params=params)
+    await db.refresh(dashboard)
+    assert viewed.status_code == 200
+    assert dashboard.last_viewed_at is None
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        assert (
+            await client.get(f"{API_PREFIX}/dashboard-panels/read", params=params)
+        ).status_code == 200
+    await db.refresh(dashboard)
+    assert dashboard.last_viewed_at is not None
+
+
+# --------------------------------------------------------- T3.1, AC135
+
+
+async def test_ac135_a_draft_reads_what_the_saved_dashboard_reads_and_a_viewer_has_none(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """`POST /preview` shares the saved read's service: equal panels over one fixed
+    window, and only for someone who may edit (FR10)."""
+    start = _hour_ago()
+    await _seed(acme, "checkout", start, minutes=40, per_minute=50)
+    panels = (
+        _panel("p_rate", "project_trend", signal="rate"),
+        _panel("p_checkout", "service_trend", service="checkout", signal="latency"),
+    )
+    dashboard = await _dashboard(db, acme, *panels)
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="checkout",
+            last_seen_at=start,
+        )
+    )
+    await db.flush()
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=30)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+    draft = window | {"definition": _definition(*panels)}
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        saved = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+        previewed = await client.post(f"{API_PREFIX}/dashboard-panels/preview", json=draft)
+        one = await client.post(
+            f"{API_PREFIX}/dashboard-panels/preview", json=draft | {"panels": ["p_checkout"]}
+        )
+        refused = await client.post(
+            f"{API_PREFIX}/dashboard-panels/preview",
+            json=draft | {"definition": {**_definition(*panels), "panels": [{"kind": "query"}]}},
+        )
+    async with _app_client(db, acme, acme.viewer, reader) as client:
+        viewer = await client.post(f"{API_PREFIX}/dashboard-panels/preview", json=draft)
+
+    assert previewed.status_code == 200, previewed.text
+    assert {panel["state"] for panel in saved["panels"].values()} == {"ok"}
+    for panel_id in ("p_rate", "p_checkout"):
+        assert previewed.json()["panels"][panel_id]["series"] == saved["panels"][panel_id]["series"]
+    assert list(one.json()["panels"]) == ["p_checkout"]
+    assert refused.status_code == 422
+    assert viewer.status_code == 403
+
+
+# ------------------------------------------------------------------ AC84
+
+
+class _Sessions:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    async def peek(self, token: str) -> Session | None:
+        return self._session
+
+
+def _limited(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    reader: AsyncClient,
+) -> tuple[httpx.AsyncClient, RateLimiter]:
+    """The app behind the real middleware, counting the member in the real limiter."""
+    client = _app_client(db, team, team.member, reader)
+    app = client._transport.app  # type: ignore[attr-defined]
+    limiter = RateLimiter(None, instances=1)  # type: ignore[arg-type]
+    app.state.rate_limiter = limiter
+    app.state.plan_limits = FixedPlanLimits()
+    app.state.resources = SimpleNamespace(
+        sessions=_Sessions(
+            Session(
+                user_id=str(team.member.id), org_id=str(team.org_id), created_at=datetime.now(UTC)
+            )
+        )
+    )
+    client.headers["Authorization"] = "Bearer a-session-token"
+    return client, limiter
+
+
+async def _fill(limiter: RateLimiter, scope: str, identity: str, slots: int) -> None:
+    for _ in range(slots):
+        assert await limiter.acquire_slot(
+            pool=TELEMETRY_TIER.quota.name, scope=scope, identity=identity, max_concurrent=slots
+        )
+
+
+def _free_at(limiter: RateLimiter, scope: str, identity: str, seconds: float) -> asyncio.Task[None]:
+    async def free() -> None:
+        await asyncio.sleep(seconds)
+        await limiter.release_slot(pool=TELEMETRY_TIER.quota.name, scope=scope, identity=identity)
+
+    return asyncio.create_task(free())
+
+
+async def test_ac84a_slots_freeing_before_each_wait_ends_still_answer_with_panels(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    await _seed(acme, "checkout", _hour_ago(), minutes=5, per_minute=5)
+    dashboard = await _dashboard(db, acme, _panel("p_rate", "project_trend", signal="rate"))
+    client, limiter = _limited(db, acme, reader)
+    person, organization = f"user:{acme.member.id}", str(acme.org_id)
+    assert TELEMETRY_TIER.max_concurrent and TELEMETRY_TIER.org_max_concurrent
+    await _fill(limiter, SCOPE_SESSION, person, TELEMETRY_TIER.max_concurrent)
+    await _fill(limiter, SCOPE_ORGANIZATION, organization, TELEMETRY_TIER.org_max_concurrent)
+    freeing = [
+        _free_at(limiter, SCOPE_SESSION, person, SLOT_WAIT - 0.3),
+        _free_at(limiter, SCOPE_ORGANIZATION, organization, 2 * SLOT_WAIT - 0.6),
+    ]
+    started = time.monotonic()
+
+    async with client:
+        answer = await client.get(
+            f"{API_PREFIX}/dashboard-panels/read",
+            params={
+                "dashboard_id": str(dashboard.id),
+                "project_id": str(acme.project_id),
+                "range": "24h",
+            },
+            timeout=PANEL_READ_CLIENT_TIMEOUT_SECONDS,
+        )
+    took = time.monotonic() - started
+    await asyncio.gather(*freeing)
+
+    assert answer.status_code == 200, answer.text
+    assert 2 * SLOT_WAIT - 1.5 < took < PANEL_READ_CLIENT_TIMEOUT_SECONDS
+    assert answer.json()["panels"]["p_rate"]["state"] in {"ok", "empty"}
+
+
+@pytest.mark.parametrize("full", [SCOPE_SESSION, SCOPE_ORGANIZATION])
+async def test_ac84b_a_bucket_that_stays_full_answers_429_and_the_handler_never_runs(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+    full: str,
+) -> None:
+    dashboard = await _dashboard(db, acme, _panel("p_rate", "project_trend", signal="rate"))
+    client, limiter = _limited(db, acme, reader)
+    identity = f"user:{acme.member.id}" if full == SCOPE_SESSION else str(acme.org_id)
+    slots = (
+        TELEMETRY_TIER.max_concurrent
+        if full == SCOPE_SESSION
+        else TELEMETRY_TIER.org_max_concurrent
+    )
+    assert slots is not None
+    await _fill(limiter, full, identity, slots)
+    started = time.monotonic()
+
+    async with client:
+        answer = await client.get(
+            f"{API_PREFIX}/dashboard-panels/read",
+            params={
+                "dashboard_id": str(dashboard.id),
+                "project_id": str(acme.project_id),
+                "range": "1h",
+            },
+            timeout=PANEL_READ_CLIENT_TIMEOUT_SECONDS,
+        )
+    took = time.monotonic() - started
+
+    assert answer.status_code == 429
+    assert SLOT_WAIT - 0.5 < took < SLOT_WAIT + 2
+    stamped = await db.scalar(select(Dashboard.last_viewed_at).where(Dashboard.id == dashboard.id))
+    assert stamped is None, "the handler ran"
+
+
+# ------------------------------------------------------------ T4.1, AC26
+
+
+async def test_ac26_top_services_chooses_in_the_store_from_the_displayed_project_only(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """Another project's services fail far more, and none of them is chosen. Each line is
+    that service's own trend, and the lines are the services list's first rows (AC14)."""
+    start = _hour_ago()
+    for rank, service in enumerate(("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")):
+        await _seed(acme, service, start, minutes=30, per_minute=(rank + 1) * 20)
+    elsewhere = str(uuid.uuid4())
+    for noisy in ("noisy-1", "noisy-2", "noisy-3"):
+        await _seed(acme, noisy, start, minutes=30, per_minute=2_000, project=elsewhere)
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_top_errors", "top_services_trend", signal="errors", order="worst", count=3),
+        _panel("p_top_rate", "top_services_trend", signal="rate", order="worst", count=3),
+        _panel("p_top_five", "top_services_trend", signal="rate", order="slowest", count=5),
+    )
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=30)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        batch = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+        ranked = (await client.get(f"{API_PREFIX}/services", params=window | {"limit": 3})).json()
+        trends = {
+            name: (
+                await client.get(
+                    f"{API_PREFIX}/services/trend", params=window | {"service_name": name}
+                )
+            ).json()["services"][0]["points"]
+            for name in ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+        }
+
+    panels = batch["panels"]
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    chosen = {series["service"] for series in panels["p_top_errors"]["series"]}
+    assert chosen == {"foxtrot", "echo", "delta"}
+    assert chosen == {row["service_name"] for row in ranked["services"]}
+    assert len(panels["p_top_five"]["series"]) == 5
+    every_line = [series for panel in panels.values() for series in panel["series"]]
+    assert not {series["service"] for series in every_line} & {"noisy-1", "noisy-2", "noisy-3"}
+    for series in panels["p_top_errors"]["series"]:
+        assert series["label"] == "error_rate"
+        assert [value for _, value in series["points"]] == [
+            point["error_rate"] for point in trends[series["service"]]
+        ]
+    for series in panels["p_top_rate"]["series"]:
+        assert [value for _, value in series["points"]] == [
+            point["requests_per_minute"] for point in trends[series["service"]]
+        ]
+
+
+# ------------------------------------------------------------ T4.2, AC58
+
+FLEET_INSERT: Final = """
+INSERT INTO metrics_gauge
+    (timestamp, start_timestamp, received_at, tenant_id, project_id, service_name,
+     scope_name, scope_version, metric_name, metric_unit, metric_description,
+     resource_attrs, attrs, flags, value)
+SELECT
+    toDateTime64({start:DateTime}, 3) + toIntervalMinute(number % {minutes:UInt32}) AS at,
+    at, at, {tenant:String}, {project:String}, 'otelcol', '', '',
+    'system.cpu.utilization', '1', '',
+    CAST(
+        concat(
+            '{"host.name":"',
+            {prefix:String},
+            leftPad(toString(intDiv(number, {minutes:UInt32})), 4, '0'),
+            '"}'
+        ) AS JSON
+    ),
+    CAST('{"cpu":0,"state":"user"}' AS JSON), 0,
+    {value:Float64}
+FROM numbers({total:UInt32})
+"""
+
+
+async def _seed_fleet(
+    team: Team, start: datetime, *, prefix: str, hosts: int, minutes: int, value: float
+) -> None:
+    writer = await _connect(WRITER_DSN)
+    try:
+        await writer.command(
+            FLEET_INSERT,
+            parameters={
+                "start": start.replace(tzinfo=None),
+                "minutes": minutes,
+                "tenant": str(team.org_id),
+                "project": str(team.project_id),
+                "prefix": prefix,
+                "total": hosts * minutes,
+                "value": value,
+            },
+        )
+    finally:
+        await writer.close()
+
+
+class _Recorded(TenantScopedRepository):
+    """The tenant's repository, keeping every statement it is asked to run."""
+
+    def __init__(self, client: AsyncClient, tenant_id: str, ran: list[tuple[str, dict[str, Any]]]):
+        super().__init__(client, tenant_id=tenant_id)
+        self._ran = ran
+
+    async def query(
+        self, sql: str, parameters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        self._ran.append((sql, dict(parameters or {})))
+        return await super().query(sql, parameters)
+
+
+async def test_ac58_a_node_late_in_the_alphabet_on_a_fleet_past_the_row_cap_draws(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    from nexovue_api.infrastructure.queries import NODE_TREND_SQL
+    from nexovue_api.infrastructure.service import MAX_SERIES
+
+    start = _hour_ago()
+    minutes = 60
+    fleet = MAX_SERIES // minutes + 10  # one row a host a minute: past the fleet read's cap
+    await _seed_fleet(acme, start, prefix="host-", hosts=fleet, minutes=minutes, value=0.5)
+    await _seed_fleet(acme, start, prefix="zz-late-", hosts=1, minutes=minutes, value=0.25)
+    late = {"host": "zz-late-0000", "container": "", "reporter": "", "reporter_instance": ""}
+    first = late | {"host": "host-0000"}
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_late", "node_trend", node=late, metric="system.cpu.utilization"),
+        _panel("p_first", "node_trend", node=first, metric="system.cpu.utilization"),
+    )
+    window = {
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=minutes)).isoformat(),
+        "project_id": str(acme.project_id),
+    }
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        fleet_read = (await client.get(f"{API_PREFIX}/infrastructure/trend", params=window)).json()
+        app = client._transport.app  # type: ignore[attr-defined]
+        app.dependency_overrides[get_tenant_repository] = lambda: _Recorded(
+            reader, str(acme.org_id), ran
+        )
+        batch = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params=window | {"dashboard_id": str(dashboard.id)},
+            )
+        ).json()
+
+    # The fleet read is cut alphabetically by host, and the late host is not in it.
+    assert fleet_read["truncated"] is True
+    assert "zz-late-0000" not in {trend["host"] for trend in fleet_read["trends"]}
+    panel = batch["panels"]["p_late"]
+    assert panel["state"] == "ok"
+    [line] = panel["series"]
+    assert line["label"] == "system.cpu.utilization"
+    assert [value for _, value in line["points"]] == [0.25] * minutes
+    # One statement for each node, bound to it: never the fleet read.
+    statements = [parameters for sql, parameters in ran if sql == NODE_TREND_SQL]
+    assert len(ran) == len(statements) == 2
+    assert {parameters["host"] for parameters in statements} == {"zz-late-0000", "host-0000"}
+    # The node the fleet read does reach reads the same line there as here (AC14).
+    [route] = [
+        trend["points"]
+        for trend in fleet_read["trends"]
+        if trend["host"] == "host-0000" and trend["metric_name"] == "system.cpu.utilization"
+    ]
+    assert [value for _, value in batch["panels"]["p_first"]["series"][0]["points"]] == [
+        point["value"] for point in route
+    ]
+
+
+# ------------------------------------------------------------ T4.9, AC114
+
+STEADY_PER_MINUTE: Final = 60
+LIVE_RANGES: Final = ("1h", "24h")
+MINUTE_ROLLOVER_ATTEMPTS: Final = 3
+
+
+async def test_ac114_a_live_windows_filling_bucket_is_marked_and_no_whole_bucket_dips(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """A steady service, its current minute half-written as one still arriving is. The
+    newest bucket of a live window is marked `incomplete_from`, and every whole bucket
+    before it reads the steady rate: drop the marked one, and the right edge is flat."""
+    for attempt in range(MINUTE_ROLLOVER_ATTEMPTS):
+        minute = datetime.now(UTC).replace(second=0, microsecond=0)
+        service = f"steady-{attempt}"
+        await _seed(
+            acme,
+            service,
+            minute - timedelta(hours=25),
+            minutes=25 * 60,
+            per_minute=STEADY_PER_MINUTE,
+        )
+        await _seed(acme, service, minute, minutes=1, per_minute=STEADY_PER_MINUTE // 2)
+        dashboard = await _dashboard(
+            db, acme, _panel(f"p_{attempt}", "service_trend", service=service, signal="rate")
+        )
+        answers = {}
+        async with _app_client(db, acme, acme.member, reader) as client:
+            for range_id in LIVE_RANGES:
+                answers[range_id] = (
+                    await client.get(
+                        f"{API_PREFIX}/dashboard-panels/read",
+                        params={
+                            "dashboard_id": str(dashboard.id),
+                            "project_id": str(acme.project_id),
+                            "range": range_id,
+                        },
+                    )
+                ).json()["panels"][f"p_{attempt}"]
+        # A minute that turned over mid-test makes the half-written one whole: try again.
+        if datetime.now(UTC).replace(second=0, microsecond=0) == minute:
+            break
+    else:
+        pytest.fail("the minute turned over during every attempt")
+
+    for range_id, panel in answers.items():
+        [line] = panel["series"]
+        buckets = [datetime.fromisoformat(at) for at, _ in line["points"]]
+        rates = [rate for _, rate in line["points"]]
+        newest = buckets[-1]
+        assert panel["incomplete_from"] is not None, range_id
+        assert datetime.fromisoformat(panel["incomplete_from"]) == newest, range_id
+        assert newest <= minute < newest + timedelta(seconds=panel["bucket_seconds"]), range_id
+        # The marked bucket is the one that would dip; every whole one reads steady. At
+        # 24 hours the first bucket starts before the window and is cut by it.
+        whole = rates[1:-1] if range_id == "24h" else rates[:-1]
+        assert whole and set(whole) == {STEADY_PER_MINUTE}, range_id
+        assert rates[-1] < STEADY_PER_MINUTE, range_id
+
+
+async def test_a_fixed_windows_newest_bucket_is_not_marked(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    start = _hour_ago()
+    await _seed(acme, "settled", start, minutes=30, per_minute=STEADY_PER_MINUTE)
+    dashboard = await _dashboard(
+        db, acme, _panel("p_settled", "service_trend", service="settled", signal="rate")
+    )
+    async with _app_client(db, acme, acme.member, reader) as client:
+        panel = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read",
+                params={
+                    "dashboard_id": str(dashboard.id),
+                    "project_id": str(acme.project_id),
+                    "from": start.isoformat(),
+                    "to": (start + timedelta(minutes=30)).isoformat(),
+                },
+            )
+        ).json()["panels"]["p_settled"]
+    assert panel["state"] == "ok"
+    assert panel["incomplete_from"] is None

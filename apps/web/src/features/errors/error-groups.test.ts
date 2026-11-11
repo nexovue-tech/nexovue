@@ -4,6 +4,8 @@ import type { ErrorGroupSummary } from "./api";
 import {
   countNewInWindow,
   DEPLOY_IS_NOT_A_CAUSE,
+  deployCell,
+  deployLines,
   describeErrors,
   describeOccurrences,
   describePrecedingDeploy,
@@ -31,6 +33,7 @@ function group(overrides: Partial<ErrorGroupSummary> = {}): ErrorGroupSummary {
     sample_source: "log",
     // The ordinary case: a project that posts no deploy notifications.
     preceding_deploy: null,
+    deploy_coverage: null,
     ...overrides,
   };
 }
@@ -220,5 +223,51 @@ describe("describePrecedingDeploy", () => {
 describe("DEPLOY_IS_NOT_A_CAUSE", () => {
   it("says what the link is not, because a reader who guesses reverts the wrong release", () => {
     expect(DEPLOY_IS_NOT_A_CAUSE).toContain("not evidence that it caused this");
+  });
+});
+
+describe("what we hear about deploys, in the cell and the panel (F28 AC73, D23)", () => {
+  const deployed = {
+    version: "2026.09.06-1",
+    service_name: "demo-payments",
+    deployed_at: "2026-08-28T19:54:31.447Z",
+  };
+
+  it("puts short words in the cell, the unknown mark only for an unread value", () => {
+    const cells = (
+      ["deploys_and_versions", "deploys_only", "versions_only", "none", null] as const
+    ).map((deploy_coverage) => deployCell(group({ deploy_coverage })));
+    expect(cells).toEqual(["none before", "none before", "none reported", "not told", "—"]);
+    expect(deployCell(group({ deploy_coverage: "deploys_only", preceding_deploy: deployed }))).toBe(
+      "after 2026.09.06-1",
+    );
+  });
+
+  it("states a different line in the panel at every coverage value", () => {
+    const lines = (["deploys_and_versions", "deploys_only", "versions_only", "none"] as const).map(
+      (deploy_coverage) => deployLines(group({ deploy_coverage })).join(" "),
+    );
+    expect(lines).toEqual([
+      "No deploy of these services was reported before this appeared. Deploys reported by your CI, versions seen in traffic.",
+      "No deploy of these services was reported before this appeared. Deploys reported by your CI. No version in traffic, so we cannot split old from new.",
+      "No deploy of these services was reported before this appeared. Versions seen in traffic. Your CI reports no deploys, so same-version redeploys and config changes do not appear.",
+      "We receive no deploy information for these services.",
+    ]);
+    expect(new Set(lines).size).toBe(4);
+  });
+
+  it("names the deploy before, with what it is not", () => {
+    const lines = deployLines(
+      group({
+        first_seen: "2026-08-28T19:58:31.447Z",
+        preceding_deploy: deployed,
+        deploy_coverage: "deploys_and_versions",
+      }),
+    );
+    expect(lines).toEqual([
+      "First seen 4 minutes after deploy 2026.09.06-1 on demo-payments.",
+      "Deploys reported by your CI, versions seen in traffic.",
+      DEPLOY_IS_NOT_A_CAUSE,
+    ]);
   });
 });

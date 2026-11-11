@@ -151,6 +151,56 @@ CROSS_TENANT_STATEMENTS: Final = (
         "what establishes the tenant: the project job is given a project id and reads its "
         "organization from the project's own row, never from the caller (design 2.1, m6)",
     ),
+    # Reliability targets (F19), handed out by the detection coordinator each minute.
+    _across(
+        "slos.job",
+        "_PROJECTS_TO_JUDGE",
+        "the SLO hand-out: every organization's projects holding a live target, longest-"
+        "waiting first, so each is handed its own judging (F19 design, 'Which projects get "
+        "a job', AC65)",
+    ),
+    _across(
+        "slos.job",
+        "_PROJECTS_TO_COUNT",
+        f"{_SWEEP}: the projects whose recent days are due a count (F19, by what is due)",
+    ),
+    _across(
+        "slos.job",
+        "_TARGETS_TO_READ",
+        f"{_SWEEP}: the targets whose history is behind their definition (F19 AC64)",
+    ),
+    _across(
+        "slos.job",
+        "_TARGET_PROJECT",
+        "what establishes the tenant: a history job is given a target id and reads its "
+        "project, and through it the organization, from the target's own row (F6's m6)",
+    ),
+    _across(
+        "slos.notices",
+        "_BLIND_PROJECTS",
+        f"{_SWEEP}: the projects whose enabled targets are not being judged, each told by "
+        "its own `org_id` (F19 FR13b, D58)",
+    ),
+    _across(
+        "slos.notices",
+        "_OPEN_BLIND",
+        f"{_SWEEP}: every open 'not being judged' notice, resolved by its own `org_id` once "
+        "its project is judged again (F19 FR13b, D58)",
+    ),
+    _across(
+        "slos.retention",
+        "_DUE_FOR_PURGE",
+        f"{_SWEEP}: deleted targets past restoring, purged one by one, each in its own "
+        "transaction binding its own `org_id` (F19 FR31)",
+    ),
+    # Releases seen in traffic (F28 T1.13, D48): the sweep finds whose services have moved;
+    # each project's job then binds the `org_id` read from the project's own row.
+    _across(
+        "releases.sync",
+        "_MOVED_SINCE_SYNC",
+        "the release sweep's hand-out: every organization's projects whose services have sent "
+        "anything since their last sync, so each is handed its own job (F28 design 3, step 1)",
+    ),
     # The job queue and its metrics.
     _across("jobs.queue", "_CLAIM", "a worker claims due jobs of every organization"),
     _across("jobs.queue", "_FINISH", "a claimed job, by its id and this worker's lease"),
@@ -163,9 +213,20 @@ CROSS_TENANT_STATEMENTS: Final = (
         "_DETECTION_PROJECTS",
         "an install-wide gauge: projects whose detection is behind",
     ),
+    _across(
+        "metrics",
+        "_CONNECTIONS_ACTIVE",
+        "an install-wide gauge, an EXISTS only: whether any tracker connection is live, so "
+        "a missing scheduler-connections pages (F22 AC123, design *Observability*)",
+    ),
     # Alerting (F21).
     _across("alerts.outbox", "_CLAIMABLE_CHANNELS", f"{_SWEEP}: the delivery claim"),
     _across("alerts.outbox", "_PRUNE_ATTEMPTS", f"{_SWEEP}: delivery attempts past keeping"),
+    _across(
+        "alerts.outbox",
+        "_CHANNELS_HOLDING",
+        f"{_SWEEP}: channels holding withheld rows to release (F19 FR23)",
+    ),
     _across("alerts.health", "_TO_REPORT", f"{_SWEEP}: channels newly failing"),
     _across("alerts.incidents", "_DUE_REPEATS", f"{_SWEEP}: incidents due a repeat"),
     _across("alerts.rules", "_RULES_OF_KINDS", f"{_SWEEP}: the rules a sweep evaluates"),
@@ -188,6 +249,48 @@ CROSS_TENANT_STATEMENTS: Final = (
         "_RECORD_FAILURE",
         "a connector by its own id, from `_ACTIVE_INTEGRATIONS`; the poll that reports it "
         "carries no organization to bind",
+    ),
+    # Cases (F22 T2.6): each step's first read finds the cases that need it in
+    # every organization; each case is then its own transaction, binding its own
+    # `org_id` (design, *Keeping and ending*).
+    _across(
+        "cases",
+        "_CLEARABLE_ASSIGNEES",
+        f"{_SWEEP}: active cases whose assignee left or became a viewer (AC10)",
+    ),
+    _across("cases", "_MISSED_JOINS", f"{_SWEEP}: open findings that missed their join (AC17)"),
+    _across(
+        "cases",
+        "_LEFT_ON_RESOLVED",
+        f"{_SWEEP}: open findings left on a resolved root (AC17)",
+    ),
+    _across("cases", "_IDLE_CASES", f"{_SWEEP}: active cases idle for 90 days (BR13)"),
+    _across(
+        "cases",
+        "_UNTOUCHED_CASES",
+        f"{_SWEEP}: untouched cases 72 hours after recovery (FR49)",
+    ),
+    _across("cases", "_DUE_WARNINGS", f"{_SWEEP}: active cases owed their idle warning (FR26)"),
+    # What the cases sweep sends (F22 T4.6): each first read finds what is owed in every
+    # organization; each row is then taken in its own transaction binding its `org_id`.
+    _across(
+        "case_emails",
+        "_OWED",
+        f"{_SWEEP}: the case emails owed, oldest first, each sent once (D90, AC94)",
+    ),
+    _across(
+        "case_emails",
+        "_TO_TELL",
+        f"{_SWEEP}: the connections whose admins are owed a failure or expiry email (FR33)",
+    ),
+    # Tracker sync (F22 T4.5): the sweep finds which connections have a due link or a due
+    # refresh; each job it adds carries the connection's own `org_id`, and the job binds
+    # it on every read (AC129).
+    _across(
+        "connections.sync",
+        "_CONNECTIONS_DUE",
+        f"{_SWEEP}: the connections with a due link or a due hourly refresh, so each is "
+        "handed its own job (design, *The job*)",
     ),
     # Billing and erasure.
     _across("billing", "_END_LAPSED_GRACE", f"{_SWEEP}: subscriptions whose grace ended"),
@@ -429,6 +532,18 @@ def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
     modules = {statement.module for statement in SCHEDULER_STATEMENTS}
     assert "nexovue_scheduler.detection.project_job" in modules
     assert "nexovue_platform.detection" in modules
+    # F22 T2.2: the case writers are walked, so their statements are held too.
+    assert {
+        "nexovue_platform.cases",
+        "nexovue_scheduler.detection.events",
+        "nexovue_scheduler.cases",
+    } <= modules
+    # F28 T1.13: the release sync's statements are held too.
+    assert "nexovue_scheduler.releases.sync" in modules
+    # F22 T3.6: the connection jobs bind the job's own organization on every read (AC129).
+    assert "nexovue_scheduler.connections.tasks" in modules
+    # F22 T4.5: and so does the sync, its sweep aside.
+    assert {"nexovue_scheduler.connections.sync", "nexovue_scheduler.connections.store"} <= modules
 
 
 def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None:

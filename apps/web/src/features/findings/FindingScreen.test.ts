@@ -3,8 +3,14 @@
 import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
+
+import type { TestRole } from "@/shared/identity.test-util";
+
+import type { Handler } from "./render-harness.test-util";
 import {
   buttons,
+  explanation,
   finding,
   json,
   minutesAgo,
@@ -34,7 +40,6 @@ async function heading(container: HTMLElement) {
 }
 
 const ACTIONS = [
-  "Acknowledge",
   "False alarm",
   "This is the new normal",
   "Snooze this service",
@@ -42,6 +47,17 @@ const ACTIONS = [
 ];
 
 describe("the finding page", () => {
+  it("offers the way back to the feed, which is the front door at / (FR1)", async () => {
+    stubApi(finding());
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const back = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => (link.textContent ?? "").trim() === "All findings",
+    );
+    expect(back?.getAttribute("href")).toBe("/");
+  });
+
   it("leads with the sentence, then each signal's values, comparison and readings (AC38)", async () => {
     stubApi(finding());
     const { container } = await mountFinding();
@@ -88,19 +104,21 @@ describe("the finding page", () => {
     expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([]);
   });
 
-  it("offers a member acknowledge, false alarm and a snooze, but not the new normal or a mute (AC39, FR22)", async () => {
+  it("offers a member false alarm and a snooze, but not the new normal or a mute (AC39, FR22)", async () => {
     stubApi(finding(), { role: "member" });
     const { container } = await mountFinding();
 
     await heading(container);
     expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([
-      "Acknowledge",
       "False alarm",
       "Snooze this service",
     ]);
+    // D47: Take this replaced Acknowledge, in the case's own group.
+    expect(buttons(container)).toContain("Take this");
+    expect(buttons(container)).not.toContain("Acknowledge");
   });
 
-  it("offers an admin all five", async () => {
+  it("offers an admin all four", async () => {
     stubApi(finding(), { role: "admin" });
     const { container } = await mountFinding();
 
@@ -178,7 +196,10 @@ describe("the finding page", () => {
 
     await press(container, "False alarm");
     expect(readable(container)).toContain("only an admin's mark returns them");
-    const reason = container.querySelector("textarea");
+    // The note box is a textarea too (F22); the reason field is the capped one.
+    const reason = [...container.querySelectorAll("textarea")].find(
+      (field) => field.maxLength === 1000,
+    );
     if (!reason) throw new Error("no reason field");
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -213,17 +234,14 @@ describe("the finding page", () => {
       {
         role: "member",
         extra: {
-          "POST /findings/f-1/acknowledge": problem(
-            409,
-            "This finding has closed or was already acknowledged since you opened it.",
-          ),
+          "PATCH /findings/f-1/case": problem(409, "This case changed since you opened it."),
         },
       },
     );
     const { container } = await mountFinding();
     await heading(container);
 
-    await press(container, "Acknowledge");
+    await press(container, "Take this");
 
     await waitFor(
       () => readable(container).includes("It is shown as it is now."),
@@ -253,10 +271,7 @@ describe("the finding page", () => {
     expect(readable(container)).toContain("Services affected");
     expect(container.querySelector('a[href="/services/cart"]')).not.toBeNull();
     expect(readable(container)).not.toContain("The chart is no longer available");
-    expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([
-      "Acknowledge",
-      "False alarm",
-    ]);
+    expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual(["False alarm"]);
   });
 
   it("opens a project finding's services in the finding's own project", async () => {
@@ -437,5 +452,840 @@ describe("the finding page", () => {
     const status = container.querySelector('section[aria-label="What you can do"] [role="status"]');
     expect(status).not.toBeNull();
     expect(readable(status as Element)).toBe("");
+  });
+});
+
+describe("the case on the page (F22, T1.12)", () => {
+  const investigating = () =>
+    finding({
+      case_state: "investigating",
+      case_opened_at: minutesAgo(20),
+      case_taken_at: minutesAgo(20),
+      assignee_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0001",
+      assignee_name: "owner",
+    });
+
+  it("puts the work before the evidence, in one DOM order (D86)", async () => {
+    stubApi(finding(), { role: "member" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const text = readable(container);
+    expect(text.indexOf("The case")).toBeGreaterThan(-1);
+    expect(text.indexOf("The case")).toBeLessThan(text.indexOf("The signal"));
+    expect(text.indexOf("The signal")).toBeLessThan(text.indexOf("What moved"));
+    expect(container.querySelector('a[href="#finding-evidence"]')).not.toBeNull();
+  });
+
+  it("takes a finding with one click and lands focus on the case line", async () => {
+    const api = stubApi(finding(), {
+      role: "member",
+      extra: {
+        "PATCH /findings/f-1/case": json({
+          finding: investigating(),
+          email_outcome: "none",
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "Take this");
+
+    expect(api.to("PATCH", "/findings/f-1/case")[0]?.body).toEqual({
+      case_state: "investigating",
+    });
+    await waitFor(() => readable(container).includes("Yours."), "the done line");
+    const line = container.querySelector('[data-testid="case-line"]');
+    await waitFor(() => document.activeElement === line, "focus on the case line");
+  });
+
+  it("renders a note's hostile text as those exact characters, nothing clickable (AC18)", async () => {
+    const hostile = "<script>alert(1)</script> [link](https://evil.example) https://evil.example";
+    stubApi(investigating(), {
+      role: "member",
+      extra: {
+        "GET /findings/f-1/timeline": json({
+          events: [
+            {
+              id: "e1",
+              kind: "note_added",
+              at: minutesAgo(5),
+              actor_kind: "person",
+              actor_id: "someone-else",
+              actor_name: "Asha",
+              detail: { note_id: "n1" },
+              note_body: hostile,
+            },
+          ],
+          next_before: null,
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await waitFor(() => readable(container).includes("alert(1)"), "the note's text");
+    expect(readable(container)).toContain("[link](https://evil.example)");
+    expect(container.querySelector("script")).toBeNull();
+    const links = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "");
+    expect(links.some((href) => href.includes("evil.example"))).toBe(false);
+  });
+
+  it("sends a note with the button or Ctrl+Enter, and a failed send keeps the draft (AC104)", async () => {
+    let fail = true;
+    const api = stubApi(finding(), {
+      role: "member",
+      extra: {
+        "POST /findings/f-1/notes": (call) => {
+          if (fail) {
+            return new Response(JSON.stringify({ status: 400, detail: "refused" }), {
+              status: 400,
+              headers: { "content-type": "application/problem+json" },
+            });
+          }
+          return new Response(
+            JSON.stringify({
+              note: {
+                id: "n1",
+                author_id: "me",
+                author_name: "member",
+                body: (call.body as { body: string }).body,
+                created_at: minutesAgo(0),
+              },
+              finding: investigating(),
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const box = [...container.querySelectorAll("textarea")].find((f) => f.maxLength !== 1000);
+    if (!box) throw new Error("no note box");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(box, "tried restarting");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(container, "Add note");
+    await waitFor(() => readable(container).includes("It is still here"), "the kept draft line");
+    expect(box.value).toBe("tried restarting");
+
+    fail = false;
+    await act(async () => {
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+      );
+    });
+    await settle();
+    await waitFor(() => box.value === "", "the sent draft clearing");
+    expect(api.to("POST", "/findings/f-1/notes").length).toBe(2);
+  });
+
+  it("refuses a 4,001-character note inline, sending nothing (AC104)", async () => {
+    const api = stubApi(finding(), { role: "member" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const box = [...container.querySelectorAll("textarea")].find((f) => f.maxLength !== 1000);
+    if (!box) throw new Error("no note box");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(box, "x".repeat(4001));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(container, "Add note");
+
+    expect(readable(container)).toContain("at most 4000 characters");
+    expect(api.to("POST", "/findings/f-1/notes").length).toBe(0);
+  });
+
+  it("shows the empty-timeline sentence for a finding with no events (AC106)", async () => {
+    stubApi(finding(), { role: "viewer" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await waitFor(
+      () => readable(container).includes("No events for this finding."),
+      "the empty-timeline sentence",
+    );
+  });
+
+  it("reassigns through a panel with a Nobody option; choosing alone does not act (AC132)", async () => {
+    const patches: unknown[] = [];
+    const api = stubApi(investigating(), {
+      role: "owner",
+      extra: {
+        "GET /members": json({
+          members: [
+            {
+              id: "m1",
+              email: "ravi@example.test",
+              name: "Ravi",
+              role: "member",
+              status: "active",
+            },
+            { id: "v1", email: "v@example.test", name: "Viewer", role: "viewer", status: "active" },
+          ],
+        }),
+        "PATCH /findings/f-1/case": (call) => {
+          patches.push(call.body);
+          return new Response(
+            JSON.stringify({
+              finding: finding({
+                case_state: "investigating",
+                case_opened_at: minutesAgo(20),
+                assignee_id: "m1",
+                assignee_name: "Ravi",
+              }),
+              email_outcome: "not_configured",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "Reassign");
+    const select = await waitFor(() => container.querySelector("select"), "the picker");
+    const options = [...select.querySelectorAll("option")].map((o) => readable(o));
+    expect(options).toContain("Nobody");
+    expect(options).toContain("Ravi");
+    // AC62: the picker never offers a viewer.
+    expect(options).not.toContain("Viewer");
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      setter?.call(select, "m1");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(patches.length).toBe(0);
+
+    await press(container, "Assign");
+    // FR4: the call carries what the page last showed — the current assignee.
+    expect(patches).toEqual([
+      { assignee_id: "m1", expected_assignee_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0001" },
+    ]);
+    await waitFor(
+      () =>
+        readable(container).includes(
+          "Assigned to Ravi. Email is not set up here, so tell them yourself.",
+        ),
+      "the truthful email line",
+    );
+    expect(api.to("GET", "/members").length).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------------- back to its list; the earlier case (F22)
+
+describe("the back link returns to the list it came from (AC128)", () => {
+  it("names the filter and carries it back", async () => {
+    stubApi(finding());
+    const { container } = await mountFinding("?case=mine");
+    await heading(container);
+
+    const back = [...container.querySelectorAll("a")].find(
+      (link) => readable(link) === "Back to Assigned to me",
+    );
+    expect(back?.getAttribute("href")).toBe("/?case=mine");
+  });
+
+  it("reads All findings when it came from no filter", async () => {
+    stubApi(finding());
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect([...container.querySelectorAll("a")].map((link) => readable(link))).toContain(
+      "All findings",
+    );
+  });
+});
+
+describe("a finding with no case names the service's earlier one (FR13, AC95)", () => {
+  const ended = {
+    id: "f-0",
+    case_state: "resolved" as const,
+    case_resolution: "no_activity" as const,
+    case_resolved_at: "2026-11-01T16:10:00Z",
+    case_activity_at: "2026-08-03T16:10:00Z",
+  };
+
+  it("links it, and offers Reopen that case beside Take this, which reopens that case", async () => {
+    const api = stubApi(finding({ earlier_case: ended }), {
+      extra: {
+        "PATCH /findings/f-0/case": json({
+          finding: finding({ id: "f-0", case_state: "investigating" }),
+          email_outcome: "none",
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const named = [...container.querySelectorAll("a")].find((link) =>
+      readable(link).startsWith("This service had a case that ended on"),
+    );
+    expect(named?.getAttribute("href")).toBe("/findings/f-0");
+    expect(buttons(container)).toEqual(expect.arrayContaining(["Take this", "Reopen that case"]));
+
+    await press(container, "Reopen that case");
+    expect(api.to("PATCH", "/findings/f-0/case").map((call) => call.body)).toEqual([
+      { case_state: "investigating" },
+    ]);
+  });
+
+  it("offers only a link after a person's own resolve", async () => {
+    stubApi(finding({ earlier_case: { ...ended, case_resolution: "resolved" } }));
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect(readable(container)).toContain("This service had a case resolved on");
+    expect(buttons(container)).not.toContain("Reopen that case");
+  });
+});
+
+describe("the linked alerts say a case is not an alert (F22 FR53, AC121)", () => {
+  it("carries the line where linked alerts are listed", async () => {
+    stubApi(
+      finding({
+        incidents: [
+          {
+            id: "inc-1",
+            rule_name: "Checkout errors",
+            condition_kind: "service_error_rate",
+            opened_at: minutesAgo(40),
+            resolved_at: null,
+          },
+        ],
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const section = container.querySelector('section[aria-labelledby="finding-incidents"]');
+    expect(readable(section as Element)).toContain(CASE_IS_NOT_AN_ALERT);
+  });
+});
+
+describe("the release before this finding (F28 AC40, AC43)", () => {
+  const release = (overrides = {}) => ({
+    release_id: "release-1",
+    period_id: "period-1",
+    service_name: "checkout",
+    version: "v2.1",
+    started_at: minutesAgo(36),
+    start_basis: "seen" as const,
+    basis: "both" as const,
+    last_state: "finished" as const,
+    is_return: false,
+    already_running: false,
+    called: null,
+    ...overrides,
+  });
+
+  const covered = (overrides = {}) => ({
+    before: release(),
+    coverage: "deploys_and_versions" as const,
+    last_reported_at: minutesAgo(36),
+    first_heard_at: null,
+    nearby: [],
+    called_known: true,
+    affected: [],
+    ...overrides,
+  });
+
+  it("names it under the header as order, with a comparison that carries the finding", async () => {
+    stubApi(finding({ release_context: covered() }));
+    const { container } = await mountFinding();
+    await heading(container);
+    const section = container.querySelector('[aria-labelledby="finding-release"]');
+
+    expect(section?.textContent).toContain(
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic. It came first. That is not evidence that it caused this.",
+    );
+    const compare = [...(section?.querySelectorAll("a") ?? [])].find(
+      (link) => link.textContent === "Compare the versions",
+    );
+    expect(compare?.getAttribute("href")).toMatch(
+      /^\/releases\/release-1\?period=period-1&finding=f-1&finding_at=/,
+    );
+  });
+
+  it("says coverage none, and offers setup only to those who can set it up (FR33)", async () => {
+    const none = covered({ before: null, coverage: "none", last_reported_at: null });
+    stubApi(finding({ release_context: none }), { role: "owner" });
+    const { container: owner } = await mountFinding();
+    await heading(owner);
+    const ownerSection = owner.querySelector('[aria-labelledby="finding-release"]');
+    expect(ownerSection?.textContent).toContain(
+      "We receive no deploy information for this service.",
+    );
+    expect(ownerSection?.textContent).not.toContain("It came first");
+    expect(ownerSection?.querySelector('a[href="/settings/projects#deploys"]')).not.toBeNull();
+    unmountAll();
+
+    stubApi(finding({ release_context: none }), { role: "viewer" });
+    const { container: viewer } = await mountFinding();
+    await heading(viewer);
+    const viewerSection = viewer.querySelector('[aria-labelledby="finding-release"]');
+    expect(viewerSection?.textContent).toContain(
+      "An owner or admin can set this up in project settings.",
+    );
+    expect(viewerSection?.querySelector('a[href="/settings/projects#deploys"]')).toBeNull();
+    expect(viewerSection?.querySelector('a[href="/docs/deploys"]')).not.toBeNull();
+  });
+
+  it("renders a hostile version and service as plain text in the section (AC43)", async () => {
+    const hostile = "<script>alert(1)</script>";
+    stubApi(
+      finding({
+        release_context: covered({
+          before: release({ version: hostile }),
+          nearby: [release({ service_name: "[click](https://evil.example)", version: hostile })],
+        }),
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+    const section = container.querySelector('[aria-labelledby="finding-release"]');
+
+    expect(section?.textContent).toContain(hostile);
+    expect(section?.textContent).toContain("[click](https://evil.example)");
+    expect(container.querySelector("script")).toBeNull();
+    expect(section?.querySelector('a[href^="https://evil"]')).toBeNull();
+  });
+
+  it("marks the charts and lists the window's releases, open by default (AC40)", async () => {
+    const at = minutesAgo(30);
+    stubApi(finding({ release_context: covered() }), {
+      extra: {
+        "GET /releases/markers": json({
+          markers: [
+            {
+              release_id: "release-1",
+              period_id: null,
+              deploy_id: "deploy-1",
+              service_name: "checkout",
+              version: "v2.1",
+              at,
+              basis: "reported",
+              state: "failed",
+            },
+          ],
+          truncated: false,
+          cap: 500,
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+    const list = await waitFor(() => container.querySelector("details"), "the releases list");
+
+    expect(list.open).toBe(true);
+    expect(list.textContent).toContain("Releases in this window (1)");
+    expect(list.textContent).toContain("CI reported it failed");
+  });
+});
+
+describe("a linked reliability target's burn (F19 AC85, T5.7)", () => {
+  it("shows the burn beside the finding, with its rate and what is left, and its target", async () => {
+    stubApi(
+      finding({
+        incidents: [
+          {
+            id: "inc-burn",
+            rule_name: "Reliability targets",
+            condition_kind: "slo_burn",
+            opened_at: minutesAgo(30),
+            resolved_at: null,
+            burn: {
+              slo_id: "slo-1",
+              label: "checkout availability, 99.9% over 28 days",
+              kind: "service_availability",
+              rate: 14.4,
+              hours_left: 50,
+              allowed: 672,
+              left: 312,
+            },
+          },
+        ],
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const section = container.querySelector('section[aria-labelledby="finding-incidents"]');
+    expect(readable(section as Element)).toContain(
+      "Also using allowed failures too fast: checkout availability, 99.9% over 28 days. 14 times faster than allowed. What is left lasts about 2 days.",
+    );
+    expect(container.querySelector('a[href="/slos/slo-1"]')).not.toBeNull();
+  });
+
+  it("says a latency burn's slow requests, and an ended burn without its old figures", async () => {
+    stubApi(
+      finding({
+        incidents: [
+          {
+            id: "inc-burn",
+            rule_name: "Reliability targets",
+            condition_kind: "slo_burn",
+            opened_at: minutesAgo(30),
+            resolved_at: minutesAgo(5),
+            burn: {
+              slo_id: null,
+              label: "checkout latency under 487.2 ms, 95% over 28 days",
+              kind: "service_latency",
+              rate: 9,
+              hours_left: 3,
+              allowed: 10,
+              left: 2,
+            },
+          },
+        ],
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const said = readable(container);
+    expect(said).toContain(
+      "Was using allowed slow requests too fast: checkout latency under 487.2 ms, 95% over 28 days.",
+    );
+    expect(said).not.toContain("times faster");
+    expect(said).not.toContain("failures");
+  });
+});
+
+describe("what lines up with this (F3 T1.11, T1.15)", () => {
+  const section = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>('[aria-labelledby="finding-explanation"]');
+  const headerText = (container: HTMLElement) =>
+    container.querySelector('[data-testid="explanation-header"]')?.textContent ?? "";
+
+  const deployFact = (overrides = {}) => ({
+    id: "deploy:d-1",
+    number: 1,
+    kind: "deploy" as const,
+    basis: "verified" as const,
+    sentence: [{ text: "Deploy of " }, { name: "checkout" }, { text: " v2.1." }],
+    at: minutesAgo(34),
+    read_at: null,
+    role: null,
+    absence: null,
+    read: null,
+    is_cause: false,
+    supports_cause: false,
+    ...overrides,
+  });
+
+  async function mountWith(found: Handler, role: TestRole = "owner") {
+    stubApi(finding(), { role, extra: { "GET /findings/f-1/explanation": found } });
+    const { container } = await mountFinding();
+    await heading(container);
+    return container;
+  }
+
+  it("leads the evidence column, with the header line under the title (FR14, AC86)", async () => {
+    const container = await mountWith(json(explanation()));
+
+    expect(headerText(container)).toBe("Not enough evidence to name a likely cause");
+    const order = [...container.querySelectorAll("h2")].map((h) => h.textContent);
+    expect(order.indexOf("What lines up with this")).toBeLessThan(order.indexOf("What moved"));
+    // F28's release row is the section's first row now (A45).
+    expect(section(container)?.querySelector('[aria-labelledby="finding-release"]')).not.toBeNull();
+  });
+
+  it("renders Look next while loading, after a failure and once read (FR42, AC66)", async () => {
+    for (const handler of [problem(500, "down"), json(explanation({ state: "reading" }))]) {
+      const container = await mountWith(handler);
+      const look = container.querySelector('[aria-labelledby="finding-look-next"]');
+      expect([...(look?.querySelectorAll("a") ?? [])].map((a) => a.textContent)).toEqual([
+        "Traces",
+        "Logs",
+        "Errors",
+        "Deploys",
+        "Infrastructure (whole project)",
+      ]);
+      // F3 Step 2 (FR16, AC21): at the finding's window, with the way back to it.
+      const traces = new URL(look?.querySelector("a")?.getAttribute("href") ?? "", "http://x");
+      expect(traces.pathname).toBe("/traces");
+      expect(traces.searchParams.get("service")).toBe("checkout");
+      expect(traces.searchParams.get("finding")).toBe("f-1");
+      expect(traces.searchParams.get("project")).toBe(PROJECT_ID);
+      expect(Date.parse(traces.searchParams.get("from") ?? "")).toBeLessThan(
+        Date.parse(traces.searchParams.get("to") ?? ""),
+      );
+      unmountAll();
+    }
+  });
+
+  it("shows InlineFailure only when nothing is held (AC88)", async () => {
+    const container = await mountWith(problem(500, "down"));
+
+    expect(headerText(container)).toBe("The explanation could not be loaded");
+    expect(section(container)?.textContent).toContain("The explanation could not be loaded");
+  });
+
+  it("lists facts in an ordered list with a hidden Basis label, and a held cause names nothing (FR50)", async () => {
+    const container = await mountWith(
+      json(explanation({ cause_held: true, facts: [deployFact()] })),
+    );
+
+    expect(headerText(container)).toBe("The facts that line up with this are below");
+    const item = section(container)?.querySelector("ol li");
+    expect(item?.textContent).toContain("Deploy of checkout v2.1.");
+    expect(item?.querySelector(".sr-only")?.textContent).toBe("Basis: ");
+    expect(item?.textContent).toContain("Signed deploy record");
+    expect(section(container)?.textContent).not.toContain("Likely");
+  });
+
+  it("names a released cause by its own line, with the signed deploy's timing note (AC7)", async () => {
+    const container = await mountWith(
+      json(
+        explanation({
+          facts: [deployFact({ is_cause: true })],
+          likely_cause: {
+            evidence_id: "deploy:d-1",
+            rule: "signed_deploy",
+            strength: "likely",
+            basis: "verified",
+            same_minute: false,
+            header: [{ text: "Likely: the deploy of " }, { name: "checkout" }, { text: " v2.1." }],
+            card: [],
+          },
+        }),
+      ),
+    );
+
+    expect(headerText(container)).toContain("Likely: the deploy of checkout v2.1.");
+    expect(section(container)?.textContent).toContain(
+      "The deploy is a signed record; the link to this finding is timing only.",
+    );
+  });
+
+  it("says a failed read plainly, never 'Not enough evidence', with no setup step (AC87)", async () => {
+    const failed = {
+      ...deployFact({ id: "absence:x", kind: "absence" as const, basis: null }),
+      sentence: [{ text: "Could not read recent errors this time." }],
+      absence: "could_not_read",
+      read: "errors",
+    };
+    const container = await mountWith(json(explanation({ reads_failed: 1, facts: [failed] })));
+
+    expect(headerText(container)).toBe(
+      "Could not finish reading the facts, so no likely cause yet",
+    );
+    expect(section(container)?.textContent).toContain("Could not read recent errors this time.");
+    expect(section(container)?.textContent).not.toContain("Send deploy notifications");
+  });
+
+  it("names the setup step when nothing was found and deploys are missing (FR45)", async () => {
+    const missing = {
+      ...deployFact({ id: "absence:d", kind: "absence" as const, basis: null }),
+      sentence: [{ text: "No deploy information for this service." }],
+      absence: "no_deploy_information",
+    };
+    const container = await mountWith(json(explanation({ facts: [missing] })));
+
+    const step = [...(section(container)?.querySelectorAll("a") ?? [])].find(
+      (a) => a.textContent === "Send deploy notifications",
+    );
+    expect(step?.getAttribute("href")).toBe("/docs/deploys");
+  });
+
+  it("shows five facts, then all with focus on the first newly shown (FR44, NFR4)", async () => {
+    const facts = Array.from({ length: 30 }, (_, index) =>
+      deployFact({ id: `deploy:${index}`, number: index + 1 }),
+    );
+    const container = await mountWith(json(explanation({ facts })));
+    expect(section(container)?.querySelectorAll("ol li").length).toBe(5);
+
+    await press(container, "Show all 30 facts");
+
+    const items = section(container)?.querySelectorAll("ol li") ?? [];
+    expect(items.length).toBe(30);
+    expect(document.activeElement).toBe(items[5]);
+  });
+
+  it("keeps a hostile name as text (AC19's code-written part)", async () => {
+    const hostile = deployFact({
+      sentence: [{ text: "Calls to " }, { name: "http://evil.example <img src=x>‮" }],
+    });
+    const container = await mountWith(json(explanation({ facts: [hostile] })));
+
+    expect(section(container)?.textContent).toContain("http://evil.example <img src=x>");
+    expect(section(container)?.querySelector('a[href^="http://evil"]')).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("offers Read the facts again to a member, not a viewer, and shows a refusal inline (AC23, AC80)", async () => {
+    const viewer = await mountWith(json(explanation()), "viewer");
+    expect(buttons(viewer)).not.toContain("Read the facts again");
+    unmountAll();
+
+    stubApi(finding(), {
+      role: "member",
+      extra: {
+        "GET /findings/f-1/explanation": json(explanation()),
+        "POST /findings/f-1/explanation/read-again": () =>
+          new Response(
+            JSON.stringify({
+              type: "about:blank",
+              title: "Conflict",
+              status: 409,
+              detail: "Too soon",
+              next_read_at: new Date(Date.now() + 40_000).toISOString(),
+            }),
+            { status: 409, headers: { "content-type": "application/problem+json" } },
+          ),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+    await press(container, "Read the facts again");
+    for (let round = 0; round < 5; round += 1) await settle();
+
+    expect(section(container)?.textContent).toMatch(/You can read again at/);
+    expect(container.textContent).not.toContain("Too soon");
+  });
+
+  it("keeps the last deploy in the release row and states no cause from it (AC91)", async () => {
+    stubApi(
+      finding({
+        release_context: {
+          before: {
+            release_id: "release-1",
+            period_id: "period-1",
+            service_name: "checkout",
+            version: "v2.1",
+            started_at: minutesAgo(160),
+            start_basis: "reported",
+            basis: "reported",
+            last_state: "finished",
+            is_return: false,
+            already_running: false,
+            called: null,
+          },
+          coverage: "deploys_only",
+          last_reported_at: minutesAgo(160),
+          first_heard_at: null,
+          nearby: [],
+          called_known: true,
+          affected: [],
+        },
+      }),
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const release = section(container)?.querySelector('[aria-labelledby="finding-release"]');
+    expect(release?.textContent).toContain("v2.1 was reported 2 hours before this");
+    expect(release?.textContent).not.toContain("No deploy recorded");
+    expect(headerText(container)).toBe("Not enough evidence to name a likely cause");
+  });
+
+  describe("Step 2: a fact's link, and the rating (F3 T2.4, T2.12)", () => {
+    const errorFact = deployFact({
+      id: "error_group:a1",
+      kind: "error_group",
+      basis: "telemetry_text",
+      sentence: [{ text: "New error: " }, { name: "TimeoutError" }],
+      target: { kind: "error_group", group_id: "a1", services: ["checkout"] },
+    });
+
+    it("links an error fact to its group at the finding's window (AC105)", async () => {
+      const container = await mountWith(json(explanation({ facts: [errorFact] })));
+      const link = section(container)?.querySelector<HTMLAnchorElement>("ol li a");
+      const url = new URL(link?.getAttribute("href") ?? "", "http://x");
+
+      expect(link?.textContent).toBe("Errors");
+      expect(url.pathname).toBe("/errors");
+      expect(url.searchParams.get("group")).toBe("a1");
+      expect(url.searchParams.get("finding")).toBe("f-1");
+    });
+
+    it("says the data aged out instead of linking to it (AC22)", async () => {
+      stubApi(finding({ raw_kept_until: minutesAgo(60 * 24) }), {
+        extra: { "GET /findings/f-1/explanation": json(explanation({ facts: [errorFact] })) },
+      });
+      const { container } = await mountFinding();
+      await heading(container);
+
+      const row = section(container)?.querySelector("ol li");
+      expect(row?.querySelector("a")).toBeNull();
+      expect(row?.textContent).toContain("Raw errors aged out on");
+    });
+
+    it("asks a member whether it was useful, and offers only reasons that fit (AC75)", async () => {
+      const api = stubApi(finding(), {
+        role: "member",
+        extra: {
+          "GET /findings/f-1/explanation": json(
+            explanation({ version: 2, rating_reasons: ["not_useful"] }),
+          ),
+          "POST /findings/f-1/explanation/feedback": json({
+            version: 2,
+            helpful: false,
+            reason: "not_useful",
+          }),
+        },
+      });
+      const { container } = await mountFinding();
+      await heading(container);
+      const buttons = () =>
+        [...(section(container)?.querySelectorAll("fieldset button") ?? [])] as HTMLButtonElement[];
+      const press = async (text: string) =>
+        act(async () =>
+          buttons()
+            .find((button) => button.textContent === text)
+            ?.click(),
+        );
+
+      expect(section(container)?.textContent).toContain("Was this useful?");
+      await press("No");
+      expect(buttons().map((button) => button.textContent)).toEqual([
+        "Yes",
+        "No",
+        "It did not help",
+      ]);
+      await press("It did not help");
+
+      expect(api.to("POST", "/findings/f-1/explanation/feedback")[0]?.body).toEqual({
+        version: 2,
+        helpful: false,
+        reason: "not_useful",
+      });
+    });
+
+    it("shows a carried rating with a way to change it", async () => {
+      const container = await mountWith(
+        json(
+          explanation({
+            version: 3,
+            my_rating: { version: 2, helpful: true, reason: null },
+            rating_reasons: ["not_useful"],
+          }),
+        ),
+        "member",
+      );
+
+      expect(section(container)?.textContent).toContain(
+        "Thanks, recorded. You said it was useful.",
+      );
+      expect(section(container)?.textContent).toContain("Change");
+    });
+
+    it("never offers a viewer the rating (AC23, AC75)", async () => {
+      const container = await mountWith(json(explanation({ version: 1 })), "viewer");
+
+      expect(section(container)?.textContent).not.toContain("Was this useful?");
+    });
   });
 });

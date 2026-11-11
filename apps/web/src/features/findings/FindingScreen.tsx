@@ -1,41 +1,75 @@
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, isConflict } from "@/shared/api-client";
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
+import { ChartReleases } from "@/shared/components/ChartReleases";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import type { SeriesToken } from "@/shared/components/TrendChart";
 import { TrendChart } from "@/shared/components/TrendChart";
+import type { DeployMarker } from "@/shared/deploy-markers";
+import { releaseMarkers } from "@/shared/deploy-markers";
 import type { Quieting } from "@/shared/detection/api";
 import { useDetectionSettings, useQuietService } from "@/shared/detection/api";
 import { QUIET_CHOICES, quietDone, quietEffect } from "@/shared/detection/quiet";
-import { formatRelativeTime } from "@/shared/format/time";
+import { UNKNOWN } from "@/shared/format/number";
+import { formatGap } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
+import { useReleaseMarkers } from "@/shared/releases/api";
 import { setSelectedProjectId, useSelection } from "@/shared/selection";
+import { setupDocUrl } from "@/shared/setup-docs";
 
-import type { FindingDetail, FindingSignal, FindingSignalKind, SignalSeries } from "./api";
-import { useFinding, useFindingAction } from "./api";
+import type {
+  CaseLink,
+  DeployLineAddition,
+  FindingDetail,
+  FindingSignal,
+  FindingSignalKind,
+  LinkedBurn,
+  ReleaseFact,
+  SignalSeries,
+} from "./api";
+import { useExplanation, useFinding, useFindingAction, useFixes } from "./api";
+import { CaseSection } from "./CaseSection";
+import { ExplanationHeaderLine, ExplanationSection } from "./ExplanationSection";
+import type { HeaderLine } from "./explanation";
+import { headerLine } from "./explanation";
+import { DeployLineExtras, FixBrief, FixSection } from "./FixSection";
+import { backLinkLabel, parseFeedSearch } from "./feed-filter";
 import type { DoneAction } from "./finding-page";
 import {
+  affectedReleases,
   availableActions,
   bandSentence,
+  CAME_FIRST,
+  comparisonSearch,
   describeSignal,
+  elsewhere,
   evidenceSentence,
   formatSignalValue,
   newNormalSentence,
   notYetSentence,
   ownEndpoint,
   PLOT_LINES,
+  releaseBefore,
   SIGNAL_NAMES,
   signalPlot,
   successSentence,
 } from "./finding-page";
-import { CLOSED_AS } from "./finding-words";
+import { linkedBurnLine } from "./finding-words";
+import { deployAddition, SUGGESTED_FIX, showsSection } from "./fix-page";
+import {
+  falseAlarmIssueSentence,
+  linkAnnouncement,
+  resolveDoneSentence,
+  syncedLink,
+} from "./link-words";
 
 const TONE_TEXT = {
   critical: "text-critical-text",
@@ -62,18 +96,26 @@ const PROSE = "max-w-prose";
  * says it is gone (AC40). Times are on the project's clock, named.
  *
  * What a person may do follows the API's table (FR23, AC39): a viewer sees no action,
- * a member may acknowledge, call a false alarm and snooze the service, an admin may
- * also set a new normal and mute it. Each confirms inline, as the rest of the console does (C11).
+ * a member may call a false alarm and snooze the service, an admin may also set a
+ * new normal and mute it. Taking the case replaced Acknowledge (F22, D47). Each
+ * confirms inline, as the rest of the console does (C11).
  */
 export function FindingScreen() {
   const { findingId } = useParams({ from: "/shell/findings/$findingId" });
+  // The feed filter this page was opened from (F22 AC128): back returns to it, by name.
+  const fromFilter = parseFeedSearch(useSearch({ strict: false })).case;
   const finding = useFinding(findingId);
   const settings = useDetectionSettings(finding.data?.project_id);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-4 pt-5 pb-10">
-      <Link to="/findings" className="text-ink-dim text-sm hover:text-ink">
-        All findings
+      {/* The feed is the front door now (FR1): back means `/`, with its filter. */}
+      <Link
+        to="/"
+        search={fromFilter === undefined ? {} : { case: fromFilter }}
+        className="text-ink-dim text-sm hover:text-ink"
+      >
+        {backLinkLabel(fromFilter)}
       </Link>
       {finding.isPending ? (
         <SkeletonRows rows={5} label="Loading the finding" />
@@ -104,20 +146,145 @@ function FindingPage({
   zone?: string;
   onReload: () => void;
 }) {
+  const announcement = useChangeAnnouncements(finding);
+  const explanation = useExplanation(finding);
+  // F5: rungs 1 and 2, read again when a new explanation version arrives.
+  const fixes = useFixes(finding.id, explanation.data?.latest_version ?? null);
   return (
     <div className="flex flex-col gap-8">
-      <Header finding={finding} zone={zone} />
-      <Controls finding={finding} zone={zone} onReload={onReload} />
-      <Signals finding={finding} />
-      <Readings finding={finding} zone={zone} />
-      {finding.scope === "project" ? <Services finding={finding} /> : null}
-      <Incidents finding={finding} zone={zone} />
-      <Feedback finding={finding} />
+      <Header
+        finding={finding}
+        zone={zone}
+        line={headerLine(explanation.data, { failed: explanation.isError, finding })}
+        suggestedFix={showsSection(fixes.data)}
+      />
+      {/* FR45, AC105: one always-present status region, at page level because the
+          case controls return nothing for a viewer. It announces only changes of
+          assignee, case state and signal state, never the actor's own act. */}
+      <p role="status" data-testid="page-status" className="sr-only">
+        {announcement.message}
+      </p>
+      {/* One DOM order, everywhere (D86, NFR8): work before evidence; the left
+          column at a wide window, stacked in the same order below it. */}
+      <div className="grid gap-8 lg:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-8">
+          <CaseSection
+            finding={finding}
+            zone={zone}
+            onReload={onReload}
+            onOwnAct={announcement.ownAct}
+          />
+          <section aria-label="The signal" className="flex flex-col gap-3">
+            <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">The signal</h2>
+            <Controls finding={finding} zone={zone} onReload={onReload} />
+          </section>
+        </div>
+        <div id="finding-evidence" className="flex min-w-0 flex-col gap-8">
+          {/* F3 FR14: the explanation leads the right column; F28's release row is its
+              first row (A45), extended by F5, with F5's brief as one line under it (D54). */}
+          <ExplanationSection
+            finding={finding}
+            explanation={explanation.data}
+            error={explanation.error}
+            onRetry={() => void explanation.refetch()}
+            releaseRow={
+              <>
+                <ReleaseSection finding={finding} zone={zone} addition={fixes.data?.deploy_line} />
+                <FixBrief
+                  fixes={fixes.data}
+                  pending={fixes.isPending}
+                  error={fixes.error}
+                  onRetry={() => void fixes.refetch()}
+                />
+              </>
+            }
+            zone={zone}
+          />
+          <Signals finding={finding} />
+          <Readings finding={finding} zone={zone} />
+          {finding.scope === "project" ? <Services finding={finding} /> : null}
+          <Incidents finding={finding} zone={zone} />
+          <Feedback finding={finding} />
+        </div>
+      </div>
+      {/* D54's fifth row: full width below the split, so a diff has the window. */}
+      <FixSection fixes={fixes.data} />
     </div>
   );
 }
 
-function Header({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+/** How long after a person's own act the status region stays quiet: their act
+ * moves focus instead of being announced (FR45). */
+const OWN_ACT_QUIET_MS = 5_000;
+
+function useChangeAnnouncements(finding: FindingDetail): {
+  message: string;
+  ownAct: () => void;
+} {
+  const [message, setMessage] = useState("");
+  const previous = useRef<
+    | { state: string; caseState: string | null; assignee: string | null; links: CaseLink[] }
+    | undefined
+  >(undefined);
+  const ownActAt = useRef(0);
+
+  useEffect(() => {
+    const now = {
+      state: finding.state,
+      caseState: finding.case_state,
+      assignee: finding.assignee_id ?? null,
+      links: finding.links ?? [],
+    };
+    const before = previous.current;
+    previous.current = now;
+    if (before === undefined) return;
+    if (Date.now() - ownActAt.current < OWN_ACT_QUIET_MS) return;
+    const changes: string[] = [];
+    if (before.state !== now.state) changes.push(`The signal is now ${now.state}.`);
+    if (before.caseState !== now.caseState) {
+      changes.push(
+        now.caseState == null ? "The case is gone." : `The case is now ${now.caseState}.`,
+      );
+    }
+    if (before.assignee !== now.assignee) {
+      changes.push(
+        now.assignee == null
+          ? "Nobody is assigned now."
+          : `Assigned to ${finding.assignee_name ?? "someone"} now.`,
+      );
+    }
+    // FR45, AC105: a link's status moving is announced; its age never is.
+    const links = linkAnnouncement(before.links, now.links);
+    if (links != null) changes.push(links);
+    if (changes.length > 0) setMessage(changes.join(" "));
+  }, [
+    finding.state,
+    finding.case_state,
+    finding.assignee_id,
+    finding.assignee_name,
+    finding.links,
+  ]);
+
+  return {
+    message,
+    ownAct: () => {
+      ownActAt.current = Date.now();
+    },
+  };
+}
+
+function Header({
+  finding,
+  zone,
+  line,
+  suggestedFix,
+}: {
+  finding: FindingDetail;
+  zone?: string;
+  line: HeaderLine;
+  /** F5 (D54): the section can fall far down a long case, so the header links to it. */
+  suggestedFix: boolean;
+}) {
   return (
     <header className="flex flex-col gap-1">
       <p className="flex flex-wrap items-baseline gap-x-2 font-mono text-2xs uppercase tracking-caps">
@@ -128,8 +295,22 @@ function Header({ finding, zone }: { finding: FindingDetail; zone?: string }) {
       <h1 className={`font-semibold font-serif text-ink text-xl tracking-tight ${PROSE}`}>
         {finding.title}
       </h1>
+      {/* F3 FR14: where to look first, in one code-written line; space always held. */}
+      <ExplanationHeaderLine line={line} zone={zone} />
       <p className="text-ink-dim text-sm">
-        <Subject finding={finding} /> · {describeState(finding, zone)}
+        <Subject finding={finding} />
+        {" · "}
+        <a href="#finding-evidence" className="underline-offset-2 hover:underline">
+          Evidence ↓
+        </a>
+        {suggestedFix ? (
+          <>
+            {" · "}
+            <a href={`#${SUGGESTED_FIX.anchor}`} className="underline-offset-2 hover:underline">
+              {SUGGESTED_FIX.jump}
+            </a>
+          </>
+        ) : null}
       </p>
       {finding.muted ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>
@@ -177,20 +358,6 @@ function ServiceLink({
   );
 }
 
-function describeState(finding: FindingDetail, zone?: string): string {
-  const since = formatZonedTime(finding.started_at, { zone });
-  if (finding.state === "closed") {
-    const how = finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed";
-    return finding.closed_at ? `${how} at ${formatZonedTime(finding.closed_at, { zone })}` : how;
-  }
-  if (finding.state === "acknowledged") {
-    const who = finding.acknowledged_by_name ?? "Someone";
-    const when = finding.acknowledged_at ? ` ${formatRelativeTime(finding.acknowledged_at)}` : "";
-    return `Open since ${since}. ${who} acknowledged it${when}`;
-  }
-  return `Open since ${since}`;
-}
-
 type Armed = "false-alarm" | "new-normal" | Quieting;
 
 /**
@@ -210,6 +377,11 @@ function Controls({
   // Also decides whether a false alarm returns the finding's minutes to the normal (D28).
   const canConfigure = useCan("configure_detection");
   const allowed = availableActions(finding, { canOperate, canConfigure });
+  // FR7, AC58: a false alarm on a root with an active case closes its synced issue.
+  const issueClosed =
+    finding.root_finding_id == null && finding.case_state === "investigating"
+      ? falseAlarmIssueSentence(finding)
+      : null;
   const act = useFindingAction(finding.id);
   const quiet = useQuietService(finding.project_id, finding.service_name ?? "");
   const [armed, setArmed] = useState<Armed>();
@@ -223,6 +395,8 @@ function Controls({
 
   const run = (action: DoneAction) => {
     const wasOpen = finding.state !== "closed";
+    // AC58: the success line names the issue too, closed by sync or already closed.
+    const issueDone = issueClosedDone(finding);
     setDone("");
     setChangedMeanwhile("");
     act.mutate(
@@ -230,7 +404,11 @@ function Controls({
       {
         onSuccess: (changed) => {
           setArmed(undefined);
-          setDone(successSentence(action, changed, { wasOpen }));
+          setDone(
+            [successSentence(action, changed, { wasOpen }), issueDone]
+              .filter((part) => part != null)
+              .join(" "),
+          );
         },
         onError: (error) => {
           if (!isConflict(error)) return;
@@ -280,16 +458,6 @@ function Controls({
   return (
     <section aria-label="What you can do" className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
-        {allowed.acknowledge ? (
-          <Button
-            variant="secondary"
-            pending={act.isPending && act.variables?.action === "acknowledge"}
-            pendingLabel="Acknowledging"
-            onClick={() => run("acknowledge")}
-          >
-            Acknowledge
-          </Button>
-        ) : null}
         {allowed.falseAlarm ? (
           <Button variant="secondary" onClick={() => setArmed("false-alarm")}>
             False alarm
@@ -352,6 +520,7 @@ function Controls({
               ? " Its minutes become part of the normal again."
               : " Its minutes stay out of the normal: only an admin's mark returns them."}
           </p>
+          {issueClosed != null ? <p className={PROSE}>{issueClosed}</p> : null}
           <label className="flex flex-col gap-1.5">
             <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
               Why (optional)
@@ -495,6 +664,22 @@ function Evidence({ entry }: { entry: FindingSignal }) {
  * can be unusual, one inside it cannot.
  */
 function Readings({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+  const window = useMemo(() => chartWindow(finding.series), [finding.series]);
+  const marks = useReleaseMarkers(
+    window === null ? undefined : finding.project_id,
+    window ?? { from: finding.started_at, to: finding.started_at },
+    finding.service_name ?? undefined,
+  );
+  const markers = useMemo(
+    () =>
+      window === null
+        ? []
+        : releaseMarkers(marks.data?.markers ?? [], {
+            serviceName: finding.service_name ?? undefined,
+            ...window,
+          }),
+    [marks.data, window, finding.service_name],
+  );
   if (finding.scope === "project") return null;
   return (
     <section aria-labelledby="finding-readings" className="flex flex-col gap-3">
@@ -508,19 +693,49 @@ function Readings({ finding, zone }: { finding: FindingDetail; zone?: string }) 
           for this finding. The values above were stored with it.
         </p>
       ) : (
-        finding.series.map((series) => (
-          <SignalChart key={series.signal} series={series} zone={zone} />
-        ))
+        <>
+          {finding.series.map((series) => (
+            <SignalChart key={series.signal} series={series} zone={zone} markers={markers} />
+          ))}
+          {/* Open by default here: the marks are the question this page is asked. */}
+          <ChartReleases
+            read={{
+              markers,
+              isError: marks.isError,
+              onRetry: () => void marks.refetch(),
+              truncated: marks.data?.truncated ?? false,
+              cap: marks.data?.cap ?? 0,
+            }}
+            zone={zone}
+            open
+          />
+        </>
       )}
     </section>
   );
+}
+
+/** The span the charts draw: their first reading to their last, or none. */
+function chartWindow(series: readonly SignalSeries[]): { from: string; to: string } | null {
+  const times = series.flatMap((each) => each.points.map((point) => point.at)).sort();
+  const [first] = times;
+  const last = times.at(-1);
+  return first === undefined || last === undefined ? null : { from: first, to: last };
 }
 
 /** Below this many readings each is drawn as a dot too: a lone minute has no line. */
 const DOTS_BELOW = 30;
 
 /** One signal's readings, its normal, and the band between the normal and its edge. */
-function SignalChart({ series, zone }: { series: SignalSeries; zone?: string }) {
+function SignalChart({
+  series,
+  zone,
+  markers,
+}: {
+  series: SignalSeries;
+  zone?: string;
+  markers: readonly DeployMarker[];
+}) {
   // Built once per series, so a re-render of the page does not hand the chart new rows.
   const plot = useMemo(() => signalPlot(series), [series]);
   const formatValue = useMemo(
@@ -537,12 +752,135 @@ function SignalChart({ series, zone }: { series: SignalSeries; zone?: string }) 
         seriesToken={SERIES_TOKEN[series.signal]}
         data={plot.data}
         band={plot.band}
+        markers={markers}
         formatValue={formatValue}
         description={`${SIGNAL_NAMES[series.signal]}: each judged minute against its normal band, shaded from the normal to its edge, ${series.points.length} minutes.`}
         showPoints={series.points.length < DOTS_BELOW}
         zone={zone}
       />
     </figure>
+  );
+}
+
+/**
+ * *Release before this* (F28 FR32, FR33, FR52; design, *Finding page*), now the first row
+ * of F3's *What lines up with this* (F3 FR14, A45): what came before this finding,
+ * worded as order. Every row naming an earlier release carries
+ * `CAME_FIRST`; the link carries the finding, so the comparison's window reaches it.
+ */
+function ReleaseSection({
+  finding,
+  zone,
+  addition,
+}: {
+  finding: FindingDetail;
+  zone?: string;
+  /** F5 FR1: the version before it, and past the look-back, a sentence; drawn in this row. */
+  addition?: DeployLineAddition | null;
+}) {
+  const canSetUp = useCan("manage_credentials");
+  const context = finding.release_context;
+  if (finding.scope === "project") {
+    const listed = affectedReleases(context);
+    return (
+      <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
+        <h3
+          id="finding-release"
+          className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
+        >
+          Releases before this
+        </h3>
+        {listed.rows.length === 0 ? (
+          <p className="text-ink-dim text-sm">
+            No release of these services in the 24 hours before this started, from what we can see.
+          </p>
+        ) : (
+          <>
+            <ReleaseRows rows={listed.rows} finding={finding} />
+            {listed.more ? <p className="text-ink-dim text-sm">{listed.more}</p> : null}
+            <p className="text-ink-dim text-sm">{CAME_FIRST}</p>
+          </>
+        )}
+      </section>
+    );
+  }
+  const line = releaseBefore(finding, { zone });
+  const before = context.before;
+  const others = elsewhere(context, finding.service_name ?? "");
+  const extras = deployAddition(addition, context, line);
+  return (
+    <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
+      <h3 id="finding-release" className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        Release before this
+      </h3>
+      <p className={`break-words text-sm ${line.dim ? "text-ink-dim" : "text-ink"}`}>
+        {line.text}
+        {line.cameFirst ? ` ${CAME_FIRST}` : ""}
+      </p>
+      {extras ? <DeployLineExtras addition={extras} zone={zone} /> : null}
+      {before !== null && line.cameFirst ? (
+        <Link
+          to="/releases/$releaseId"
+          params={{ releaseId: before.release_id }}
+          search={comparisonSearch(before, finding)}
+          className={LINK}
+        >
+          {line.compare ? "Compare the versions" : "Open this release"}
+        </Link>
+      ) : null}
+      {context.coverage === "none" && context.first_heard_at === null ? (
+        <p className="text-ink-dim text-sm">
+          {canSetUp ? (
+            <Link to="/settings/projects" hash="deploys" className={LINK}>
+              Set up deploy reporting
+            </Link>
+          ) : (
+            "An owner or admin can set this up in project settings."
+          )}{" "}
+          <a href={setupDocUrl("deploys")} className={LINK}>
+            How releases are found
+          </a>
+        </p>
+      ) : null}
+      {others.rows.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+            Elsewhere in this project
+          </h3>
+          {others.lead ? <p className="text-ink-dim text-sm">{others.lead}</p> : null}
+          <ReleaseRows rows={others.rows} finding={finding} />
+          {context.called_known ? null : (
+            <p className="text-ink-dim text-sm">
+              Which of these this service calls could not be read.
+            </p>
+          )}
+          <p className="text-ink-dim text-sm">{CAME_FIRST}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** Releases as rows: version, service, how long before, and "this service calls it". */
+function ReleaseRows({ rows, finding }: { rows: readonly ReleaseFact[]; finding: FindingDetail }) {
+  return (
+    <ul className="flex flex-col gap-1 text-sm">
+      {rows.map((row) => (
+        <li key={row.period_id} className="break-words">
+          <Link
+            to="/releases/$releaseId"
+            params={{ releaseId: row.release_id }}
+            search={comparisonSearch(row, finding)}
+            className="font-mono text-ink hover:underline"
+          >
+            {row.version}
+          </Link>{" "}
+          of {row.service_name}, {formatGap(row.started_at, finding.started_at) ?? UNKNOWN} before
+          this
+          {row.called ? " (this service calls it)" : ""}.
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -596,10 +934,32 @@ function Incidents({ finding, zone }: { finding: FindingDetail; zone?: string })
                 ? `, ended ${formatZonedTime(incident.resolved_at, { zone })}`
                 : ", still open"}
             </span>
+            {incident.burn ? (
+              <BurnLine burn={incident.burn} ended={incident.resolved_at !== null} />
+            ) : null}
           </li>
         ))}
       </ul>
+      {/* F22 FR53, D58: a linked alert is a rule's record and cannot become a case. */}
+      <p className={`text-ink-dim text-sm ${PROSE}`}>{CASE_IS_NOT_AN_ALERT}</p>
     </section>
+  );
+}
+
+/** A linked reliability target's burn: its rate and what is left, and its target (AC85). */
+function BurnLine({ burn, ended }: { burn: LinkedBurn; ended: boolean }) {
+  return (
+    <p className={`text-ink-dim ${PROSE}`}>
+      {linkedBurnLine(burn, ended)}
+      {burn.slo_id ? (
+        <>
+          {" "}
+          <Link to="/slos/$sloId" params={{ sloId: burn.slo_id }} className={LINK}>
+            Open the target
+          </Link>
+        </>
+      ) : null}
+    </p>
   );
 }
 
@@ -614,4 +974,13 @@ function Feedback({ finding }: { finding: FindingDetail }) {
       <p className={`text-ink text-sm ${PROSE}`}>{finding.feedback_reason}</p>
     </section>
   );
+}
+
+/** After a false alarm or new normal that ended the case: what happens to its issue. */
+function issueClosedDone(finding: FindingDetail): string | null {
+  if (finding.root_finding_id != null || finding.case_state !== "investigating") return null;
+  const link = syncedLink(finding);
+  if (link?.external_key == null) return null;
+  const closed = link.tracker_closed_at != null || link.seen_state === "closed";
+  return resolveDoneSentence(link.external_key, closed ? "already_closed" : "will_close");
 }

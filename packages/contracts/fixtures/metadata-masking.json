@@ -1,0 +1,123 @@
+{
+  "_why": "The deploy webhook stores a sender's `metadata` (F28 FR9, AC53), and the default credential rules must mask it before it is stored. The rules live in the worker (`apps/workers/internal/pipeline/mask`), which Python cannot import, so `nexovue_platform.masking` ports the default families, and both read these cases: the Go test proves the worker masks each attribute this way, and the Python test proves the port agrees.",
+  "_rule": "Each case is one flat attribute, key and string value, under the default rules with nothing configured. `masked` is the value after masking: `[masked]` where the whole value goes, the value with runs replaced where only part of it does, and the value unchanged where nothing matches.",
+  "cases": [
+    {
+      "name": "a key naming a password",
+      "key": "db_password",
+      "value": "hunter2",
+      "masked": "[masked]"
+    },
+    {
+      "name": "a key naming a secret, any case",
+      "key": "Client-SECRET",
+      "value": "abc",
+      "masked": "[masked]"
+    },
+    {
+      "name": "api_key spelled with an underscore",
+      "key": "api_key",
+      "value": "k1",
+      "masked": "[masked]"
+    },
+    {
+      "name": "apikey spelled as one word",
+      "key": "deployApiKey",
+      "value": "k2",
+      "masked": "[masked]"
+    },
+    {
+      "name": "api-key spelled with a hyphen",
+      "key": "x-api-key",
+      "value": "k3",
+      "masked": "[masked]"
+    },
+    { "name": "a singular token", "key": "github_token", "value": "ghp_abc", "masked": "[masked]" },
+    {
+      "name": "a plural token count is kept",
+      "key": "input_tokens",
+      "value": "1200",
+      "masked": "1200"
+    },
+    {
+      "name": "a singular token after a plural one",
+      "key": "tokens_token",
+      "value": "t",
+      "masked": "[masked]"
+    },
+    {
+      "name": "an authorization header",
+      "key": "http.request.header.authorization",
+      "value": "anything",
+      "masked": "[masked]"
+    },
+    {
+      "name": "a legacy-style header key",
+      "key": "http.request.header_proxy-authorization",
+      "value": "anything",
+      "masked": "[masked]"
+    },
+    { "name": "a cookie header", "key": "cookie", "value": "session=1", "masked": "[masked]" },
+    {
+      "name": "a set-cookie header",
+      "key": "http.response.header.set-cookie",
+      "value": "a=b",
+      "masked": "[masked]"
+    },
+    {
+      "name": "an ordinary key",
+      "key": "environment",
+      "value": "production",
+      "masked": "production"
+    },
+    { "name": "a branch name", "key": "branch", "value": "main", "masked": "main" },
+    {
+      "name": "a bearer credential in free text after an auth marker",
+      "key": "note",
+      "value": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123",
+      "masked": "Authorization: Bearer [masked]"
+    },
+    {
+      "name": "a basic credential standing alone",
+      "key": "note",
+      "value": "Basic dXNlcjpwYXNzd29yZHBhc3N3b3Jk",
+      "masked": "Basic [masked]"
+    },
+    {
+      "name": "a short bearer word is not a credential",
+      "key": "note",
+      "value": "the bearer of bad news brought the deploy",
+      "masked": "the bearer of bad news brought the deploy"
+    },
+    {
+      "name": "a card number with spaces",
+      "key": "note",
+      "value": "paid with 4111 1111 1111 1111 today",
+      "masked": "paid with [masked] today"
+    },
+    {
+      "name": "a digit run failing Luhn is kept",
+      "key": "build",
+      "value": "4111111111111112",
+      "masked": "4111111111111112"
+    },
+    {
+      "name": "a password inside a URL",
+      "key": "registry",
+      "value": "https://deploy:s3cr3tpass@registry.example.com/v2",
+      "masked": "https://deploy:[masked]@registry.example.com/v2"
+    },
+    {
+      "name": "a signature query parameter",
+      "key": "artifact",
+      "value": "https://bucket.example.com/a.tar?X-Amz-Signature=deadbeef&b=1",
+      "masked": "https://bucket.example.com/a.tar?X-Amz-Signature=[masked]&b=1"
+    },
+    {
+      "name": "a URL with nothing secret is kept",
+      "key": "artifact",
+      "value": "https://example.com/builds/42",
+      "masked": "https://example.com/builds/42"
+    }
+  ]
+}

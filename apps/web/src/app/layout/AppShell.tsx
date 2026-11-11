@@ -2,6 +2,7 @@ import { Outlet } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { VerifyEmailBanner } from "@/features/auth/VerifyEmailBanner";
+import { ConnectionsBanner } from "@/features/settings/ConnectionsBanner";
 import { SupportBanner } from "@/features/support/SupportBanner";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { useOnlineStatus } from "@/shared/hooks/use-online-status";
@@ -67,6 +68,8 @@ export function AppShell() {
         {/* Under the offline strip on purpose: offline is why the screen is wrong now,
             and an unverified address is not urgent enough to sit above that. */}
         <VerifyEmailBanner />
+        {/* F22 FR31: a connection a person must fix, on every screen, to those who can. */}
+        <ConnectionsBanner />
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           <ErrorBoundary scope="route">

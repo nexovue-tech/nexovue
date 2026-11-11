@@ -70,13 +70,25 @@ export interface AnomalyFindingCondition {
   minimum_severity: Severity;
 }
 
+/**
+ * A reliability target's allowed failures running out too fast (F19, FR14). The burn's
+ * severity is its tier's; the rule only chooses which it sends, at or above a minimum.
+ */
+export interface SloBurnCondition {
+  kind: "slo_burn";
+  /** Null covers every target in the project, including ones set later. */
+  slo_ids: string[] | null;
+  minimum_severity: Severity;
+}
+
 export type Condition =
   | CheckStateCondition
   | ErrorRateCondition
   | LatencyCondition
   | SilenceCondition
   | NewErrorCondition
-  | AnomalyFindingCondition;
+  | AnomalyFindingCondition
+  | SloBurnCondition;
 export type ConditionKind = Condition["kind"];
 
 export interface RuleChannel {
@@ -139,6 +151,10 @@ export interface Incident {
   muted: boolean;
   // The check it was about has since been deleted (its page would say "No such check").
   check_deleted: boolean;
+  /** The project's zone, which every time on the incident page shows (F19 FR13). */
+  zone: string;
+  /** A reliability target's burn only (F19 AC85); null for every other kind. */
+  burn: BurnFacts | null;
   detail: {
     check_id?: string;
     state?: string;
@@ -150,8 +166,31 @@ export interface Incident {
     threshold?: number;
     unit?: string;
     exception_type?: string;
+    // F19's burns (design, *Messages*): numbers, ids and the zone, never a target's name.
+    slo_id?: string;
+    kind?: string;
+    endpoint?: string | null;
+    objective_percent?: string;
+    window_days?: number;
+    holding?: boolean;
+    rate?: number | null;
+    hours_left?: number | null;
+    since?: string | null;
+    allowed?: number;
+    left?: number;
+    zone?: string;
+    as_of?: string;
+    notice?: string;
+    closed_why?: string;
   };
   notifications: IncidentNotification[];
+}
+
+export interface BurnFacts {
+  findings: { id: string; title: string }[];
+  last_deploy_at: string | null;
+  deploys_connected: boolean;
+  target_deleted: boolean;
 }
 
 export interface IncidentList {
@@ -182,6 +221,8 @@ export interface ChannelSummary {
   muted_until: string | null;
   muted_by: string | null;
   quiet_hours: QuietHours | null;
+  /** F3 FR48: whether a channel people read gets a finding's follow-up message. */
+  sends_explained: boolean;
   created_at: string;
   rules: { id: string; name: string; project_id: string }[];
 }
@@ -210,6 +251,7 @@ export interface UpdateChannel {
   name?: string;
   config?: Record<string, unknown>;
   secret?: string;
+  sends_explained?: boolean;
 }
 
 export interface DeliveryAttempt {
@@ -528,6 +570,20 @@ export function useServiceReadings(projectId: string | undefined) {
 
 /** The project's checks, by name, for a rule's scope. Read from the checks endpoint
  *  directly: features do not import one another. */
+/** A project's reliability targets, by nexovue's composed label, for a burn rule (F19). */
+export function useSloTargetChoices(projectId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["alert-slo-choices", projectId ?? ""],
+    enabled: enabled && projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ targets: { id: string; label: string }[] }>("slos", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+    select: (response) => response.targets.map(({ id, label }) => ({ id, name: label })),
+  });
+}
+
 export function useCheckChoices(projectId: string | undefined) {
   return useQuery({
     queryKey: ["alert-check-choices", projectId ?? ""],

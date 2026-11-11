@@ -19,10 +19,28 @@ CONSOLE_FILES: Final = Path("/srv/web")
 ROLES: Final[dict[str, list[str]]] = {
     "api": ["uvicorn", "nexovue_api.main:app", "--host", "0.0.0.0", "--port", "8000"],
     "scheduler-beat": ["python", "-m", "nexovue_scheduler", "beat"],
-    "scheduler-light": ["python", "-m", "nexovue_scheduler", "worker", "--concurrency", "8"],
+    # Capped queues together hold at most 4 of the 8 slots, so probes and alert sweeps
+    # keep 4 whatever detection, evidence, releases and SLO work ask (F3 A56, F19 D66).
+    "scheduler-light": [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--concurrency", "8", "--uncapped-floor", "4"),
+    ],
     "scheduler-deliveries": [
         *("python", "-m", "nexovue_scheduler", "worker"),
         *("--queues", "deliveries", "--concurrency", "4"),
+    ],
+    # F22: every tracker call, on narrow settings (D80). Sync's queue is capped at 2 of
+    # the 3 slots, so a test and a sweep always have one (F5's D40, AC86).
+    "scheduler-connections": [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--queues", "connections,connections-interactive"),
+        *("--concurrency", "3", "--tasks", "connections"),
+    ],
+    # F3: the AI role, idle until an organization turns AI on (FD6). Its own account,
+    # network and tasks; it claims `insight` alone, through its account's functions.
+    "scheduler-insight": [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--queues", "insight", "--concurrency", "4", "--tasks", "insight"),
     ],
     "scheduler-health": ["python", "-m", "nexovue_scheduler", "health"],
     "setup": ["python", "-m", "nexovue_api.setup"],

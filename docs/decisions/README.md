@@ -27,6 +27,22 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-021 — nexovue reports its own health for an outside monitor to read](ADR-021-nexovue-reports-its-own-health-for-an-outside-monitor.md)
 - [ADR-022 — A finding is the one record of a detected problem, and the outbox addresses findings or incidents](ADR-022-a-finding-is-the-one-record-of-a-detected-problem.md) — with the F6 design, 2026-10-31
 - [ADR-023 — The scheduler writes detection readings to ClickHouse, through an account that can insert into that one table only](ADR-023-the-scheduler-writes-detection-state-to-clickhouse-through-its-own-account.md) — with the F6 design, 2026-10-31
+- [ADR-024 — A case is a finding's columns, with one active case per service](ADR-024-a-case-is-a-findings-columns.md) — with the F22 design, 2026-11-02
+- [ADR-025 — Version numbers are counted before sampling, in their own rollup](ADR-025-version-numbers-are-counted-before-sampling-in-their-own-rollup.md) — with the F28 design, 2026-11-02; filed 2026-11-07
+- [ADR-026 — Going over the service cap is recorded in ClickHouse, and the cap keeps the busiest](ADR-026-going-over-the-service-cap-is-recorded-in-clickhouse.md) — with the browser-door change, 2026-11-07
+- [ADR-027 — A reliability target's history is daily counts in Postgres, not another rollup](ADR-027-an-slos-history-is-daily-counts-in-postgres.md) — with the F19 design, 2026-11-02; filed 2026-11-07
+- [ADR-028 — Reliability target judging runs on `scheduler-light`, under the shared floor](ADR-028-slo-judging-runs-on-scheduler-light-under-the-shared-floor.md) — the founder's D66, 2026-11-02; filed 2026-11-07
+- [ADR-029 — A release is a stored record with periods, fed by two sources, with measured beating told](ADR-029-a-release-is-a-stored-record-with-periods.md) — with the F28 design, 2026-11-02; filed 2026-11-08
+- [ADR-030 — `scheduler-connections` makes every tracker call, on narrow settings](ADR-030-scheduler-connections-makes-every-tracker-call.md) — with the F22 design, 2026-11-02; filed 2026-11-08 with F22 Step 3
+- [ADR-031 — A dashboard is a checked document of fixed panel kinds](ADR-031-a-dashboard-is-a-checked-document-of-fixed-panel-kinds.md) — with the F20 design, 2026-11-02; filed 2026-11-08
+- [ADR-032 — A batch read is charged by the scan](ADR-032-a-batch-read-is-charged-by-the-scan.md) — with the F20 design, 2026-11-02; filed 2026-11-08
+- [ADR-033 — The deploy envelope signs its id and time, and secrets are shown once](ADR-033-the-deploy-envelope-signs-its-id-and-time-and-secrets-are-shown-once.md) — with the F28 design, 2026-11-02; filed 2026-11-08
+- [ADR-034 — An incident can say what it is about](ADR-034-an-incident-can-say-what-it-is-about.md) — with the F19 design, 2026-11-02; filed 2026-11-08
+- [ADR-035 — Trackers are reconciled, and a webhook only rings the doorbell](ADR-035-trackers-are-reconciled-and-a-webhook-only-rings-the-doorbell.md) — with the F22 design, 2026-11-02; filed 2026-11-09 with F22 Step 4
+- [ADR-038 — A burn does not repeat news, decided at the claim and released when its reason ends](ADR-038-a-burn-does-not-repeat-news.md) — with the F19 design, 2026-11-02; filed 2026-11-09 with F19 Step 5
+- [ADR-039 — An explanation is a frozen evidence record, with code choosing the cause](ADR-039-an-explanation-is-a-frozen-evidence-record-with-code-choosing-the-cause.md) — with the F3 design, 2026-11-02; filed 2026-11-09 with F3 Step 1
+- [ADR-040 — AI runs in its own role, with its own account and network](ADR-040-ai-runs-in-its-own-role-with-its-own-account-and-network.md) — with the F3 design, 2026-11-02; filed 2026-11-11 with F3 Step 3
+- [ADR-047 — One provider interface, three wire formats, no SDK](ADR-047-one-provider-interface-three-wire-formats-no-sdk.md) — with the F3 design, 2026-11-02; filed 2026-11-11 with F3 Step 4
 
 ## Earlier decisions, 0001–0112
 

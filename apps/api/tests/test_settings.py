@@ -36,6 +36,13 @@ KNOWN_VARIABLES = (
     "CHECK_SECRET_PREVIOUS_KEYS",
     "CREDENTIAL_ENCRYPTION_KEY",
     "CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS",
+    "CONNECTION_SECRET_KEY",
+    "CONNECTION_SECRET_PREVIOUS_KEYS",
+    "NEXOVUE_CONNECTIONS",
+    "AI_SECRET_KEY",
+    "AI_SECRET_PREVIOUS_KEYS",
+    "SCHEDULER_INSIGHT_REPLICAS",
+    "SHOW_HELD_CAUSES",
 )
 
 
@@ -156,10 +163,11 @@ def _settings(*, env: str, otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT) -> Settin
         otlp_endpoint=otlp_endpoint,
         check_secret_key=DEPLOYED_KEYS["CHECK_SECRET_KEY"],
         credential_encryption_key=DEPLOYED_KEYS["CREDENTIAL_ENCRYPTION_KEY"],
+        connection_secret_key=DEPLOYED_KEYS["CONNECTION_SECRET_KEY"],
     )
 
 
-@pytest.mark.parametrize("missing", ["CHECK_SECRET_KEY", "CREDENTIAL_ENCRYPTION_KEY"])
+@pytest.mark.parametrize("missing", sorted(DEPLOYED_KEYS))
 def test_production_refuses_to_start_without_either_encryption_key(
     monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
@@ -178,6 +186,36 @@ def test_production_refuses_to_start_without_either_encryption_key(
     with pytest.raises(SettingsError) as refused:
         get_settings()
     assert missing in str(refused.value)
+
+
+@pytest.mark.parametrize(("value", "on"), [("yes", True), ("no", False), ("", True)])
+def test_connections_follow_the_install_s_setting(
+    monkeypatch: pytest.MonkeyPatch, value: str, on: bool
+) -> None:
+    """F22 AC118: the same `NEXOVUE_CONNECTIONS` the scheduler reads; on unless `no`."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "NEXOVUE_CONNECTIONS": value})
+
+    assert get_settings().connections_enabled is on
+
+
+def test_production_starts_without_the_ai_key_and_reads_the_ai_container_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 AC71, AC103: AI is optional, so a missing `AI_SECRET_KEY` stops nothing here (the
+    screen says AI is unavailable); `SCHEDULER_INSIGHT_REPLICAS=0` says no AI container runs."""
+    _apply(
+        monkeypatch,
+        {
+            **COMPLETE_ENVIRONMENT,
+            "ENV": "production",
+            "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+            **DEPLOYED_KEYS,
+            "SCHEDULER_INSIGHT_REPLICAS": "0",
+        },
+    )
+
+    settings = get_settings()
+    assert settings.ai_keys.current == "" and settings.scheduler_insight_replicas == 0
 
 
 def test_development_starts_without_the_encryption_keys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -226,3 +264,21 @@ def test_there_is_one_read_time_limit_and_it_is_the_one_every_read_sends() -> No
     """Group 9, C4: CLICKHOUSE_QUERY_TIMEOUT_SECONDS (15 s) was overridden by the 30 s
     every tenant read sends, so the setting promised a bound nothing enforced."""
     assert "clickhouse_query_timeout_seconds" not in Settings.model_fields
+
+
+def test_held_causes_stay_held_unless_the_override_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 A60: a development install may show held causes so the founder can judge them."""
+    _apply(monkeypatch, COMPLETE_ENVIRONMENT)
+    assert get_settings().show_held_causes is False
+
+    get_settings.cache_clear()
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "SHOW_HELD_CAUSES": "true"})
+    assert get_settings().show_held_causes is True
+
+
+def test_production_refuses_to_show_held_causes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 AC92: setting the non-production override in production stops the process."""
+    _apply(monkeypatch, _deployed(SHOW_HELD_CAUSES="true"))
+
+    with pytest.raises(SettingsError, match="SHOW_HELD_CAUSES"):
+        get_settings()

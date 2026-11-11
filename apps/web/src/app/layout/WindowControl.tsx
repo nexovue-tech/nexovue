@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { SelectField } from "@/shared/components/SelectField";
@@ -7,11 +8,13 @@ import {
   clearAbsoluteWindow,
   describeWindowChoice,
   setAbsoluteWindow,
+  setSelectedProjectId,
   setSelectedRangeId,
   TIME_RANGES,
   useLiveWindow,
   useSelection,
 } from "@/shared/selection";
+import { type UrlWindow, urlWindowLine, useUrlWindow, withoutUrlWindow } from "@/shared/url-window";
 
 /**
  * Which window every screen is read against — "the last hour", or an incident.
@@ -25,6 +28,59 @@ import {
  * customer pays to store could not be asked for from any screen until now.
  */
 export function WindowControl() {
+  const inAddress = useUrlWindow();
+  if (inAddress !== null) return <AddressWindow window={inAddress} />;
+  return <ChosenWindow />;
+}
+
+/**
+ * A finding's link carried its window in the address (F3 FR16). It is shown, never
+ * stored: the person's own window is one click away and unchanged (AC21). The line
+ * wraps on a phone, because a `title` holding exact times is no use there.
+ */
+function AddressWindow({ window }: { window: UrlWindow }) {
+  const navigate = useNavigate();
+  const router = useRouter();
+  const location = useLocation();
+  const { projectId } = useSelection();
+  // A copied link opens the project it was about, as following it from the page does.
+  useEffect(() => {
+    if (window.project && window.project !== projectId) setSelectedProjectId(window.project);
+  }, [window.project, projectId]);
+  return (
+    <span
+      data-testid="address-window"
+      className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+    >
+      <span className="min-w-0 text-ink [overflow-wrap:anywhere]">{urlWindowLine(window)}</span>
+      {window.finding ? (
+        <Link
+          to="/findings/$findingId"
+          params={{ findingId: window.finding }}
+          className="text-brand-text underline-offset-2 hover:underline"
+        >
+          Back to the finding
+        </Link>
+      ) : null}
+      <button
+        type="button"
+        onClick={() =>
+          void navigate({
+            href: `${location.pathname}${router.options.stringifySearch(
+              withoutUrlWindow(location.search as Record<string, unknown>),
+            )}`,
+            replace: true,
+          })
+        }
+        className="text-brand-text underline-offset-2 hover:underline"
+      >
+        Use my own window
+      </button>
+    </span>
+  );
+}
+
+function ChosenWindow() {
   const { window: choice } = useSelection();
   const live = useLiveWindow();
   const [picking, setPicking] = useState(false);

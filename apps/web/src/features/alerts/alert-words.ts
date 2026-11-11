@@ -3,6 +3,7 @@ import { ApiError } from "@/shared/api-client";
 import type {
   AlertableState,
   AlertRule,
+  BurnFacts,
   ChannelKind,
   ChannelSummary,
   Condition,
@@ -56,6 +57,7 @@ export const CONDITION_NAMES: Record<ConditionKind, string> = {
   service_silent: "A service goes silent",
   new_error_group: "A new error appears",
   anomaly_finding: "Anomaly detection finds a problem",
+  slo_burn: "A target's allowed failures run out too fast",
 };
 
 /** The kinds that decide whether detection is heard: an owner's or an admin's (D11). */
@@ -84,6 +86,17 @@ export function describeCondition(
       return `A new error in ${condition.services === null ? "any service" : joinOr(condition.services)}`;
     case "anomaly_finding":
       return `Anomaly detection finds a ${condition.minimum_severity === "critical" ? "critical problem" : "problem"} in ${condition.services === null ? "any service" : joinOr(condition.services)}`;
+    case "slo_burn": {
+      const which =
+        condition.slo_ids === null
+          ? "any reliability target"
+          : condition.slo_ids.length === 1
+            ? "one chosen target"
+            : `${condition.slo_ids.length} chosen targets`;
+      const fast =
+        condition.minimum_severity === "critical" ? "fast enough to act now" : "too fast";
+      return `Allowed failures run out ${fast} on ${which}`;
+    }
   }
 }
 
@@ -171,6 +184,7 @@ export function describeDuration(
 export function describeHappening(incident: Incident): string {
   if (incident.condition_kind === "new_error_group") return "is a new error";
   const detail = incident.detail;
+  if (incident.condition_kind === "slo_burn") return describeBurn(detail);
   if (detail.reading === "silence") return "went silent";
   if (detail.reading && typeof detail.value === "number") {
     const value =
@@ -178,6 +192,82 @@ export function describeHappening(incident: Incident): string {
     return `${detail.reading} ${value}, over ${detail.threshold}${detail.unit === "%" ? "%" : " ms"}`;
   }
   return detail.state ? `is ${detail.state}` : "fired";
+}
+
+// FR12: each kind's own word, so a latency target never says "failures" (AC89).
+const BURN_NOUN: Record<string, string> = {
+  service_latency: "slow requests",
+  check_availability: "failed runs",
+};
+const BURN_ALLOWANCE: Record<string, string> = {
+  service_latency: "Slow requests still allowed",
+  check_availability: "Failed runs still allowed",
+};
+const BURN_EVENTS: Record<string, string> = { check_availability: "runs" };
+const HOURS_IN_TWO_DAYS = 48;
+
+function describeBurn(detail: Incident["detail"]): string {
+  const noun = BURN_NOUN[detail.kind ?? ""] ?? "failures";
+  if (detail.notice === "exhausted") return `has no allowed ${noun} left`;
+  if (detail.notice === "excluded") return "had time left out";
+  if (detail.notice === "blind") return "are not being judged";
+  if (typeof detail.rate === "number" && detail.holding) {
+    return `is using its allowed ${noun} ${Math.floor(detail.rate)} times faster than allowed`;
+  }
+  return `used its allowed ${noun} too fast`;
+}
+
+/** A burn's current figures for the incident page (F19 AC104): each line from `detail`,
+ *  which the job keeps current while the burn is open. */
+export function describeBurnFacts(detail: Incident["detail"]): string[] {
+  const kind = detail.kind ?? "";
+  const lines: string[] = [];
+  if (typeof detail.rate === "number") {
+    lines.push(`${Math.floor(detail.rate)} times faster than allowed.`);
+  }
+  if (typeof detail.hours_left === "number") {
+    const hours = detail.hours_left;
+    lines.push(
+      hours <= 0
+        ? "Nothing is left."
+        : hours < 1
+          ? "At this rate, what is left lasts under an hour."
+          : hours < HOURS_IN_TWO_DAYS
+            ? `At this rate, what is left lasts about ${Math.floor(hours)} hours.`
+            : `At this rate, what is left lasts about ${Math.floor(hours / 24)} days.`,
+    );
+  }
+  if (detail.allowed !== undefined && detail.left !== undefined) {
+    lines.push(
+      `${BURN_ALLOWANCE[kind] ?? "Failures still allowed"}: ${detail.left} of ${detail.allowed}.`,
+    );
+  }
+  if (detail.objective_percent && detail.window_days) {
+    lines.push(
+      `Target: ${detail.objective_percent}% of ${BURN_EVENTS[kind] ?? "requests"} over ${detail.window_days} days.`,
+    );
+  }
+  if (detail.closed_why === "source_silent") {
+    lines.push("No longer judged: its source sent nothing for 24 hours. The burn may not be over.");
+  }
+  return lines;
+}
+
+/** F19 design, *Elsewhere*: the last deploy of a burn's service before it began. */
+export function describeDeploy(
+  burn: BurnFacts,
+  openedAt: string,
+  clock: (iso: string) => string,
+): string {
+  if (burn.last_deploy_at === null) {
+    return burn.deploys_connected ? "No deploy recorded." : "Deploys are not connected.";
+  }
+  const minutes = Math.max(
+    0,
+    Math.round((Date.parse(openedAt) - Date.parse(burn.last_deploy_at)) / 60_000),
+  );
+  const gap = minutes < 60 ? `${minutes} minutes` : describeDuration(burn.last_deploy_at, openedAt);
+  return `Last deploy: ${clock(burn.last_deploy_at)}, ${gap} before this started.`;
 }
 
 /** Where an incident stands, in one line: open and for how long, or when it ended. */
@@ -256,9 +346,11 @@ export function describeTold(incident: Incident): string {
 export interface RuleDraft {
   kind: ConditionKind;
   name: string;
-  /** Every check or service, or the chosen ones. */
+  /** Every check, service or target, or the chosen ones. */
   scope: "all" | "chosen";
   checkIds: string[];
+  /** A burn rule's chosen reliability targets (F19). */
+  sloIds: string[];
   services: string[];
   states: Partial<Record<AlertableState, Severity>>;
   severity: Severity;
@@ -278,6 +370,7 @@ export interface RuleDraft {
 export type RuleField =
   | "name"
   | "checks"
+  | "targets"
   | "services"
   | "states"
   | "threshold"
@@ -298,6 +391,8 @@ export const KIND_DEFAULTS: Record<
   new_error_group: { severity: "warning", threshold: "" },
   // The default rule sends critical findings only (FR29); a new rule starts wider.
   anomaly_finding: { severity: "warning", threshold: "" },
+  // F19 FR25: warnings and criticals, as the default *Reliability targets* rule.
+  slo_burn: { severity: "warning", threshold: "" },
 };
 
 export function emptyRuleDraft(
@@ -308,6 +403,7 @@ export function emptyRuleDraft(
     name: "",
     scope: "all",
     checkIds: [],
+    sloIds: [],
     services: [],
     states: { down: DEFAULT_SEVERITY.down },
     severity: "critical",
@@ -363,6 +459,9 @@ export function ruleDraftOf(rule: AlertRule): RuleDraft {
       states: { ...condition.states },
     };
   }
+  if (condition.kind === "slo_burn") {
+    return sloDraftOf(draft, condition.slo_ids, condition.minimum_severity);
+  }
   const services = {
     scope: condition.services === null ? ("all" as const) : ("chosen" as const),
     services: condition.services ?? [],
@@ -395,6 +494,15 @@ export function ruleDraftOf(rule: AlertRule): RuleDraft {
   }
 }
 
+function sloDraftOf(draft: RuleDraft, slo_ids: string[] | null, minimum: Severity): RuleDraft {
+  return {
+    ...draft,
+    scope: slo_ids === null ? "all" : "chosen",
+    sloIds: slo_ids ?? [],
+    severity: minimum,
+  };
+}
+
 const isWhole = (text: string, low: number, high: number) =>
   /^\d+$/.test(text.trim()) && Number(text) >= low && Number(text) <= high;
 
@@ -410,6 +518,12 @@ export function ruleProblems(draft: RuleDraft): Partial<Record<RuleField, string
     }
     if (Object.keys(draft.states).length === 0) {
       problems.states = "Choose at least one state to alert on.";
+    }
+    return problems;
+  }
+  if (draft.kind === "slo_burn") {
+    if (draft.scope === "chosen" && draft.sloIds.length === 0) {
+      problems.targets = "Choose at least one target, or cover every target.";
     }
     return problems;
   }
@@ -443,6 +557,14 @@ function conditionOf(draft: RuleDraft): Condition {
       kind: "check_state",
       check_ids: draft.scope === "all" ? null : draft.checkIds,
       states: draft.states,
+    };
+  }
+  if (draft.kind === "slo_burn") {
+    // The draft's severity is the rule's minimum: a burn's own comes from its tier.
+    return {
+      kind: "slo_burn",
+      slo_ids: draft.scope === "all" ? null : draft.sloIds,
+      minimum_severity: draft.severity,
     };
   }
   const scope = {
@@ -494,6 +616,7 @@ function normalised(draft: RuleDraft): RuleDraft {
   return {
     ...draft,
     checkIds: [...draft.checkIds].sort(),
+    sloIds: [...draft.sloIds].sort(),
     services: [...draft.services].sort(),
     channelIds: [...draft.channelIds].sort(),
     states: Object.fromEntries(Object.entries(draft.states).sort()),

@@ -1,0 +1,28 @@
+{
+  "_why": "One name check guards a release's version and service name at both doors (F28 FR9, design 'One name check at both doors'). The deploy webhook refuses a name that fails it; the worker folds such a version into `__other__`. Go cannot import Python, so the two implementations agree only if both read these cases: apps/workers/internal/pipeline/derive reads them now, and the webhook's Python check reads them when it is built (F28 plan T2.2).",
+  "_rule": "A name fails when it holds a control character (Unicode category Cc: C0, DEL and C1, so NUL too), a bidirectional embedding, override or isolate (U+202A to U+202E, U+2066 to U+2069), or a Unicode tag character (U+E0000 to U+E007F), or when it is exactly the reserved `__other__`. Length is not part of this rule: each door applies its own limit. The empty string passes: it is a span with no version.",
+  "cases": [
+    { "name": "a plain semantic version", "value": "v2.1.0", "allowed": true },
+    { "name": "a commit hash", "value": "3f9c2a1b7e", "allowed": true },
+    { "name": "a build id with punctuation", "value": "build-2026.11.07+42_rc", "allowed": true },
+    { "name": "letters outside ASCII", "value": "versión-ñ-版本", "allowed": true },
+    { "name": "no version at all", "value": "", "allowed": true },
+    {
+      "name": "a name merely containing the reserved word",
+      "value": "__other__2",
+      "allowed": true
+    },
+    { "name": "the reserved value itself", "value": "__other__", "allowed": false },
+    { "name": "a NUL character", "value": "v1\u0000", "allowed": false },
+    { "name": "a newline (C0)", "value": "v1\nv2", "allowed": false },
+    { "name": "an escape character (C0)", "value": "v1\u001b[31m", "allowed": false },
+    { "name": "DEL", "value": "v1\u007f", "allowed": false },
+    { "name": "a C1 control character", "value": "v1\u0085", "allowed": false },
+    { "name": "a right-to-left override", "value": "v1\u202e1v", "allowed": false },
+    { "name": "a left-to-right embedding", "value": "\u202av1", "allowed": false },
+    { "name": "a first-strong isolate", "value": "v1\u2068", "allowed": false },
+    { "name": "a pop directional isolate", "value": "v1\u2069", "allowed": false },
+    { "name": "a Unicode tag character", "value": "v1\udb40\udc41", "allowed": false },
+    { "name": "the cancel tag", "value": "v1\udb40\udc7f", "allowed": false }
+  ]
+}

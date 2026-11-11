@@ -31,7 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from structlog.testing import capture_logs
 
-from nexovue_scheduler import metrics
+from nexovue_scheduler import metrics, slos
 from nexovue_scheduler.jobs import child, queue, worker
 from nexovue_scheduler.jobs.queue import ClaimedJob, enqueue
 from nexovue_scheduler.jobs.worker import Worker
@@ -111,6 +111,7 @@ async def _work_until(
     concurrency: int = 1,
     queues: list[str] | None = None,
     caps: dict[str, int] | None = None,
+    uncapped_floor: int = 0,
     child_memory_limit: int = worker.MAX_CHILD_PRIVATE_BYTES,
 ) -> None:
     """Run workers on `lane` until `done()` holds, or fail when patience runs out."""
@@ -124,6 +125,7 @@ async def _work_until(
                 concurrency=concurrency,
                 task_modules=MODULES,
                 caps=caps or {},
+                uncapped_floor=uncapped_floor,
                 child_memory_limit=child_memory_limit,
             ).run(stop)
         )
@@ -418,6 +420,71 @@ async def test_a_capped_queue_never_holds_more_than_its_slots(
     finally:
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM jobs WHERE queue = :q"), {"q": others})
+
+
+async def test_capped_queues_together_stay_above_the_floor_and_take_turns(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """F3 A56, AC47, F19 D66, AC68: on `scheduler-light` the capped queues (detection, F3's
+    evidence, F28's releases and F19's three, at their real caps) ask for more seats than
+    the floor leaves them. Together they hold at most 8 - 4, every one of them gets its
+    turn, and the uncapped lane, the probes' and alert sweeps', keeps its 4."""
+    capped = {
+        f"{lane}.{name}": cap
+        for name, cap in worker.QUEUE_CAPS.items()
+        if name in {"detection", "evidence", "releases", *slos.QUEUES}
+    }
+    assert sum(capped.values()) > 4, "the real caps no longer ask for more than the floor"
+    probes = f"{lane}.probes"
+    notes = tmp_path / "notes"
+    jobs = 0
+    try:
+        for queue_name in capped:
+            for number in range(3):
+                await _add(
+                    engine,
+                    JobRequest(
+                        task=job_fixtures.SPAN,
+                        queue=queue_name,
+                        kwargs={
+                            "path": str(notes),
+                            "marker": f"capped {queue_name} {number}",
+                            "pause": 0.6,
+                        },
+                    ),
+                )
+                jobs += 1
+        for number in range(8):
+            await _add(
+                engine,
+                JobRequest(
+                    task=job_fixtures.SPAN,
+                    queue=probes,
+                    kwargs={"path": str(notes), "marker": f"probe {number}", "pause": 0.6},
+                ),
+            )
+            jobs += 1
+
+        await _work_until(
+            engine,
+            lane,
+            lambda: sum(line.startswith("end") for line in _lines(notes)) >= jobs,
+            concurrency=8,
+            queues=[*capped, probes],
+            caps=capped,
+            uncapped_floor=4,
+        )
+
+        lines = _lines(notes)
+        assert _most_at_once(lines, "capped") <= 4
+        assert _most_at_once(lines, "probe") >= 4
+        for queue_name, cap in capped.items():
+            assert 1 <= _most_at_once(lines, f"capped {queue_name} ") <= cap
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM jobs WHERE queue = ANY(:q)"), {"q": [*capped, probes]}
+            )
 
 
 def _pids(path: Path) -> list[str]:

@@ -6,6 +6,11 @@ account and leaves every audit entry naming the user id, never the address or
 the name (AC2); the last owner is refused and nothing changes (AC3); an admin's
 removal leaves the same audit result (AC4).
 
+F19 AC88 (plan T3.5): removing a person replaces their address and full name inside
+reliability targets' names and descriptions, live or deleted, and at any depth in their
+change history, across the whole organization whoever wrote them; and the export holds
+the changes they made, and nobody else's.
+
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
@@ -37,7 +42,11 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     DetectionState,
     Finding,
+    FindingNote,
     SessionRecord,
+    SloExclusion,
+    SloTarget,
+    SloTargetChange,
     User,
 )
 from nexovue_api.detection import service as detection
@@ -278,6 +287,86 @@ async def test_the_export_is_cut_at_its_bound_and_says_so(
     assert export.oldest_activity_at == export.activity[-1].at
 
 
+async def _note(
+    db: AsyncSession, acme: ProvisionedTenant, finding: Finding, author: User, body: str
+) -> FindingNote:
+    note = FindingNote(
+        org_id=acme.organization.id, finding_id=finding.id, author_id=author.id, body=body
+    )
+    db.add(note)
+    await db.flush()
+    return note
+
+
+async def _case_finding(db: AsyncSession, acme: ProvisionedTenant, service: str) -> Finding:
+    finding = Finding(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        scope="service",
+        service_name=service,
+        severity="warning",
+        title=f"{service} is slower than normal",
+        signals=[],
+        started_at=_now() - timedelta(hours=1),
+        case_state="investigating",
+        case_opened_at=_now(),
+        case_activity_at=_now(),
+    )
+    db.add(finding)
+    await db.flush()
+    return finding
+
+
+async def test_the_export_holds_the_notes_the_person_wrote_and_nobody_else_s(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F22 AC25, BR16: a person's notes are in their own export, in their words,
+    newest first, with which finding each is on; a colleague's are not."""
+    priya = await _join(db, acme, "member", "Priya")
+    checkout = await _case_finding(db, acme, "checkout")
+    cart = await _case_finding(db, acme, "cart")
+    first = await _note(db, acme, checkout, priya, "restarted the pods")
+    await _note(db, acme, checkout, acme.user, "the owner's own words")
+    db.add(
+        FindingNote(
+            org_id=acme.organization.id,
+            finding_id=cart.id,
+            author_id=priya.id,
+            body="cart is fine",
+            created_at=first.created_at + timedelta(seconds=1),
+        )
+    )
+    await db.flush()
+
+    export = await personal_data.export(db, user=priya, organization=acme.organization, now=_now())
+    body = export.model_dump(mode="json")
+
+    assert [(note["finding_id"], note["body"]) for note in body["notes_written"]] == [
+        (str(cart.id), "cart is fine"),
+        (str(checkout.id), "restarted the pods"),
+    ]
+    assert body["notes_truncated"] is False
+    assert "the owner's own words" not in json.dumps(body)
+
+
+async def test_the_notes_are_cut_at_their_own_bound_and_say_so(
+    db: AsyncSession, acme: ProvisionedTenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC25's truncation flag is the notes' own, apart from the activity's."""
+    monkeypatch.setattr(personal_data, "MAX_NOTES_EXPORTED", 2)
+    checkout = await _case_finding(db, acme, "checkout")
+    for index in range(3):
+        await _note(db, acme, checkout, acme.user, f"note {index}")
+
+    export = await personal_data.export(
+        db, user=acme.user, organization=acme.organization, now=_now()
+    )
+
+    assert len(export.notes_written) == 2
+    assert export.notes_truncated is True
+    assert export.truncated is False
+
+
 # ---- deleting your own account -------------------------------------------------------
 
 
@@ -420,3 +509,167 @@ async def test_an_admins_removal_scrubs_the_same_way(
     removed = next(entry for entry in entries if entry.action == audit.MEMBER_REMOVED)
     assert removed.actor_user_id == acme.user.id
     assert removed.detail == {"role": "member"}
+
+
+# ---- F19 AC88: reliability targets ------------------------------------------------------
+
+
+async def _slo_target(
+    db: AsyncSession, acme: ProvisionedTenant, *, name: str, description: str, **extra: Any
+) -> SloTarget:
+    target = SloTarget(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        name=name,
+        description=description,
+        kind="service_availability",
+        service_name="checkout",
+        objective_percent=99.9,
+        window_days=28,
+        upstream_sampling="no",
+        definition_key=f"key-{uuid.uuid4()}",
+        **extra,
+    )
+    db.add(target)
+    await db.flush()
+    return target
+
+
+def _slo_change(
+    acme: ProvisionedTenant, target: SloTarget, actor: User, before: Any, after: Any
+) -> SloTargetChange:
+    return SloTargetChange(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        slo_id=target.id,
+        actor_user_id=actor.id,
+        what="changed",
+        before=before,
+        after=after,
+    )
+
+
+async def test_ac88_removal_replaces_the_person_inside_every_target_s_free_text(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    priya = await _join(db, acme, "member", "Priya Raman")
+    address = priya.email
+    live = await _slo_target(
+        db, acme, name="Checkout for Priya Raman", description=f"Ask {address} first"
+    )
+    deleted = await _slo_target(
+        db,
+        acme,
+        name="Old checkout",
+        description="PRIYA RAMAN's draft",
+        deleted_at=_now(),
+    )
+    untouched = await _slo_target(db, acme, name="Priyanka's cart", description="")
+    # Written by someone else, naming her deep inside.
+    db.add(
+        _slo_change(
+            acme,
+            live,
+            acme.user,
+            {"name": "x", "notes": [{"by": f"{address}"}]},
+            {"name": "Checkout for Priya Raman", "nested": {"who": ["Priya Raman"]}},
+        )
+    )
+    await db.flush()
+
+    await members.remove(
+        db, actor=acme.user, organization=acme.organization, member_id=priya.id, now=_now()
+    )
+    await db.flush()
+
+    for target in (live, deleted, untouched):
+        await db.refresh(target)
+    assert live.name == f"Checkout for {members.FORMER_MEMBER_NAME}"
+    assert live.description == f"Ask {members.FORMER_MEMBER_NAME} first"
+    assert deleted.description == f"{members.FORMER_MEMBER_NAME}'s draft"
+    assert untouched.name == "Priyanka's cart"
+    changes = list(
+        await db.scalars(
+            select(SloTargetChange).where(SloTargetChange.org_id == acme.organization.id)
+        )
+    )
+    written = json.dumps([[change.before, change.after] for change in changes])
+    assert address not in written and "Priya Raman" not in written
+    assert members.FORMER_MEMBER_NAME in written
+
+
+async def test_ac88_the_export_holds_the_target_changes_the_person_made(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    priya = await _join(db, acme, "member", "Priya")
+    other = await _join(db, acme, "member", "Other")
+    target = await _slo_target(db, acme, name="checkout", description="")
+    db.add_all(
+        [
+            _slo_change(
+                acme, target, priya, {"objective_percent": "99.9"}, {"objective_percent": "99.5"}
+            ),
+            _slo_change(acme, target, other, {"name": "a"}, {"name": "b"}),
+        ]
+    )
+    await db.flush()
+
+    exported = await personal_data.export(
+        db, user=priya, organization=acme.organization, now=_now()
+    )
+
+    assert [(change.slo_id, change.after) for change in exported.slo_target_changes] == [
+        (target.id, {"objective_percent": "99.5"})
+    ]
+
+
+async def test_ac88_removal_replaces_the_person_inside_every_exclusion_s_reason(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F19 T4.7: an exclusion's reason is free text, scrubbed whoever wrote it."""
+    priya = await _join(db, acme, "member", "Priya Raman")
+    target = await _slo_target(db, acme, name="checkout", description="")
+    exclusion = SloExclusion(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        slo_id=target.id,
+        starts_at=_now() - timedelta(hours=2),
+        ends_at=_now() - timedelta(hours=1),
+        reason=f"Upgrade run by Priya Raman ({priya.email})",
+        created_by=acme.user.id,
+    )
+    db.add(exclusion)
+    await db.flush()
+
+    await members.remove(
+        db, actor=acme.user, organization=acme.organization, member_id=priya.id, now=_now()
+    )
+    await db.flush()
+    await db.refresh(exclusion)
+    name = members.FORMER_MEMBER_NAME
+    assert exclusion.reason == f"Upgrade run by {name} ({name})"
+
+
+async def test_ac88_the_export_holds_the_exclusions_the_person_made(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    priya = await _join(db, acme, "member", "Priya")
+    target = await _slo_target(db, acme, name="checkout", description="")
+    for author, reason in ((priya, "Her planned upgrade"), (acme.user, "Someone else's work")):
+        db.add(
+            SloExclusion(
+                org_id=acme.organization.id,
+                project_id=acme.project.id,
+                slo_id=target.id,
+                starts_at=_now() - timedelta(hours=2),
+                ends_at=_now() - timedelta(hours=1),
+                reason=reason,
+                created_by=author.id,
+            )
+        )
+    await db.flush()
+    exported = await personal_data.export(
+        db, user=priya, organization=acme.organization, now=_now()
+    )
+    assert [each.reason for each in exported.slo_exclusions] == ["Her planned upgrade"]
+    assert exported.slo_exclusions_truncated is False

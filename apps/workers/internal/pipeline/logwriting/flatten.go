@@ -15,6 +15,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/vitals"
 )
 
@@ -98,6 +99,16 @@ type stamps struct {
 	derivedRetentionDays uint16
 }
 
+// flattened is what one message's records become.
+type flattened struct {
+	rows     []logRow
+	readings []vitals.Reading
+	// syntheticRefused is the records left out because they claimed to be a
+	// synthetic check's evidence from a door other than the prober's, kept so
+	// the drop is logged, never silent.
+	syntheticRefused proberdoor.Refusals
+}
+
 // rows flattens the decoded payload, which by this point has already been
 // through the mask stage.
 //
@@ -106,11 +117,19 @@ type stamps struct {
 // same attributes again for the sake of a separation the caller does not want:
 // the readings must be written under the same offsets as the rows they came
 // from, or a restart between the two inserts loses one of them.
-func (d decoded) rows(marks stamps) ([]logRow, []vitals.Reading) {
+func (d decoded) rows(marks stamps) flattened {
 	rows := make([]logRow, 0, countRecords(d.request))
 	var readings []vitals.Reading
+	refused := 0
+	prober := proberdoor.Trusted(d.envelope.GetDoor())
 	for _, resourceLogs := range d.request.GetResourceLogs() {
 		resourceAttrs := resourceLogs.GetResource().GetAttributes()
+		// A record claiming to be a check's evidence from any other door is a
+		// forgery, not customer data: dropped and counted (proberdoor).
+		if !prober && proberdoor.ClaimsCheck(resourceAttrs) {
+			refused += recordsOf(resourceLogs)
+			continue
+		}
 		shared := resourceFacts{
 			attrsJSON:   otlpvalue.AttributesJSON(resourceAttrs),
 			serviceName: otlpvalue.StringOrEmpty(resourceAttrs, attrServiceName),
@@ -129,7 +148,9 @@ func (d decoded) rows(marks stamps) ([]logRow, []vitals.Reading) {
 			}
 		}
 	}
-	return rows, readings
+	out := flattened{rows: rows, readings: readings}
+	out.syntheticRefused.Note(refused, d.envelope)
+	return out
 }
 
 // vitalMarks are what a reading takes from its message rather than from its own
@@ -251,8 +272,19 @@ func unixNanoTime(unixNano uint64) (time.Time, bool) {
 func countRecords(request *logsvc.ExportLogsServiceRequest) int {
 	total := 0
 	for _, resourceLogs := range request.GetResourceLogs() {
-		for _, scopeLogs := range resourceLogs.GetScopeLogs() {
-			total += len(scopeLogs.GetLogRecords())
+		total += recordsOf(resourceLogs)
+	}
+	return total
+}
+
+// recordsOf is how many records one resource carries, the rows it would write.
+func recordsOf(resourceLogs *logspb.ResourceLogs) int {
+	total := 0
+	for _, scopeLogs := range resourceLogs.GetScopeLogs() {
+		for _, record := range scopeLogs.GetLogRecords() {
+			if record != nil {
+				total++
+			}
 		}
 	}
 	return total

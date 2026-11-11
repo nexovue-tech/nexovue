@@ -28,6 +28,7 @@ CONDITION_KINDS: Final = (
     "service_latency_p95",
     "service_silent",
     "anomaly_finding",
+    "slo_burn",
 )
 
 SEVERITIES: Final = ("critical", "warning")
@@ -44,6 +45,8 @@ SEVERITY_RANK: Final[dict[str, int]] = {"warning": 1, "critical": 2}
 # `adopted`: a finding's level became the new normal by itself, told to the owners
 # outside any rule (D22). `stopped` and `running_again`: detection stopped judging a
 # project, and resumed (D24); their subject is the project, not an incident or finding.
+# F3 adds `explained`: one follow-up naming a finding's likely place to look, to people
+# only. It tells no news (`FINDING_TOLD_KINDS`) and is never an open alert (FR21, FR22).
 NOTIFICATION_KINDS: Final = (
     "opened",
     "escalated",
@@ -55,6 +58,7 @@ NOTIFICATION_KINDS: Final = (
     "adopted",
     "stopped",
     "running_again",
+    "explained",
 )
 NotificationKind = Literal[
     "opened",
@@ -67,19 +71,32 @@ NotificationKind = Literal[
     "adopted",
     "stopped",
     "running_again",
+    "explained",
 ]
+# F3's follow-up kind, named once for the writer, the outbox and the composer.
+EXPLAINED: Final = "explained"
 
 # Kinds whose subject is a project, so the row names neither an incident nor a finding.
 PROJECT_NOTIFICATION_KINDS: Final = ("stopped", "running_again")
 
 # Kinds that end their subject: PagerDuty resolves the alert on either.
 ENDING_KINDS: Final = frozenset({"resolved", "closed"})
+# Kinds that tell a channel news of their subject (F19 FR24): an ending is owed to a
+# channel one of these reached.
+NEWS_KINDS: Final = frozenset({"opened", "flapping", "escalated", "joined", "repeated"})
 
 # `delivering` is claimed under a lease; a worker that dies leaves it to be
 # reclaimed when the lease ends (ADR-013). `dropped` is a decision not to send —
 # a muted channel, or a PagerDuty resolve withheld while the alert still carries
 # another open subject (D35) — recorded so the delivery log still shows it.
 NOTIFICATION_STATES: Final = ("pending", "delivering", "delivered", "failed", "dropped")
+
+# F19 (FR22, FR26): why a `dropped` row was withheld, so a release is a query, not a
+# reading of `outcome_reason`'s words. `same_news`: a channel people read was told the
+# same news by another subject; `service_snoozed`: a burn's service is snoozed.
+WITHHELD_SAME_NEWS: Final = "same_news"
+WITHHELD_SERVICE_SNOOZED: Final = "service_snoozed"
+WITHHELD_REASONS: Final = (WITHHELD_SAME_NEWS, WITHHELD_SERVICE_SNOOZED)
 
 ATTEMPT_OUTCOMES: Final = ("delivered", "retrying", "failed")
 
@@ -231,6 +248,39 @@ CRITICAL_PROBLEMS_CONDITION: Final = AnomalyFindingCondition(minimum_severity="c
 # How long a service may have been quiet and still be one that "sent some" (FR5).
 SILENCE_LOOKBACK_HOURS: Final = 24
 
+# ------------------------------------------------------ reliability targets
+#
+# F19: a target's allowed failures running out too fast. It names targets, not
+# services, so it has no `covers(service)`: a reader that asks every condition about a
+# service must skip this kind (F19 FR25, design *Burn*).
+
+# A project holds at most this many targets (F19 FR6), so a rule names no more.
+SLO_IDS_MOST: Final = 200
+SloIds = Annotated[list[uuid.UUID], Field(min_length=1, max_length=SLO_IDS_MOST)]
+
+
+class SloBurnCondition(_Condition):
+    """A target burning its allowed failures too fast (F19 FR14 to FR18). `slo_ids`
+    absent means every target in the project, including ones set after the rule. The
+    burn's severity is the tier's, never the rule's; the rule only chooses which it
+    sends, at or above `minimum_severity`."""
+
+    kind: Literal["slo_burn"] = "slo_burn"
+    slo_ids: SloIds | None = None
+    minimum_severity: Severity = "warning"
+
+    def covers_target(self, slo_id: uuid.UUID) -> bool:
+        return self.slo_ids is None or slo_id in self.slo_ids
+
+    def admits(self, severity: str) -> bool:
+        return SEVERITY_RANK[severity] >= SEVERITY_RANK[self.minimum_severity]
+
+
+# The third default rule every project is created with (F19 FR25): every target's
+# warnings and criticals to the organization's owners. Silent until a target exists.
+SLO_RULE_NAME: Final = "Reliability targets"
+SLO_RULE_CONDITION: Final = SloBurnCondition()
+
 Condition = (
     CheckStateCondition
     | ErrorRateCondition
@@ -238,6 +288,7 @@ Condition = (
     | SilenceCondition
     | NewErrorCondition
     | AnomalyFindingCondition
+    | SloBurnCondition
 )
 
 
@@ -258,6 +309,8 @@ def parse_condition(raw: object) -> Condition:
             return NewErrorCondition.model_validate(raw)
         case "anomaly_finding":
             return AnomalyFindingCondition.model_validate(raw)
+        case "slo_burn":
+            return SloBurnCondition.model_validate(raw)
         case _:
             raise ValueError(f"unknown condition kind {kind!r}")
 
@@ -268,3 +321,24 @@ def service_subject(service: str) -> str:
 
 def error_subject(group_id: str) -> str:
     return f"error:{group_id}"
+
+
+# F19: a burn's subject is its target, so two targets on one service are two incidents
+# (design, *The link to findings*). Its notices hang off the same prefix, and the blind
+# notice is the project's (FR13b).
+SLO_PREFIX: Final = "slo:"
+
+
+def slo_subject(slo_id: uuid.UUID | str) -> str:
+    return f"{SLO_PREFIX}{slo_id}"
+
+
+def slo_of_subject(subject_key: str) -> uuid.UUID | None:
+    """The target a subject key names, burn or notice; None when it names none."""
+    if not subject_key.startswith(SLO_PREFIX):
+        return None
+    first = subject_key.removeprefix(SLO_PREFIX).split(":", 1)[0]
+    try:
+        return uuid.UUID(first)
+    except ValueError:
+        return None

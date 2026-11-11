@@ -212,7 +212,7 @@ At 375 px the feed has no sideways scroll, and no case sentence is truncated (AC
 
 ### `/settings/connections` (new, `features/settings/ConnectionsScreen.tsx`)
 
-One rail entry in `shared/settings/settings-nav.ts`, in *This organization*, `requires: "manage_connections"`, keywords `github`, `jira`, `issues`, `tracker`. Hidden, not disabled, from others (F6's C10 convention). The screen repeats *What leaves this server* from the spec, at the top. Repository and mapping tables reflow to stacked rows at 375 px.
+One rail entry in `shared/settings/settings-nav.ts`, in *This organization*, `requires: "manage_connections"`, keywords `github`, `issues`, `tracker`, with `jira` added by Step 7 only if it goes ahead (founder, 2026-11-09: nothing public mentions Jira until Atlassian answers). Hidden, not disabled, from others (F6's C10 convention). The screen repeats *What leaves this server* from the spec, at the top. Repository and mapping tables reflow to stacked rows at 375 px.
 
 | State | What it shows |
 |---|---|
@@ -237,7 +237,6 @@ One rail entry in `shared/settings/settings-nav.ts`, in *This organization*, `re
 | Abandoned on GitHub | "Setup did not finish on GitHub." Shown when they return to settings with a setup still open | **Start again** | Start route |
 | `state` wrong or reused | "This setup link is not valid. Nothing was changed." | **Start again** | Settings |
 | `state` or code expired, past one hour | "This setup link has expired. Nothing was changed." | **Start again** | Settings |
-| Session ended | The sign-in screen, then "Sign in finished, but setup must start again." | **Start again** | Settings |
 | App made, not installed | "Now choose which repositories it may reach." | **Install on GitHub** | GitHub's install page |
 | No repository chosen | "The App is installed, but reaches no repository." | **Choose repositories on GitHub** | GitHub |
 | First test failed | The failure in words (FR44) | **Test again** | Settings |
@@ -883,19 +882,9 @@ All arithmetic or guesses. Nothing is measured.
 
 Written here, not in `docs/decisions/`. Each takes the next free number when approved.
 
-### Proposed ADR: Trackers are reconciled, and a webhook only rings the doorbell
+### Filed: Trackers are reconciled, and a webhook only rings the doorbell
 
-**Status:** Proposed. **Context.** Two systems hold a status. Either can be unreachable or written to by someone else. Neither GitHub's nor Jira's pages read promise delivery order, and a self-hosted install may not be reachable at all.
-
-**Decision.**
-
-1. Each synced link stores `seen_state` and `wanted_state`. One function compares them with a fresh read, per *The comparison*.
-2. A webhook, once its signature is proved, only makes that function run sooner. Nothing in its body changes a case, and it adds no job.
-3. Polling alone must be enough.
-4. No delivery table.
-5. Only status crosses, plus fixed comments within BR10's limit.
-
-**Consequences.** Duplicates, order and replay stop mattering. An unreachable install works. It costs a charged read per active link on a timer, and up to five minutes of delay without a webhook. It does not suit a future feature that needs every change, such as syncing comments. That would need its own decision.
+Filed as [ADR-035](../../decisions/ADR-035-trackers-are-reconciled-and-a-webhook-only-rings-the-doorbell.md) on 2026-11-09, when Step 4 built the reconcile. The text that stood here is that record now.
 
 ### Proposed ADR: A case is a finding's columns, with one active case per service
 
@@ -911,18 +900,9 @@ Written here, not in `docs/decisions/`. Each takes the next free number when app
 
 **Consequences.** A finding's meaning stays what F6 defined. F6's open indexes and the outbox are untouched. A check failure with no finding has no notes or tracker link, which is revisited if users ask. `retention.py`'s rule gains clauses.
 
-### Proposed ADR: `scheduler-connections` makes every tracker call, on narrow settings
+### Filed: `scheduler-connections` makes every tracker call, on narrow settings
 
-**Status:** Proposed; carries FD23, amends foundation section 1's "API, on a person's click", and adds a role under ADR-019. **Decision.**
-
-1. A new role, from the same image, on queues `connections` and `connections-interactive`, with sync, on `connections`, capped below the slots.
-2. It holds `CONNECTION_SECRET_KEY`, and not the shared anchor's keys. `SCHEDULER_ROLE` gains `connections`, and `TASK_SETS` an entry.
-3. The API adds jobs and reads results, per ADR-011's reason.
-4. It runs no model, enforced by a test on the modules it actually loads.
-5. Typed addresses are limited to known hosts until a self-hosted tracker is supported.
-6. It is optional: an install can leave it out, and hosted has none until founder decision 3 is answered.
-
-**Consequences.** A slow GitHub holds no alert. A click's result arrives a moment later, not in the response. One more container, memory unmeasured. F5's GitHub work runs here too.
+Filed as [ADR-030](../../decisions/ADR-030-scheduler-connections-makes-every-tracker-call.md) on 2026-11-08, when Step 3 built the role. The text that stood here is that record now.
 
 ## What other features must change
 

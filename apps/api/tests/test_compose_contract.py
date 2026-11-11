@@ -15,11 +15,14 @@ from typing import Any, Final
 
 import pytest
 import yaml
+from nexovue_platform.evidence import EVIDENCE_QUEUE
 
 import nexovue_api
 from nexovue_api.roles import command_for
+from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_QUEUE
+from nexovue_scheduler.jobs.worker import QUEUE_CAPS
 
 COMPOSE: Final = Path(nexovue_api.__file__).parents[4] / "deploy" / "compose"
 
@@ -56,6 +59,9 @@ SETTINGS: Final = {
     "WORKERS_MASKING_HASH_SECRET": "masking-secret",
     "CHECK_SECRET_KEY": "check-key",
     "CREDENTIAL_ENCRYPTION_KEY": "credential-key",
+    "CONNECTION_SECRET_KEY": "connection-key",
+    "POSTGRES_INSIGHT_PASSWORD": "insight-postgres-secret",
+    "AI_SECRET_KEY": "ai-key-stand-in",
     "S3_BUCKET": "nexovue",
     "S3_ACCESS_KEY_ID": "install-access-key",
     "S3_SECRET_ACCESS_KEY": "install-secret-key",
@@ -105,8 +111,12 @@ def layout(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
+# Every optional service, so the general rules below hold for them too.
+EVERY_PROFILE: Final = ("monitoring", "connections")
+
+
 def test_only_the_edge_publishes_a_port(layout: str, tmp_path: Path) -> None:
-    services = _render(layout, tmp_path, profiles=("monitoring",))
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
 
     published = sorted(name for name, service in services.items() if service.get("ports"))
 
@@ -116,7 +126,7 @@ def test_only_the_edge_publishes_a_port(layout: str, tmp_path: Path) -> None:
 def test_every_long_running_service_restarts_and_has_a_healthcheck(
     layout: str, tmp_path: Path
 ) -> None:
-    services = _render(layout, tmp_path, profiles=("monitoring",))
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
 
     unchecked = sorted(
         name
@@ -134,7 +144,7 @@ def test_every_long_running_service_restarts_and_has_a_healthcheck(
 
 
 def test_images_are_ours_by_version_or_pinned(layout: str, tmp_path: Path) -> None:
-    services = _render(layout, tmp_path, profiles=("monitoring",))
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
 
     for name, service in services.items():
         image = service["image"]
@@ -290,7 +300,7 @@ def test_scheduler_light_judges_detection_beside_its_probes(layout: str, tmp_pat
     queues = {
         name: _queues_of(
             command_for(service["command"][0], service["command"][1:]),
-            service["environment"]["PROBER_REGION"],
+            service["environment"].get("PROBER_REGION", "local"),
         )
         for name, service in services.items()
         if name.startswith("scheduler-") and name != "scheduler-beat"
@@ -301,6 +311,66 @@ def test_scheduler_light_judges_detection_beside_its_probes(layout: str, tmp_pat
     assert f"light.{region}" in queues["scheduler-light"], "the location's probes were dropped"
     others = [name for name, taken in queues.items() if DETECTION_QUEUE in taken]
     assert others == ["scheduler-light"], f"{layout}: {others} take detection jobs"
+    # F3 AC47: the evidence job gathers on `scheduler-light` alone, beside detection.
+    gatherers = [name for name, taken in queues.items() if EVIDENCE_QUEUE in taken]
+    assert gatherers == ["scheduler-light"], f"{layout}: {gatherers} take evidence jobs"
+
+
+def _floor_of(argv: list[str]) -> int:
+    return int(argv[argv.index("--uncapped-floor") + 1]) if "--uncapped-floor" in argv else 0
+
+
+def _concurrency_of(argv: list[str]) -> int:
+    return int(argv[argv.index("--concurrency") + 1])
+
+
+def test_slo_work_runs_on_scheduler_light_under_its_floor(layout: str, tmp_path: Path) -> None:
+    """F19 D66, AC68, NFR2: the three SLO queues are `scheduler-light`'s and no other
+    worker's, each capped, and every capped queue together sits under a floor that
+    leaves probes and alert sweeps 4 of its 8 slots. No `scheduler-slo` exists."""
+    services = _render(layout, tmp_path)
+    assert "scheduler-slo" not in services, f"{layout}: a scheduler-slo service exists"
+
+    argv = {
+        name: command_for(service["command"][0], service["command"][1:])
+        for name, service in services.items()
+        if name.startswith("scheduler-") and name != "scheduler-beat"
+    }
+    queues = {
+        name: _queues_of(arguments, services[name]["environment"].get("PROBER_REGION", "local"))
+        for name, arguments in argv.items()
+    }
+    light = argv["scheduler-light"]
+    for queue_name in slos.QUEUES:
+        assert queue_name in queues["scheduler-light"]
+        assert QUEUE_CAPS[queue_name] == slos.QUEUE_CAPS[queue_name]
+        others = [name for name, taken in queues.items() if queue_name in taken]
+        assert others == ["scheduler-light"], f"{layout}: {others} take {queue_name}"
+    assert (_concurrency_of(light), _floor_of(light)) == (8, 4)
+    capped = [name for name in queues["scheduler-light"] if name in QUEUE_CAPS]
+    assert set(capped) >= {DETECTION_QUEUE, *slos.QUEUES, *releases.QUEUES}
+
+
+def test_the_release_sync_runs_on_scheduler_light_capped_under_its_floor(
+    layout: str, tmp_path: Path
+) -> None:
+    """F28 D31, AC72: the `releases` queue is `scheduler-light`'s and no other worker's,
+    capped at two seats inside the floor that keeps probes and alert sweeps 4 of 8."""
+    services = _render(layout, tmp_path)
+    argv = {
+        name: command_for(service["command"][0], service["command"][1:])
+        for name, service in services.items()
+        if name.startswith("scheduler-") and name != "scheduler-beat"
+    }
+    queues = {
+        name: _queues_of(arguments, services[name]["environment"].get("PROBER_REGION", "local"))
+        for name, arguments in argv.items()
+    }
+    for queue_name in releases.QUEUES:
+        assert QUEUE_CAPS[queue_name] == releases.QUEUE_CAPS[queue_name] == 2
+        others = [name for name, taken in queues.items() if queue_name in taken]
+        assert others == ["scheduler-light"], f"{layout}: {others} take {queue_name}"
+    assert (_concurrency_of(argv["scheduler-light"]), _floor_of(argv["scheduler-light"])) == (8, 4)
 
 
 def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
@@ -316,4 +386,228 @@ def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
 
     assert DETECTION_QUEUE in workers["scheduler-light"]
     assert "light.local" in workers["scheduler-light"]
+    assert set(slos.QUEUES) <= set(workers["scheduler-light"])
+    assert set(releases.QUEUES) <= set(workers["scheduler-light"])
+    assert _floor_of(dev["services"]["scheduler-light"]["command"].split()) == 4
     assert DETECTION_QUEUE not in workers["scheduler-deliveries"]
+
+
+# ------------------------------------------------------- F22: scheduler-connections
+
+CONNECTIONS_ROLE: Final = "scheduler-connections"
+# AC33: what the role holds, and nothing else. No Kafka, no check key, no mail, no object
+# store: it opens tracker keys and calls trackers, and a compromise of it reaches no more.
+CONNECTIONS_ROLE_VARIABLES: Final = frozenset(
+    {
+        "ENV",
+        "NEXOVUE_DEPLOYMENT",
+        "LOG_LEVEL",
+        "LOG_FORMAT",
+        "SCHEDULER_ROLE",
+        "POSTGRES_DSN",
+        "APP_BASE_URL",
+        "CONNECTION_SECRET_KEY",
+        "CONNECTION_SECRET_PREVIOUS_KEYS",
+    }
+)
+
+
+def test_the_connections_role_runs_only_where_its_profile_is_on(tmp_path: Path) -> None:
+    """AC118: `NEXOVUE_CONNECTIONS=no` leaves the profile off, and Compose starts no role."""
+    assert CONNECTIONS_ROLE not in _render("self-hosted", tmp_path)
+    assert CONNECTIONS_ROLE in _render("self-hosted", tmp_path, profiles=("connections",))
+
+
+@pytest.mark.parametrize("layout_name", ["self-hosted", "quickstart", "three-brokers"])
+def test_the_connections_role_holds_exactly_its_own_variables(
+    layout_name: str, tmp_path: Path
+) -> None:
+    """AC33: an exact list, so a merged `control-plane-env` (its check key, its mail and
+    object store keys) or anything added later fails here."""
+    services = _render(layout_name, tmp_path, profiles=("connections",))
+
+    held = set(services[CONNECTIONS_ROLE]["environment"])
+
+    assert held == CONNECTIONS_ROLE_VARIABLES, sorted(held ^ CONNECTIONS_ROLE_VARIABLES)
+    assert services[CONNECTIONS_ROLE]["environment"]["SCHEDULER_ROLE"] == "connections"
+    assert services[CONNECTIONS_ROLE]["command"] == ["scheduler-connections"]
+
+
+def test_only_the_api_and_the_connections_role_hold_the_connection_key(
+    layout: str, tmp_path: Path
+) -> None:
+    """AC33, FD10: the separation is which container holds the key."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if "CONNECTION_SECRET_KEY" in (service.get("environment") or {})
+    }
+
+    assert "api" in holders
+    assert holders <= {"api", CONNECTIONS_ROLE}, f"{layout}: {sorted(holders)}"
+
+
+def test_the_hosted_overlay_names_no_connections_role() -> None:
+    """Hosted has no tracker connections until founder decision 3 (step H)."""
+    hosted = yaml.safe_load((COMPOSE / "nexovue.hosted.yaml").read_text())["services"]
+
+    assert CONNECTIONS_ROLE not in hosted
+
+
+def test_an_install_without_the_connection_key_refuses_to_start(tmp_path: Path) -> None:
+    """`${…:?}`: an upgrade adds the key (`deploy/nexovue`), so a missing one is a fault."""
+    values = {k: v for k, v in SETTINGS.items() if k != "CONNECTION_SECRET_KEY"}
+
+    rendered = _compose_config("self-hosted", tmp_path, values)
+
+    assert rendered.returncode != 0
+    assert "set CONNECTION_SECRET_KEY" in rendered.stderr
+
+
+def test_the_development_stack_runs_the_connections_role_on_its_own_tasks() -> None:
+    dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
+    service = dev["services"][CONNECTIONS_ROLE]
+
+    argv = service["command"].split()
+    assert argv[argv.index("--queues") + 1] == "connections,connections-interactive"
+    assert argv[argv.index("--tasks") + 1] == "connections"
+    assert service["environment"]["SCHEDULER_ROLE"] == "connections"
+    assert "CHECK_SECRET_KEY" not in service["environment"]
+
+
+def test_a_restore_stops_every_role_that_writes_to_postgres(tmp_path: Path) -> None:
+    """T3.12: a role left running would write to the database being replaced. Held against
+    the rendered install with every profile on, so a new role must join the stop list."""
+    from install_kit import run_kit_function
+
+    services = _render("self-hosted", tmp_path, profiles=EVERY_PROFILE)
+    writers = {
+        name
+        for name, service in services.items()
+        if "POSTGRES_DSN" in (service.get("environment") or {}) and name not in ONE_SHOT
+    }
+    settings = tmp_path / "kit-settings.env"
+    settings.write_text("NEXOVUE_CONNECTIONS='yes'\n")
+
+    stopped = run_kit_function(tmp_path, "services_to_stop", str(settings)).stdout.split()
+
+    assert CONNECTIONS_ROLE in writers
+    assert writers <= set(stopped), sorted(writers - set(stopped))
+
+
+INSIGHT_ROLE: Final = "scheduler-insight"
+# F3 AC41: what the AI role holds, and nothing else. No Kafka, ClickHouse, check, channel or
+# connection key, no mail, no object store.
+INSIGHT_ROLE_VARIABLES: Final = frozenset(
+    {
+        "ENV",
+        "NEXOVUE_DEPLOYMENT",
+        "LOG_LEVEL",
+        "LOG_FORMAT",
+        "SCHEDULER_ROLE",
+        "POSTGRES_DSN",
+        "AI_SECRET_KEY",
+        "AI_SECRET_PREVIOUS_KEYS",
+        "AI_PRIVATE_ENDPOINTS",
+    }
+)
+
+
+def test_the_insight_role_holds_exactly_its_own_variables(layout: str, tmp_path: Path) -> None:
+    """AC41: an exact list in every layout, so a merged `control-plane-env` fails here."""
+    services = _render(layout, tmp_path)
+    insight = services[INSIGHT_ROLE]
+
+    held = set(insight["environment"])
+
+    assert held == INSIGHT_ROLE_VARIABLES, sorted(held ^ INSIGHT_ROLE_VARIABLES)
+    assert insight["environment"]["SCHEDULER_ROLE"] == "insight"
+    assert insight["environment"]["POSTGRES_DSN"].startswith(
+        "postgresql+asyncpg://nexovue_insight:"
+    )
+    assert insight["command"] == [INSIGHT_ROLE]
+    assert insight["deploy"]["resources"]["limits"]["memory"] == str(384 * 2**20)
+
+
+def test_only_the_api_and_the_insight_role_hold_the_ai_key(layout: str, tmp_path: Path) -> None:
+    """AC41, FD10: read by value, so a key passed under another name is caught too."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if SETTINGS["AI_SECRET_KEY"] in json.dumps(service.get("environment") or {})
+    }
+
+    # The API seals with it (F3 T4.6); the AI role opens with it; nothing else holds it.
+    assert holders == {"api", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
+
+
+def test_only_setup_and_the_insight_role_hold_its_password(layout: str, tmp_path: Path) -> None:
+    """AC41: setup creates the account; the role signs in as it; nothing else knows it."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if SETTINGS["POSTGRES_INSIGHT_PASSWORD"] in json.dumps(service.get("environment") or {})
+    }
+
+    assert holders == {"setup", INSIGHT_ROLE}, f"{layout}: {sorted(holders)}"
+
+
+def test_the_insight_role_shares_a_network_with_postgres_and_the_monitor_alone(
+    layout: str, tmp_path: Path
+) -> None:
+    """AC42's Compose half: who the AI role can reach by name. Prometheus scrapes it, and its
+    metrics carry no tenant (design, *Network*). The live half runs in `just insight-fence`."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+    own = set(services[INSIGHT_ROLE]["networks"])
+
+    neighbours = {
+        name
+        for name, service in services.items()
+        if name != INSIGHT_ROLE and own & set(service.get("networks") or {})
+    }
+
+    assert own == {"ai"}
+    assert neighbours == {"postgres", "prometheus"}, f"{layout}: {sorted(neighbours)}"
+
+
+def test_the_insight_role_can_be_left_out_by_one_setting(tmp_path: Path) -> None:
+    """AC103: `SCHEDULER_INSIGHT_REPLICAS=0` runs the install with no AI container."""
+    services = _render("self-hosted", tmp_path, SCHEDULER_INSIGHT_REPLICAS="0")
+
+    assert services[INSIGHT_ROLE]["deploy"]["replicas"] == 0
+    # The API reads the same setting, so `/settings/ai` says no AI container runs.
+    assert str(services["api"]["environment"]["SCHEDULER_INSIGHT_REPLICAS"]) == "0"
+
+
+def test_an_install_without_the_ai_settings_still_renders(tmp_path: Path) -> None:
+    """AC71: `:-`, never `:?`, so a missing AI key or password stops this role alone, which
+    refuses them itself, and never the whole install."""
+    values = {
+        key: value
+        for key, value in SETTINGS.items()
+        if key not in {"AI_SECRET_KEY", "POSTGRES_INSIGHT_PASSWORD"}
+    }
+
+    assert _compose_config("self-hosted", tmp_path, values).returncode == 0
+
+
+def test_the_development_stack_runs_the_insight_role_on_its_own_tasks_and_network() -> None:
+    dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
+    service = dev["services"][INSIGHT_ROLE]
+
+    argv = service["command"].split()
+    assert argv[argv.index("--queues") + 1] == "insight"
+    assert argv[argv.index("--tasks") + 1] == "insight"
+    assert service["environment"]["SCHEDULER_ROLE"] == "insight"
+    assert "nexovue_insight:" in service["environment"]["POSTGRES_DSN"]
+    assert service["networks"] == ["ai"]
+    assert "CHECK_SECRET_KEY" not in service["environment"]
+    # The dead `insight` service and its model address are gone (F3 owns the removal).
+    assert "insight" not in dev["services"]
+    assert "LLM_BASE_URL" not in (COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8")

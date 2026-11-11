@@ -3,8 +3,10 @@
 The zero-configuration promise (US21.1, FR8, AC21): a new organization's first
 check that goes down emails the owner, which is only true if signup leaves an
 owners channel and a default rule sending to it. F6 FR29 adds a second default
-rule, *Critical problems*, so a critical finding emails the owner too. And the
-promise's limit (AC22): a default rule somebody deleted stays deleted.
+rule, *Critical problems*, so a critical finding emails the owner too. F19 FR25 adds a
+third, *Reliability targets*, silent until a target exists, for new projects and,
+through migration 0058, existing ones (AC76). And the promise's limit (AC22): a default
+rule somebody deleted stays deleted.
 
 Every test runs in a transaction that is rolled back.
 
@@ -13,11 +15,13 @@ This suite fails rather than skips when the stack is down; see tests/helpers/liv
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -27,8 +31,9 @@ from nexovue_platform.alerts.model import (
     CRITICAL_PROBLEMS_RULE_NAME,
     DEFAULT_RULE_NAME,
     OWNERS_CHANNEL_NAME,
+    SLO_RULE_NAME,
 )
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.data.postgres.models import (
@@ -108,7 +113,7 @@ async def _channels_of(db: AsyncSession, rule: AlertRule) -> list[NotificationCh
     return list(await db.scalars(statement))
 
 
-async def test_signup_leaves_an_owners_channel_and_two_default_rules_sending_to_it(
+async def test_signup_leaves_an_owners_channel_and_three_default_rules_sending_to_it(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
     channels = list(
@@ -120,7 +125,7 @@ async def test_signup_leaves_an_owners_channel_and_two_default_rules_sending_to_
         ("owners", OWNERS_CHANNEL_NAME)
     ]
 
-    checks_down, critical_problems = await _rules(db, tenant.project.id)
+    checks_down, critical_problems, reliability = await _rules(db, tenant.project.id)
     assert checks_down.name == DEFAULT_RULE_NAME
     assert checks_down.condition == {
         "kind": "check_state",
@@ -135,12 +140,19 @@ async def test_signup_leaves_an_owners_channel_and_two_default_rules_sending_to_
         "services": None,
         "minimum_severity": "critical",
     }
-    for rule in (checks_down, critical_problems):
+    # F19 FR25: every target's warnings and criticals; silent until a target exists.
+    assert reliability.name == SLO_RULE_NAME
+    assert reliability.condition == {
+        "kind": "slo_burn",
+        "slo_ids": None,
+        "minimum_severity": "warning",
+    }
+    for rule in (checks_down, critical_problems, reliability):
         assert (rule.is_default, rule.enabled) == (True, True)
         assert [channel.id for channel in await _channels_of(db, rule)] == [channels[0].id]
 
 
-async def test_both_defaults_are_audited_in_the_owners_name(
+async def test_every_default_is_audited_in_the_owners_name(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
     entries = list(
@@ -149,7 +161,7 @@ async def test_both_defaults_are_audited_in_the_owners_name(
         )
     )
     created = [entry for entry in entries if entry.action == "alert_rule.created"]
-    assert len(created) == 2
+    assert len(created) == 3
     assert {entry.actor_user_id for entry in created} == {tenant.user.id}
     [channel] = [entry for entry in entries if entry.action == "notification_channel.created"]
     assert channel.actor_user_id == tenant.user.id
@@ -167,7 +179,11 @@ async def test_a_new_project_gets_its_own_default_rules_to_the_same_owners(
 
     first = await _rules(db, tenant.project.id)
     second = await _rules(db, created.id)
-    assert [rule.name for rule in second] == [DEFAULT_RULE_NAME, CRITICAL_PROBLEMS_RULE_NAME]
+    assert [rule.name for rule in second] == [
+        DEFAULT_RULE_NAME,
+        CRITICAL_PROBLEMS_RULE_NAME,
+        SLO_RULE_NAME,
+    ]
     assert {rule.id for rule in second}.isdisjoint({rule.id for rule in first})
     owners = (await _channels_of(db, first[0]))[0].id
     for rule in second:
@@ -200,7 +216,7 @@ async def test_deleting_a_project_takes_its_rules_and_closes_its_incidents(
         actor=tenant.user,
         request=ProjectCreateRequest(name="Staging"),
     )
-    rule, _ = await _rules(db, staging.id)
+    rule, *_ = await _rules(db, staging.id)
     incident = Incident(
         org_id=tenant.organization.id,
         project_id=staging.id,
@@ -221,4 +237,34 @@ async def test_deleting_a_project_takes_its_rules_and_closes_its_incidents(
     assert await _rules(db, staging.id) == []
     await db.refresh(incident)
     assert incident.resolved_at is not None
-    assert len(await _rules(db, tenant.project.id)) == 2
+    assert len(await _rules(db, tenant.project.id)) == 3
+
+
+def _backfill_statement() -> str:
+    """Migration 0058's own statement, run here against a project that predates it."""
+    [path] = (Path(__file__).resolve().parents[1] / "migrations" / "versions").glob("0058_*.py")
+    spec = importlib.util.spec_from_file_location("revision_0058", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    statement = module.BACKFILL_SLO_RULE_SQL
+    assert isinstance(statement, str)
+    return statement
+
+
+async def test_an_existing_project_gains_the_reliability_rule_to_its_owners(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """AC76: a project created before 0058 holds the default rule after it."""
+    await db.execute(
+        delete(AlertRule).where(
+            AlertRule.project_id == tenant.project.id, AlertRule.name == SLO_RULE_NAME
+        )
+    )
+    await db.execute(text(_backfill_statement()))
+    [reliability] = [
+        rule for rule in await _rules(db, tenant.project.id) if rule.name == SLO_RULE_NAME
+    ]
+    assert (reliability.condition_kind, reliability.is_default) == ("slo_burn", True)
+    [owners] = await _channels_of(db, reliability)
+    assert owners.kind == "owners"

@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-Built; awaiting review. Specification (through D36), design (revision 2.1) and plan (revision 2) approved.
+Merged to `main` on 2026-11-02 (PR #24). Specification (through D36), design (revision 2.1) and plan (revision 2) approved.
 
 ## Current task
 
-The pull request is open for the founder's review. The feature is built and checked here.
+None. F6 is merged; the measurements below wait for the deployed server.
 
 ## Completed
 
@@ -194,7 +194,7 @@ The pull request is open for the founder's review. The feature is built and chec
 
 ## Next action
 
-1. The founder reviews and merges the pull request (CI: `check`, `license/cla`, CodeQL).
+1. Done: merged 2026-11-02 (PR #24), all CI checks green.
 2. On the founder's Mac: Step 1's demo measurement, and the fault-bed run for AC36
    (`tools/fault-bed/README.md`, about 3 weeks of warm-up and 12 days of run).
 3. The plan's demo checks for Steps 2c to 6, which need the application images.

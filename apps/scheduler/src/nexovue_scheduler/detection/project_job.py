@@ -64,8 +64,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
-from nexovue_platform.alerts.model import service_subject
+from nexovue_platform.alerts.model import SLO_RULE_CONDITION, service_subject
 from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
+from nexovue_platform.cases import CASE_JOIN_WINDOW
 from nexovue_platform.detection import (
     ADOPTED_AUDIT_ACTION,
     ADOPTION_AFTER_DAYS,
@@ -79,13 +80,22 @@ from nexovue_platform.detection import (
     normal_band,
     shift_ratio,
 )
+from nexovue_platform.evidence import (
+    CHANGED,
+    CLOSED,
+    OPENED,
+    SETTLE_DELAY_SECONDS,
+    SETTLED,
+    ReadReason,
+    gather_evidence_request,
+)
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.alerts.incidents import SERVICE_KINDS
-from nexovue_scheduler.detection import JUDGE_PROJECT_TASK, notify
+from nexovue_scheduler.detection import JUDGE_PROJECT_TASK, events, notify
 from nexovue_scheduler.detection.baselines import (
     EXCLUDED_KEY,
     FAILING,
@@ -146,6 +156,7 @@ from nexovue_scheduler.detection.store import (
     reading_version,
     store_for_process,
 )
+from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import enqueue, with_engine
 
@@ -275,14 +286,25 @@ _OPEN_PROJECT_FINDING: Final = text(
     FOR UPDATE
     """
 )
+# A new finding joins its scope's active case at birth (F22 FR9, FR10): the same
+# scope and service, a case a person acted on since `join_since`. The two active-case
+# indexes say at most one row answers. Joining sets no case column of its own, so
+# traffic can never hold a case open (D42). The casts give the values one type,
+# since each is bound both as a column and in a comparison.
 _OPEN: Final = text(
     """
     INSERT INTO findings
         (org_id, project_id, scope, service_name, severity, muted, title, signals, services,
-         started_at)
+         started_at, root_finding_id)
     VALUES (:org_id, :project_id, :scope, :service_name, :severity, :muted, :title,
-            CAST(:signals AS jsonb), CAST(:services AS jsonb), :started_at)
-    RETURNING id
+            CAST(:signals AS jsonb), CAST(:services AS jsonb), :started_at,
+            (SELECT active.id FROM findings AS active
+             WHERE active.org_id = :org_id AND active.project_id = :project_id
+               AND active.scope = CAST(:scope AS varchar)
+               AND active.service_name IS NOT DISTINCT FROM CAST(:service_name AS varchar)
+               AND active.case_state = 'investigating'
+               AND active.case_activity_at > :join_since))
+    RETURNING id, root_finding_id
     """
 )
 _UPDATE: Final = text(
@@ -339,16 +361,19 @@ _COMPLETED: Final = text(
     """
 )
 # BR2, AC20: an open finding is linked to every open threshold or *went silent*
-# incident on its service. Each run, so an incident that opened while this job was
-# deciding is linked by the next run if its own sweep could not see the finding.
+# incident on its service, and to every open reliability target burn about it (F19
+# FR20), whose key is its target. Each run, so an incident that opened while this job
+# was deciding is linked by the next run if its own sweep could not see the finding.
 _LINK_INCIDENTS: Final = text(
     """
     INSERT INTO finding_incidents (org_id, finding_id, incident_id)
     SELECT :org_id, :finding_id, incidents.id
     FROM incidents
     WHERE incidents.org_id = :org_id AND incidents.project_id = :project_id
-      AND incidents.subject_key = :subject_key AND incidents.resolved_at IS NULL
-      AND incidents.condition_kind = ANY(CAST(:kinds AS text[]))
+      AND incidents.resolved_at IS NULL
+      AND ((incidents.subject_key = :subject_key
+            AND incidents.condition_kind = ANY(CAST(:kinds AS text[])))
+           OR (incidents.condition_kind = :burn_kind AND incidents.about_key = :subject_key))
     ON CONFLICT DO NOTHING
     """
 )
@@ -905,7 +930,7 @@ async def _keep_project_finding(
             datetime.fromisoformat(phases[name][TRAFFIC]["unusual_since"])
             for name in decision.involved
         )
-        finding_id = (
+        opened = (
             await connection.execute(
                 _OPEN,
                 {
@@ -918,9 +943,12 @@ async def _keep_project_finding(
                     "signals": json.dumps([signal]),
                     "services": json.dumps(sorted(decision.involved)),
                     "started_at": started,
+                    "join_since": now - CASE_JOIN_WINDOW,
                 },
             )
-        ).scalar_one()
+        ).one()
+        finding_id = opened.id
+        await _read_facts(connection, key, finding_id, *OPENING_READS)
         outcome.opened += 1
         outcome.notified += await notify.finding_opened(
             connection,
@@ -928,6 +956,19 @@ async def _keep_project_finding(
             org_id=key["org_id"],
             severity="critical",
             services=sorted(decision.involved),
+            at=now,
+        )
+        # Beside the notify call, never inside it (F22 T1.10): a muted finding
+        # returns from notify before the flap guard, and still gets its event.
+        await events.finding_opened(
+            connection,
+            org_id=key["org_id"],
+            project_id=key["project_id"],
+            finding_id=finding_id,
+            scope="project",
+            service_name=None,
+            severity="critical",
+            root_finding_id=opened.root_finding_id,
             at=now,
         )
     elif decision.close is not None and row is not None:
@@ -942,8 +983,12 @@ async def _keep_project_finding(
             },
         )
         outcome.closed += 1
+        await _read_facts(connection, key, row.id, CLOSED)
         outcome.notified += await notify.finding_closed(
             connection, row.id, org_id=key["org_id"], severity="critical", at=now
+        )
+        await events.finding_closed(
+            connection, org_id=key["org_id"], finding_id=row.id, reason=decision.close, at=now
         )
         return ProjectContext(pending=decision.pending)
     elif row is not None:
@@ -1110,11 +1155,25 @@ async def _keep_finding(
         _name_evidence(detection, service, finding, change.worsened, judged)
         if change.opened:
             finding.muted = muted
-            finding_id = await _open(connection, key, service, finding, zone)
+            finding_id, root_finding_id = await _open(
+                connection, key, service, finding, zone, now=now
+            )
+            await _read_facts(connection, key, finding_id, *OPENING_READS)
             since = finding.started_at
             outcome.opened += 1
             outcome.notified += await notify.finding_opened(
                 connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+            )
+            await events.finding_opened(
+                connection,
+                org_id=key["org_id"],
+                project_id=key["project_id"],
+                finding_id=finding_id,
+                scope="service",
+                service_name=service,
+                severity=finding.severity,
+                root_finding_id=root_finding_id,
+                at=now,
             )
         else:
             assert finding_id is not None, "a finding the lifecycle kept open has a row"
@@ -1136,8 +1195,16 @@ async def _keep_finding(
                 },
             )
             outcome.closed += 1
+            await _read_facts(connection, key, finding_id, CLOSED)
             outcome.notified += await notify.finding_closed(
                 connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+            )
+            await events.finding_closed(
+                connection,
+                org_id=key["org_id"],
+                finding_id=finding_id,
+                reason=change.closed,
+                at=now,
             )
             finding, finding_id = None, None
         if change.joined:
@@ -1369,8 +1436,12 @@ async def _adopt(
         },
     )
     outcome.closed += 1
+    await _read_facts(connection, key, finding_id, CLOSED)
     outcome.notified += await notify.finding_adopted(
         connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+    )
+    await events.finding_closed(
+        connection, org_id=key["org_id"], finding_id=finding_id, reason="adopted", at=now
     )
     # The rebuilt normal is asked for by the next run, which finds this one stale.
     return True
@@ -1387,9 +1458,14 @@ async def _notify_change(
 ) -> int:
     """What a minute did to an open finding, said once each (FR28, D29)."""
     written = 0
+    if change.raised or change.joined:
+        await _read_facts(connection, key, finding_id, CHANGED)
     if change.raised:
         written += await notify.finding_escalated(
             connection, finding_id, org_id=key["org_id"], at=now
+        )
+        await events.severity_raised(
+            connection, org_id=key["org_id"], finding_id=finding_id, at=now
         )
     if change.joined:
         written += await notify.finding_joined(
@@ -1400,7 +1476,30 @@ async def _notify_change(
             keys=len(finding.keys),
             at=now,
         )
+        await events.signal_joined(
+            connection,
+            org_id=key["org_id"],
+            finding_id=finding_id,
+            signal_count=len(finding.keys),
+            at=now,
+        )
     return written
+
+
+# F3 (FR1, A1): an opening's two reads, now and once deploy records have had 5 minutes.
+OPENING_READS: Final = (OPENED, SETTLED)
+
+
+async def _read_facts(
+    connection: AsyncConnection, key: Mapping[str, Any], finding_id: uuid.UUID, *reasons: ReadReason
+) -> None:
+    """Add the evidence job in this transaction (F3 FR1, A1): an opening that commits has
+    its job, and one that fails leaves neither. Detection imports only the job's name."""
+    for reason in reasons:
+        delay = SETTLE_DELAY_SECONDS if reason == SETTLED else 0
+        await queue.enqueue(
+            connection, gather_evidence_request(finding_id, key["org_id"], reason, countdown=delay)
+        )
 
 
 async def _link_incidents(
@@ -1414,6 +1513,7 @@ async def _link_incidents(
             "finding_id": finding_id,
             "subject_key": service_subject(key["service_name"]),
             "kinds": sorted(SERVICE_KINDS),
+            "burn_kind": SLO_RULE_CONDITION.kind,
         },
     )
 
@@ -1424,8 +1524,11 @@ async def _open(
     service: str,
     finding: OpenFinding,
     zone: ZoneInfo,
-) -> uuid.UUID:
-    finding_id: uuid.UUID = (
+    *,
+    now: datetime,
+) -> tuple[uuid.UUID, uuid.UUID | None]:
+    """The new finding's id, and the case it joined at birth, if any (F22 FR9)."""
+    opened = (
         await connection.execute(
             _OPEN,
             {
@@ -1437,11 +1540,12 @@ async def _open(
                 "signals": json.dumps(finding.signals()),
                 "services": "[]",
                 "started_at": finding.started_at,
+                "join_since": now - CASE_JOIN_WINDOW,
             },
         )
-    ).scalar_one()
+    ).one()
     finding.dirty = False
-    return finding_id
+    return opened.id, opened.root_finding_id
 
 
 def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:

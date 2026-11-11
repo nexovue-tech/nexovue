@@ -1,11 +1,16 @@
 import { Link, useParams } from "@tanstack/react-router";
-
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { LookNextLinks } from "@/shared/components/LookNextLinks";
 import { SkeletonRows } from "@/shared/components/Skeleton";
-import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { setSelectedProjectId, useSelection } from "@/shared/selection";
+import { lookNext } from "@/shared/evidence-links";
+import { formatRelativeTime } from "@/shared/format/time";
+import { formatZonedTime } from "@/shared/format/zoned";
+import { setAbsoluteWindow, setSelectedProjectId, useSelection } from "@/shared/selection";
 
 import {
+  describeBurnFacts,
+  describeDeploy,
   describeHappening,
   describeIncidentState,
   describeNotification,
@@ -50,10 +55,91 @@ export function IncidentScreen() {
   );
 }
 
+/** A burn's figures as of the job's last minute, and its target (F19 T4.11, AC104). */
+function BurnFacts({ incident }: { incident: Incident }) {
+  const detail = incident.detail;
+  const burn = incident.burn;
+  return (
+    <>
+      {describeBurnFacts(detail).map((line) => (
+        <p key={line} className="max-w-prose text-ink text-sm">
+          {line}
+        </p>
+      ))}
+      {detail.as_of ? (
+        <p className="text-ink-dim text-sm">
+          As of <Moment iso={detail.as_of} zone={incident.zone} />
+        </p>
+      ) : null}
+      {burn?.findings.map((finding) => (
+        <p key={finding.id} className="max-w-prose text-sm">
+          <span className="text-ink-dim">With finding: </span>
+          <Link
+            to="/findings/$findingId"
+            params={{ findingId: finding.id }}
+            className="text-ink underline-offset-2 hover:underline"
+          >
+            {finding.title}
+          </Link>
+        </p>
+      ))}
+      {burn && detail.service ? (
+        <p className="max-w-prose text-ink-dim text-sm">
+          {describeDeploy(burn, incident.opened_at, (iso) =>
+            formatZonedTime(iso, { zone: incident.zone }),
+          )}
+        </p>
+      ) : null}
+      {burn?.target_deleted ? (
+        <p className="max-w-prose text-ink-dim text-sm">
+          This target has since been deleted. What it recorded is above.
+        </p>
+      ) : detail.slo_id ? (
+        <p className="text-sm">
+          <Link
+            to="/slos/$sloId"
+            params={{ sloId: detail.slo_id }}
+            className="text-ink underline-offset-2 hover:underline"
+          >
+            Open the target
+          </Link>
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/** A service's incident names its service in its subject key (F21). */
+const SERVICE_SUBJECT = "service:";
+
+/**
+ * F3 FR53: an incident's page gets "Look next", built by the same helper as a finding's,
+ * at its window: its service's data when it has one, the project's otherwise. It holds
+ * no likely cause and no evidence row (AC101).
+ */
+function IncidentLookNext({ incident }: { incident: Incident }) {
+  const service = incident.subject_key.startsWith(SERVICE_SUBJECT)
+    ? incident.subject_key.slice(SERVICE_SUBJECT.length)
+    : (incident.detail.service ?? null);
+  const entries = lookNext({
+    project_id: incident.project_id,
+    started_at: incident.opened_at,
+    closed_at: incident.is_event ? incident.opened_at : incident.resolved_at,
+    service_name: service || null,
+  });
+  return (
+    <LookNextLinks
+      entries={entries}
+      projectId={incident.project_id}
+      headingId="incident-look-next"
+    />
+  );
+}
+
 function IncidentDetail({ incident }: { incident: Incident }) {
   const open = incident.resolved_at === null && !incident.is_event;
   return (
-    <div className="flex max-w-3xl flex-col gap-8">
+    <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-1">
         <p className="flex flex-wrap items-baseline gap-x-2 font-mono text-2xs uppercase tracking-caps">
           <span className={`font-medium ${TONE_TEXT[incident.severity]}`}>{incident.severity}</span>
@@ -81,14 +167,18 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         {incident.detail.location ? (
           <p className="text-ink-dim text-sm">Seen from: {incident.detail.location}</p>
         ) : null}
+        {incident.condition_kind === "slo_burn" ? <BurnFacts incident={incident} /> : null}
         <p className="text-ink-dim text-sm">
-          {incident.is_event ? "Seen" : "Started"}: <Moment iso={incident.opened_at} />
+          {incident.is_event ? "Seen" : "Started"}:{" "}
+          <Moment iso={incident.opened_at} zone={incident.zone} />
         </p>
         {incident.resolved_at && !incident.is_event ? (
           <p className="text-ink-dim text-sm">
-            Ended: <Moment iso={incident.resolved_at} />
+            Ended: <Moment iso={incident.resolved_at} zone={incident.zone} />
           </p>
         ) : null}
+        {/* F22 FR53, D58: an incident is a rule's record, never a case. */}
+        <p className="max-w-prose text-ink-dim text-sm">{CASE_IS_NOT_AN_ALERT}</p>
         <p className="text-ink-dim text-sm">
           Rule:{" "}
           {incident.rule_id ? (
@@ -112,6 +202,8 @@ function IncidentDetail({ incident }: { incident: Incident }) {
         <Evidence incident={incident} />
       </section>
 
+      <IncidentLookNext incident={incident} />
+
       <section aria-labelledby="incident-told" className="flex flex-col gap-1">
         <h2 id="incident-told" className="font-medium font-serif text-base text-ink">
           Who was told
@@ -129,7 +221,7 @@ function IncidentDetail({ incident }: { incident: Incident }) {
                 {notification.delivered_at ? (
                   <span className="text-ink-dim">
                     {" "}
-                    · <Moment iso={notification.delivered_at} />
+                    · <Moment iso={notification.delivered_at} zone={incident.zone} />
                   </span>
                 ) : null}
               </li>
@@ -152,7 +244,8 @@ function Evidence({ incident }: { incident: Incident }) {
   };
   const { check_id: checkId, service } = incident.detail;
 
-  if (incident.condition_kind === "check_state" && checkId) {
+  const checkBurn = incident.condition_kind === "slo_burn" && !service;
+  if ((incident.condition_kind === "check_state" || checkBurn) && checkId) {
     return incident.check_deleted ? (
       <p className="text-ink-dim text-sm">
         The check this was about has since been deleted, and its runs with it. What it recorded is
@@ -177,6 +270,28 @@ function Evidence({ incident }: { incident: Incident }) {
       </Link>
     );
   }
+  if (incident.condition_kind === "slo_burn" && service) {
+    // The errors from the burn's start, so the screen opens on what it is about.
+    const fromStart = () => {
+      intoProject();
+      setAbsoluteWindow(incident.opened_at, incident.resolved_at ?? new Date().toISOString());
+    };
+    return (
+      <div className="flex flex-col gap-1">
+        <Link
+          to="/services/$name"
+          params={{ name: service }}
+          onClick={intoProject}
+          className={LINK}
+        >
+          Open {service}
+        </Link>
+        <Link to="/errors" search={{ service_name: service }} onClick={fromStart} className={LINK}>
+          Errors in {service} since this started
+        </Link>
+      </div>
+    );
+  }
   if (service) {
     return (
       <Link to="/services/$name" params={{ name: service }} onClick={intoProject} className={LINK}>
@@ -187,10 +302,12 @@ function Evidence({ incident }: { incident: Incident }) {
   return <p className="text-ink-dim text-sm">—</p>;
 }
 
-function Moment({ iso }: { iso: string }) {
+/** A time in the project's zone, with its date when not today (F19 FR13, AC108). */
+function Moment({ iso, zone }: { iso: string; zone: string }) {
+  const shown = formatZonedTime(iso, { zone });
   return (
-    <time dateTime={iso} title={formatTimestamp(iso)}>
-      {formatTimestamp(iso)} ({formatRelativeTime(iso)})
+    <time dateTime={iso} title={shown}>
+      {shown} ({formatRelativeTime(iso)})
     </time>
   );
 }

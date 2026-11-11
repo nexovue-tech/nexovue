@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { bandStretches } from "@/shared/components/chart-band";
 
-import type { FindingSignal, SignalSeries } from "./api";
+import type { FindingSignal, ReleaseContext, ReleaseFact, SignalSeries } from "./api";
 import {
+  affectedReleases,
   bandSentence,
+  comparisonSearch,
   describeSignal,
+  elsewhere,
   evidenceSentence,
   ownEndpoint,
   PLOT_LINES,
+  releaseBefore,
   signalPlot,
 } from "./finding-page";
 import { finding } from "./render-harness.test-util";
@@ -174,5 +178,534 @@ describe("a traffic reading says what it counts", () => {
       "4.0 requests a minute at worst, against 24 normally. Now 7.2.",
     );
     expect(bandSentence(entry)).toBe("Normal band 12 to 24 requests a minute.");
+  });
+});
+
+// ---------------------------------------------------------------- the case
+
+import type { FindingDetail } from "./api";
+import {
+  caseActions,
+  caseDoneSentence,
+  caseSentence,
+  eventSentence,
+  joinedLeadLine,
+} from "./finding-page";
+import { NOBODY_HAS_TAKEN_THIS, resolutionWords } from "./finding-words";
+
+const ME = "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0001";
+const ASHA = "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0009";
+const NOW = Date.parse("2026-11-02T18:00:00Z");
+const ZONE = "UTC";
+
+const aCase = (overrides: Partial<FindingDetail>): FindingDetail =>
+  finding({
+    started_at: "2026-11-02T14:02:00Z",
+    ...overrides,
+  });
+
+const sentence = (root: FindingDetail, viewerId: string | null = ME) =>
+  caseSentence({ finding: root, root, viewerId, zone: ZONE, now: NOW });
+
+const investigating = (overrides: Partial<FindingDetail> = {}) =>
+  aCase({
+    case_state: "investigating",
+    case_opened_at: "2026-11-02T14:06:00Z",
+    assignee_id: ASHA,
+    assignee_name: "Asha",
+    case_taken_at: "2026-11-02T14:06:00Z",
+    ...overrides,
+  });
+
+describe("the page's one sentence states both questions (FR23, AC5, AC63)", () => {
+  it("never claims nobody is working: the words are the fixed ones", () => {
+    expect(sentence(aCase({}))).toBe(`Open since 14:02 UTC. ${NOBODY_HAS_TAKEN_THIS}`);
+  });
+
+  it("an assigned open case is a fact with its time (D76)", () => {
+    expect(sentence(investigating())).toBe("Open since 14:02 UTC. Asha took this at 14:06 UTC");
+    expect(sentence(investigating({ assignee_id: ME, assignee_name: "Me" }))).toBe(
+      "Open since 14:02 UTC. You took this at 14:06 UTC",
+    );
+  });
+
+  it("an unassigned case reads as being investigated by nobody", () => {
+    expect(sentence(investigating({ assignee_id: null, assignee_name: null }))).toBe(
+      "Open since 14:02 UTC. Being investigated, nobody assigned",
+    );
+  });
+
+  it("recovery does not end the work, and the words follow the closed reason (AC5)", () => {
+    const recovered = investigating({
+      state: "closed",
+      closed_reason: "recovered",
+      closed_at: "2026-11-02T15:04:00Z",
+      case_signal: "closed",
+    });
+    expect(sentence(recovered)).toBe("Recovered at 15:04 UTC, still being investigated by Asha");
+    expect(sentence({ ...recovered, closed_reason: "service_gone" } as FindingDetail)).toBe(
+      "Service stopped sending at 15:04 UTC, still being investigated by Asha",
+    );
+    expect(sentence({ ...recovered, assignee_id: null, assignee_name: null })).toBe(
+      "Recovered at 15:04 UTC, still being investigated, nobody assigned",
+    );
+  });
+
+  it("a root with an open joined finding never reads Recovered (AC59, AC100)", () => {
+    const back = investigating({
+      state: "closed",
+      closed_reason: "recovered",
+      closed_at: "2026-11-02T15:04:00Z",
+      case_signal: "open",
+      open_joined_finding_id: "f-2",
+      open_joined_since: "2026-11-02T15:50:00Z",
+      assignee_acted_since_join: true,
+    });
+    expect(sentence(back)).toBe(
+      "Came back at 15:50 UTC and is still open. Asha took the case at 14:06 UTC",
+    );
+    const idle = { ...back, assignee_acted_since_join: false } as FindingDetail;
+    expect(sentence(idle)).toContain("Asha took the case");
+    expect(sentence(idle)).toContain(", and has not acted since");
+    expect(sentence(idle)).not.toContain("Recovered");
+  });
+
+  it("a resolved case says how it ended, on an open or a recovered signal", () => {
+    const resolved = aCase({
+      state: "closed",
+      closed_reason: "recovered",
+      closed_at: "2026-11-02T15:04:00Z",
+      case_state: "resolved",
+      case_opened_at: "2026-11-02T14:06:00Z",
+      case_resolution: "resolved",
+      case_resolved_at: "2026-11-02T16:10:00Z",
+      case_resolved_by_name: "Asha",
+      case_signal: "closed",
+    });
+    expect(sentence(resolved)).toBe("Recovered at 15:04 UTC. Asha resolved the case at 16:10 UTC.");
+    expect(
+      sentence({
+        ...resolved,
+        state: "open",
+        closed_reason: null,
+        closed_at: null,
+        case_signal: "open",
+      } as FindingDetail),
+    ).toBe("Still open: the signal has not recovered. Asha resolved the case at 16:10 UTC.");
+  });
+
+  it("times carry the date across a day boundary, and always the zone (AC107)", () => {
+    const yesterday = sentence(
+      investigating({ started_at: "2026-10-31T14:02:00Z", case_taken_at: "2026-10-31T14:06:00Z" }),
+    );
+    expect(yesterday).toBe("Open since 31 Oct, 14:02 UTC. Asha took this at 31 Oct, 14:06 UTC");
+  });
+});
+
+describe("how a case ended, one phrase per resolution", () => {
+  it("spells each resolution the spec's way", () => {
+    expect(resolutionWords("tracker_closed", { at: "16:10 UTC" })).toBe(
+      "Closed in GitHub at 16:10 UTC, reopen here if that was wrong",
+    );
+    expect(resolutionWords("no_activity")).toBe("Ended by itself after 90 days with no activity");
+    expect(resolutionWords("recovered_untouched")).toBe(
+      "Ended by itself 3 days after recovery. Nobody had added anything",
+    );
+    expect(resolutionWords("false_alarm")).toBe("Ended as a false alarm");
+    expect(resolutionWords("new_normal")).toBe("Ended as the new normal");
+  });
+});
+
+describe("the joined page's lead line (FR12, FR13)", () => {
+  it("names the case it is part of, active or resolved", () => {
+    expect(joinedLeadLine(investigating(), ZONE, NOW)).toBe(
+      "Part of a case that started at 14:06 UTC",
+    );
+    expect(
+      joinedLeadLine(
+        investigating({
+          case_state: "resolved",
+          case_resolution: "resolved",
+          case_resolved_at: "2026-11-01T10:00:00Z",
+        }),
+        ZONE,
+        NOW,
+      ),
+    ).toBe("Part of a case resolved on 1 Nov, 10:00 UTC");
+  });
+});
+
+describe("which case actions this person gets", () => {
+  it("offers Take this on a finding nobody took, and nothing to a viewer", () => {
+    expect(caseActions(aCase({}), { canOperateCases: true, viewerId: ME }).takeThis).toBe(true);
+    expect(caseActions(aCase({}), { canOperateCases: false, viewerId: ME })).toMatchObject({
+      takeThis: false,
+      resolve: false,
+      note: false,
+    });
+  });
+
+  it("offers Resolve and Reassign on my case, Take over on someone else's", () => {
+    const mine = caseActions(investigating({ assignee_id: ME }), {
+      canOperateCases: true,
+      viewerId: ME,
+    });
+    expect(mine).toMatchObject({ resolve: true, reassign: true, takeOverFrom: null });
+    const theirs = caseActions(investigating(), { canOperateCases: true, viewerId: ME });
+    expect(theirs.takeOverFrom).toBe("Asha");
+  });
+
+  it("offers Reopen on a resolved case", () => {
+    const resolved = investigating({
+      case_state: "resolved",
+      case_resolution: "resolved",
+      case_resolved_at: "2026-11-02T16:10:00Z",
+    });
+    expect(caseActions(resolved, { canOperateCases: true, viewerId: ME })).toMatchObject({
+      reopen: true,
+      resolve: false,
+      takeThis: false,
+    });
+  });
+});
+
+describe("the line after an act says only what the system knows (FR48, AC98, AC117)", () => {
+  it("adds the PagerDuty lines only when the project has a PagerDuty channel", () => {
+    expect(caseDoneSentence("take", { hasPagerDuty: true })).toBe(
+      "Yours. PagerDuty is not told: acknowledge the page there too.",
+    );
+    expect(caseDoneSentence("take")).toBe("Yours.");
+    expect(caseDoneSentence("resolve", { hasPagerDuty: true })).toBe(
+      "Resolved. PagerDuty is not told, so a live page stays until the signal recovers.",
+    );
+    expect(caseDoneSentence("resolve")).toBe("Resolved.");
+  });
+
+  it("tells the truth about the assignment email, outcome by outcome", () => {
+    expect(caseDoneSentence("assign", { assigneeName: "Ravi", emailOutcome: "will_try" })).toBe(
+      "Assigned to Ravi. An email is on its way, so check they saw it if it is urgent.",
+    );
+    expect(
+      caseDoneSentence("assign", { assigneeName: "Ravi", emailOutcome: "not_configured" }),
+    ).toBe("Assigned to Ravi. Email is not set up here, so tell them yourself.");
+    expect(caseDoneSentence("assign", { assigneeName: "Ravi", emailOutcome: "rate_limited" })).toBe(
+      "Assigned to Ravi. Ravi was emailed about this case a moment ago.",
+    );
+  });
+});
+
+describe("a timeline row's words come from kinds and typed detail alone", () => {
+  it("reads a take, a reassign and a deleted note", () => {
+    expect(
+      eventSentence({
+        id: "e1",
+        kind: "assigned",
+        at: "2026-11-02T14:06:00Z",
+        actor_kind: "person",
+        actor_id: ASHA,
+        actor_name: "Asha",
+        detail: { assignee_id: ASHA },
+      }),
+    ).toBe("Asha took this");
+    expect(
+      eventSentence({
+        id: "e2",
+        kind: "note_deleted",
+        at: "2026-11-02T14:07:00Z",
+        actor_kind: "person",
+        actor_name: "Asha",
+        detail: {},
+      }),
+    ).toBe("A note was deleted");
+  });
+});
+
+// ------------------------------------------------ keeping and ending (F22 T2.7)
+
+import { caseEndingSentence, earlierCaseLine, keptSentence } from "./finding-page";
+
+describe("an active case says when it ends by itself (FR26, FR49)", () => {
+  it("an idle case says how long it has been quiet, when it ends, and what keeps it", () => {
+    const idle = investigating({
+      case_activity_at: "2026-08-18T18:00:00Z",
+      case_ends_on: "2026-11-16T18:00:00Z",
+      case_ends_by: "idle",
+    });
+    expect(caseEndingSentence(idle, ZONE, NOW)).toBe(
+      "No activity for 76 days. Ends by itself on 16 Nov, 18:00 UTC. Add a note to keep it going, or resolve it.",
+    );
+  });
+
+  it("an untouched recovered case says it ends unless someone adds something", () => {
+    const untouched = investigating({
+      state: "closed",
+      closed_at: "2026-11-02T15:04:00Z",
+      case_ends_on: "2026-11-05T15:04:00Z",
+      case_ends_by: "untouched",
+    });
+    expect(caseEndingSentence(untouched, ZONE, NOW)).toBe(
+      "Recovered. Ends by itself on 5 Nov, 15:04 UTC unless someone adds something.",
+    );
+  });
+
+  it("an end today says at what time, not on what day", () => {
+    const today = investigating({
+      case_ends_on: "2026-11-02T21:00:00Z",
+      case_ends_by: "untouched",
+    });
+    expect(caseEndingSentence(today, ZONE, NOW)).toBe(
+      "Recovered. Ends by itself at 21:00 UTC unless someone adds something.",
+    );
+  });
+
+  it("says nothing when the server names no end", () => {
+    expect(caseEndingSentence(investigating(), ZONE, NOW)).toBeNull();
+  });
+});
+
+describe("a finding with no case names the service's earlier one (FR9, FR13, AC15, AC68, AC95)", () => {
+  const earlier = {
+    id: "f-0",
+    case_state: "resolved" as const,
+    case_resolution: "resolved" as const,
+    case_resolved_at: "2026-11-01T16:10:00Z",
+    case_activity_at: "2026-11-01T16:10:00Z",
+  };
+
+  it("a quiet active case is named with when it was last touched; taking this joins it", () => {
+    const line = earlierCaseLine(
+      {
+        ...earlier,
+        case_state: "investigating",
+        case_resolution: null,
+        case_resolved_at: null,
+        case_activity_at: "2026-10-12T09:00:00Z",
+      },
+      ZONE,
+      NOW,
+    );
+    expect(line).toEqual({
+      sentence: "This service has a case nobody has touched since 12 Oct, 09:00 UTC",
+      reopenable: false,
+    });
+  });
+
+  it("a case a person resolved is a link only", () => {
+    for (const resolution of ["resolved", "false_alarm", "new_normal"] as const) {
+      const line = earlierCaseLine({ ...earlier, case_resolution: resolution }, ZONE, NOW);
+      expect(line.sentence).toBe("This service had a case resolved on 1 Nov, 16:10 UTC");
+      expect(line.reopenable).toBe(false);
+    }
+  });
+
+  it("a case that ended without a person's decision can be reopened, and says how it ended", () => {
+    for (const resolution of ["tracker_closed", "no_activity", "recovered_untouched"] as const) {
+      const line = earlierCaseLine({ ...earlier, case_resolution: resolution }, ZONE, NOW);
+      expect(line.reopenable).toBe(true);
+      expect(line.sentence).toBe(
+        `This service had a case that ended on 1 Nov, 16:10 UTC. ${resolutionWords(resolution, {
+          at: "1 Nov, 16:10 UTC",
+        })}`,
+      );
+    }
+  });
+
+  it("offers Reopen that case beside Take this only when it can be reopened", () => {
+    const reopenable = aCase({
+      earlier_case: { ...earlier, case_resolution: "no_activity" },
+    });
+    const personal = aCase({ earlier_case: earlier });
+    expect(caseActions(reopenable, { canOperateCases: true, viewerId: ME })).toMatchObject({
+      takeThis: true,
+      reopenEarlier: "f-0",
+    });
+    expect(caseActions(personal, { canOperateCases: true, viewerId: ME }).reopenEarlier).toBeNull();
+    expect(
+      caseActions(reopenable, { canOperateCases: false, viewerId: ME }).reopenEarlier,
+    ).toBeNull();
+  });
+});
+
+describe("a case says how long it is kept (FR24, FR27, AC112)", () => {
+  it("names the deletion date and the joined findings still kept", () => {
+    const resolved = aCase({
+      case_state: "resolved",
+      deletes_on: "2026-12-02T16:10:00Z",
+      joined_kept_count: 3,
+    });
+    expect(keptSentence(resolved, ZONE, NOW)).toBe(
+      "Kept until 2 Dec, 16:10 UTC. 3 later findings are still kept.",
+    );
+    expect(keptSentence({ ...resolved, joined_kept_count: 1 }, ZONE, NOW)).toBe(
+      "Kept until 2 Dec, 16:10 UTC. 1 later finding is still kept.",
+    );
+  });
+
+  it("an active case names only its kept findings, and a case with none says nothing", () => {
+    expect(keptSentence(investigating({ joined_kept_count: 2 }), ZONE, NOW)).toBe(
+      "2 later findings are still kept.",
+    );
+    expect(keptSentence(investigating({ joined_kept_count: 0 }), ZONE, NOW)).toBeNull();
+  });
+});
+
+/* ------------------------------------------------- F28: the release before this */
+
+const STARTED = "2026-11-09T14:02:00Z";
+const minutesBefore = (minutes: number) =>
+  new Date(Date.parse(STARTED) - minutes * 60_000).toISOString();
+
+const fact = (overrides: Partial<ReleaseFact> = {}): ReleaseFact => ({
+  release_id: "release-1",
+  period_id: "period-1",
+  service_name: "checkout",
+  version: "v2.1",
+  started_at: minutesBefore(6),
+  start_basis: "seen",
+  basis: "both",
+  last_state: "finished",
+  is_return: false,
+  already_running: false,
+  called: null,
+  ...overrides,
+});
+
+const context = (overrides: Partial<ReleaseContext> = {}): ReleaseContext => ({
+  before: fact(),
+  coverage: "deploys_and_versions",
+  last_reported_at: minutesBefore(6),
+  first_heard_at: null,
+  nearby: [],
+  called_known: true,
+  affected: [],
+  ...overrides,
+});
+
+const about = (release_context: ReleaseContext, overrides = {}) =>
+  releaseBefore(finding({ started_at: STARTED, release_context, ...overrides }), { zone: "UTC" });
+
+describe("the release before a finding (AC40, every row of the wording table)", () => {
+  it.each([
+    [
+      "under 24 hours",
+      context(),
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic.",
+    ],
+    [
+      "CI said failed",
+      context({ before: fact({ last_state: "failed" }) }),
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic. CI reported it failed.",
+    ],
+    [
+      "CI said rolled back",
+      context({ before: fact({ last_state: "rolled_back" }) }),
+      "v2.1 of checkout started 6 minutes before this. Reported by your CI, seen in traffic. CI reported it rolled back.",
+    ],
+    [
+      "came back",
+      context({ before: fact({ version: "v2.0", is_return: true }) }),
+      "v2.0 came back 6 minutes before this.",
+    ],
+    [
+      "reported, never seen",
+      context({ before: fact({ basis: "reported", start_basis: "reported" }) }),
+      "v2.1 was reported 6 minutes before this, and we have not seen it in traffic.",
+    ],
+    [
+      "41 days earlier",
+      context({ before: fact({ started_at: minutesBefore(41 * 24 * 60) }) }),
+      "The last known release was 41 days earlier.",
+    ],
+  ])("%s names it, as order", (_, given, words) => {
+    const said = about(given);
+    expect(said.text).toBe(words);
+    expect(said.cameFirst).toBe(true);
+  });
+
+  it("reads an older release dimmer, with no comparison prompt", () => {
+    const old = about(context({ before: fact({ started_at: minutesBefore(41 * 24 * 60) }) }));
+    const recent = about(context());
+    expect([old.dim, old.compare]).toEqual([true, false]);
+    expect([recent.dim, recent.compare]).toEqual([false, true]);
+  });
+
+  it.each([
+    [
+      "already running",
+      context({
+        before: fact({
+          version: "v1.4",
+          already_running: true,
+          started_at: "2026-10-01T09:00:00Z",
+        }),
+      }),
+      "v1.4 was running when we started counting on 1 Oct 2026. No release since.",
+    ],
+    [
+      "nothing before, deploys and versions",
+      context({ before: null, last_reported_at: minutesBefore(12 * 24 * 60) }),
+      "No release of this service before this started, from what we can see. Last report: 12 days before this.",
+    ],
+    [
+      "coverage none",
+      context({ before: null, coverage: "none", last_reported_at: null }),
+      "We receive no deploy information for this service.",
+    ],
+    [
+      "first heard after",
+      context({
+        before: null,
+        coverage: "none",
+        last_reported_at: null,
+        first_heard_at: "2026-11-10T09:00:00Z",
+      }),
+      "We first heard about deploys on this service on 10 Nov 2026, after this started.",
+    ],
+  ])("%s names no earlier release, so it carries no caution", (_, given, words) => {
+    const said = about(given);
+    expect(said.text).toBe(words);
+    expect(said.cameFirst).toBe(false);
+  });
+
+  it("lists a project finding's services, newest first, up to 5 and then how many more", () => {
+    const affected = ["a", "b", "c", "d", "e", "f", "g", "h"].map((service, index) =>
+      fact({ service_name: service, version: `v${index}`, started_at: minutesBefore(10 + index) }),
+    );
+    const listed = affectedReleases(context({ before: null, coverage: null, affected }));
+    expect(listed.rows.map((row) => row.service_name)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(listed.more).toBe("and 3 more");
+    expect(listed.cameFirst).toBe(true);
+    expect(affectedReleases(context({ affected: [] })).cameFirst).toBe(false);
+  });
+
+  it("names releases elsewhere, marks what this service calls, and counts them when none is its own", () => {
+    const nearby = [
+      fact({
+        service_name: "payments",
+        version: "p7",
+        started_at: minutesBefore(20),
+        called: true,
+      }),
+      fact({ service_name: "search", version: "s3", started_at: minutesBefore(10), called: false }),
+    ];
+    const said = elsewhere(context({ before: null, nearby }), "checkout");
+    expect(said.lead).toBe(
+      "No release on this service. 2 elsewhere in this project in the last 2 hours.",
+    );
+    expect(said.rows.map((row) => [row.service_name, row.called])).toEqual([
+      ["payments", true],
+      ["search", false],
+    ]);
+    const own = elsewhere(context({ nearby: [fact(), ...nearby] }), "checkout");
+    expect(own.lead).toBeNull();
+    expect(own.rows).toHaveLength(2);
+  });
+
+  it("opens the comparison carrying the finding, so its window reaches the finding (FR22)", () => {
+    expect(comparisonSearch(fact(), finding({ id: "f-9", started_at: STARTED }))).toEqual({
+      period: "period-1",
+      finding: "f-9",
+      finding_at: STARTED,
+    });
   });
 });

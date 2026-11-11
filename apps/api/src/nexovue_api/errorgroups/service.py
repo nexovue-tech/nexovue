@@ -29,6 +29,7 @@ from nexovue_api.errorgroups.schemas import (
     PrecedingDeploy,
 )
 from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.releases.service import CoverageBook
 from nexovue_api.window import receive_window
 
 DEFAULT_LIMIT: Final = 50
@@ -61,6 +62,7 @@ async def list_error_groups(
     limit: int,
     new_only: bool = False,
     deploys: DeployHistory = EMPTY_DEPLOY_HISTORY,
+    coverage: CoverageBook | None = None,
 ) -> ErrorGroupListResponse:
     """The window's error groups, the most frequent first, for one service or all.
 
@@ -91,7 +93,7 @@ async def list_error_groups(
         parameters,
     )
     return ErrorGroupListResponse(
-        groups=[_to_summary(row, deploys) for row in rows],
+        groups=[_to_summary(row, deploys, coverage) for row in rows],
         # A full page is the cap biting: there may be more this answer does not hold.
         truncated=len(rows) >= limit,
     )
@@ -105,6 +107,7 @@ async def get_error_group(
     from_time: datetime,
     to_time: datetime,
     deploys: DeployHistory = EMPTY_DEPLOY_HISTORY,
+    coverage: CoverageBook | None = None,
 ) -> ErrorGroupDetailResponse:
     """One group and the instances behind it, or a 404.
 
@@ -130,7 +133,7 @@ async def get_error_group(
         parameters | {"group_id": group_id, "limit": OCCURRENCE_SAMPLE_SIZE},
     )
     return ErrorGroupDetailResponse(
-        group=_to_summary(summary_row, deploys),
+        group=_to_summary(summary_row, deploys, coverage),
         recent=[_to_occurrence(row) for row in occurrence_rows],
     )
 
@@ -159,7 +162,9 @@ def _window_parameters(project_id: str, from_time: datetime, to_time: datetime) 
     }
 
 
-def _to_summary(row: dict[str, Any], deploys: DeployHistory) -> ErrorGroupSummary:
+def _to_summary(
+    row: dict[str, Any], deploys: DeployHistory, coverage: CoverageBook | None = None
+) -> ErrorGroupSummary:
     first_seen = values.nanos_to_datetime(row["first_seen_nanos"])
     services = [values.text(service) for service in row["services"]]
 
@@ -183,6 +188,7 @@ def _to_summary(row: dict[str, Any], deploys: DeployHistory) -> ErrorGroupSummar
         sample_span_id=values.present_span_id(row["sample_span_id"]),
         sample_source=values.text(row["sample_source"]),
         preceding_deploy=_preceding_deploy(deploys, services=services, at=first_seen),
+        deploy_coverage=None if coverage is None else coverage.value_of(services, at=first_seen),
     )
 
 

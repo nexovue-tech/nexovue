@@ -107,12 +107,23 @@ write_choices() {
         *) die "NEXOVUE_KAFKA_BROKERS is 1 or 3 (docs/self-hosting/sizing.md)." ;;
     esac
     set_setting "$file" NEXOVUE_MONITORING "${NEXOVUE_MONITORING:-no}"
+    # F22: tracker connections, and the `scheduler-connections` role that makes every call.
+    case "${NEXOVUE_CONNECTIONS:-yes}" in
+        yes | no) set_setting "$file" NEXOVUE_CONNECTIONS "${NEXOVUE_CONNECTIONS:-yes}" ;;
+        *) die "NEXOVUE_CONNECTIONS is yes or no (docs/self-hosting/install.md)." ;;
+    esac
 }
 
-# ClickHouse's own accounts (deploy/clickhouse/users.d), whose passwords the store reads from its
-# environment each time it starts. Only these can be created after the install: every other secret
-# is written into a store, a key or the Kafka log once, and a new value would lock that data away.
-ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD"
+# The stores' own accounts whose passwords are set again each time they start: ClickHouse's
+# (deploy/clickhouse/users.d) from its environment, and the AI role's Postgres account, which
+# `setup` creates and sets at every start (F3). Only these can be created after the install: every
+# other secret is written into a store, a key or the Kafka log once, and a new value would lock
+# that data away.
+ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD POSTGRES_INSIGHT_PASSWORD"
+# Sealing keys added after an install was created. A key that has sealed nothing yet locks nothing
+# away, so an upgrade may add one; replacing one that exists would (F22: tracker connections;
+# F3: AI provider keys).
+KEYS_ADDED_LATER="CONNECTION_SECRET_KEY AI_SECRET_KEY"
 
 write_secrets() {
     local file="$1" key
@@ -129,17 +140,24 @@ write_secrets() {
     set_setting "$file" WORKERS_MASKING_HASH_SECRET "$(random_base64)"
     set_setting "$file" CHECK_SECRET_KEY "$(random_key)"
     set_setting "$file" CREDENTIAL_ENCRYPTION_KEY "$(random_key)"
+    for key in $KEYS_ADDED_LATER; do
+        set_setting "$file" "$key" "$(random_key)"
+    done
     set_setting "$file" S3_BUCKET nexovue
     set_setting "$file" S3_ACCESS_KEY_ID "$(random_hex 10)"
     set_setting "$file" S3_SECRET_ACCESS_KEY "$(random_hex 20)"
 }
 
-# For settings written by an older version: an account added since gets its password, and nothing
-# that exists is touched (C9, C25). Settings are never regenerated after the install.
+# For settings written by an older version: an account added since gets its password, a sealing key
+# added since gets a key, and nothing that exists is touched (C9, C25). Settings are never
+# regenerated after the install.
 add_missing_secrets() {
     local file="$1" key
     for key in $ACCOUNT_PASSWORDS; do
         grep -qE "^${key}=" "$file" || set_setting "$file" "$key" "$(random_hex 24)"
+    done
+    for key in $KEYS_ADDED_LATER; do
+        grep -qE "^${key}=" "$file" || set_setting "$file" "$key" "$(random_key)"
     done
 }
 
@@ -211,6 +229,32 @@ NEXOVUE_HOME="${NEXOVUE_HOME:-/opt/nexovue}"
 settings_file="$NEXOVUE_HOME/nexovue.env"
 release_dir() { printf '%s/releases/%s' "$NEXOVUE_HOME" "$1"; }
 
+# Whether this install runs tracker connections (F22, AC118): on unless set to `no`, which also
+# covers settings written before the choice existed; never on hosted (founder decision 3).
+connections_run() {
+    [ "$(setting "$1" NEXOVUE_CONNECTIONS)" != no ] && [ "$(setting "$1" NEXOVUE_LAYOUT)" != hosted ]
+}
+
+# The optional Compose profiles an install's settings turn on, one per line.
+compose_profiles() {
+    if [ "$(setting "$1" NEXOVUE_MONITORING)" = yes ]; then
+        printf '%s\n' monitoring
+    fi
+    if connections_run "$1"; then
+        printf '%s\n' connections
+    fi
+}
+
+# Every service that writes to the stores, stopped before a restore. A role whose profile is off
+# is not named, because what `compose stop` does with one was not checked (F22 design).
+services_to_stop() {
+    printf '%s\n' proxy receiver worker api scheduler-beat scheduler-light scheduler-deliveries \
+        scheduler-insight
+    if connections_run "$1"; then
+        printf '%s\n' scheduler-connections
+    fi
+}
+
 # The Compose files this install runs: nexovue.yaml and the overlays its settings name.
 compose_in() {
     local kit="$1" settings="$2" project="$3"
@@ -227,9 +271,10 @@ compose_in() {
     for overlay in $(setting "$settings" NEXOVUE_EXTRA_COMPOSE); do
         files+=(-f "$overlay")
     done
-    if [ "$(setting "$settings" NEXOVUE_MONITORING)" = yes ]; then
-        files+=(--profile monitoring)
-    fi
+    local profile
+    for profile in $(compose_profiles "$settings"); do
+        files+=(--profile "$profile")
+    done
     docker compose --project-name "$project" --env-file "$settings" "${files[@]}" "$@"
 }
 
@@ -598,7 +643,8 @@ restore_snapshot() {
     fi
 
     step "stopping every service but the stores"
-    compose stop proxy receiver worker api scheduler-beat scheduler-light scheduler-deliveries
+    # shellcheck disable=SC2046 # one service per word, by design
+    compose stop $(services_to_stop "$settings_file")
     compose up --detach --wait postgres clickhouse kafka seaweedfs
 
     step "restoring"

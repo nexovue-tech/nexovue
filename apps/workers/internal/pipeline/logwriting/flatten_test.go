@@ -141,7 +141,7 @@ func TestFlattenSplitsAttributesAndPromotesTheException(t *testing.T) {
 		request:  requestWithOneRecord(errorRecord()),
 	}
 
-	rows, _ := payload.rows(testStamps())
+	rows := payload.rows(testStamps()).rows
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
@@ -184,7 +184,7 @@ func TestIDsAreHexAtTheDeclaredWidth(t *testing.T) {
 		envelope: &nexovuev1.Envelope{},
 		request:  requestWithOneRecord(errorRecord()),
 	}
-	rows, _ := payload.rows(testStamps())
+	rows := payload.rows(testStamps()).rows
 	row := rows[0]
 
 	if len(row.TraceID) != otlpvalue.TraceIDHexLen || len(row.SpanID) != otlpvalue.SpanIDHexLen {
@@ -199,7 +199,7 @@ func TestIDsAreHexAtTheDeclaredWidth(t *testing.T) {
 		envelope: &nexovuev1.Envelope{},
 		request:  requestWithOneRecord(&logspb.LogRecord{}),
 	}
-	bareRows, _ := untraced.rows(testStamps())
+	bareRows := untraced.rows(testStamps()).rows
 	bare := bareRows[0]
 	if len(bare.TraceID) != otlpvalue.TraceIDHexLen || len(bare.SpanID) != otlpvalue.SpanIDHexLen {
 		t.Errorf("a record with no trace context wrote ids of width (%d, %d)",
@@ -272,4 +272,52 @@ func errorRecord() *logspb.LogRecord {
 
 func stringValue(text string) *commonpb.AnyValue {
 	return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: text}}
+}
+
+// A synthetic check's evidence comes only from the prober's door, for the same
+// reason as its readings: the check screens find it by the resource's
+// `synthetic.check.*` attributes, so anyone could otherwise write evidence for
+// a run that never happened. A forged record is dropped and counted; an
+// ordinary record beside it is written (browser-door T4.3, decision 5).
+func TestSyntheticEvidenceIsWrittenOnlyFromTheProbersDoor(t *testing.T) {
+	cases := map[nexovuev1.Door]struct {
+		wantRows    int
+		wantRefused int
+	}{
+		nexovuev1.Door_DOOR_RUM:       {wantRows: 1, wantRefused: 2},
+		nexovuev1.Door_DOOR_OTLP:      {wantRows: 1, wantRefused: 2},
+		nexovuev1.Door_DOOR_SYNTHETIC: {wantRows: 3},
+	}
+	for door, want := range cases {
+		t.Run(door.String(), func(t *testing.T) {
+			request := requestWithOneRecord(errorRecord())
+			evidence := &logspb.ResourceLogs{
+				Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+					{Key: attrServiceName, Value: stringValue("nexovue-prober")},
+					{Key: "synthetic.check.id", Value: stringValue("check-1")},
+				}},
+				ScopeLogs: []*logspb.ScopeLogs{{LogRecords: []*logspb.LogRecord{errorRecord(), errorRecord()}}},
+			}
+			request.ResourceLogs = append(request.ResourceLogs, evidence)
+			payload := decoded{
+				envelope: &nexovuev1.Envelope{TenantId: "tenant-a", ProjectId: "project-a", Door: door},
+				request:  request,
+			}
+
+			out := payload.rows(testStamps())
+			if len(out.rows) != want.wantRows {
+				t.Errorf("wrote %d rows, want %d", len(out.rows), want.wantRows)
+			}
+			for _, row := range out.rows {
+				if want.wantRefused > 0 && row.ServiceName != "checkout" {
+					t.Errorf("wrote a %s row through %s; forged evidence must not reach `logs`",
+						row.ServiceName, door)
+				}
+			}
+			if out.syntheticRefused.Count != want.wantRefused {
+				t.Errorf("syntheticRefused = %d, want %d: a drop is counted, never silent",
+					out.syntheticRefused.Count, want.wantRefused)
+			}
+		})
+	}
 }

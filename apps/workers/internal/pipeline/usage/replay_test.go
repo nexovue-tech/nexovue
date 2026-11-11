@@ -33,6 +33,11 @@ type recordedStore struct {
 	// `ON CONFLICT DO NOTHING` and the reason a replayed service is harmless.
 	services map[string]map[string]struct{}
 
+	// lastSeen is `service_last_seen`: one time per project and service, moved
+	// only forward, from the same transposition and receive time the real
+	// statement is given (lastSeenOf, newestReceived).
+	lastSeen map[string]time.Time
+
 	// transactions counts committed transactions, so a test can tell "applied
 	// twice, added once" from "applied once".
 	transactions int
@@ -48,6 +53,7 @@ func newRecordedStore() *recordedStore {
 		received: make(map[int32]time.Time),
 		rows:     make(map[string]Counts),
 		services: make(map[string]map[string]struct{}),
+		lastSeen: make(map[string]time.Time),
 	}
 }
 
@@ -100,6 +106,15 @@ func (s *recordedStore) Apply(
 			newServices++
 		}
 	}
+	if received := newestReceived(progress); !received.IsZero() {
+		heard := lastSeenOf(rows)
+		for i, name := range heard.names {
+			key := heard.orgIDs[i] + "/" + heard.projectIDs[i] + "/" + name
+			if received.After(s.lastSeen[key]) {
+				s.lastSeen[key] = received
+			}
+		}
+	}
 	s.transactions++
 
 	if s.loseAcknowledgement {
@@ -122,6 +137,13 @@ func (s *recordedStore) spans() int64 {
 // under test: the size of the set, not a sum of anything.
 func (s *recordedStore) billableServices() int {
 	return len(s.services[testDayKey()])
+}
+
+// lastSeenAt reads back when the project under test last heard a service, and
+// whether it has a row at all.
+func (s *recordedStore) lastSeenAt(service string) (time.Time, bool) {
+	at, held := s.lastSeen[testOrg+"/"+testProject+"/"+service]
+	return at, held
 }
 
 func testDayKey() string {
@@ -175,6 +197,25 @@ func servicesBatch(
 		Partition: partition,
 		Offset:    offset,
 		Value: envelope(t, nexovuev1.Signal_SIGNAL_SPANS,
+			spansFrom(t, 1, servicesNamed...), receivedAt),
+	}}
+}
+
+// doorBatch is servicesBatch through a named door.
+func doorBatch(
+	t *testing.T,
+	door nexovuev1.Door,
+	offset int64,
+	receivedAt time.Time,
+	servicesNamed ...string,
+) []*kgo.Record {
+	t.Helper()
+
+	return []*kgo.Record{{
+		Topic:     testTopic,
+		Partition: 0,
+		Offset:    offset,
+		Value: envelopeThrough(t, door, nexovuev1.Signal_SIGNAL_SPANS,
 			spansFrom(t, 1, servicesNamed...), receivedAt),
 	}}
 }
@@ -439,5 +480,45 @@ func TestAFlushOfOnlyReplaysDoesNotMoveTheFrontierBack(t *testing.T) {
 	}
 	if got := store.counted[0]; got != 101 {
 		t.Errorf("counted through offset %d, want 101", got)
+	}
+}
+
+// The browser door's services are billed and their usage counted, but they
+// never reach `service_last_seen`: a site-key holder can neither add a name the
+// *went silent* alert then watches, nor keep a server that has stopped looking
+// alive by sending its name from a page (docs/changes/browser-door-last-seen).
+// The server door, before and after, still creates and refreshes the row.
+func TestABrowserDoorBatchNeitherCreatesNorRefreshesALastSeenRow(t *testing.T) {
+	store := newRecordedStore()
+	counter := testCounting(store)
+	first := testReceivedAt
+	forged := first.Add(10 * time.Minute)
+	resumed := first.Add(20 * time.Minute)
+
+	absorbAndFlush(t, counter, doorBatch(t, nexovuev1.Door_DOOR_OTLP, 1, first, "checkout"))
+	if at, held := store.lastSeenAt("checkout"); !held || !at.Equal(first) {
+		t.Fatalf("after the server door: checkout last seen %v (row %t), want %v", at, held, first)
+	}
+
+	absorbAndFlush(t, counter, doorBatch(t, nexovuev1.Door_DOOR_RUM, 2, forged, "checkout", "minted"))
+	if at, _ := store.lastSeenAt("checkout"); !at.Equal(first) {
+		t.Errorf("a browser-door batch refreshed checkout to %v, want it left at %v", at, first)
+	}
+	if at, held := store.lastSeenAt("minted"); held {
+		t.Errorf("a browser-door batch created a last-seen row for minted at %v", at)
+	}
+	if got := store.spans(); got != 3 {
+		t.Errorf("spans = %d, want 3: the browser door's usage is still counted", got)
+	}
+	if got := store.billableServices(); got != 2 {
+		t.Errorf("billable services = %d, want 2 (checkout and minted): billing is unchanged", got)
+	}
+	if got := store.rows[testDayKey()].BrowserBytes; got == 0 {
+		t.Error("browser bytes = 0, want the browser batch's payload charged to the browser share")
+	}
+
+	absorbAndFlush(t, counter, doorBatch(t, nexovuev1.Door_DOOR_OTLP, 3, resumed, "checkout"))
+	if at, _ := store.lastSeenAt("checkout"); !at.Equal(resumed) {
+		t.Errorf("after the server door again: checkout last seen %v, want %v", at, resumed)
 	}
 }

@@ -15,11 +15,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from nexovue_platform.checks.task import CheckDefinition
+from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler import metrics
 from nexovue_scheduler.beat import (
     ATTEMPT_PRUNE_ENTRY,
     BASELINE_SWEEP_ENTRY,
+    CASES_SWEEP_ENTRY,
+    CONNECTIONS_SWEEP_ENTRY,
     DELIVERY_SWEEP_ENTRY,
     DETECTION_SWEEP_ENTRY,
     ERASURE_ENTRY,
@@ -28,12 +32,16 @@ from nexovue_scheduler.beat import (
     FILE_SWEEP_ENTRY,
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
+    RELEASE_SWEEP_ENTRY,
     Beat,
     _start_offset,
     _unchanged,
 )
+from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck
+from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.leader import LeaderLock
+from nexovue_scheduler.releases import RELEASES_QUEUE, SWEEP_RELEASES_TASK
 from nexovue_scheduler.settings import Settings
 
 ORG_ID = uuid.uuid4()
@@ -181,6 +189,69 @@ def test_detection_is_swept_every_minute_and_its_normal_hourly_on_its_own_queue(
     assert normal.interval_seconds == 3600
     # A sweep not started before the next is due is dropped, not queued behind it.
     assert judging.request.expires_seconds == 60
+
+
+def test_cases_are_swept_every_five_minutes_on_light_by_a_registered_task() -> None:
+    """F22 T2.6: `cases_sweep` ends idle and untouched cases and heals races. It
+    holds mail's settings, so it runs on `light`, never on a connections queue;
+    beat names it, and a worker must be able to run it."""
+    sweep = _scheduler()._sweep_entries()[CASES_SWEEP_ENTRY]
+
+    assert sweep.request.task == CASES_SWEEP_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 300
+    assert sweep.request.expires_seconds == 300
+    assert CASES_SWEEP_TASK in registry.registered()
+
+
+def test_with_no_live_connection_beat_adds_no_connection_sweep() -> None:
+    """AC118's beat clause (moved to T4.5, founder 2026-11-09): with connections off, or
+    none live, there is no sweep job at all, so nothing waits for a role not running."""
+    assert CONNECTIONS_SWEEP_ENTRY not in _scheduler("self-hosted")._sweep_entries()
+
+
+def test_a_live_connection_is_swept_every_30_seconds_by_scheduler_connections() -> None:
+    """F22 T4.5: `sweep_connections` adds each due sync and hourly refresh; it runs on
+    the role's interactive queue, which a hung sync can never fill (AC86)."""
+    beat = _scheduler("self-hosted")
+    beat.connections_live = True
+    sweep = beat._sweep_entries()[CONNECTIONS_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_CONNECTIONS_TASK
+    assert sweep.request.queue == CONNECTIONS_INTERACTIVE_QUEUE
+    assert sweep.interval_seconds == 30
+    assert sweep.request.expires_seconds == 30
+    assert SWEEP_CONNECTIONS_TASK in registry.registered(registry.TASK_SETS["connections"])
+
+    beat.connections_live = False
+    assert CONNECTIONS_SWEEP_ENTRY not in beat._sweep_entries()
+
+
+async def test_beat_reads_whether_a_connection_is_live_with_the_setting() -> None:
+    """The one EXISTS `connections_active` reads (a named cross-tenant exception), and
+    `NEXOVUE_CONNECTIONS=no` makes it false whatever rows remain (AC118)."""
+    answered: list[bool] = []
+
+    class Connection:
+        async def scalar(self, *_: Any) -> bool:
+            return True
+
+    for enabled in (True, False):
+        answered.append(await metrics.connections_live(cast(Any, Connection()), enabled=enabled))
+    assert answered == [True, False]
+
+
+def test_releases_are_swept_every_minute_on_their_own_capped_queue() -> None:
+    """F28 T1.10 (D31, AC72): the sweep and its project jobs run on `releases`, which
+    `scheduler-light` takes with a cap, so a slow read never holds an alert sweep's slot.
+    A sweep not started before the next is due is dropped."""
+    sweep = _scheduler()._sweep_entries()[RELEASE_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_RELEASES_TASK
+    assert sweep.request.queue == RELEASES_QUEUE
+    assert sweep.interval_seconds == 60
+    assert sweep.request.expires_seconds == 60
+    assert SWEEP_RELEASES_TASK in registry.registered()
 
 
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:

@@ -2,15 +2,172 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**Step 4 built and committed 2026-11-11** (on `feature/phase-2`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. Migration 0071, after 0070.
+**Step 3 built and committed 2026-11-11** (on `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070, after F22 Step 6's 0069.
+**Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Open decisions 9 to 11 await the founder. Next: the founder's first real call per format with a free-tier key (`tools/ai-eval/real_call.py`), which is what puts a format on the screen.
+
+Step 3 awaits the founder's review of the diff, then commit after F22 Step 6 (migration chain). Then the coordinator's first run of `just insight-fence`. Open decision 7 is the founder's.
+
+Step 2 is committed (`55703b4`). Step 2b is the founder's after Phase 2 (foundation item 30); Step 2c's code (T2.15, T2.16) is still to build.
 
 
 ## Completed
+
+### Step 4, built 2026-11-11 (worktree `wt/f3s4`)
+
+**What a person sees.** `/settings/ai`, under "This organization". Everyone reads whether AI wording is on. An owner or admin sees what is missing, each step linked: a provider connection (format, base URL, model, region as typed, a write-only key, time per call, monthly token limit, optional prices), a test that runs on the AI container, the exact request for the newest finding's facts (or a labelled sample) with its stand-in names, the owner's consent, the switch, per-project opt-out, the month's tokens with an estimate, and each run with "View what was sent". **No format is offered yet**: each appears once a dated real call is recorded (AC77), and none has run here, so on this build the form says so and cannot be saved. **Nothing is sent to a provider except a test.**
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T4.1 | `AIRequest` (trusted parts only), `AIResponse` with one closed outcome, `HttpCall`; three wire formats as pure `build` and `parse`; the constant check request; `explain_request` over a stored `model_input` (`PROMPT_VERSION` `explain-1`), the sendable-field list held to `ModelFacts`, a labelled sample; FR23's rules shared by the API and the AI role; both fingerprints; the key's owner; the dated real-call record | `nexovue_platform/ai/` |
+| T4.2 | `PrivateEndpoints` (address or range, with port; loopback, link-local, reserved, multicast, unspecified refused even when listed; wider than /16 or /48 refused); the guard's `private_endpoints` and `public_allowed`; `user_agent`; a header with a control character never sent (a tab still is); `AI_PRIVATE_ENDPOINTS` parsed at boot | `probes/addresses.py`, `probes/http_check.py`, `scheduler/settings.py` |
+| T4.3 | The transport (no redirects; `http` only to a listed address; closed failure words); the connection test as a task: run row before the call, tokens to the month with no reservation, the result on the connection only for the values it tested, the person's result through migration 0070's function | `insight/transport.py`, `check.py`, `store.py`, `registry.py` |
+| T4.4 | `MANAGE_AI` (owner, admin), `CONSENT_AI_DISCLOSURE` (owner) | `permissions.py`, `policy.py`, `test_policy.py`, `identity.ts`, `identity.test-util.ts`, `MembersScreen.test.ts` |
+| T4.5 | `/ai/connection` (read, save, delete), `/connection/check` and its result, `/preview`, `/consent`, `/switch`, `/project-opt-outs`, `/usage`, `/runs`, `/runs/{id}/sent`; audit names with old and new hosts; owners emailed after commit (`Message.AI_CONNECTION_CHANGED`) | `nexovue_api/ai/`, `audit/service.py`, `main.py`, email templates |
+| T4.6 | `ai_connections.sealed_key` under the `ai` ring, bound to organization, connection and address; `SEALED_COLUMNS`; the AI account's grant; the API reads `AI_SECRET_KEY` and `SCHEDULER_INSIGHT_REPLICAS`; Compose gives the API both | migration `0071`, `keys.py`, `models.py`, `insight_account.py`, `settings.py`, `nexovue.yaml`, `docker-compose.yaml`, `key-rotation.md` |
+| T4.7 | The screen in every role and state, the rail entry, the route, the unsaved-changes guard | `features/aisettings/`, `router.tsx`, `settings-nav.ts`, `console-routes.json` |
+| T4.10 | One real call through a format and the record line it earns; the screen offers only recorded formats | `tools/ai-eval/real_call.py`, `real_calls.py` |
+
+Migration **0071** (down revision `0070` for now; F5 Step 1 may take 0074 to 0075 and F20 Step 5 0076 to 0077, so the coordinator re-chains), roll forward only. **ADR-047** filed (one provider interface, three wire formats, no SDK). `docs/operations/ai.md` gains allowing a local model and an unreadable key.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **`ai_runs.outcome` gains `not_found` and `bad_request`** (migration 0071), so a failed test says "model not found" apart from a refused key (spec, *Error cases*). The check's own reasons are a closed list too (`jobs.CHECK_REASONS`), never a provider's words.
+- **Plain `http` is saved only to a private address written as an address** (`http://192.168.1.20:11434`); a name over `http` is refused on save, because the API cannot know what it resolves to. At call time `http` reaches only a listed address. `localhost` and loopback are refused with spec's words.
+- **The test's call limit is the connection's, capped at 45 s**, so a test answers inside the screen's 60-second wait.
+- **The test is refused with 409 when `SCHEDULER_INSIGHT_REPLICAS=0`**, rather than queued for no one.
+- **`AIRequest` holds trusted parts only** until `untrusted.py` (T5.1); run ids live on the run row, not in the request, so the request is only what is sent.
+- **`insight/store.py` exists from this step** (run rows, metering); reservations are T5.3's.
+- **A run is "not consented" when no `ai.disclosure_agreed` audit row names its host at or before it**, read from `audit_log`, which the AI account cannot write. Tests are marked not applicable.
+- **A support view reads on or off only** on `GET /ai/connection`: a base URL's path can carry a customer's secret.
+- **`test_sealed_columns_listed.py` not created**: `test_keys_live.py` already reads every `sealed_*` column from the catalog (F22's) and now names this one, with a rotation case.
+- **Private-endpoint cases live in `test_ai_private_endpoints.py`**: `test_connect_guard.py`'s module stops on live DNS (`nip.io`), which this machine cannot resolve, so cases added there would never run here.
+- **The admin's consent view copies the page's link, not the owners' names**: `GET /ai/connection` returns no owner list (open decision 11).
+
+### Step 3, built 2026-11-11 (worktree `wt/f3s3`)
+
+**What a person sees.** Nothing on screen. An install now runs one more container, `scheduler-insight`, idle, with its own Postgres account and network; `nexovue setup` says whether that account is ready and, if Postgres refused part of it, what is left. `SCHEDULER_INSIGHT_REPLICAS=0` leaves it out.
+
+**The spike (T3.1), run 2026-11-11 on Postgres 18 (`pgvector/pgvector:0.8.6-pg18-trixie`): passed.**
+
+- A column-level `UPDATE` grant does **not** permit `LOCK TABLE`: refused in `ACCESS EXCLUSIVE`, `EXCLUSIVE`, `SHARE`, `ROW EXCLUSIVE` and `ACCESS SHARE` on `finding_explanations`. A table-level `INSERT` does permit `ROW EXCLUSIVE` (measured on `job_results`), which is why the account holds none on the queue.
+- Revoking from `PUBLIC` holds against the account, and the install account keeps each function. **Revoking only the two functions the design named left `pg_try_advisory_xact_lock` open**, so `setup` revokes every `pg_advisory_*` and `pg_try_advisory_*` overload, read from the catalog.
+- The four functions and the shared statements agree on one table of cases (due, not yet due, leased, lapsed, expired, spent, order, limit, the lease fence, `SKIP LOCKED`), and never touch another queue; the store function writes `ai_check` and keeps the first result.
+- **Two things the design assumed are false** (open decision 7): the `NOTIFY` command needs no privilege, so revoking `pg_notify` does not stop it; and the account's timeouts are defaults it can `SET` to zero. A NOTIFY flood from 8 connections did not stall ordinary commits here (about 4,100 to 2,600 commits a second, CPU shared; one run on one machine).
+- `setup` cannot state `NOSUPERUSER`, `NOREPLICATION` or `NOBYPASSRLS` without being a superuser, even to restate false, nor `NOCREATEDB` without `CREATEDB` (measured), so it states only `LOGIN NOINHERIT`, the limit and the password, then reads the role back and refuses to call it ready if it holds any of those.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T3.1 | The spike, as a suite: parity table, locked row, other queues, the store, every refusal, the limit, the two gaps as they are | `apps/scheduler/tests/test_insight_account_live.py` |
+| T3.2 | `ai_connections`, `ai_project_opt_outs`, `ai_usage_monthly`, `ai_runs` with their `CHECK`s; the four `SECURITY DEFINER` functions, `search_path` fixed, tables named with their schema, `EXECUTE` taken from `PUBLIC`; `ai_check` in `JOB_RESULT_KINDS` and the check; deletion lists and statements | Migration `0070`, `models.py`, `organizations/tables.py`, `queries.py`, `nexovue_platform/ai_records.py` |
+| T3.3 | `provision`: role, limit, timeouts, password; everything taken, then `INSIGHT_GRANTS`; advisory, `pg_notify`, `TEMP`, `CREATE` on `public` from `PUBLIC`; each refusal said; `nexovue setup grants` | `nexovue_api/insight_account.py`, `setup.py`, `justfile`, `nexovue.yaml` |
+| T3.4 | Restore prints `setup` as next; `scheduler-insight` stopped first; the doc | `restore-postgres.sh`, `deploy/nexovue`, `backup-and-restore.md` |
+| T3.5 | `SCHEDULER_ROLE=insight`; `AI_SECRET_KEY` required in production for it alone; `AI_PRIVATE_ENDPOINTS` read as written (T4.2 parses it) | `scheduler/settings.py` |
+| T3.6 | Insight task set and preload; queue statements by role; `store_ai_check`; a worker refuses queues its functions cannot claim; `--tasks insight` only as `SCHEDULER_ROLE=insight`; 48 MiB children | `registry.py`, `preload_insight.py`, `insight/`, `queue.py`, `results.py`, `worker.py`, `__main__.py` |
+| T3.7 | `scheduler-insight`: `--queues insight --concurrency 4 --tasks insight` | `roles.py` |
+| T3.8 | `x-insight-env`, the service, `ai` network, replicas, 384M; Postgres on both networks; Prometheus on both; hosted, quickstart, build overlays; dev `insight` service replaced | `deploy/compose/` |
+| T3.9 | The password and the key written at install and added at upgrade | `deploy/nexovue` |
+| T3.10 | The reach test from inside the container (marker `insight_fence`); the sizing row, not measured | `test_insight_network_live.py`, `sizing.md` |
+| T3.11 | `just insight-fence` and its CI job: build, kit, install, reach, backup, empty volume, restore, catalog read, the account suites. **Not yet run** | `tools/insight-fence/fence.sh`, `justfile`, `.github/workflows/ci.yml` |
+
+Migration **0070** (on F22's **0069**; renumbered from 0068 at the coordinator's request), roll forward only (added to `test_migration_rules.py`). **ADR-040** filed. `docs/operations/ai.md` started (the account's runbook; Step 5 adds the rest), `current-system-reference.md` gains the second account.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **`ai_connections.sealed_key` waits for T4.6.** `test_keys_live.py` holds every binary column to `SEALED_COLUMNS`, and the `ai` ring that seals it is T4.6's; adding the column now would need the ring now. `key_id` is here.
+- **The API does not hold `AI_SECRET_KEY` yet:** it reads it from T4.6, so Compose names it on `scheduler-insight` alone for now; the Compose test allows `api` too.
+- **The closed lists live in `nexovue_platform.ai_records`**, not `nexovue_platform.ai`: the models import them, and every module importing the models would then "reach AI code" in the no-AI suites. `nexovue_platform.ai` is created by T4.1.
+- **`ai_runs.purpose` allows `explain`, `check`, `chat`, `fix`** (foundation's three and A51's), so F4 and F5 need no migration for it; outcomes are the design's failure table plus `started`, `done`, `abstained`, `died`.
+- **Timeouts:** statement 10 s, idle in transaction 30 s (guesses; see open decision 7 for why they are not a bound).
+- **`setup` also takes `CREATE` on `public` from `PUBLIC`** (Postgres 15's default, said again for an older database) and clears any role setting it does not set.
+- **The dev `scheduler-insight` has no `AI_SECRET_KEY`**: development allows it, and committing a new literal key would need a gitleaks entry; Step 4 sets one.
+- **T3.6 is proved in `test_insight_role.py`**, F22's pattern for its own role, rather than `test_jobs_live.py`.
+- **The `ai` network is declared once, in `compose.infra.yaml`**, where Postgres is defined; the deploy overlay inherits Postgres's list.
+
+### Step 2, built 2026-11-09 (on `feature/phase-2`)
+
+**What a person sees.** Every "Look next" link, and each fact's own link, opens its data at the finding's minutes: the window travels in the address (`?from=&to=&project=&finding=`), so a copied link opens the same minutes, the person's own window on every other screen is left as it was, and a line under the window control says "Showing this finding's window, 13:47 to 14:20 Kolkata time", with "Back to the finding" and "Use my own window". An error fact opens its group on the Errors screen; a dependency fact opens traces through the callee, or the caller's calls named by the attribute that named it, or, with none, the caller's calls labelled "not narrowed"; failing calls or slow ones. Raw data past retention reads "Raw traces aged out on {date}" instead of a link. A finding card names its likely cause in one wrapping line. Members rate an explanation ("Was this useful?"); admins see each rule's counts on `/settings/explanations`, can stop a rule naming causes, and copy a counts-only summary. A labelled sample sits at `/findings/sample`, linked from the empty feed with the first findings' date. An incident's page has "Look next" too. A channel people read that was told a finding gets one follow-up when a signed deploy is its likely place to look, with the deploy's base rate, unless the channel turns it off. **While FR50 holds (production), no cause is stated, so no card line and no follow-up appear**; the override shows them outside production.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T2.1 | F28's chart markers re-run: "marks the charts and lists the window's releases (AC40)" passes | `FindingScreen.test.ts` (unchanged) |
+| T2.2 | Parse and build the address window; drop a project or finding that is not an identifier; apply on the six screens only | `shared/url-window.ts` |
+| T2.3 | `useWindowChoice` prefers the address window and never writes the stored one; the six routes keep it; each screen keeps it on a filter change; the window line, with "Back to the finding" and "Use my own window"; `project` selected on arrival | `shared/selection.ts`, `app/router.tsx`, `TraceListScreen.tsx`, `ErrorsScreen.tsx`, `LogsScreen.tsx`, `InfrastructureScreen.tsx`, `app/layout/WindowControl.tsx` |
+| T2.4 | Every link, built in one place; a `target` on each fact in the API (the values a link needs, no message text); `?group=` on Errors | `shared/evidence-links.ts`, `shared/components/LookNextLinks.tsx`, `findings/explanations.py`, `findings/schemas.py`, `features/errors/filters.ts`, `ErrorsScreen.tsx`, `ExplanationSection.tsx` |
+| T2.5 | The card's cause line, wrapping, from `likely_cause_sentence` | `FindingsScreen.tsx` |
+| T2.6 | `explained` in the vocabulary and the kind check; `notification_channels.sends_explained`; the channel switch | `alerts/model.py`, migration `0067`, `channels/` (API), `ChannelDetailScreen.tsx`, `features/alerts/api.ts` |
+| T2.7 | `explained.write`: on any read after the settled time, written or not, for a `likely` cause on a verified record once released; told channels people read with it on and no follow-up at any sequence; 5 per channel in 10 minutes under a per-channel transaction lock, the fifth saying so | `evidence/explained.py`, `evidence/gather.py` |
+| T2.8 | `_TAKEN` reads the newest likely-and-verified version's deploy fact; the composer's own branch (no signals, the base rate, the page as current, no previews); `compose_batch` keeps it out of the count, severity and "still open"; a row that cannot be written, or a finding closed since, is dropped alone with its reason | `alerts/outbox.py`, `alerts/messages.py`, `alerts/payloads.py`, `alerts/delivery.py` |
+| T2.8 (F19) | `explained` joins `_WITHHOLD_UNTOLD_ENDING`: it goes only where news of its finding reached the channel (F19 AC58, F19's *Open decisions* 2) | `alerts/outbox.py` |
+| T2.9 | `explained` never on a webhook; the follow-up, frequent deployers, the 7-day clock and pages with no finding; held until the bar is met | `docs/product/setup/alerts/webhooks.md`, `channels.md`, `setup/deploys.md`, `docs/features/alerts/spec.md` |
+| T2.12 | Ratings (one per person per version, carried until the cause changes, reasons that fit what was shown, audited); rule counts and stopping a rule (audited, per organization); gather passes the stopped rules to `rules.decide`; the rating control; `/settings/explanations` | migration `0067`, `findings/explanations.py`, `explanation_queries.py`, `findings/router.py`, `explanations/router.py` (new), `audit/`, `organizations/`, `evidence/reads.py`, `gather.py`, `features/explanationsettings/` (new), `settings-nav.ts` |
+| T2.13 | `/findings/sample` from fixed data (likely, abstained, absences), no actions or links; the empty feed's sample link, deploy setup link and first findings' date. **Not built:** AC104's deploy-cause and traffic dates (*Open decisions*, 5) | `sample-explanation.ts`, `SampleExplanationScreen.tsx`, `FindingsScreen.tsx`, `app/router.tsx`, `console-routes.json` |
+| T2.14 | An incident's "Look next", its service's or the project's, at its window | `IncidentScreen.tsx` |
+
+Migration **0067** (on 0066): the kind check widened (`NOT VALID`, then validated), `sends_explained`, `finding_explanation_ratings`, `explanation_stopped_rules`; roll forward only (ratings and stopped rules exist nowhere else; added to `test_migration_rules.py`'s list). **No ADR:** nothing settled here is material beyond the design's.
+
+**Decisions taken while building** (technical; none changes product behaviour):
+
+- **The link helper lives in `shared/`, not `features/findings/`** as T2.4 named: T2.14 reuses it from `features/alerts`, and biome refuses one feature importing another. Its type `ExplanationFactTarget` lives there too; `findings/api.ts` re-exports it.
+- **The fact's link values are a typed `target` on each fact** in `GET /findings/{id}/explanation`, read from the frozen `values`: an error group's id and services; a dependency's caller, callee, the attribute that named it, and its failure shares and p95s; a release id; another record's id. The design said links are built only by the console; the API only says what the data is. Never message text or exception type.
+- **A dependency link's slow-call threshold is the normal p95** (`min_duration_ms` = `p95_before`), and a failure move wins over a latency move. A `slower` finding's traces link uses its worst reading, as the design says.
+- **The address window is ignored past 31 days**, and on any path but the six, so a stray `from` elsewhere changes nothing.
+- **The follow-up's words are built from the cause's deploy fact**, not the page's header segments: "A likely place to look on checkout: the deploy of checkout v2.1, 4 min before this (3 deploys in 7 days). See the finding's page for the current reading." A service name failing `[A-Za-z0-9._-]{1,80}` reads "a service" as the design says; **a version failing it reads "a version"** (the design names only services). The base-rate words moved to `nexovue_platform.evidence.deploy_rate_words`, so the page and the message say it one way.
+- **A follow-up is dropped at delivery when its finding has closed since** (FR21's "nor once the finding has closed"), and when no likely-and-verified version stands. Any composer that raises drops only its own row (AC78), so a bug in one kind cannot hold back a batch: this applies to every kind, not only `explained`.
+- **One alert with follow-ups in a batch reads as that alert**, with each follow-up as one more line; follow-ups alone read "N findings have a likely place to look".
+- **The channel switch is on the channel's own page**, beside quiet hours, not the list (`ChannelsScreen.tsx` as T2.6 named); its test is in `ChannelsScreen.test.ts`, which mounts both.
+- **`/explanations` has its own router module** (`nexovue_api/explanations/router.py`): in the findings router it inherited the telemetry rate-limit tier, which the coverage test holds to every route in a file that reads ClickHouse; these read Postgres only.
+- **A rule counts only where it was shown:** a held cause (FR50) counts as no cause on `/settings/explanations`, as the page shows it; so in production every rule reads 0 until the bar is met.
+- **The rating's "Yes" carries no reason and "No" always one**, a `CHECK` on the table.
+- **An incident's "Look next" shows on every incident page**, after its evidence, not only those with no finding: the API does not say whether one is linked, except a burn's.
+
+### Step 1, built 2026-11-09 (on `feature/phase-2`)
+
+**What a person sees.** Under a finding's title, one line says where to look first: a likely cause by rule, "The facts that line up with this are below" while causes are held (FR50), "Not enough evidence to name a likely cause" only when every read completed, or "Could not finish reading the facts, so no likely cause yet". The right column now leads with *What lines up with this*: F28's *Release before this* as its first row (T1.15, A45), "Look next" (traces, logs, errors, deploys, infrastructure; not yet window-aware, T2.3), the numbered facts with what each rests on, the setup step when nothing was found, and "Read the facts again" for members and up, once a minute. With no AI anywhere, every new finding gets a frozen explanation within a minute of the job running.
+
+**What was built.**
+
+| Task | What | Where |
+|---|---|---|
+| T1.0 | `door` (`server`, `browser`) and `server_peer_attr` on `service_edges_1m`, carried from the envelope and the caller's span. A row is `browser` when either span came through the browser door. `door` joins the sorting key at its end; `server_peer_attr` stays out, read with `max` (A84's shape, also in `design.md`) | `serviceedges/`, `traceassembly/stages.go`, `flatten.go`; ClickHouse `000040` |
+| T1.1 | `finding_explanations` (with `wording_generation` and `read_again_at`), `evidence_error_group_reads`; deletion lists; the hour's expiry | Migration `0066` (on `0065`, the coordinator's), `models.py`, `organizations/tables.py`, `evidence/retention.py`, `jobs/expiry.py` |
+| T1.2 | The evidence contract (queue, task names, `gather_evidence_request`, kinds, bases, rule names, `CAUSE_BAR_RECORDED` and `RELEASED_RULES`, `display_name`), `ModelFacts` and `Alias`, the alias book; `ai_available`; `SHOW_HELD_CAUSES`, refused in production by both settings | `nexovue_platform/evidence/`, `deployment.py`, both `settings.py` |
+| T1.3 | Edges (server door first, the bound inside the statement), traffic, new error groups (A62), hosts (FR52), under 10 s and 256 MiB | `evidence/store.py`; `evidence` in `PROJECT_BOUND_PACKAGES` |
+| T1.4 | Postgres reads: finding, other open findings, incidents, checks (name and state only), the intake (self-hosted, project findings); F28's `coverage`, `release_before`, `releases_near`, and `deploys_in_window`, `releases_seen_in_window` (see *Open decisions*, 1) | `evidence/reads.py`, `releases/facts.py` |
+| T1.5 | The rules (FR8 to FR12) and the sentences, pure | `evidence/rules.py`, `sentences.py` |
+| T1.6 | The task: a session lock per finding, each read on its own, a failed read an absence and one re-read in 60 s, the fingerprint (FR43), versions, `model_input` with aliases | `evidence/gather.py`, `inputs.py`, `jobs/registry.py` |
+| T1.7 | Gathers queued in the opening's own transaction (opened, settled at 300 s, changed, closed by every path including adoption) and from the deploy webhook per new item; `evidence` on `scheduler-light`, capped at 2 under F19's floor | `detection/project_job.py`, `deploys/service.py`, `deploys/queries.py`, `jobs/worker.py`, `__main__.py` |
+| T1.8 | The evidence job and its contract walked for AI imports; `nexovue_platform.ai` and `nexovue_scheduler.insight` denied before they exist; no probes client | `test_detection_has_no_ai.py`, `import_walk.py` |
+| T1.9 | Confirmed: the scheduler tenancy test walks `evidence/`. No new exemption: `intake_refusals` is already install-wide | `test_scheduler_postgres_tenancy_structure.py` (unchanged) |
+| T1.10 | `GET /findings/{id}/explanation` (`?version=`), `POST .../read-again` (409 with `next_read_at`), `raw_kept_until` on the finding, `likely_cause_sentence` on a person's feed rows, `Reader.is_person`, the held cause | `findings/explanations.py`, `explanation_queries.py`, `router.py`, `schemas.py`, `service.py`, `auth/dependencies.py` |
+| T1.11 | The section, the header line, polling (5 s for 15 minutes, then 60 s while open), Look next, read-again, the setup step, the shared-cause count, held facts on a failed refetch | `features/findings/explanation.ts`, `ExplanationSection.tsx`, `api.ts`, `FindingScreen.tsx` |
+| T1.12 | `just explain-demo --rule N`, dev only, saying plainly that detection did not judge the finding | `tools/detection-seed/explain_demo.py`, `justfile` |
+| T1.13 | Detection and its alerts compared across Step 1's five arms, and a failed `jobs` insert aborting the opening loudly | `test_detection_unmoved_live.py` |
+| T1.14 | `REQUEST_EXPLANATION` in all five copies, plus `test_auth_routes.py`'s list | `permissions.py`, `policy.py`, `test_policy.py`, `identity.ts`, `identity.test-util.ts`, `MembersScreen.test.ts`, `team-and-api-access/spec.md` |
+| T1.15 | F28's section folded in as the first row; its tests (AC40, AC43, FR33) re-run through it and pass | `FindingScreen.tsx` |
+
+ADR-039 (an explanation is a frozen evidence record, with code choosing the cause) is filed. The other three proposed ADRs wait for the evidence their own steps produce (the AI role, Step 3; the provider interface, Step 4); the floor is already ADR-028's.
+
+**Decisions taken while building** (technical, recorded here; none changes product behaviour):
+
+- **000040's down keeps `door`.** ClickHouse refuses to drop or rename a sorting-key column, and a migration here is one statement, so the down drops `server_peer_attr` only. The kept column is harmless to the code before it (its writer names its columns), and running 000040 again changes nothing but `server_peer_attr`. Proved by up, down, up on `f3s1-ch`.
+- **`evidence_error_group_reads` cascades from `projects`** (`REMOVED_BY_CASCADE`), not `DELETED_DIRECTLY` as the design listed: it has a project key with `ON DELETE CASCADE`, and the deletion test holds that.
+- **"Once a minute" is stored as `finding_explanations.read_again_at`.** The design named no store; the rate limiter cannot be read without spending, and the page must show when the next read is allowed. With no version yet, a click is deduplicated by `ENQUEUE_UNLESS_WAITING`.
+- **`WORDING_REASONS`** is the design's own outcome names (`died`, `expired`, `run_cap`, `too_long`, `bad_key`, `unavailable`, `limited`, `refused`, `invalid`), frozen in 0066; Step 5 widens it by a migration if it needs more.
+- **The error-group read is reused within its minute,** keyed by the window's start minute, so a later read never reuses a stale opening read.
+- **Host disk is per filesystem** (used over the sum of its states), not the node total the screen shows, so a device mounted twice is never summed twice.
+- **A deploy's base rate counts one rollout once:** a version's `started` and `finished` events inside one 30-minute lookback are one deploy. A week of records is known from F28's coverage a week back.
 
 - **2026-11-02.** [`research.md`](research.md) was already in place. Written from it, the foundation, the F6 documents and a fresh reading of the code:
   [`spec.md`](spec.md) (106 acceptance criteria), [`design.md`](design.md) (with four proposed ADRs), [`plan.md`](plan.md) (seven steps and a founder gate after Step 2).
@@ -26,12 +183,41 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Steps 1 to 2c start once F28's release functions (its Steps 1b to 3) are in; T0.1 first updates the catalog wording. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+Founder: review Step 4's diff and open decisions 9 to 11; commit after Step 3. Then, with a free-tier key, `AI_EVAL_KEY=... uv run python tools/ai-eval/real_call.py --format openai_chat ...` once per format that has an account, and add the printed line to `real_calls.py` in a reviewed change: that is what offers a format on `/settings/ai`. Step 5 next.
+
+Earlier (Step 3):
+Founder: review Step 3's diff and open decision 7; commit after F22 Step 6. Coordinator: first run of `just insight-fence` by hand (expect fixes to the harness), which ticks T3.4, T3.10 and T3.11 and settles ADR-040's owed evidence. Then Step 4.
+
+Earlier:
+The founder reviews Step 2's diff; then commit. The founder's checks after Phase 2: send a test finding to Slack and email and read the follow-up (Step 2's *Judgeable*; A55 can be overturned there), follow each link from a demo finding and copy one into a private window, and the Playwright checks at 390 and 1920 pixels. T0.1 and T0.2 are still unticked and not part of Step 2. F22's T2.9 (the `explained` timeline event beside F3's row) can now be built, since `explained.write` exists.
 
 
 ## Open decisions
 
-**None for the founder.** Both gates and the test server were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The go or stop is still read against its approved rule after T2.11, and the bar is met or not only after Step 2c's runs.
+**From Step 4, 2026-11-11:**
+
+9. **The dev stack has no `AI_SECRET_KEY`** (`DEV_AI_SECRET_KEY` defaults empty on `api` and `scheduler-insight`), so `/settings/ai` on `just dev` says "AI is not available: AI_SECRET_KEY is not set" until a developer sets one in `.env`. A committed dev literal, as `DEV_CONNECTION_SECRET_KEY` has, needs a `.gitleaksignore` fingerprint, which names the commit, so it is a follow-up commit. **Recommendation:** commit a dev literal on both services, then add its `.gitleaksignore` line in the next commit, as F22's key was.
+10. **Mute and project deletion do not yet stop queued wording** (plan T4.5 points to T5.11). No wording run exists before Step 5, so nothing can be sent meanwhile; the opt-out route already does it. **Recommendation:** keep it in T5.11, with the `word` job's own re-check.
+11. **The admin's consent view shows no owners' names** (design, *Consent*: "with owner names and `CopyButton`"); it says "Waiting for an owner" and copies the page's link. **Recommendation:** add the active owners' display names to `GET /ai/connection` for `MANAGE_AI` in the hardening pass; it is a read, no new risk.
+
+**From Step 3, 2026-11-11:**
+
+7. **Two holes the fence cannot close with grants** (spike T3.1, measured). (a) **`NOTIFY` needs no privilege.** A broken-into AI process can notify, and a listener of its own that never reads can fill Postgres's notification queue (8 GB by default), after which every notifying commit in the database fails: Run now, send tests, read-again, connection syncs. Alerts and beat's schedule do not use it. (b) **The timeouts are defaults.** The account can `SET statement_timeout = 0` (and the idle and transaction timeouts) and hold a transaction open: that holds back vacuum for the whole database, so `jobs`, the busiest table, bloats over hours, and a migration that alters a table it read waits and fails its lock timeout, so `setup`, and with it every service's start, fails until the process is stopped. **Options:** (i) a watchdog on beat's leader, every minute, ending any `nexovue_insight` backend whose transaction is older than a bound (2 minutes) or that has been listening, with `pg_terminate_backend` as the install account, plus an alert; (ii) accept and document (done in `docs/operations/ai.md`); (iii) give the AI role no Postgres at all and pass its rows through the API (design's FD2 rejected this). **Recommendation: (i)**, built with Step 5's sweep (T5.5) and its metrics (T5.10), which already run on beat's leader; it bounds both holes to two minutes without a design change. The rest of Step 3 does not depend on it.
+8. **Migration 0070's down revision is F22's 0069,** which is not on this worktree's branch: `test_setup_schema.py` and `alembic upgrade` fail here (`KeyError: '0069'`) until F22 Step 6 is committed first, as the coordinator plans. **Recommendation:** commit F22 Step 6 first, then this; nothing to change here.
+
+**From Step 2, 2026-11-09:**
+
+5. **AC104's second and third dates have no source** (FR55: "Deploy causes can reach 'likely' from {date}" and "traffic drops from {date}"). The first needs the project's first deploy record, the second when detection starts judging traffic drops; no route gives either (`/releases/coverage` gives a per-service last report; `DetectionStatus` gives only `earliest_judging_date`, which is built as "First findings from {date}"). **Options:** (a) add `first_deploy_record_at` (the earliest signed deploy event) to F28's `/releases/coverage` and a traffic-judging date to F6's detection status, then finish T2.13; (b) say the rule without dates ("once deploy notifications have run for 7 days"), as built now. **Recommendation: (a)**, a small change to two other features' routes, which this step may not make; T2.13 stays unticked until then.
+6. **AC23's token refusal on the rating** is held structurally (`test_authorization_coverage.py`: the route's gate needs a signed-in person, as every token-refused route's does), not by a live request: the explanation test harness overrides the reader and cannot run the real identity dependency for a token. **Recommendation:** accept; the same holds for Step 1's read-again.
+
+**From Step 1, 2026-11-09:**
+
+1. **F28's `deploys_in_window` and `releases_seen_in_window` did not exist** (they are F28's T5.2, Step 5), yet T1.4 and A71 need them: rules 1, 3, 4 and the base rate read signed deploys, rule 5 seen versions. Built in F28's `releases/facts.py` by F28's published signatures (D29, *Signatures, for F3*), signed events in `OPENING_STATES` only, no sender text. **Recommendation:** accept them as F28's; F28's T5.2 keeps `release_comparison` and the AC45 allow-list test, and adds its own `test_release_facts_live.py` cases for these two. F28's owner should confirm.
+2. **FR11's two project rules name no strength.** Built as `possible` for both (a deploy to half the services; a shared dependency with its own finding). **Recommendation:** keep `possible` until the bed scores them; neither sends `explained`, which needs `likely`.
+3. **AC14's live arm, spans through the real receiver with a browser key,** needs the dev stack's receiver, Kafka and workers, which this build did not run. The worker's part is proved by unit and store tests. **Recommendation:** run it on the dev stack as part of Step 2's `just dev` session, and build it then.
+4. **T1.3's error-group read at a stated volume on the 16 GB install** ("a timeout there fails this task") cannot be measured here. **Recommendation:** measure on the Mac's dev stack with `tools/detection-seed` volume before Step 2 is reported, and on Oracle after deployment (foundation item 9).
+
+**Earlier: none for the founder.** Both gates and the test server were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The go or stop is still read against its approved rule after T2.11, and the bar is met or not only after Step 2c's runs.
 
 ## Own questions answered, 2026-11-02
 
@@ -56,7 +242,7 @@ Held up: A82, A83, A84, the six pointers to approved foundation items, the test 
 
 ## Blocked
 
-Nothing is blocked now. Implementation cannot start until the three gates pass, F6 has merged, and F28's readers exist. Steps 3 to 6 also need the founder's written go. **Step 2c's runs, T2.17's report and T2.18's check wait for Oracle after Phase 2 is deployed** (foundation item 9); until then no likely cause is stated.
+Nothing is blocked now. Implementation cannot start until the three gates pass, F6 has merged, and F28's readers exist. Steps 3 to 6 no longer wait for the founder's written go: **Founder decision, 2026-11-09 (foundation item 30):** Step 2b's stop-or-go is read after Phase 2, and Steps 3 to 7 are built now. **Step 2c's runs, T2.17's report and T2.18's check wait for Oracle after Phase 2 is deployed** (foundation item 9); until then no likely cause is stated.
 
 ## Reviews
 
@@ -331,6 +517,19 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Risks
 
+**Added by Step 4 (2026-11-11):**
+
+- **The address guard's promise widened** (ADR-047): a private address was reachable only in development; now an operator's listed addresses and ports open one for an AI connection. Loopback, link-local and ranges wider than /16 stay refused, and `public_allowed` keeps `http` off the internet.
+- **Every probe now refuses a header holding a control character** (a tab still passes), where libcurl sent it before. A check whose saved header held a line break now fails with "A header holds a control character and was not sent", which is the safe answer, but it is a change in what an existing check does.
+- **Until a real call is recorded, the settings screen cannot save a connection**, because it offers no format (AC77). The founder's first real call is what opens it.
+- **Every field name in the three formats was read from documentation, not from a response.** A provider that differs fails as `invalid` or `bad_request`, never silently, and the real call shows it.
+
+**Added by Step 2 (2026-11-09):**
+
+- **The follow-up changes a path every people-read alert takes** (`_TAKEN`, `compose_batch`, the drop of an unwritable row). AC78's golden fixture holds every earlier kind's bytes on six channel kinds; a later change to an alert's words must rewrite it deliberately (`NEXOVUE_WRITE_OUTBOX_GOLDEN=1`).
+- **Any composer that raises now drops its row** instead of failing the delivery task and retrying until the lease ends; the drop is logged with the row and kind, and the delivery log shows "not sent: this message could not be written".
+- **Nothing in production shows a cause yet** (FR50), so the card line, the follow-up and the rule counts read empty there until the bar is met; their behaviour is proved only with the non-production override.
+
 **What remains after the reviews.**
 
 - **No real user was asked.** The largest gap. T2.10 now sits in the plan, before the costly work.
@@ -354,7 +553,141 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Validation
 
-None run. No test, query or model. The code was read, and each review finding checked. Web facts read on 2026-11-02, through a summarizing tool: Docker Hub on `POSTGRES_USER`; PostgreSQL on `INSERT` and `LOCK` privileges; Coroot's AI overview, AI configuration and AI benchmark pages; OpenObserve's AI SRE page; Grafana's Assistant invoice page; Datadog's Watchdog page; HolmesGPT's evaluations page in its repository. Microsoft's Azure OpenAI v1 page, through a summarizing tool, and its older REST reference through a search summary only. A script confirmed every acceptance criterion in `spec.md`, AC1 to AC106, is cited by a task in `plan.md`, and was re-run after the second review.
+### Step 4, 2026-11-11
+
+Own container `f3s4-pg` (Postgres 18, `pgvector/pgvector:0.8.6-pg18-trixie`, port 25432, network `f3s4-net`), migrated with Alembic from a scratch copy whose 0070 pointed at 0067 (F22's 0068 and 0069 are not on this branch), then 0071. No ClickHouse was needed. Every behaviour test was seen failing first, or failing on a saved copy with its behaviour removed, then passing:
+
+| Test | Seen failing by | Then |
+|---|---|---|
+| `test_ai_wire_formats.py` (97) | Saved copy without Claude's 200 refusal, the Bedrock model's path encoding, the `..` and query checks, the reported-model pattern: 6 failed | 97 passed |
+| `test_ai_private_endpoints.py` (26) | Saved copy without the private and excluded check in `allows` and without the width limit: 3 failed | 26 passed |
+| `test_http_check.py` (+4) | Control-character refusal removed: 4 failed | 9 passed |
+| `test_insight_check_live.py` (11), as `nexovue_insight` | Saved copy following redirects, without the call-time FR23 check, opening the key for a fixed address, recording a result without the model in its guard: 7 failed | 11 passed |
+| `test_ai_settings_live.py` (37) | First run: 4 failed on real faults (aliases read from the escaped body; a viewer's shape; an audit time compared with the pinned clock). Saved copy without key erasure, price clearing, the consent fingerprint check, the opt-out's pending-to-off, the unavailable refusal: 5 failed; the beat-lock flag hard-wired off: failed | 37 passed |
+| `test_keys_live.py` (7) | `ai_connections.sealed_key` left out of `SEALED_COLUMNS`: 3 failed | 7 passed |
+| `test_insight_grants_live.py` (8) | Grant without `sealed_key`: failed | 8 passed |
+| `test_ai_vocabulary.py` (6) | The outcome list checked against 0070's copy: failed | 6 passed |
+| `test_policy.py` (102) | `MANAGE_AI` to members, consent to admins: 2 failed | 102 passed |
+| `test_authorization_coverage.py` | The seven AI write routes unplaced: failed, naming each | passed |
+| `test_compose_contract.py` (92) | The API's `AI_SECRET_KEY` and `SCHEDULER_INSIGHT_REPLICAS` removed: 6 failed | 92 passed |
+| `test_settings.py` (+1) | Production requiring `AI_SECRET_KEY`: failed | 33 passed |
+| `AISettingsScreen.test.ts` (19) | Saved copy without the member sentence, the erase confirmation, the 60-second words, the owner-only consent: 5 failed | 19 passed |
+| `tools/ai-eval/test_real_call.py` (3) | First run: failed on a real fault (a call with estimated counts earned a record) | 3 passed |
+
+Final run, one process: this step's suites with `test_insight_role.py`, `test_insight_account_live.py`, `test_detection_has_no_ai.py`, `test_scheduler_settings.py`, `test_deletion_live.py`, `test_migration_rules.py`, `test_notifications_console.py`, `test_roles.py`, the three tenancy-structure suites, `test_auth_routes.py`, `test_ratelimit_coverage.py`, `test_install_secrets.py`, `test_model_facts.py`: **3,199 passed**. `uv run mypy .`: no issues in 957 files. `ruff check .`, `ruff format --check .`: clean. Biome on the touched web folders: clean. `pnpm -r --if-present run typecheck`: done. Whole web suite: **170 files, 2,078 tests passed** (`status-interpretation.test.ts` among them). `verify-tokens.js`: clean.
+
+**Not run, and why:**
+
+- **No real provider was called.** Each format's dated real call (AC77, T4.10) needs the founder's free-tier key (foundation item 4): not yet run. Claude's and Bedrock's own formats have no free tier and stay hidden until someone with an account runs them.
+- **T4.9, Bedrock's AWS signing through `perform`:** not run; needs an AWS account and a scoped key.
+- **`test_connect_guard.py`'s module** stops on live DNS (`nip.io` does not resolve here); it was not changed.
+- **The Playwright checks at 390 and 1920 pixels (AC90), the customer page `docs/product/setup/ai.md` (T4.8), design QA and every browser or phone check:** deferred to the feature's hardening pass by the founder's rule of 2026-11-11.
+- **AC71's "account missing" screen case live:** renaming the role inside a test would disturb a running dev stack's AI container; the words are tested on the screen, and the read is one catalog query.
+- `just check`, `just stack`, `just insight-fence` and other features' live suites: not run, by instruction.
+
+### Step 3, 2026-11-11
+
+Own containers `f3s3-pg` (Postgres 18, port 25432) and `f3s3-ch` (ClickHouse 26.3, port 28123, network `f3s3-net`), migrated to 0070 before the renumbering. Every test below was seen failing first, or failing on a saved copy with its behaviour removed, then passing:
+
+| Test | Seen failing by | Then |
+|---|---|---|
+| `test_insight_account_live.py` (39) | Broken copies: a table `UPDATE` on `jobs`/`finding_explanations`, shared rights handed back to `PUBLIC`, no connection limit; function bodies without the queue filter, `SKIP LOCKED`, lease grace or the lease fence, and a store writing `check_run` and replacing: 17 failed, and the locked-row case blocked until killed | 39 passed |
+| `test_insight_grants_live.py` (8) | Broken copy (an extra `aliases` column, a table `UPDATE`, no take-back, limit 50, one timeout dropped, missing password fatal): 5 failed; the over-privilege check removed: 1 failed | 8 passed |
+| `test_insight_role.py` (11) | Full preload for the insight set: 2 failed; the worker's queue check removed: 1 failed; the role/tasks check removed: a real worker started (killed at 60 s); the child's limit at 10 MiB: failed | 11 passed; the child kept 20.7 MiB of its own |
+| `test_scheduler_settings.py` (+7) | Before the settings change: 4 failed (the misspelt-role cases already held) | 32 passed |
+| `test_roles.py` (+1) | Before the role: failed | 7 passed |
+| `test_compose_contract.py` (+15) | On the Compose files from `HEAD`: 12 failed; `test_a_restore_stops_every_role_that_writes_to_postgres` failed until `deploy/nexovue` named the role | 92 passed |
+| `test_install_secrets.py`, `test_install_script.py` | On `deploy/nexovue` from `HEAD`: 7 failed | passed |
+| `test_deletion_live.py` | AI tables left out of the deletion lists: 2 failed, naming all four | passed, with seeded AI rows |
+| `test_ai_vocabulary.py` (6) | A list and the call range changed in code only: 2 failed | 6 passed |
+
+Also run and passing: `test_jobs_live.py`, `test_detection_prune_live.py`, `test_slo_prune_live.py`, `test_erasure_inventory.py`, `test_keys_live.py`, `test_apikeys_live.py`, `test_migration_rules.py`, the three tenancy-structure suites, the three no-AI suites (2,715 passed in one run). **`test_setup_schema.py` fails here** with `KeyError: '0069'` after the renumbering (open decision 8). `uv run mypy .`: no issues in 934 files. `ruff check`, `ruff format --check`: clean. `pnpm -r --if-present run typecheck`: done; `verify-tokens.js`: clean (no web code changed). `docker compose -f deploy/compose/docker-compose.yaml config`: parses; Postgres on `ai` and `default`, `scheduler-insight` on `ai` only.
+
+**`just insight-fence`: not yet run here; the coordinator runs it.** Its parts that could run against these containers did (the account suites); the reach test (AC42), the real restore (AC46) and the container's memory need the built images and an installed kit.
+
+### Step 2, 2026-11-09
+
+Every behaviour change has a test seen failing first, or proved by removing the behaviour from a saved copy and restoring it. Live suites ran on this build's own containers (`f3s2-pg` on 25432, `f3s2-ch` on 28123, with its reader, eraser and detection-writer users), migrated with Alembic and the Go setup, with every suite's DSN pointed at them.
+
+| Test | Result | Seen failing |
+|---|---|---|
+| `test_alert_vocabulary.py` (26) | pass | yes, before 0067 froze `explained` |
+| `test_evidence_vocabulary.py` (7; 4 new: ratings' reasons, rules, the API's closed lists) | pass | 2 failed with a word dropped from 0067 |
+| `test_migration_rules.py` (43) | pass; 0067's downgrade refuses | — |
+| `test_evidence_explained_live.py` (26, new) | pass | under six mutations: the channel switch, the people-read filter, the channel lock (the race made deterministic: one writer holds its transaction open), the settled read with no new version, the stopped rules, the any-sequence check |
+| `test_outbox_golden_live.py` (7, new): every pre-F3 kind on six channel kinds, byte for byte against a fixture written from the code before Step 2; a follow-up with no cause dropped alone; a raising composer dropping only its row; F19's AC58 both ways; the newest likely cause read at the claim | pass | the golden failed with one existing line's words changed; AC58 failed with `explained` out of the withhold; the drops failed with the drop removed; the claim's read failed without its strength filter |
+| `test_alert_messages.py` (69; 16 new), `test_alert_payloads.py` (16) | pass | 14 failed without the branch, 4 without the batch exclusion, 1 without Slack's unfurl flags, 7 without the closed-finding guard |
+| `test_channels_live.py` (23; 1 new) | pass | yes, without the people-only guard |
+| `test_findings_explanation_live.py` (20; 12 new) | pass | the reason guard, the carried rating and the fact targets each failed when removed |
+| `test_authorization_coverage.py`, `test_ratelimit_coverage.py` | pass | yes: the three new routes unplaced, and `/explanations` on the telemetry tier |
+| `test_deletion_live.py` (28) | pass | 23 failed before `explanation_stopped_rules` had its deletion statement and both tables their seed rows |
+| `test_evidence_link_traces_live.py` (7, new): AC105's callee shapes run against the real trace search | pass | yes, with one shape's attribute dropped from the shared fixture (the console's test failed too) |
+| `test_evidence_gather_live.py`, `test_evidence_store_live.py`, `test_detection_project_job_live.py`, `test_detection_unmoved_live.py`, `test_detection_notify_live.py`, `test_slo_one_message_live.py`, `test_alert_delivery_live.py`, `test_alert_outbox_live.py` | 133 and 55 pass | — (regression) |
+| Web: `url-window.test.ts` (20), `evidence-links.test.ts` (22), `app/url-window-routes.test.ts` (11, the app's own router), `FindingsView.test.ts` (6 new), `FindingScreen.test.ts` (5 new), `SampleExplanationScreen.test.ts` (3), `ExplanationSettingsScreen.test.ts` (7), `ChannelsScreen.test.ts` (2 new), `IncidentScreen.test.ts` (2 new) | pass; **the whole web suite: 2,015 in 165 files** | the channel, incident and empty-feed tests were written first and failed; the rest under mutations (a path left out, the screen's window spread removed, the card line, the fact link and rating removed, the sample's gating, the rule's confirmation) |
+
+Also run: `uv run mypy .` (923 files, no issues), `ruff check .`, `ruff format --check .`, biome on all of `apps/web/src` and both JSON fixtures (one warning, in an untouched file), `pnpm -r --if-present run typecheck`, `verify-tokens.js`. The offline API suite: 5,108 pass (four suites needing ClickHouse ran with it as live suites instead).
+
+**One flake seen once:** `test_slo_one_message_live.py::test_ac56_a_burn_and_a_finding_in_two_projects_both_go` failed once in a 15-file batch and passed alone, in its own file (55) and in two later batches. Not investigated further; F19's.
+
+**Said plainly:** before the reader and writer DSNs were set, one batch ran the evidence and project-job suites with their defaults, `localhost:18123`, another worktree's ClickHouse. Each test's tenant id is random, so no other tenant's rows were read or changed, but a few test rows may remain there. Every later run used this build's own containers only.
+
+**Not run (Step 2):** the Slack and email follow-up as received, and following each link from a demo finding (Step 2's *Judgeable*): **not yet run, founder checks after Phase 2.** The Playwright flow for AC21 and the 390 and 1920 pixel checks: no dev stack in this build. Slack's own handling of `unfurl_links`: not tested.
+
+### Step 1, 2026-11-09
+
+Every behaviour change has a test seen failing first, or, where written with the code, proved by removing the behaviour (a saved copy restored afterwards). Live suites ran on this build's own containers (`f3s1-pg` on 25432, `f3s1-ch` on 28123), migrated with Alembic and the Go setup; 0066's `read_again_at` was added to the running database by hand after the renumbering.
+
+| Test | Result | Seen failing |
+|---|---|---|
+| Go `serviceedges`, `traceassembly` (5 new door and attribute tests, peer attribute, browser edge) | pass; `go vet` clean; golangci-lint 0 issues | build failure before the fields existed |
+| `writer_storeprobe_test.go` (door survives a forced merge) | pass on `f3s1-ch` | failed before 000040 (no column) |
+| `test_model_facts.py` (19) | pass | 11 failed with the type check removed |
+| `test_settings.py`, `test_scheduler_settings.py` (2 each, AC92's override) | pass | yes, before the setting |
+| `test_policy.py` | 94 pass | collection error before the action |
+| `test_authorization_coverage.py` | pass | yes, on the ungated route |
+| `test_deletion_live.py` (27) | pass | 2 failed with the tables left out |
+| `test_evidence_vocabulary.py` (3), `test_migration_rules.py` (37) | pass | yes, with a word added |
+| `test_evidence_rules.py` (52) | pass | base-rate cases failed first; 21 failed under five mutations |
+| `test_evidence_store_live.py` (9) | pass | 2 failed without the server-door preference and the hour's look-back |
+| `test_tenant_chokepoint_structure.py` (18) | pass | yes, with an unbound evidence statement |
+| `test_evidence_gather_live.py` (14) | pass | 4 failed without the fingerprint, the lock or the deleted-project stop |
+| `test_detection_memory_live.py`, the gather at its row bounds | pass, peak 2 MiB under 64 MiB | yes, with the limit lowered to 1 MiB |
+| `test_detection_coordinator.py`, `test_compose_contract.py` | 11 and 69 pass | 1 and 5 failed on the old worker |
+| `test_detection_project_job_live.py` (37, two new) | pass | yes, with the enqueue removed |
+| `test_deploys_live.py` (44, five new) | pass | yes, with the enqueue removed |
+| `test_jobs_live.py`'s floor case, now with `evidence` and `releases` | pass | not separately (the floor is F19's) |
+| `test_detection_has_no_ai.py` (9) | pass | yes, with AI and probes imports planted |
+| `test_scheduler_postgres_tenancy_structure.py` (14) | pass | yes, with an unbound statement planted |
+| `test_detection_unmoved_live.py` (2) | pass | yes, with a gather that touched `findings` |
+| `test_findings_explanation_live.py` (8) | pass | 3 failed with the hold, the minute or the token scope removed |
+| `test_findings_api_live.py` (36), `test_release_facts_live.py` | pass | — |
+| `explanation.test.ts` (23), `FindingScreen.test.ts` (11 new; F28's AC40 cases through the folded section) | pass, 593 across the touched web folders | 4 failed under four mutations |
+| `test_explain_demo.py` (10) | pass | yes, under a mutation |
+
+Also run: `uv run mypy .` (909 files, no issues), `ruff check .`, `ruff format --check .`, biome on the touched web folders, `pnpm -r --if-present run typecheck`, `verify-tokens.js`. The offline API suite: 5,042 pass; `test_setup_schema.py` fails here only because migration `0065` (the coordinator's) is not on this branch, and passes once 0066 is re-chained. The offline scheduler and platform suites: 5,332 pass; `test_connect_guard.py` needs internet DNS and was not run.
+
+### CI fix 2026-11-09: the gather tests raced the dev stack's own evidence worker
+
+CI failed `test_detection_project_job_live.py::test_an_opening_adds_its_two_reads_and_a_close_its_last_in_its_transaction`: it expected the jobs `[opened, settled, closed]` for the finding and found only `[settled]`. *Why:* the test read the `jobs` table after the run, so it proved "the gathers are still waiting in the queue", which the product never promises. The stack's `scheduler-light` worker, which CI runs beside the tests, claims queue `evidence`, runs the immediate `opened` and `closed` gathers within a second, and deletes each job once it has run (`jobs/queue.py`, `_FINISH`). Only the 5-minute `settled` one was left. The product kept AC2, AC79 and A1. This is the same kind of failure as the prune test (13fd4ad) and AC60's SLO test, above.
+
+*What the tests prove now, whoever runs the job:*
+- **The opening and closing test** reads each service transaction of the project job at its last statement (`_advance`), on the transaction's own connection. It reads the findings and gathers whose `xmin` is that transaction's id, then asks Postgres afterwards whether each transaction committed (`pg_xact_status`). It asserts that the transaction that first wrote the finding (`open`) added exactly `opened` (no delay) and `settled` (300 s). It asserts that the transaction that closed it added exactly `closed`. No other transaction added a gather, and both committed. This is stronger than before, because the old test never checked that the job and the finding shared one transaction.
+- **The failed-commit test** (`..._fails_to_commit_leaves_no_job_behind`) had the same blind spot the other way: a wrongly committed gather could have been run and deleted before the `== []` check. It now reads the killed transaction before the kill: it had written the open finding and its two gathers. It then asserts that Postgres records that transaction as `aborted`, and keeps the old checks.
+- **`test_detection_unmoved_live.py`** (AC48's arms) did not fail, but it was not testing what it says. Measured: in every arm, `unregistered` and `backed_up` included, the stack had already run the outage's `opened` and `closed` gathers with the real store before the arm chose anything. So the outage now adds its gathers to a queue no worker claims (the request is unchanged except `queue`, asserted to be `evidence` first). Each arm asserts that all three gathers wait and that no `finding_explanations` row exists before it runs.
+- `test_findings_explanation_live.py` and `test_deploys_live.py` also read `jobs` for gathers. They do not race: each writes inside one outer transaction that is rolled back and never committed, so no worker can see their jobs.
+
+*Seen failing, then passing, against the running dev stack:* the unchanged opening test failed 3 of 3 runs (`[settled]`). The changed pair passed 5 of 5 runs. With the enqueue moved to its own transaction (a temporary mutation of `_read_facts`, restored), both changed tests fail. With the unmoved test's hold switched off, its new check fails (`['settled'] == ['closed', 'opened', 'settled']`). With the hold on, it passed 5 of 5 runs. The F3 live suites (`test_evidence_gather_live`, `test_evidence_store_live`, `test_detection_project_job_live`, `test_detection_unmoved_live`, `test_findings_explanation_live`) passed 70 of 70. `uv run mypy .`, `ruff check .` and `ruff format --check .` are clean. No product code changed.
+
+### Not run
+
+- **The founder's judgement** ("does the first screen tell you where to look?", the abstention rate on the seeded cases): not yet run, founder checks after Phase 2.
+- `just explain-demo` against the dev stack, and the Playwright checks at 390 and 1920 pixels (AC17, AC70): no dev stack in this build.
+- AC14's receiver arm and T1.3's volume measurement (*Open decisions*, 3 and 4).
+- `just check` was not run, by instruction.
+
+### Earlier
+
+None run before Step 1. No test, query or model. The code was read, and each review finding checked. Web facts read on 2026-11-02, through a summarizing tool: Docker Hub on `POSTGRES_USER`; PostgreSQL on `INSERT` and `LOCK` privileges; Coroot's AI overview, AI configuration and AI benchmark pages; OpenObserve's AI SRE page; Grafana's Assistant invoice page; Datadog's Watchdog page; HolmesGPT's evaluations page in its repository. Microsoft's Azure OpenAI v1 page, through a summarizing tool, and its older REST reference through a search summary only. A script confirmed every acceptance criterion in `spec.md`, AC1 to AC106, is cited by a task in `plan.md`, and was re-run after the second review.
 
 ## Specification impact
 
@@ -362,7 +695,9 @@ This is the specification. On approval it amends: `phase-2-foundation.md` (the d
 
 ## Documentation impact
 
-None changed. Listed in `design.md`, *Specification impact*, and in the plan's tasks. New customer and operator documents are `docs/product/setup/ai.md` and `docs/operations/ai.md`, written during Steps 4 and 5.
+**Step 4 (2026-11-11):** `docs/operations/ai.md` (allowing a local model, an unreadable key), `docs/operations/key-rotation.md` (`AI_SECRET_KEY`), ADR-047 and the decisions index, `phase-2-tracker.md`. `docs/product/setup/ai.md` is deferred to the hardening pass.
+
+**Step 2 (2026-11-09):** `docs/product/setup/alerts/webhooks.md` (no `explained` event on a webhook), `setup/alerts/channels.md` (the follow-up, its limits and switch, frequent deployers, pages with no finding, held until the bar is met), `setup/deploys.md` (what deploys add to a finding, the 7-day clock), `docs/features/alerts/spec.md` (amended: the `explained` kind), F19's `status.md` (AC58 done), `phase-2-tracker.md`. Before Step 2: none changed. Listed in `design.md`, *Specification impact*, and in the plan's tasks. New customer and operator documents are `docs/product/setup/ai.md` and `docs/operations/ai.md`, written during Steps 4 and 5.
 
 ## Cross-feature reconciliation, 2026-11-02
 
@@ -380,7 +715,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-11 (Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

@@ -25,6 +25,10 @@ from nexovue_platform.email.settings import (
     email_settings,
     refuse_console_mail_in_production,
 )
+from nexovue_platform.evidence import (
+    SHOW_HELD_CAUSES_VARIABLE,
+    refuse_held_causes_in_production,
+)
 from pydantic import (
     AnyUrl,
     Field,
@@ -239,6 +243,30 @@ class Settings(BaseSettings):
     # the same list, to open jobs queued before a rotation.
     check_secret_previous_keys: str = ""
 
+    # --- tracker connections (F22) --------------------------------------------
+    # Seals a connection's App key, webhook secret and manifest code. Its own key,
+    # held by this API (to seal, to open a webhook secret, and to re-seal) and by
+    # `scheduler-connections` alone (FD10, AC33).
+    connection_secret_key: str = ""
+    connection_secret_previous_keys: str = ""
+    # Whether tracker connections run on this install (`NEXOVUE_CONNECTIONS`,
+    # AC118): the setting `deploy/nexovue` uses to start `scheduler-connections`,
+    # which the scheduler reads too. On unless set to `no`.
+    connections_enabled: bool = Field(default=True, validation_alias="NEXOVUE_CONNECTIONS")
+
+    # --- AI wording (F3) ---------------------------------------------------------
+    # Seals an organization's provider key, and re-seals it on a rotation. Held here and by
+    # `scheduler-insight` alone (FD10). Not required even in production: AI is optional, so
+    # a missing key makes `/settings/ai` say AI is unavailable and stops nothing (AC71).
+    ai_secret_key: str = ""
+    ai_secret_previous_keys: str = ""
+    # How many AI containers the install runs (`SCHEDULER_INSIGHT_REPLICAS`, design *The
+    # role*): 0 is the documented way to run with none, and the screen then says so (AC103).
+    scheduler_insight_replicas: int = Field(default=1, ge=0)
+    # F3 A60: show likely causes before the founder's bar is met, so Steps 1 and 2 can be
+    # judged on a development install. Production refuses to start with it (AC92).
+    show_held_causes: bool = Field(default=False, validation_alias=SHOW_HELD_CAUSES_VARIABLE)
+
     # The probe locations a check can run from. The hosted service lists its
     # regions; a self-hosted install has one. Each is a scheduler worker
     # consuming `light.<location>`.
@@ -379,6 +407,11 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _causes_held_in_production(self) -> Settings:
+        refuse_held_causes_in_production(env=self.env, show_held_causes=self.show_held_causes)
+        return self
+
+    @model_validator(mode="after")
     def _keys_are_set_in_production(self) -> Settings:
         """A deployed install seals with both keys (readiness blocker 17).
 
@@ -392,10 +425,19 @@ class Settings(BaseSettings):
         for variable, value in (
             ("CREDENTIAL_ENCRYPTION_KEY", self.credential_encryption_key),
             ("CHECK_SECRET_KEY", self.check_secret_key),
+            ("CONNECTION_SECRET_KEY", self.connection_secret_key),
         ):
             if not value:
                 raise ValueError(f"{variable} is not set; production seals secrets with it.")
         return self
+
+    @field_validator("connections_enabled", mode="before")
+    @classmethod
+    def _connections_unless_no(cls, value: object) -> object:
+        """`deploy/nexovue` writes `yes` or `no`; anything but `no` leaves them on."""
+        if isinstance(value, str):
+            return value.strip().lower() != "no"
+        return value
 
     @field_validator("probe_locations", mode="before")
     @classmethod
@@ -472,6 +514,16 @@ class Settings(BaseSettings):
     def check_secret_keys(self) -> ConfiguredKeys:
         """Check and channel secrets' keyring, as configured."""
         return ConfiguredKeys(self.check_secret_key, self.check_secret_previous_keys)
+
+    @property
+    def connection_keys(self) -> ConfiguredKeys:
+        """Tracker connections' keyring (F22). `scheduler-connections` holds the same."""
+        return ConfiguredKeys(self.connection_secret_key, self.connection_secret_previous_keys)
+
+    @property
+    def ai_keys(self) -> ConfiguredKeys:
+        """AI providers' keyring (F3). `scheduler-insight` holds the same, to open."""
+        return ConfiguredKeys(self.ai_secret_key, self.ai_secret_previous_keys)
 
     @property
     def credential_keys(self) -> ConfiguredKeys:

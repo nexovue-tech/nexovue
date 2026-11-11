@@ -20,6 +20,23 @@ def test_each_role_runs_the_process_the_compose_files_ran() -> None:
     assert roles.command_for("setup", []) == ["python", "-m", "nexovue_api.setup"]
 
 
+def test_the_connections_role_takes_its_two_queues_and_its_own_tasks() -> None:
+    """F22, D80 and F5's D40: sync capped below the slots, and a narrow task set."""
+    assert roles.command_for("scheduler-connections", []) == [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--queues", "connections,connections-interactive"),
+        *("--concurrency", "3", "--tasks", "connections"),
+    ]
+
+
+def test_the_insight_role_takes_its_queue_and_its_own_tasks() -> None:
+    """F3: the AI role claims `insight` alone, on four children, loading its own tasks."""
+    assert roles.command_for("scheduler-insight", []) == [
+        *("python", "-m", "nexovue_scheduler", "worker"),
+        *("--queues", "insight", "--concurrency", "4", "--tasks", "insight"),
+    ]
+
+
 def test_extra_arguments_reach_the_role() -> None:
     assert roles.command_for("scheduler-light", ["--concurrency", "2"])[-2:] == [
         "--concurrency",

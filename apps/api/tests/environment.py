@@ -29,6 +29,7 @@ TEST_ENVIRONMENT: Final[dict[str, str]] = {
 DEPLOYED_KEYS: Final[dict[str, str]] = {
     "CHECK_SECRET_KEY": "qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=",
     "CREDENTIAL_ENCRYPTION_KEY": "1tru1EuwOqD39XZm1z-sb2mrRHEFmbD_vreXaw2YZE8=",
+    "CONNECTION_SECRET_KEY": "Wm3n0P1oYHk2s1Yx7c5lQ0mJd8h6rT4vB9eA2uFgK0s=",
 }
 
 for name, value in TEST_ENVIRONMENT.items():
