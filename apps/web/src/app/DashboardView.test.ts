@@ -479,13 +479,13 @@ describe("the dashboard view", () => {
       (each) => text(each) === "View as table",
     );
     expect(toggle).toBeDefined();
-    expect(checkout()?.className).toMatch(/lg:col-span/);
+    expect(checkout()?.className).toMatch(/@3xl:col-span/);
 
     act(() => toggle?.click());
 
     expect(checkout()?.querySelector("table")).not.toBeNull();
     expect(text(checkout()?.querySelector("thead") ?? null)).toContain("p95 (est.)");
-    expect(checkout()?.className).not.toMatch(/lg:col-span/);
+    expect(checkout()?.className).not.toMatch(/@3xl:col-span/);
   });
 
   it.each([

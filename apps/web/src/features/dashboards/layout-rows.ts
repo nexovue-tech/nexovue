@@ -3,22 +3,25 @@
  *
  * A panel's `width` is its share of a 12-column row, and the last panel in each row grows
  * to fill it, so a saved layout never leaves empty columns on the right (the founder's
- * standing rule). Narrow charts and tables widen where the window is narrow: at 1024 px a
- * chart of width 3 would have about 114 px of plot, and a table scrolls rather than
+ * standing rule). Narrow charts and tables widen where the screen is narrow: at 768 px of
+ * `main` a chart of width 3 would have about 100 px of plot, and a table scrolls rather than
  * squeezes (design, *Dashboard view*).
  */
 
 export const COLUMNS = 12;
-/** Between `lg` and `xl`, a chart or table of width 3 or 4 spans this many. */
+/** Between `@3xl` and `@5xl`, a chart or table of width 3 or 4 spans this many. */
 const NARROW_SPAN = 6;
 const NARROW_WIDTHS = new Set([3, 4]);
-/** From `xl`, a table spans at least this many. */
+/** From `@5xl`, a table spans at least this many. */
 const TABLE_MIN_SPAN = 4;
 
 /** What decides how a panel may narrow: charts, tables, and the rest (notes, numbers). */
 export type PanelShape = "time" | "table" | "text";
-/** Tailwind's breakpoints the grid changes at: below `lg`, `lg` to `xl`, and from `xl`. */
-export type GridSize = "base" | "lg" | "xl";
+/**
+ * The container widths of `main` the grid changes at: below `@3xl`, `@3xl` to `@5xl`, and
+ * from `@5xl` (F4 T2.10b: screens lay out by the width they are given, not the window's).
+ */
+export type GridSize = "base" | "@3xl" | "@5xl";
 
 export interface LayoutPanel {
   id: string;
@@ -34,10 +37,10 @@ export interface LayoutCell {
 
 function spanAt(panel: LayoutPanel, size: GridSize): number {
   if (size === "base") return COLUMNS;
-  if (size === "lg" && panel.shape !== "text" && NARROW_WIDTHS.has(panel.width)) {
+  if (size === "@3xl" && panel.shape !== "text" && NARROW_WIDTHS.has(panel.width)) {
     return NARROW_SPAN;
   }
-  if (size === "xl" && panel.shape === "table") return Math.max(panel.width, TABLE_MIN_SPAN);
+  if (size === "@5xl" && panel.shape === "table") return Math.max(panel.width, TABLE_MIN_SPAN);
   return Math.min(Math.max(panel.width, 1), COLUMNS);
 }
 

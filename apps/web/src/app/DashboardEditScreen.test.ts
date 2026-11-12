@@ -437,14 +437,14 @@ describe("a toolbar per panel, by keyboard alone (AC37)", () => {
     expect(liveRegions(container)).toHaveLength(1);
   });
 
-  it("lays panels out as the read view does, at lg and at xl (FR49)", async () => {
+  it("lays panels out as the read view does, at @3xl and at @5xl (FR49)", async () => {
     const { container } = await openEditor();
     await ready(container);
 
     const classes = container.querySelector('section[data-panel-id="p_rate"]')?.className ?? "";
-    // A chart of width 4 spans 6 between lg and xl, and its own 4 from xl.
-    expect(classes).toContain("lg:col-span-6");
-    expect(classes).toContain("xl:col-span-4");
+    // A chart of width 4 spans 6 between @3xl and @5xl, and its own 4 from @5xl.
+    expect(classes).toContain("@3xl:col-span-6");
+    expect(classes).toContain("@5xl:col-span-4");
   });
 
   it("states what the dashboard costs against its caps", async () => {
