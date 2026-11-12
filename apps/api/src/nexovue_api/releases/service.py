@@ -24,12 +24,13 @@ from typing import Any, Final
 from nexovue_platform import releases as method
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.auth.dependencies import Reader
-from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import Release, ReleasePeriod
+from nexovue_api.auth.dependencies import Identity, Reader
+from nexovue_api.data.clickhouse.base import TenantScopedRepository, server_error_code
+from nexovue_api.data.postgres.models import Project, Release, ReleasePeriod
 from nexovue_api.detection import queries as detection_queries
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
 from nexovue_api.findings.queries import derived_retention_days
+from nexovue_api.projects.config import KEEP_ERRORS
 from nexovue_api.projects.service import require_readable_project
 from nexovue_api.releases import queries
 from nexovue_api.releases.schemas import (
@@ -38,21 +39,35 @@ from nexovue_api.releases.schemas import (
     BlockView,
     ComparisonView,
     CoverageList,
+    DeployFactView,
+    ErrorKind,
+    FindingWindowView,
+    LaterFinding,
     LatestRelease,
     Marker,
     MarkerList,
+    NamingDiffers,
     PeriodView,
     ReadingView,
     ReleaseList,
     ReleaseRow,
     ReleaseView,
+    Rollout,
+    RolloutMinute,
+    RolloutSeries,
+    SenderDeploy,
+    SenderDetails,
     ServiceCoverage,
     SideView,
     TrafficView,
+    VersionErrorGroup,
+    VersionErrors,
 )
+from nexovue_api.window import RECEIVE_CLOCK_SLACK
 
 NO_SUCH_RELEASE: Final = "No such release"
 NO_SUCH_PERIOD: Final = "This release has no such period."
+NO_SUCH_FINDING: Final = "No such finding in this release's project."
 BAD_CURSOR: Final = "This page link is not one we gave out."
 DEFAULT_LIMIT: Final = 50
 MAX_LIMIT: Final = 200
@@ -60,6 +75,11 @@ MAX_LIMIT: Final = 200
 SERVING_WITHIN: Final = timedelta(minutes=10)
 WINDOW_HOURS: Final = tuple(int(window / timedelta(hours=1)) for window in method.WINDOWS)
 _CURSOR_SEPARATOR: Final = "|"
+# FR46 reads releases first heard of in this long (a guess).
+NAMING_LOOKBACK: Final = timedelta(hours=24)
+# Findings listed under one period (FR34); past it the page says there are more.
+LATER_FINDINGS_CAP: Final = 50
+_MINUTE: Final = timedelta(minutes=1)
 
 
 # ------------------------------------------------------------------ the list
@@ -111,6 +131,9 @@ async def list_releases(
                 started_at=found[1],
             )
         )
+    differs = await queries.naming_differs(
+        session, org_id=reader.org_id, project_id=project.id, since=now - NAMING_LOOKBACK
+    )
     return ReleaseList(
         releases=[_row(row, now) for row in page],
         total=total,
@@ -122,6 +145,14 @@ async def list_releases(
         latest=latest,
         window_from=start,
         window_to=end,
+        naming_differs=[
+            NamingDiffers(
+                service_name=row.service_name,
+                reported_version=row.reported_version,
+                seen_version=row.seen_version,
+            )
+            for row in differs
+        ],
     )
 
 
@@ -236,11 +267,37 @@ async def read_release(
         last_reported_at=release.last_reported_at,
         report_count=release.report_count,
         last_state=release.last_state,
-        periods=[_period(period) for period in reversed(periods)],
+        periods=[
+            await _period(session, release=release, period=period) for period in reversed(periods)
+        ],
+        deploys=[
+            DeployFactView(
+                id=row.id,
+                deployed_at=row.deployed_at,
+                received_at=row.created_at,
+                state=row.state,
+                commit_sha=row.commit_sha,
+            )
+            for row in await queries.deploys_of(
+                session, org_id=reader.org_id, release_id=release.id
+            )
+        ],
     )
 
 
-def _period(period: ReleasePeriod) -> PeriodView:
+async def _period(session: AsyncSession, *, release: Release, period: ReleasePeriod) -> PeriodView:
+    """A period, with the findings on its service that started while it served (FR34,
+    AC41): from its start's own minute, so a finding in that minute is after it, and
+    never one that started before."""
+    found = await queries.findings_from(
+        session,
+        org_id=release.org_id,
+        project_id=release.project_id,
+        service_name=release.service_name,
+        start=_minute_of(period.started_at),
+        end=period.ended_at,
+        limit=LATER_FINDINGS_CAP + 1,
+    )
     return PeriodView(
         id=period.id,
         started_at=period.started_at,
@@ -249,10 +306,65 @@ def _period(period: ReleasePeriod) -> PeriodView:
         previous_version=period.previous_version,
         already_running=period.already_running,
         is_return=period.is_return,
+        later_findings=[
+            LaterFinding(
+                id=row.id,
+                title=row.title,
+                severity=row.severity,
+                state=row.state,
+                started_at=row.started_at,
+            )
+            for row in found[:LATER_FINDINGS_CAP]
+        ],
+        later_findings_truncated=len(found) > LATER_FINDINGS_CAP,
     )
 
 
+def _minute_of(moment: datetime) -> datetime:
+    return moment.replace(second=0, microsecond=0)
+
+
 # ---------------------------------------------------------------- comparison
+
+
+@dataclass(frozen=True, slots=True)
+class _Compared:
+    """The period a comparison reads, and the stretch of rows it reads."""
+
+    release: Release
+    period: ReleasePeriod
+    window: timedelta
+    to: datetime
+    as_of: bool
+    kept_days: int
+
+
+async def _readable_period(
+    session: AsyncSession, *, reader: Reader, release_id: uuid.UUID, period_id: uuid.UUID | None
+) -> tuple[Release, ReleasePeriod]:
+    release = await _readable_release(session, reader=reader, release_id=release_id)
+    periods = await queries.periods_of(session, org_id=reader.org_id, release_id=release.id)
+    return release, _chosen(periods, period_id)
+
+
+async def _compared(
+    session: AsyncSession,
+    *,
+    release: Release,
+    period: ReleasePeriod,
+    window: timedelta,
+    now: datetime,
+) -> _Compared:
+    """Where reads of this period stop: the window's end or the settled minute (AC35)."""
+    sweep = await detection_queries.detection_sweep(session)
+    to, as_of = method.comparison_end(
+        period.started_at + window, sweep.settled_minute if sweep else None, now
+    )
+    kept_days = min(
+        await derived_retention_days(session, org_id=release.org_id) or method.VERSION_ROLLUP_DAYS,
+        method.VERSION_ROLLUP_DAYS,
+    )
+    return _Compared(release, period, window, to, as_of, kept_days)
 
 
 async def compare(
@@ -262,84 +374,184 @@ async def compare(
     reader: Reader,
     release_id: uuid.UUID,
     period_id: uuid.UUID | None,
-    window_hours: int,
+    window_hours: int | None,
+    finding_id: uuid.UUID | None,
     now: datetime,
 ) -> ComparisonView:
-    """One period against its previous version, by the design's ordered list."""
-    release = await _readable_release(session, reader=reader, release_id=release_id)
-    periods = await queries.periods_of(session, org_id=reader.org_id, release_id=release.id)
-    period = _chosen(periods, period_id)
-    window = timedelta(hours=window_hours)
-    sweep = await detection_queries.detection_sweep(session)
-    to, as_of = method.comparison_end(
-        period.started_at + window, sweep.settled_minute if sweep else None, now
+    """One period against its previous version, by the design's ordered list, with what
+    the numbers cannot hide: minutes missing from the version rows (FR28), versions the
+    worker combined (FR17), two environments (FR45), and last week (FR25)."""
+    release, period = await _readable_period(
+        session, reader=reader, release_id=release_id, period_id=period_id
     )
-    kept_days = min(
-        await derived_retention_days(session, org_id=reader.org_id) or method.VERSION_ROLLUP_DAYS,
-        method.VERSION_ROLLUP_DAYS,
+    finding = (
+        None
+        if finding_id is None
+        else await _finding_after(session, release=release, period=period, finding_id=finding_id)
     )
-    previous_started = (
-        await queries.previous_started_at(
-            session,
-            org_id=reader.org_id,
-            project_id=release.project_id,
-            service_name=release.service_name,
-            version=period.previous_version,
-            before=period.started_at,
-        )
-        if period.previous_version
-        else None
-    )
+    window = _window_of(window_hours, period, finding)
+    compared = await _compared(session, release=release, period=period, window=window, now=now)
+    expired_before = now - timedelta(days=compared.kept_days)
     start = method.read_start(period.started_at, window)
-    rows = (
-        await queries.version_minutes(
-            repository,
-            project_id=release.project_id,
-            service_name=release.service_name,
-            start=start,
-            end=to,
-        )
-        if to > start
-        else []
-    )
+    rows, totals = await _rows_and_totals(repository, compared, start)
     decided = method.choose_method(
         method.PeriodToCompare(
             started_at=period.started_at,
             version=release.version,
             previous_version=period.previous_version,
             already_running=period.already_running,
-            previous_started_at=previous_started,
+            previous_started_at=await _previous_started(session, release, period),
             reported_at=method.reported_moment(period.started_at, period.start_basis),
         ),
-        [_minute(row) for row in rows],
-        to=to,
+        rows,
+        to=compared.to,
         window=window,
-        expired_before=now - timedelta(days=kept_days),
+        expired_before=expired_before,
+        totals=totals,
     )
+    spans = method.compared_spans(decided)
+    last_week = await _last_week(repository, release, decided, expired_before)
+    differing = method.minutes_differing(rows, totals, spans)
     return ComparisonView(
         period_id=period.id,
         version=release.version,
         previous_version=period.previous_version,
         reason=decided.reason,
         lead=decided.lead,
-        as_of=to if as_of else None,
-        compared_to=to,
-        window_hours=window_hours,
-        blocks=[_block(block) for block in decided.blocks],
+        as_of=compared.to if compared.as_of else None,
+        compared_to=compared.to,
+        window_hours=_hours(window),
+        blocks=[_block(block, method.last_week_of(block, last_week)) for block in decided.blocks],
         traffic=None
         if decided.traffic is None
         else TrafficView(
             this_version=_side(decided.traffic[0]), previous_version=_side(decided.traffic[1])
         ),
         other_versions=list(decided.other_versions),
-        numbers_kept_days=kept_days,
+        numbers_kept_days=compared.kept_days,
+        incomplete=differing > 0,
+        minutes_differing=differing,
+        versions_combined=method.versions_combined(rows, spans),
+        mixed_environments=await _mixed_environments(repository, release, spans),
+        finding=None
+        if finding is None
+        else FindingWindowView(
+            id=finding[0],
+            started_at=finding[1],
+            reaches=method.reaches(period.started_at, window, finding[1]),
+        ),
     )
 
 
-def window_hours_of(requested: int | None) -> int:
-    """FR22's windows; one hour by default."""
+async def _finding_after(
+    session: AsyncSession, *, release: Release, period: ReleasePeriod, finding_id: uuid.UUID
+) -> tuple[uuid.UUID, datetime] | None:
+    """The finding a comparison was opened from (FR22): this project's, or 404. One that
+    started before the period says nothing of a window from it, so it is left out."""
+    found = await queries.project_finding(
+        session, org_id=release.org_id, project_id=release.project_id, finding_id=finding_id
+    )
+    if found is None:
+        raise NotFoundError(NO_SUCH_FINDING)
+    if found.started_at < _minute_of(period.started_at):
+        return None
+    return found.id, found.started_at
+
+
+def _window_of(
+    window_hours: int | None,
+    period: ReleasePeriod,
+    finding: tuple[uuid.UUID, datetime] | None,
+) -> timedelta:
+    """The window asked for; else, opened from a finding, the smallest that reaches it
+    (FR22, AC64); else an hour."""
+    if window_hours is not None:
+        return timedelta(hours=window_hours)
+    if finding is not None:
+        return method.window_for_finding(period.started_at, finding[1]).window
+    return method.DEFAULT_WINDOW
+
+
+def _hours(window: timedelta) -> int:
+    return int(window / timedelta(hours=1))
+
+
+async def _rows_and_totals(
+    repository: TenantScopedRepository, compared: _Compared, start: datetime
+) -> tuple[list[method.VersionMinute], list[method.ServiceMinute]]:
+    if compared.to <= start:
+        return [], []
+    keys: dict[str, Any] = {
+        "project_id": compared.release.project_id,
+        "service_name": compared.release.service_name,
+        "start": start,
+        "end": compared.to,
+    }
+    rows = [_minute(row) for row in await queries.version_minutes(repository, **keys)]
+    totals = [_total(row) for row in await queries.service_minutes(repository, **keys)]
+    return rows, totals
+
+
+async def _previous_started(
+    session: AsyncSession, release: Release, period: ReleasePeriod
+) -> datetime | None:
+    if not period.previous_version:
+        return None
+    return await queries.previous_started_at(
+        session,
+        org_id=release.org_id,
+        project_id=release.project_id,
+        service_name=release.service_name,
+        version=period.previous_version,
+        before=period.started_at,
+    )
+
+
+async def _last_week(
+    repository: TenantScopedRepository,
+    release: Release,
+    decided: method.Comparison,
+    expired_before: datetime,
+) -> list[method.ServiceMinute]:
+    """The service's minutes a week before each before-and-after block, while kept."""
+    stretches = [
+        (block.start - method.LAST_WEEK, block.end - method.LAST_WEEK)
+        for block in decided.blocks
+        if block.method != method.SIDE_BY_SIDE
+    ]
+    if not stretches or min(start for start, _ in stretches) < expired_before:
+        return []
+    rows = await queries.service_minutes(
+        repository,
+        project_id=release.project_id,
+        service_name=release.service_name,
+        start=min(start for start, _ in stretches),
+        end=max(end for _, end in stretches),
+    )
+    return [_total(row) for row in rows]
+
+
+async def _mixed_environments(
+    repository: TenantScopedRepository, release: Release, spans: Sequence[method.Span]
+) -> bool:
+    """FR45, read only where there are numbers to warn about."""
+    if not spans:
+        return False
+    found = await queries.environments(
+        repository,
+        project_id=release.project_id,
+        service_name=release.service_name,
+        start=min(start for start, _ in spans),
+        end=max(end for _, end in spans),
+        clock_slack=RECEIVE_CLOCK_SLACK,
+    )
+    return len(found) > 1
+
+
+def window_hours_of(requested: int | None) -> int | None:
+    """FR22's windows; None when unset, for the comparison to choose."""
     if requested is None:
-        return WINDOW_HOURS[0]
+        return None
     if requested not in WINDOW_HOURS:
         raise InvalidRequestError(
             f"`window` is one of {', '.join(str(hours) for hours in WINDOW_HOURS)} hours."
@@ -368,6 +580,15 @@ def _minute(row: dict[str, Any]) -> method.VersionMinute:
     )
 
 
+def _total(row: dict[str, Any]) -> method.ServiceMinute:
+    return method.ServiceMinute(
+        minute=datetime.fromtimestamp(int(row["minute_epoch"]), UTC),
+        requests=int(row["requests"]),
+        errors=int(row["errors"]),
+        buckets=tuple(int(count) for count in row["buckets"]),
+    )
+
+
 def _side(side: method.Side) -> SideView:
     return SideView(
         version=side.version, requests=side.requests, errors=side.errors, p95_ms=side.p95_ms
@@ -378,17 +599,224 @@ def _reading(reading: method.Reading) -> ReadingView:
     return ReadingView(reading=reading.reading, note=reading.note)
 
 
-def _block(block: method.Block) -> BlockView:
+def _block(block: method.Block, last_week: method.Side | None) -> BlockView:
     return BlockView(
         kind=block.kind,
         method=block.method,
         start=block.start,
         end=block.end,
+        previous_from=block.previous_start,
+        previous_to=block.previous_end,
         minutes_compared=block.minutes_compared,
         this_version=_side(block.this_version),
         previous_version=_side(block.previous_version),
         failure_share=_reading(block.failure_share),
         p95=_reading(block.p95),
+        last_week=None if last_week is None else _side(last_week),
+    )
+
+
+# ------------------------------------------------------- errors by version, FR29
+
+# At most this many groups (FR29); the read asks for one more to know there are more.
+ERROR_GROUPS_CAP: Final = 100
+# ClickHouse's TIMEOUT_EXCEEDED, as `dashboardpanels/shared_reads.py` reads it: a read
+# past the account's time limit (`users.d/api-reader.xml`).
+_TIMEOUT_EXCEEDED: Final = 159
+
+
+async def errors_by_version(
+    session: AsyncSession,
+    repository: TenantScopedRepository,
+    *,
+    reader: Reader,
+    release_id: uuid.UUID,
+    period_id: uuid.UUID | None,
+    window_hours: int | None,
+    now: datetime,
+) -> VersionErrors:
+    """Error groups new in this version, gone in it, or in both (FR29): this version
+    from the period's start over the window, the previous version over the equal
+    stretch before. A timeout, aged-out rows and sampling that keeps errors off each
+    say so in words, never as an empty list (FR30, FR31, FR51)."""
+    release, period = await _readable_period(
+        session, reader=reader, release_id=release_id, period_id=period_id
+    )
+    project = await require_readable_project(session, reader=reader, project_id=release.project_id)
+    window = timedelta(hours=window_hours) if window_hours else method.DEFAULT_WINDOW
+    previous = period.previous_version or None
+    end = max(min(period.started_at + window, now), period.started_at)
+    # The previous version over the same duration before the start (FR29).
+    start = period.started_at - (end - period.started_at) if previous else period.started_at
+    # A release counted in server traffic reads no browser-door row (FR29, AC69).
+    server = release.first_seen_at is not None
+    answer: dict[str, Any] = {
+        "period_id": period.id,
+        "version": release.version,
+        "previous_version": previous,
+        "start": period.started_at,
+        "end": end,
+        "window_hours": _hours(window),
+        "groups": [],
+        "truncated": False,
+        "timed_out": False,
+        "aged_out_on": None,
+        "may_be_incomplete": _keeps_errors_off(project),
+        "browser_door_read": not server,
+    }
+    raw_days = await queries.raw_retention_days(
+        session, org_id=release.org_id, project_id=release.project_id
+    )
+    if raw_days is not None and start < now - timedelta(days=raw_days):
+        answer["aged_out_on"] = start + timedelta(days=raw_days)
+        return VersionErrors(**answer)
+    if end <= start:
+        return VersionErrors(**answer)
+    try:
+        rows = await queries.errors_by_version(
+            repository,
+            project_id=release.project_id,
+            this_version=release.version,
+            previous_version=previous or release.version,
+            service_name=release.service_name,
+            split_at=period.started_at,
+            start=start,
+            end=end,
+            clock_slack=RECEIVE_CLOCK_SLACK,
+            server_door_only=server,
+            limit=ERROR_GROUPS_CAP + 1,
+        )
+    except Exception as failed:
+        if server_error_code(failed) != _TIMEOUT_EXCEEDED:
+            raise
+        answer["timed_out"] = True
+        return VersionErrors(**answer)
+    answer["groups"] = [_error_group(row, compared=previous is not None) for row in rows][
+        :ERROR_GROUPS_CAP
+    ]
+    answer["truncated"] = len(rows) > ERROR_GROUPS_CAP
+    return VersionErrors(**answer)
+
+
+def _keeps_errors_off(project: Project) -> bool:
+    return (project.sampling_config or {}).get(KEEP_ERRORS) is False
+
+
+def _error_group(row: dict[str, Any], *, compared: bool) -> VersionErrorGroup:
+    mine, theirs = int(row["this_occurrences"]), int(row["previous_occurrences"])
+    return VersionErrorGroup(
+        group_id=str(row["group_id"]),
+        exception_type=str(row["exception_type"]),
+        message_template=str(row["message_template"]),
+        kind=_error_kind(mine, theirs, compared=compared),
+        this_occurrences=mine,
+        previous_occurrences=theirs,
+        from_browser=bool(row["from_browser"]),
+    )
+
+
+def _error_kind(mine: int, theirs: int, *, compared: bool) -> ErrorKind:
+    if not compared:
+        return "this_version"
+    if mine and theirs:
+        return "in_both"
+    return "new_here" if mine else "gone_here"
+
+
+# ---------------------------------------------------------- rollout share, FR26
+
+# The versions drawn by name; the rest are "Other versions" (FR26).
+ROLLOUT_NAMED: Final = 4
+
+
+async def rollout(
+    session: AsyncSession,
+    repository: TenantScopedRepository,
+    *,
+    reader: Reader,
+    release_id: uuid.UUID,
+    period_id: uuid.UUID | None,
+    window_hours: int | None,
+    now: datetime,
+) -> Rollout:
+    """Each version's requests per minute around the period, from the hour before its
+    start to the settled minute: the four busiest by name, the rest together. No version
+    and the worker's fold are labels, never versions (FR26)."""
+    release, period = await _readable_period(
+        session, reader=reader, release_id=release_id, period_id=period_id
+    )
+    window = timedelta(hours=window_hours) if window_hours else method.DEFAULT_WINDOW
+    compared = await _compared(session, release=release, period=period, window=window, now=now)
+    start = method.read_start(period.started_at, window)
+    rows, _ = await _rows_and_totals(repository, compared, start)
+    series, minutes = _rollout_series(rows)
+    return Rollout(
+        period_id=period.id,
+        series=series,
+        minutes=minutes,
+        as_of=compared.to if compared.as_of else None,
+        compared_to=compared.to,
+    )
+
+
+def _rollout_series(
+    rows: Sequence[method.VersionMinute],
+) -> tuple[list[RolloutSeries], list[RolloutMinute]]:
+    totals: dict[str, int] = defaultdict(int)
+    for row in rows:
+        totals[row.version] += row.requests
+    named = sorted(totals, key=lambda version: (-totals[version], version))[:ROLLOUT_NAMED]
+    series = [_series_of(version) for version in named]
+    rest = len(totals) > len(named)
+    if rest:
+        series.append(RolloutSeries(kind="other_versions", version=None))
+    by_minute: dict[datetime, list[int]] = defaultdict(lambda: [0] * len(series))
+    for row in rows:
+        place = named.index(row.version) if row.version in named else len(named)
+        by_minute[row.minute][place] += row.requests
+    return series, [
+        RolloutMinute(minute=minute, requests=counts)
+        for minute, counts in sorted(by_minute.items())
+    ]
+
+
+def _series_of(version: str) -> RolloutSeries:
+    if version == method.NO_VERSION:
+        return RolloutSeries(kind="no_version", version=None)
+    if version == method.OTHER_VERSION:
+        return RolloutSeries(kind="combined", version=None)
+    return RolloutSeries(kind="version", version=version)
+
+
+# ------------------------------------------------------- sender's details, FR54
+
+# Who may read a sender's free-text `metadata` (D46): members and above. A viewer reads
+# the link and the source, which a person on call needs, and not the free text.
+READS_SENDER_METADATA: Final = frozenset({"owner", "admin", "member"})
+
+
+async def sender_details(
+    session: AsyncSession, *, identity: Identity, release_id: uuid.UUID
+) -> SenderDetails:
+    """What each sender wrote beside the release's deploys (FR54): to a signed-in person
+    only, never a token or a ticket (the route takes an identity), as plain text."""
+    reader = Reader(org_id=identity.org_id, identity=identity)
+    release = await _readable_release(session, reader=reader, release_id=release_id)
+    may_read_metadata = identity.user.role in READS_SENDER_METADATA
+    return SenderDetails(
+        deploys=[
+            SenderDeploy(
+                deploy_id=row.id,
+                deployed_at=row.deployed_at,
+                url=row.url,
+                source=row.source,
+                metadata=dict(row.event_metadata) if may_read_metadata else None,
+                metadata_withheld=not may_read_metadata,
+            )
+            for row in await queries.sender_text_of(
+                session, org_id=release.org_id, release_id=release.id
+            )
+        ]
     )
 
 

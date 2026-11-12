@@ -59,6 +59,9 @@ type logRow struct {
 	ExceptionType    string
 	ExceptionMessage string
 	TimestampSource  string
+	// Door is `consume.StoredDoor` of the envelope: whether this record came through
+	// the browser door, whose site key anyone can read (F28 D38).
+	Door string
 }
 
 // decoded is one Kafka message unpacked: our envelope and the OTLP request it
@@ -211,6 +214,7 @@ func flattenRecord(
 		ExceptionType:    exception.Type,
 		ExceptionMessage: exception.Message,
 		TimestampSource:  source,
+		Door:             consume.StoredDoor(envelope.GetDoor()),
 	}
 }
 

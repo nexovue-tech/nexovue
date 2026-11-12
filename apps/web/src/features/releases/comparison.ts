@@ -11,8 +11,7 @@ import { formatCount, formatPercent } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { shortVersion } from "@/shared/format/version";
 
-import type { Block, Comparison, Reading, Side, WindowHours } from "./api";
-import { WINDOW_HOURS } from "./api";
+import type { Block, Comparison, Reading, Side } from "./api";
 
 const MINUTES_PER_HOUR = 60;
 const MS_PER_MINUTE = 60_000;
@@ -148,6 +147,8 @@ export interface MeasureLine {
   word: string;
   /** One entry per side: this version first. */
   sides: [string, string];
+  /** FR25: the whole service a week earlier, before-and-after methods only. */
+  lastWeek: string | null;
 }
 
 /**
@@ -158,6 +159,7 @@ export interface MeasureLine {
 export function measureLines(block: Block): MeasureLine[] {
   const mine = block.this_version;
   const theirs = block.previous_version;
+  const week = block.last_week;
   const name = (side: Side) => shortVersion(side.version) || "No version";
   const failure: MeasureLine = {
     label: "Failure share",
@@ -170,6 +172,10 @@ export function measureLines(block: Block): MeasureLine[] {
       `${name(mine)} ${failurePercent(mine)} (${formatCount(mine.errors)} of ${formatCount(mine.requests)})`,
       `${name(theirs)} ${failurePercent(theirs)} (${formatCount(theirs.errors)} of ${formatCount(theirs.requests)})`,
     ],
+    lastWeek:
+      week === null
+        ? null
+        : `${failurePercent(week)} (${formatCount(week.errors)} of ${formatCount(week.requests)})`,
   };
   const p95: MeasureLine = {
     label: "p95",
@@ -184,6 +190,7 @@ export function measureLines(block: Block): MeasureLine[] {
       `${name(mine)} ${milliseconds(mine.p95_ms)}`,
       `${name(theirs)} ${milliseconds(theirs.p95_ms)}`,
     ],
+    lastWeek: week === null ? null : milliseconds(week.p95_ms),
   };
   if (block.method === "side_by_side") {
     const both = mine.requests + theirs.requests;
@@ -194,6 +201,7 @@ export function measureLines(block: Block): MeasureLine[] {
         label: "Share of traffic",
         reading: null,
         word: "",
+        lastWeek: null,
         sides: [
           `${name(mine)} ${formatPercent(both > 0 ? mine.requests / both : null)}`,
           `${name(theirs)} ${formatPercent(both > 0 ? theirs.requests / both : null)}`,
@@ -211,39 +219,53 @@ export function measureLines(block: Block): MeasureLine[] {
       reading: null,
       word: "",
       sides: [`${name(mine)} ${perMinute(mine)}`, `${name(theirs)} ${perMinute(theirs)}`],
+      lastWeek: week === null ? null : perMinute(week),
     },
   ];
 }
 
 /* ------------------------------------------ opened from a finding (FR22, AC64) */
 
-const MS_PER_HOUR = 3_600_000;
-
-export interface FindingWindow {
-  hours: WindowHours;
-  /** Whether the window reaches the finding's start; the largest when none does. */
-  reaches: boolean;
-}
-
-/**
- * The smallest offered window from the period's start that reaches a finding's start.
- * A release 5 hours before compares over 6, so it does not read "about the same" over a
- * healthy first hour while the service fails later.
- */
-export function windowForFinding(periodStart: string, findingStart: string): FindingWindow {
-  const gap = Date.parse(findingStart) - Date.parse(periodStart);
-  const reaching = WINDOW_HOURS.find((hours) => hours * MS_PER_HOUR >= gap);
-  return reaching === undefined
-    ? { hours: WINDOW_HOURS[WINDOW_HOURS.length - 1] as WindowHours, reaches: false }
-    : { hours: reaching, reaches: true };
-}
-
-export function findingWindowSentence(choice: FindingWindow, findingStartWords: string): string {
-  return choice.reaches
-    ? `Compared over ${choice.hours} ${plural(choice.hours, "hour")}, to include the finding that started at ${findingStartWords}.`
+/** The API chose the window from the finding; this says so, or that it ends before it. */
+export function findingWindowSentence(
+  hours: number,
+  reaches: boolean,
+  findingStartWords: string,
+): string {
+  return reaches
+    ? `Compared over ${hours} ${plural(hours, "hour")}, to include the finding that started at ${findingStartWords}.`
     : "This comparison ends before that finding started, so it says nothing about it.";
 }
 
-export function windowWords(hours: WindowHours): string {
+export function windowWords(hours: number): string {
   return `Compared over ${hours} ${plural(hours, "hour")} from the start.`;
+}
+
+/* ----------------------------------------------- what the numbers cannot hide */
+
+export const TWO_ENVIRONMENTS =
+  "Two environments appear to share this project, so these comparisons mix them.";
+export const VERSIONS_COMBINED =
+  "Versions were combined: too many in one minute, so a version's count may be short.";
+
+/** FR17, FR28, FR45: each true warning, in the design's order. */
+export function warningSentences(comparison: Comparison): string[] {
+  const warnings: string[] = [];
+  if (comparison.mixed_environments) warnings.push(TWO_ENVIRONMENTS);
+  if (comparison.versions_combined) warnings.push(VERSIONS_COMBINED);
+  if (comparison.incomplete) {
+    const count = comparison.minutes_differing;
+    warnings.push(
+      `Incomplete: some counts were not stored for ${count} ${plural(count, "minute")}.`,
+    );
+  }
+  return warnings;
+}
+
+/** FR49, under any block reading "about the same". */
+export const WHOLE_SERVICE_CAUTION =
+  "This covers the whole service. A problem on one endpoint can be hidden here.";
+
+export function readsAboutTheSame(block: Block): boolean {
+  return block.failure_share.reading === "about_same" || block.p95.reading === "about_same";
 }

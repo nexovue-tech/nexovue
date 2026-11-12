@@ -46,6 +46,7 @@ type spanBlock struct {
 	linkTraceIDs   *proto.ColArr[[]byte]
 	linkSpanIDs    *proto.ColArr[[]byte]
 	linkAttributes *proto.ColArr[string]
+	door           *proto.ColLowCardinality[string]
 
 	// columns names each column exactly as the table declares it, so the server
 	// matches on name rather than on position. Built once; it is also the
@@ -74,6 +75,7 @@ func newSpanBlock() *spanBlock {
 		linkTraceIDs:      proto.NewArray[[]byte](&proto.ColFixedStr{Size: otlpvalue.TraceIDHexLen}),
 		linkSpanIDs:       proto.NewArray[[]byte](&proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen}),
 		linkAttributes:    proto.NewArray[string](new(proto.ColStr)),
+		door:              new(proto.ColStr).LowCardinality(),
 	}
 	// The column carries its own precision; without it ch-go cannot encode a
 	// time and the server would be told the wrong type.
@@ -111,6 +113,7 @@ func newSpanBlock() *spanBlock {
 		{Name: "links.trace_id", Data: block.linkTraceIDs},
 		{Name: "links.span_id", Data: block.linkSpanIDs},
 		{Name: "links.attributes", Data: block.linkAttributes},
+		{Name: "door", Data: block.door},
 	}
 	return block
 }
@@ -144,6 +147,7 @@ func (b *spanBlock) append(row spanRow) {
 	b.exceptionType.Append(row.ExceptionType)
 	b.exceptionMessage.Append(row.ExceptionMessage)
 	b.appendLinks(row.Links)
+	b.door.Append(row.Door)
 }
 
 // appendLinks writes one row's links across the three parallel arrays, which

@@ -21,10 +21,16 @@ from nexovue_api.releases import service
 from nexovue_api.releases.schemas import (
     BlockView,
     ComparisonView,
+    DeployFactView,
+    PeriodView,
     ReadingView,
+    ReleaseList,
     ReleaseRow,
     ReleaseView,
+    Rollout,
     SideView,
+    VersionErrorGroup,
+    VersionErrors,
 )
 
 NOW = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
@@ -81,8 +87,8 @@ def test_a_release_s_basis_keeps_reported_and_seen_apart() -> None:
 
 
 def test_the_windows_offered_are_1_6_and_24_hours() -> None:
-    """FR22."""
-    assert service.window_hours_of(None) == 1
+    """FR22: unset is left for the comparison to choose, an hour or a finding's."""
+    assert service.window_hours_of(None) is None
     assert [service.window_hours_of(hours) for hours in (1, 6, 24)] == [1, 6, 24]
     with pytest.raises(InvalidRequestError):
         service.window_hours_of(2)
@@ -100,7 +106,22 @@ def test_a_page_link_reads_back_and_a_forged_one_is_refused() -> None:
             service._read_cursor(forged)
 
 
-@pytest.mark.parametrize("model", [ReleaseRow, ReleaseView, ComparisonView, BlockView, SideView])
+@pytest.mark.parametrize(
+    "model",
+    [
+        ReleaseRow,
+        ReleaseList,
+        ReleaseView,
+        PeriodView,
+        DeployFactView,
+        ComparisonView,
+        BlockView,
+        SideView,
+        VersionErrors,
+        VersionErrorGroup,
+        Rollout,
+    ],
+)
 def test_no_response_carries_sender_text(model: Any) -> None:
     """FR54, AC76: sender text is `sender-details`' alone."""
     assert not set(model.model_fields) & SENDER_TEXT
@@ -117,9 +138,47 @@ def test_a_block_says_from_and_to_on_the_wire() -> None:
         minutes_compared=3,
         this_version=side,
         previous_version=side,
+        previous_from=NOW - timedelta(minutes=3),
+        previous_to=NOW,
         failure_share=ReadingView(reading="not_clearly_different"),
         p95=ReadingView(reading=None, note="warm_up"),
     )
     shown = block.model_dump(mode="json", by_alias=True)
     assert {"from", "to"} <= set(shown)
     assert "start" not in shown
+
+
+@pytest.mark.parametrize(
+    ("mine", "theirs", "compared", "kind"),
+    [
+        (3, 0, True, "new_here"),
+        (0, 3, True, "gone_here"),
+        (2, 5, True, "in_both"),
+        (4, 0, False, "this_version"),
+    ],
+)
+def test_an_error_group_s_kind(mine: int, theirs: int, compared: bool, kind: str) -> None:
+    """FR29; with no previous version nothing is called new."""
+    assert service._error_kind(mine, theirs, compared=compared) == kind
+
+
+def test_the_rollout_names_four_and_labels_no_version_and_combined() -> None:
+    """FR26: '' and `__other__` are labels, the rest past four are together."""
+    rows = [
+        platform.VersionMinute(NOW, version, requests, 0, ())
+        for version, requests in (("v1", 9), ("", 8), ("__other__", 7), ("v2", 6), ("v3", 1))
+    ]
+    series, minutes = service._rollout_series(rows)
+    assert [(each.kind, each.version) for each in series] == [
+        ("version", "v1"),
+        ("no_version", None),
+        ("combined", None),
+        ("version", "v2"),
+        ("other_versions", None),
+    ]
+    assert minutes[0].requests == [9, 8, 7, 6, 1]
+
+
+def test_viewers_do_not_read_sender_metadata() -> None:
+    """D46: members and above."""
+    assert frozenset({"owner", "admin", "member"}) == service.READS_SENDER_METADATA

@@ -9,7 +9,7 @@ import { formatGap } from "@/shared/format/time";
 import { shortVersion } from "@/shared/format/version";
 import { formatZonedTime } from "@/shared/format/zoned";
 
-import type { Activity, Basis } from "./api";
+import type { Activity, Basis, NamingDiffers } from "./api";
 
 const MS_PER_MINUTE = 60_000;
 /** A reported version not seen yet reads "waiting" this long (spec, *States*; a guess). */
@@ -79,4 +79,9 @@ export function latestWords(
   const gap = formatGap(startedAt, new Date(now).toISOString());
   const when = gap === undefined ? "" : `, ${gap} ago`;
   return `The latest was ${shortVersion(version)} of ${service}${when}.`;
+}
+
+/** FR46, in place of the "never seen" words on that service's rows (AC78). */
+export function namingDiffersWords(differs: NamingDiffers): string {
+  return `Your CI and your traffic name versions differently: CI sent ${shortVersion(differs.reported_version)}, traffic sends ${shortVersion(differs.seen_version)}`;
 }

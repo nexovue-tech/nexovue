@@ -650,10 +650,11 @@ export function elsewhere(
   return { lead, rows };
 }
 
-/** The release page's search, carrying the finding so its window reaches it (FR22). */
+/** The release page's search, carrying the finding: the API chooses the window that
+ * reaches its start (FR22), and the page links back to it. */
 export function comparisonSearch(
   fact: ReleaseFact,
-  finding: Pick<FindingDetail, "id" | "started_at">,
-): { period: string; finding: string; finding_at: string } {
-  return { period: fact.period_id, finding: finding.id, finding_at: finding.started_at };
+  finding: Pick<FindingDetail, "id">,
+): { period: string; finding: string } {
+  return { period: fact.period_id, finding: finding.id };
 }

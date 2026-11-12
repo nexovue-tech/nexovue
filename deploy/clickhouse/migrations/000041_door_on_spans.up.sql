@@ -1,0 +1,14 @@
+-- Which door a stored span came through (F28 D38, plan T4.2); 000042 adds the same
+-- column to `logs`, since a migration here is one statement.
+--
+-- A site key is printed in its page, so anyone can send an exception through the
+-- browser door naming any service and version. A release with server traffic must
+-- not list such an error as new in its version (F28 FR29, AC69), and only the stored
+-- row can tell: the rollups already leave the browser door out (docs/changes/
+-- browser-door). The values are the edges rollup's (000040): `browser` for the
+-- browser door, `server` for every other. '' is a row written before this column
+-- existed, which readers take as not browser.
+--
+-- Outside the sorting key, so adding it is a metadata change with no rewrite. A
+-- LowCardinality column of two values costs little per row; not measured.
+ALTER TABLE spans ADD COLUMN IF NOT EXISTS door LowCardinality(String) CODEC(ZSTD(1))

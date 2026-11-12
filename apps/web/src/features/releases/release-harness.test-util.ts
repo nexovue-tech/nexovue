@@ -56,6 +56,7 @@ export function listOf(rows: ReleaseRow[], overrides: Partial<ReleaseList> = {})
     latest: null,
     window_from: minutesAgo(60),
     window_to: minutesAgo(0),
+    naming_differs: [],
     ...overrides,
   };
 }
@@ -76,6 +77,7 @@ export function stubApi(handlers: Record<string, Handler>) {
     "GET /auth/me": json(identityFor("owner")),
     "GET /projects": PROJECTS,
     [`GET /projects/${PROJECT_ID}/detection`]: json({ timezone: "UTC" }),
+    "GET /releases/coverage": json({ at: "2026-11-12T12:00:00Z", services: [] }),
     ...handlers,
   };
   vi.stubGlobal(

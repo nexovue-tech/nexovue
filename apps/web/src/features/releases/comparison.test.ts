@@ -6,7 +6,8 @@ import {
   measureLines,
   openingSentence,
   readingTone,
-  windowForFinding,
+  readsAboutTheSame,
+  warningSentences,
   windowWords,
 } from "./comparison";
 
@@ -29,6 +30,9 @@ function block(overrides: Partial<Block> = {}): Block {
     previous_version: side("v2.0", 6000, 12, 398),
     failure_share: { reading: "higher", note: null },
     p95: { reading: "about_same", note: null },
+    previous_from: "2026-11-08T11:00:00Z",
+    previous_to: "2026-11-08T11:42:00Z",
+    last_week: null,
     ...overrides,
   };
 }
@@ -47,6 +51,11 @@ function comparison(overrides: Partial<Comparison> = {}): Comparison {
     traffic: null,
     other_versions: [],
     numbers_kept_days: 30,
+    incomplete: false,
+    minutes_differing: 0,
+    versions_combined: false,
+    mixed_environments: false,
+    finding: null,
     ...overrides,
   };
 }
@@ -208,6 +217,7 @@ describe("each measure's line", () => {
       reading: "higher",
       word: "higher",
       sides: ["v2.1 3.0% (180 of 6,000)", "v2.0 0.2% (12 of 6,000)"],
+      lastWeek: null,
     });
     expect(p95?.sides).toEqual(["v2.1 412 ms", "v2.0 398 ms"]);
     expect(share).toEqual({
@@ -215,6 +225,7 @@ describe("each measure's line", () => {
       reading: null,
       word: "",
       sides: ["v2.1 50.0%", "v2.0 50.0%"],
+      lastWeek: null,
     });
   });
 
@@ -233,31 +244,70 @@ describe("each measure's line", () => {
 });
 
 describe("a comparison opened from a finding (FR22, AC64)", () => {
-  const PERIOD = "2026-11-09T09:00:00Z";
-  const later = (hours: number) => new Date(Date.parse(PERIOD) + hours * 3_600_000).toISOString();
-
-  it("takes the smallest window reaching the finding, and says so", () => {
-    const five = windowForFinding(PERIOD, later(5));
-    expect(five.hours).toBe(6);
-    expect(findingWindowSentence(five, "14:00 UTC")).toBe(
+  it("says the window the API chose reaches the finding", () => {
+    expect(findingWindowSentence(6, true, "14:00 UTC")).toBe(
       "Compared over 6 hours, to include the finding that started at 14:00 UTC.",
     );
-    expect(windowForFinding(PERIOD, later(0.5)).hours).toBe(1);
   });
 
   it("says a comparison ending before the finding says nothing about it", () => {
-    const thirty = windowForFinding(PERIOD, later(30));
-    expect(thirty).toEqual({ hours: 24, reaches: false });
-    expect(findingWindowSentence(thirty, "15:00 UTC")).toBe(
+    expect(findingWindowSentence(24, false, "15:00 UTC")).toBe(
       "This comparison ends before that finding started, so it says nothing about it.",
     );
   });
 
   it("without a finding, each window reads its own", () => {
-    expect([1, 6, 24].map((hours) => windowWords(hours as 1 | 6 | 24))).toEqual([
+    expect([1, 6, 24].map((hours) => windowWords(hours))).toEqual([
       "Compared over 1 hour from the start.",
       "Compared over 6 hours from the start.",
       "Compared over 24 hours from the start.",
     ]);
+  });
+});
+
+describe("what the numbers cannot hide (FR17, FR28, FR45)", () => {
+  it("states each true warning, and none when nothing is wrong", () => {
+    expect(warningSentences(comparison())).toEqual([]);
+    expect(
+      warningSentences(
+        comparison({
+          mixed_environments: true,
+          versions_combined: true,
+          incomplete: true,
+          minutes_differing: 1,
+        }),
+      ),
+    ).toEqual([
+      "Two environments appear to share this project, so these comparisons mix them.",
+      "Versions were combined: too many in one minute, so a version's count may be short.",
+      "Incomplete: some counts were not stored for 1 minute.",
+    ]);
+  });
+
+  it("puts FR49's caution under about the same only (AC79)", () => {
+    expect(readsAboutTheSame(block())).toBe(true);
+    expect(
+      readsAboutTheSame(
+        block({
+          failure_share: { reading: "higher", note: null },
+          p95: { reading: "lower", note: null },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("gives last week a column in before-and-after methods only (FR25, AC65)", () => {
+    const after = block({
+      kind: "after_rollout",
+      method: "version_before_after",
+      last_week: side("", 4000, 12, 300),
+    });
+    expect(measureLines(after).map((line) => line.lastWeek)).toEqual([
+      "0.3% (12 of 4,000)",
+      "300 ms",
+      "95.2",
+    ]);
+    expect(measureLines(block()).map((line) => line.lastWeek)).toEqual([null, null, null]);
+    expect(measureLines(block()).map((line) => line.label)).toContain("Share of traffic");
   });
 });

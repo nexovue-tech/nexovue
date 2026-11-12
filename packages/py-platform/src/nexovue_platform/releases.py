@@ -76,6 +76,8 @@ DEFAULT_WINDOW: Final = WINDOWS[0]
 VERSION_ROLLUP_DAYS: Final = 35
 # With no settled minute yet, a read ends this long before now, marked "as of".
 UNSETTLED_LAG: Final = timedelta(minutes=3)
+# The before-and-after methods also show the same stretch this long earlier (FR25).
+LAST_WEEK: Final = timedelta(days=7)
 _MINUTE: Final = timedelta(minutes=1)
 _P95_SHARE: Final = 0.95
 _SHARE_EPSILON: Final = 1e-9
@@ -250,6 +252,16 @@ class VersionMinute:
 
 
 @dataclass(frozen=True, slots=True)
+class ServiceMinute:
+    """One service's minute over every version, as `service_stats_1m` holds it."""
+
+    minute: datetime
+    requests: int
+    errors: int
+    buckets: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PeriodToCompare:
     """What the comparison needs of a stored period (`release_periods`)."""
 
@@ -278,6 +290,10 @@ class Side:
 
 @dataclass(frozen=True, slots=True)
 class Block:
+    """One comparison. `start` to `end` is this version's stretch, and `previous_start`
+    to `previous_end` the previous side's: the same minutes side by side, the equal
+    stretch before the period otherwise."""
+
     kind: str
     method: str
     start: datetime
@@ -287,6 +303,8 @@ class Block:
     previous_version: Side
     failure_share: Reading
     p95: Reading
+    previous_start: datetime
+    previous_end: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,10 +390,12 @@ def choose_method(
     to: datetime,
     window: timedelta,
     expired_before: datetime,
+    totals: Sequence[ServiceMinute] = (),
 ) -> Comparison:
     """The design's ordered list. `minutes` are the service's rows from `read_start` to
-    `to`; `to` is exclusive and never past the settled minute; numbers older than
-    `expired_before` are gone."""
+    `to`, and `totals` its `service_stats_1m` minutes over the same span, which the time
+    method reads (design 4, step 6); `to` is exclusive and never past the settled
+    minute; numbers older than `expired_before` are gone."""
     if period.started_at < expired_before:
         return Comparison(NUMBERS_EXPIRED)
     if to - period.started_at < TOO_RECENT_UNDER:
@@ -387,7 +407,8 @@ def choose_method(
     if all(row.version == NO_VERSION for row in rows):
         if period.reported_at is None:
             return Comparison(NO_VERSION_NO_DEPLOY)
-        return _by_time(rows, period.reported_at, min(period.reported_at + window, to))
+        whole = [_as_unversioned(total) for total in totals if total.minute < to] or rows
+        return _by_time(whole, period.reported_at, min(period.reported_at + window, to))
     if not any(row.version == period.version for row in rows):
         return Comparison(NEW_VERSION_NOT_SEEN, other_versions=_busiest_first(rows))
     if period.already_running:
@@ -420,6 +441,8 @@ def _by_version(
                 other=[by_key[(m, previous)] for m in shared],
                 start=shared[0],
                 end=shared[-1] + _MINUTE,
+                previous_start=shared[0],
+                previous_end=shared[-1] + _MINUTE,
                 minutes_compared=len(shared),
                 period=period,
                 previous=previous,
@@ -443,6 +466,8 @@ def _by_version(
                 ],
                 start=finished,
                 end=end,
+                previous_start=before_from,
+                previous_end=period.started_at,
                 minutes_compared=_whole_minutes(stretch),
                 period=period,
                 previous=previous,
@@ -463,6 +488,8 @@ def _by_time(rows: Sequence[VersionMinute], moment: datetime, end: datetime) -> 
         other=before,
         start=moment,
         end=end,
+        previous_start=moment - stretch,
+        previous_end=moment,
         minutes_compared=_whole_minutes(stretch),
         period=None,
         previous=NO_VERSION,
@@ -492,6 +519,8 @@ def _block(
     other: Sequence[VersionMinute],
     start: datetime,
     end: datetime,
+    previous_start: datetime,
+    previous_end: datetime,
     minutes_compared: int,
     period: PeriodToCompare | None,
     previous: str,
@@ -517,6 +546,8 @@ def _block(
         previous_version=other_side,
         failure_share=failure,
         p95=p95,
+        previous_start=previous_start,
+        previous_end=previous_end,
     )
 
 
@@ -594,3 +625,91 @@ def _busiest_first(rows: Iterable[VersionMinute]) -> tuple[str, ...]:
 
 def _whole_minutes(stretch: timedelta) -> int:
     return int(stretch.total_seconds() // _MINUTE.total_seconds())
+
+
+def _as_unversioned(total: ServiceMinute) -> VersionMinute:
+    return VersionMinute(total.minute, NO_VERSION, total.requests, total.errors, total.buckets)
+
+
+# ------------------------------------------------- what a comparison also says
+
+Span = tuple[datetime, datetime]
+
+
+def compared_spans(comparison: Comparison) -> tuple[Span, ...]:
+    """Every stretch a comparison's numbers came from, each side of each block."""
+    return tuple(
+        span
+        for block in comparison.blocks
+        for span in ((block.start, block.end), (block.previous_start, block.previous_end))
+    )
+
+
+def _within(minute: datetime, spans: Iterable[Span]) -> bool:
+    return any(start <= minute < end for start, end in spans)
+
+
+def minutes_differing(
+    versions: Iterable[VersionMinute], totals: Iterable[ServiceMinute], spans: Sequence[Span]
+) -> int:
+    """FR28, per minute (D33): how many compared minutes' requests, summed over every
+    version, differ from `service_stats_1m`'s. A minute one table holds and the other
+    does not differs too, so a dropped write never reads as healthy numbers."""
+    by_version: dict[datetime, int] = defaultdict(int)
+    for row in versions:
+        if _within(row.minute, spans):
+            by_version[row.minute] += row.requests
+    by_service: dict[datetime, int] = defaultdict(int)
+    for total in totals:
+        if _within(total.minute, spans):
+            by_service[total.minute] += total.requests
+    return sum(
+        1
+        for minute in by_version.keys() | by_service.keys()
+        if by_version.get(minute, 0) != by_service.get(minute, 0)
+    )
+
+
+def versions_combined(versions: Iterable[VersionMinute], spans: Sequence[Span]) -> bool:
+    """FR17: the worker folded versions into `__other__` in a compared minute, so a
+    version's count may be short and the comparison is inexact."""
+    return any(
+        row.version == OTHER_VERSION and row.requests > 0 and _within(row.minute, spans)
+        for row in versions
+    )
+
+
+def last_week_of(block: Block, totals: Iterable[ServiceMinute]) -> Side | None:
+    """FR25: the whole service over this block's stretch one week earlier, for the two
+    before-and-after methods only; None for side by side, and where nothing was kept."""
+    if block.method == SIDE_BY_SIDE:
+        return None
+    start, end = block.start - LAST_WEEK, block.end - LAST_WEEK
+    rows = [_as_unversioned(total) for total in totals if start <= total.minute < end]
+    if not rows:
+        return None
+    side, _ = _side(NO_VERSION, rows, None)
+    return side
+
+
+@dataclass(frozen=True, slots=True)
+class FindingWindow:
+    """FR22: the window a comparison opened from a finding takes, and whether it
+    reaches the finding's start."""
+
+    window: timedelta
+    reaches: bool
+
+
+def window_for_finding(period_start: datetime, finding_start: datetime) -> FindingWindow:
+    """The smallest offered window from the period's start that reaches the finding,
+    or the largest when none does. A release 5 hours before a finding compares over 6,
+    so a healthy first hour cannot read "about the same" while the service fails later."""
+    for window in WINDOWS:
+        if period_start + window >= finding_start:
+            return FindingWindow(window, True)
+    return FindingWindow(WINDOWS[-1], False)
+
+
+def reaches(period_start: datetime, window: timedelta, finding_start: datetime) -> bool:
+    return period_start + window >= finding_start

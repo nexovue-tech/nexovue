@@ -1,8 +1,8 @@
 """The wire contract of `/releases` (F28 design, *Routes*).
 
-No sender text crosses here: `metadata`, `url` and `source` are served by
-`sender-details` alone, from Step 4 (FR54, AC76). Names are telemetry text, shown as
-plain text (BR10).
+No sender text crosses here but `SenderDetails`: `metadata`, `url` and `source` are
+served by `sender-details` alone, to a signed-in person (FR54, AC76). Names are
+telemetry text, shown as plain text (BR10).
 """
 
 from __future__ import annotations
@@ -54,6 +54,15 @@ class LatestRelease(_Out):
     started_at: datetime
 
 
+class NamingDiffers(_Out):
+    """FR46: a service whose CI and traffic name versions differently, with the newest
+    of each, in place of the "never seen" words on its rows."""
+
+    service_name: str
+    reported_version: str
+    seen_version: str
+
+
 class ReleaseList(_Out):
     releases: list[ReleaseRow]
     # The window's whole count, not the page's: "12 releases in this window on 4 services".
@@ -66,6 +75,18 @@ class ReleaseList(_Out):
     latest: LatestRelease | None
     window_from: datetime
     window_to: datetime
+    # FR46, over the last 24 hours.
+    naming_differs: list[NamingDiffers]
+
+
+class LaterFinding(_Out):
+    """A finding on the service that started during a period (FR34): order, not cause."""
+
+    id: uuid.UUID
+    title: str
+    severity: str
+    state: str
+    started_at: datetime
 
 
 class PeriodView(_Out):
@@ -76,6 +97,20 @@ class PeriodView(_Out):
     previous_version: str | None
     already_running: bool
     is_return: bool
+    # "Started after this release", oldest first, up to `LATER_FINDINGS_CAP`.
+    later_findings: list[LaterFinding]
+    later_findings_truncated: bool
+
+
+class DeployFactView(_Out):
+    """One reported deploy of the release, facts only (design, *Routes*). The sender's
+    time beside our arrival time, so a gap between them shows (UR13)."""
+
+    id: uuid.UUID
+    deployed_at: datetime
+    received_at: datetime
+    state: DeployState
+    commit_sha: str | None
 
 
 class ReleaseView(_Out):
@@ -93,6 +128,8 @@ class ReleaseView(_Out):
     report_count: int
     last_state: str | None
     periods: list[PeriodView]
+    # Oldest claim first.
+    deploys: list[DeployFactView]
 
 
 class SideView(_Out):
@@ -115,11 +152,26 @@ class BlockView(_Out):
     method: Literal["side_by_side", "version_before_after", "time_before_after"]
     start: datetime = Field(serialization_alias="from")
     end: datetime = Field(serialization_alias="to")
+    # The previous side's stretch: the same minutes side by side, before otherwise.
+    previous_from: datetime
+    previous_to: datetime
     minutes_compared: int
     this_version: SideView
     previous_version: SideView
     failure_share: ReadingView
     p95: ReadingView
+    # FR25: the whole service over this block's stretch a week earlier; before-and-after
+    # methods only, and null where those numbers are gone.
+    last_week: SideView | None = None
+
+
+class FindingWindowView(_Out):
+    """FR22: the finding the comparison was opened from, and whether its window
+    reaches the finding's start."""
+
+    id: uuid.UUID
+    started_at: datetime
+    reaches: bool
 
 
 class TrafficView(_Out):
@@ -147,6 +199,15 @@ class ComparisonView(_Out):
     other_versions: list[str]
     # The project's limit on version numbers, for "kept 30 days on this project".
     numbers_kept_days: int
+    # FR28: compared minutes whose version rows do not sum to the service's.
+    incomplete: bool
+    minutes_differing: int
+    # FR17: the worker folded versions in a compared minute, so this is inexact.
+    versions_combined: bool
+    # FR45: more than one environment label in the service's stored spans.
+    mixed_environments: bool
+    # Set when opened from a finding of this project that started after the period.
+    finding: FindingWindowView | None
 
 
 class Marker(_Out):
@@ -183,3 +244,86 @@ class ServiceCoverage(_Out):
 class CoverageList(_Out):
     at: datetime
     services: list[ServiceCoverage]
+
+
+ErrorKind = Literal["new_here", "gone_here", "in_both", "this_version"]
+
+
+class VersionErrorGroup(_Out):
+    """One error group of the two versions (FR29). `this_version` when there is no
+    previous version to hold it against."""
+
+    group_id: str
+    exception_type: str
+    message_template: str
+    kind: ErrorKind
+    this_occurrences: int
+    previous_occurrences: int
+    # Some occurrences came through the browser door (FR27).
+    from_browser: bool
+
+
+class VersionErrors(_Out):
+    """Errors by version: new here, gone here, in both, or why there is no list."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    period_id: uuid.UUID
+    version: str
+    previous_version: str | None
+    start: datetime = Field(serialization_alias="from")
+    end: datetime = Field(serialization_alias="to")
+    window_hours: int
+    groups: list[VersionErrorGroup]
+    # More groups than the cap of 100 fell in the window.
+    truncated: bool
+    # FR51: the read took too long, which is never an empty list.
+    timed_out: bool
+    # FR30: raw rows this read needed had aged out, on this date.
+    aged_out_on: datetime | None
+    # FR31: the project's sampling keeps errors off, so the list may be incomplete.
+    may_be_incomplete: bool
+    # A release with no server traffic reads the browser door too (FR27).
+    browser_door_read: bool
+
+
+RolloutSeriesKind = Literal["version", "no_version", "combined", "other_versions"]
+
+
+class RolloutSeries(_Out):
+    """One line of the share chart (FR26): a version, or one of three labels."""
+
+    kind: RolloutSeriesKind
+    version: str | None
+
+
+class RolloutMinute(_Out):
+    minute: datetime
+    # Requests per series, in `series` order.
+    requests: list[int]
+
+
+class Rollout(_Out):
+    """Each version's requests per minute (FR26): the top four, then the rest."""
+
+    period_id: uuid.UUID
+    series: list[RolloutSeries]
+    minutes: list[RolloutMinute]
+    as_of: datetime | None
+    compared_to: datetime
+
+
+class SenderDeploy(_Out):
+    """What a sender wrote beside one deploy (FR54): shown to a person, as plain text.
+    `metadata` is null for a viewer, with `metadata_withheld` saying so."""
+
+    deploy_id: uuid.UUID
+    deployed_at: datetime
+    url: str | None
+    source: str
+    metadata: dict[str, str] | None
+    metadata_withheld: bool
+
+
+class SenderDetails(_Out):
+    deploys: list[SenderDeploy]

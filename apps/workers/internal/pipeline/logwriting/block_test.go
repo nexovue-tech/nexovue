@@ -9,13 +9,14 @@ import (
 )
 
 // logsColumns is every column of the `logs` table, in declaration order:
-// migration 000002 created it, 000015 appended the exception columns and 000017
-// appended the timestamp source. A column added there must be added here.
+// migration 000002 created it, 000015 appended the exception columns, 000017
+// appended the timestamp source and 000042 the door. A column added there must be
+// added here.
 var logsColumns = []string{
 	"timestamp", "received_at", "retention_days", "tenant_id", "project_id",
 	"trace_id", "span_id", "service_name", "severity", "severity_number",
 	"body", "body_structured", "resource_attrs", "log_attrs",
-	"exception_type", "exception_message", "timestamp_source",
+	"exception_type", "exception_message", "timestamp_source", "door",
 }
 
 func TestBlockCoversEveryColumnOfTheTable(t *testing.T) {

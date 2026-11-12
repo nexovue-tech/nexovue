@@ -81,6 +81,8 @@ THE_SURFACE: Final = {
     "nexovue_api/releases/router.py:list_releases": "GET /releases",
     "nexovue_api/releases/router.py:get_release": "GET /releases/{release_id}",
     "nexovue_api/releases/router.py:get_comparison": "GET /releases/{release_id}/comparison",
+    "nexovue_api/releases/router.py:get_errors": "GET /releases/{release_id}/errors",
+    "nexovue_api/releases/router.py:get_rollout": "GET /releases/{release_id}/rollout",
     "nexovue_api/releases/router.py:list_markers": "GET /releases/markers",
     "nexovue_api/releases/router.py:list_coverage": "GET /releases/coverage",
     "nexovue_api/llm_observability/router.py:list_llm_calls": "GET /llm/calls",

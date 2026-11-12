@@ -1,4 +1,4 @@
-"""`/releases` against real Postgres and ClickHouse (F28 plan T1.14).
+"""`/releases` against real Postgres and ClickHouse (F28 plan T1.14, Step 4).
 
 AC26 (another tenant's, another project's and a deleted project's release answer 404 on
 every route, to a person and a token), AC27 (paging, the service and version filters, a
@@ -8,6 +8,9 @@ shows a smaller mixed change; and what F6 does with it, recorded), AC31 (too lit
 traffic), AC35 (no minute past the settled minute), AC62 (the most recent block leads),
 AC63 (a slow first three minutes left out of p95), and the list reading no ClickHouse.
 
+Step 4 (T4.1, T4.3, T4.4): AC23, AC29 with last week, AC30, AC32's every reason, AC36,
+AC41, AC64, AC65's five versions, AC67, AC69, AC76 and AC78.
+
 Postgres rows are written inside one outer transaction per test and rolled back, with
 F22's team helpers (`test_findings_cases_live.py`); the version rollup is written as the
 worker writes it, under a tenant removed at the end of the run. AC28's F6 half commits a
@@ -16,6 +19,7 @@ tenant of its own, as the project job runs on its own connections.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterable, Iterator
@@ -46,13 +50,14 @@ from nexovue_api.auth.dependencies import (
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import (
     DeployEvent,
+    Finding,
     Project,
     Release,
     ReleasePeriod,
     ServiceLastSeen,
     User,
 )
-from nexovue_api.deps import get_app_settings, get_db_session
+from nexovue_api.deps import get_app_settings, get_db_session, get_session_store
 from nexovue_api.settings import API_PREFIX, Settings
 
 ADMIN_DSN: Final = os.environ.get(
@@ -103,8 +108,8 @@ async def reader_client() -> AsyncIterator[AsyncClient]:
 @pytest.fixture
 async def acme(db: AsyncSession) -> Team:  # noqa: F811
     team = await _team(db, "Acme")
-    delete_after_run("service_versions_1m", str(team.org_id))
-    delete_after_run("service_stats_1m", str(team.org_id))
+    for table in ("service_versions_1m", "service_stats_1m", "spans", "logs"):
+        delete_after_run(table, str(team.org_id))
     return team
 
 
@@ -952,3 +957,642 @@ async def test_each_service_reads_its_coverage_as_of_a_moment(
 
 def _iso(moment: datetime) -> str:
     return moment.isoformat().replace("+00:00", "Z")
+
+
+# ===================================================================== Step 4
+#
+# The whole release page. Rows are written relative to `T0`, a whole hour three to four
+# hours ago, so no assertion depends on the minute or second a test runs in.
+
+
+async def _finding_at(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    started_at: datetime,
+    *,
+    service: str = SERVICE,
+    project_id: uuid.UUID | None = None,
+) -> Finding:
+    # Closed, since one service holds one open finding at a time.
+    row = Finding(
+        org_id=team.org_id,
+        project_id=project_id or team.project_id,
+        scope="service",
+        service_name=service,
+        severity="warning",
+        state="closed",
+        closed_reason="recovered",
+        title=f"{service} is slower than normal",
+        signals=[],
+        started_at=started_at,
+        closed_at=started_at + MINUTE,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+def write_stats_only(
+    client: Client, team: Team, minute: datetime, requests: int, *, service: str = SERVICE
+) -> None:
+    """Requests `service_stats_1m` counted and `service_versions_1m` did not: a dropped
+    version write, as FR28 must catch."""
+    client.command(
+        f"""
+        INSERT INTO service_stats_1m
+            (tenant_id, project_id, service_name, minute, request_count, error_count,
+             latency_buckets)
+        SELECT '{team.org_id}', '{team.project_id}', '{service}',
+               toDateTime({int(minute.timestamp())}), {requests}, 0,
+               arrayReduce('sumForEachState', [CAST({_buckets(requests, FAST)}, 'Array(UInt32)')])
+        """
+    )
+
+
+def write_error(
+    client: Client,
+    team: Team,
+    *,
+    at: datetime,
+    version: str,
+    exception_type: str,
+    door: str = "server",
+    table: str = "spans",
+    environment: str | None = None,
+    service: str = SERVICE,
+) -> None:
+    """One stored exception, shaped as the worker writes it: a span event promoted to
+    columns, or a log record carrying its version on the resource."""
+    resource: dict[str, Any] = {"service": {"name": service, "version": version}}
+    if environment is not None:
+        resource["deployment"] = {"environment": {"name": environment}}
+    trace, span = uuid.uuid4().hex, uuid.uuid4().hex[:16]
+    common = {
+        "at": at,
+        "tenant": str(team.org_id),
+        "project": str(team.project_id),
+        "service": service,
+        "trace": trace,
+        "span": span,
+        "type": exception_type,
+        "message": f"{exception_type} happened",
+        "resource": json.dumps(resource),
+        "door": door,
+    }
+    if table == "spans":
+        client.command(
+            """
+            INSERT INTO spans (timestamp, received_at, retention_days, tenant_id, project_id,
+                               trace_id, span_id, service_name, span_name, span_kind,
+                               status_code, deployment_version, resource_attrs,
+                               exception_type, exception_message, door)
+            SELECT %(at)s, %(at)s, 30, %(tenant)s, %(project)s, %(trace)s, %(span)s,
+                   %(service)s, 'GET /', 'SERVER', 'ERROR', %(version)s, %(resource)s,
+                   %(type)s, %(message)s, %(door)s
+            """,
+            parameters={**common, "version": version},
+        )
+        return
+    client.command(
+        """
+        INSERT INTO logs (timestamp, received_at, retention_days, tenant_id, project_id,
+                          trace_id, span_id, service_name, severity, severity_number, body,
+                          body_structured, resource_attrs, log_attrs, exception_type,
+                          exception_message, timestamp_source, door)
+        SELECT %(at)s, %(at)s, 30, %(tenant)s, %(project)s, %(trace)s, %(span)s,
+               %(service)s, 'ERROR', 17, %(message)s, '{}', %(resource)s, '{}', %(type)s,
+               %(message)s, 'event', %(door)s
+        """,
+        parameters=common,
+    )
+
+
+async def _read(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    reader_client: AsyncClient,
+    path: str,
+    *,
+    person: User | None = None,
+) -> dict[str, Any]:
+    answer = await _get(db, team, path, person=person, repository=_repository(reader_client, team))
+    assert answer.status_code == 200, answer.text
+    return dict(answer.json())
+
+
+# ------------------------------------------------- T4.1: AC29, AC36, AC67
+
+
+async def test_a_replacement_with_no_overlap_reads_before_and_after_with_last_week(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC29, FR25: the previous side is the equal stretch before, and last week's
+    column is the whole service over the same 40 minutes a week earlier."""
+    week = timedelta(days=7)
+    write_versions(
+        administrator,
+        acme,
+        minutes("v0", T0 - week, 40, 50, 1)
+        + minutes("v1", T0 - HOUR, 60, 100)
+        + minutes("v2", T0, 40, 100),
+    )
+    seeded = await _release(db, acme, "v2", T0, previous="v1")
+    await _settle(db, T0 + 39 * MINUTE)
+
+    found = await _comparison(db, acme, reader_client, seeded)
+
+    (block,) = found["blocks"]
+    assert block["method"] == "version_before_after"
+    assert block["previous_from"].startswith((T0 - 40 * MINUTE).strftime("%Y-%m-%dT%H:%M"))
+    assert block["previous_to"].startswith(T0.strftime("%Y-%m-%dT%H:%M"))
+    assert (block["last_week"]["requests"], block["last_week"]["errors"]) == (2000, 40)
+    assert (found["incomplete"], found["minutes_differing"]) == (False, 0)
+    assert (found["versions_combined"], found["mixed_environments"]) == (False, False)
+
+
+async def test_one_missing_minute_in_a_24_hour_window_reads_incomplete(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC36, FR28: one minute whose version rows fall short of the service's."""
+    start = T0 - 24 * HOUR
+    write_versions(
+        administrator, acme, minutes("v1", start - HOUR, 60, 20) + minutes("v2", start, 1440, 20)
+    )
+    write_stats_only(administrator, acme, start + 700 * MINUTE, 5)
+    seeded = await _release(db, acme, "v2", start, previous="v1")
+    await _settle(db, start + 1439 * MINUTE)
+
+    found = await _comparison(db, acme, reader_client, seeded, query="?window=24")
+
+    assert found["window_hours"] == 24
+    assert (found["incomplete"], found["minutes_differing"]) == (True, 1)
+
+
+async def test_combined_versions_and_two_environments_are_said(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC67: `__other__` in a compared minute marks the comparison inexact (FR17), and
+    two environment labels in the service's stored spans warn (FR45)."""
+    write_versions(
+        administrator,
+        acme,
+        minutes("v1", T0 - HOUR, 60, 100)
+        + minutes("v2", T0, 40, 100)
+        + minutes("__other__", T0 + 10 * MINUTE, 1, 3),
+    )
+    for environment in ("production", "staging"):
+        write_error(
+            administrator,
+            acme,
+            at=T0 + 5 * MINUTE,
+            version="v2",
+            exception_type="Boom",
+            environment=environment,
+        )
+    seeded = await _release(db, acme, "v2", T0, previous="v1")
+    await _settle(db, T0 + 39 * MINUTE)
+
+    found = await _comparison(db, acme, reader_client, seeded)
+
+    assert found["versions_combined"] is True
+    assert found["mixed_environments"] is True
+
+
+# ---------------------------------------------- T4.1: AC30, AC32's reasons
+
+
+async def test_every_reason_is_reachable_with_its_own_answer(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC32, AC30's second half: each of FR21's reasons from its own service."""
+    write_versions(administrator, acme, minutes("v1", T0 - HOUR, 100, 50), service="seen-v1")
+    write_versions(administrator, acme, minutes("", T0 - HOUR, 100, 50), service="no-version")
+    write_versions(administrator, acme, minutes("v1", T0, 60, 50), service="first")
+    write_versions(administrator, acme, minutes("v1", T0, 60, 50), service="running")
+    await _settle(db, T0 + 59 * MINUTE)
+    reported_v21 = await _release(db, acme, "v2.1", T0, service="seen-v1", previous="v1")
+    cases = {
+        "new_version_not_seen": reported_v21,
+        "no_request_traffic": await _release(db, acme, "v2", T0, service="silent"),
+        "no_version_no_deploy": await _release(db, acme, "v2", T0, service="no-version"),
+        "no_previous_version": await _release(db, acme, "v1", T0, service="first"),
+        "already_running": await _release(
+            db, acme, "v1", T0, service="running", already_running=True
+        ),
+        "too_recent": await _release(db, acme, "v3", T0 + 57 * MINUTE, service="seen-v1"),
+        "numbers_expired": await _release(db, acme, "v0", T0 - 40 * 24 * HOUR, service="old"),
+    }
+    for reason, seeded in cases.items():
+        found = await _comparison(db, acme, reader_client, seeded)
+        assert (found["reason"], found["blocks"]) == (reason, []), reason
+    found = await _comparison(db, acme, reader_client, cases["new_version_not_seen"])
+    assert found["other_versions"] == ["v1"]
+    expired = await _comparison(db, acme, reader_client, cases["numbers_expired"])
+    assert expired["numbers_kept_days"] in (30, 35)
+
+
+# ----------------------------------------------------- T4.1: AC64, FR22
+
+
+async def test_opened_from_a_finding_the_window_reaches_it_and_says_so(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC64: 5 hours on reads 6 hours; 30 hours on reads 24 and does not reach it; with
+    no finding each window reads itself; another project's finding is not found."""
+    start = T0 - 30 * HOUR
+    write_versions(administrator, acme, minutes("v1", start - HOUR, 60, 50))
+    seeded = await _release(db, acme, "v2", start, previous="v1")
+    await _settle(db, T0)
+    later = await _finding_at(db, acme, start + 5 * HOUR)
+    much_later = await _finding_at(db, acme, start + 30 * HOUR)
+
+    near = await _comparison(db, acme, reader_client, seeded, query=f"?finding={later.id}")
+    far = await _comparison(db, acme, reader_client, seeded, query=f"?finding={much_later.id}")
+
+    assert (near["window_hours"], near["finding"]["reaches"]) == (6, True)
+    assert (far["window_hours"], far["finding"]["reaches"]) == (24, False)
+    for hours in (1, 6, 24):
+        alone = await _comparison(db, acme, reader_client, seeded, query=f"?window={hours}")
+        assert (alone["window_hours"], alone["finding"]) == (hours, None)
+    stranger = await _get(
+        db,
+        acme,
+        f"/releases/{seeded.release_id}/comparison?finding={uuid.uuid4()}",
+        repository=_repository(reader_client, acme),
+    )
+    assert stranger.status_code == 404
+
+
+# ------------------------------------------------------------ T4.1: AC78, FR46
+
+
+async def _told(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    version: str,
+    *,
+    reported_at: datetime | None = None,
+    seen_at: datetime | None = None,
+    service: str = SERVICE,
+) -> None:
+    db.add(
+        Release(
+            org_id=team.org_id,
+            project_id=team.project_id,
+            service_name=service,
+            version=version,
+            first_reported_at=reported_at,
+            last_reported_at=reported_at,
+            report_count=1 if reported_at else 0,
+            first_seen_at=seen_at,
+            last_seen_at=seen_at,
+        )
+    )
+    await db.flush()
+
+
+async def test_ci_and_traffic_naming_versions_differently_is_said_with_the_newest_of_each(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC78: two told-never-seen beside one seen-never-told in 24 hours, on one service;
+    one told-never-seen alone does not; outside the 24 hours does not count."""
+    now = datetime.now(UTC)
+    await _told(db, acme, "1.4.0", reported_at=now - 3 * HOUR)
+    await _told(db, acme, "1.5.0", reported_at=now - 2 * HOUR)
+    await _told(db, acme, "abc123", seen_at=now - HOUR)
+    await _told(db, acme, "2.0.0", reported_at=now - 2 * HOUR, service="payments")
+    await _told(db, acme, "def456", seen_at=now - HOUR, service="payments")
+    await _told(db, acme, "1.0.0", reported_at=now - 30 * HOUR, service="payments")
+    await _told(db, acme, "1.1.0", reported_at=now - 3 * HOUR, service="search")
+    await _told(db, acme, "2.2.0", reported_at=now - 2 * HOUR, service="search")
+    await _told(db, acme, "ghi789", seen_at=now - 30 * HOUR, service="search")
+
+    answer = await _get(db, acme, f"/releases?project_id={acme.project_id}")
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["naming_differs"] == [
+        {"service_name": SERVICE, "reported_version": "1.5.0", "seen_version": "abc123"}
+    ]
+
+
+# ------------------------------------------------------- T4.3: AC69, FR29
+
+
+async def test_errors_by_version_read_new_gone_and_in_both_and_leave_the_browser_out(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC69: each kind from a seeded error, spans and log records alike; a browser
+    key's exception naming the server version does not list on that release."""
+    before, after = T0 - 30 * MINUTE, T0 + 30 * MINUTE
+    write_error(administrator, acme, at=before, version="v1", exception_type="InBoth")
+    write_error(administrator, acme, at=before, version="v1", exception_type="Gone")
+    write_error(administrator, acme, at=after, version="v2", exception_type="InBoth")
+    write_error(administrator, acme, at=after, version="v2", exception_type="New", table="logs")
+    write_error(
+        administrator,
+        acme,
+        at=after,
+        version="v2",
+        exception_type="FromAPage",
+        door="browser",
+        table="logs",
+    )
+    write_error(administrator, acme, at=after, version="v9", exception_type="OtherVersion")
+    seeded = await _release(db, acme, "v2", T0, previous="v1")
+
+    found = await _read(db, acme, reader_client, f"/releases/{seeded.release_id}/errors")
+
+    kinds = {group["exception_type"]: group["kind"] for group in found["groups"]}
+    assert kinds == {"InBoth": "in_both", "Gone": "gone_here", "New": "new_here"}
+    assert (found["timed_out"], found["aged_out_on"], found["browser_door_read"]) == (
+        False,
+        None,
+        False,
+    )
+
+
+async def test_a_release_with_no_server_traffic_reads_its_browser_errors_labelled(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """FR27: a reported release never seen in server traffic still shows its errors,
+    marked as coming from the browser."""
+    write_error(
+        administrator,
+        acme,
+        at=T0 + 10 * MINUTE,
+        version="v2",
+        exception_type="FromAPage",
+        door="browser",
+        table="logs",
+    )
+    release = Release(
+        org_id=acme.org_id,
+        project_id=acme.project_id,
+        service_name=SERVICE,
+        version="v2",
+        first_reported_at=T0,
+        last_reported_at=T0,
+        report_count=1,
+    )
+    db.add(release)
+    await db.flush()
+    period = ReleasePeriod(
+        org_id=acme.org_id,
+        release_id=release.id,
+        project_id=acme.project_id,
+        service_name=SERVICE,
+        started_at=T0,
+        start_basis="reported",
+    )
+    db.add(period)
+    await db.flush()
+
+    found = await _read(db, acme, reader_client, f"/releases/{release.id}/errors")
+
+    (group,) = found["groups"]
+    assert (group["exception_type"], group["kind"], group["from_browser"]) == (
+        "FromAPage",
+        "this_version",
+        True,
+    )
+    assert found["browser_door_read"] is True
+
+
+async def test_aged_out_errors_give_their_date_and_sampling_errors_off_says_incomplete(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader_client: AsyncClient,
+) -> None:
+    """AC69's FR30 and FR31: never a list of zeros."""
+    old = await _release(db, acme, "v1", T0 - 40 * 24 * HOUR, previous="v0")
+    project = await db.get(Project, acme.project_id)
+    assert project is not None
+    project.sampling_config = {"keep_errors": False}
+    await db.flush()
+
+    found = await _read(db, acme, reader_client, f"/releases/{old.release_id}/errors")
+
+    assert found["groups"] == []
+    assert found["aged_out_on"] is not None
+    assert found["may_be_incomplete"] is True
+
+
+# ------------------------------------------------------------- T4.3: AC76
+
+
+async def _deploy(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    release_id: uuid.UUID,
+    deployed_at: datetime,
+    *,
+    state: str = "finished",
+) -> DeployEvent:
+    row = DeployEvent(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        service_name=SERVICE,
+        version="v2",
+        deployed_at=deployed_at,
+        source="github-actions",
+        delivery_id=f"run-{uuid.uuid4()}",
+        event_metadata={"pipeline": "build 41"},
+        state=state,
+        commit_sha="a" * 40,
+        url="https://ci.example/runs/41",
+        release_id=release_id,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def test_sender_text_is_a_person_s_and_its_metadata_a_member_s(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC76, FR54: a token is refused; a viewer reads the link and source, never the
+    metadata; `GET /releases/{id}` carries none of it."""
+    seeded = await _release(db, acme, "v2", T0, previous="v1")
+    await _deploy(db, acme, seeded.release_id, T0)
+    path = f"/releases/{seeded.release_id}/sender-details"
+
+    member = (await _get(db, acme, path, person=acme.member)).json()["deploys"][0]
+    viewer = (await _get(db, acme, path, person=acme.viewer)).json()["deploys"][0]
+    async with _client(db, acme, None, _NoClickHouse()) as client:
+        # No session store is needed: a token is refused before one is asked.
+        client._transport.app.dependency_overrides[get_session_store] = lambda: None  # type: ignore[attr-defined]
+        as_token = await client.get(
+            f"{API_PREFIX}{path}", headers={"Authorization": "Bearer nvt_live_x"}
+        )
+    release = (await _get(db, acme, f"/releases/{seeded.release_id}")).json()
+
+    assert (member["url"], member["source"], member["metadata"]) == (
+        "https://ci.example/runs/41",
+        "github-actions",
+        {"pipeline": "build 41"},
+    )
+    assert (viewer["url"], viewer["metadata"], viewer["metadata_withheld"]) == (
+        "https://ci.example/runs/41",
+        None,
+        True,
+    )
+    assert as_token.status_code == 403
+    shown = json.dumps(release)
+    for sender_text in ("ci.example", "github-actions", "build 41"):
+        assert sender_text not in shown
+
+
+async def test_sender_details_of_another_tenant_s_release_are_not_found(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    theirs = await _release(db, globex, "v1", T0)
+    answer = await _get(db, acme, f"/releases/{theirs.release_id}/sender-details")
+    assert answer.status_code == 404
+
+
+# ------------------------------------------------------- T4.4: AC23, AC41
+
+
+async def test_a_reported_release_reads_not_seen_then_serving_once_counted(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC23."""
+    now = datetime.now(UTC)
+    release = Release(
+        org_id=acme.org_id,
+        project_id=acme.project_id,
+        service_name=SERVICE,
+        version="v2",
+        first_reported_at=now - HOUR,
+        last_reported_at=now - HOUR,
+        report_count=1,
+    )
+    db.add(release)
+    await db.flush()
+    path = f"/releases/{release.id}"
+
+    before = (await _get(db, acme, path)).json()
+    release.first_seen_at = now - 50 * MINUTE
+    release.last_seen_at = now - MINUTE
+    await db.flush()
+    after = (await _get(db, acme, path)).json()
+
+    assert (before["activity"], before["basis"]) == ("not_seen", "reported")
+    assert (after["activity"], after["basis"]) == ("serving", "both")
+
+
+async def test_a_release_lists_findings_that_started_while_it_served_and_its_deploys(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC41, FR34: a finding in the period's own minute is after it; one a minute before
+    is not; nor one after the period ended, nor another service's. The deploys list the
+    sender's time beside our arrival time."""
+    started = T0 + 30 * timedelta(seconds=1)
+    seeded = await _release(db, acme, "v2", started, previous="v1", ended_at=T0 + 2 * HOUR)
+    same_minute = await _finding_at(db, acme, T0)
+    later = await _finding_at(db, acme, T0 + HOUR)
+    await _finding_at(db, acme, T0 - MINUTE)
+    await _finding_at(db, acme, T0 + 3 * HOUR)
+    await _finding_at(db, acme, T0 + HOUR, service="payments")
+    deploy = await _deploy(db, acme, seeded.release_id, T0 - 20 * MINUTE)
+
+    found = (await _get(db, acme, f"/releases/{seeded.release_id}")).json()
+
+    (period,) = found["periods"]
+    assert [row["id"] for row in period["later_findings"]] == [str(same_minute.id), str(later.id)]
+    assert period["later_findings_truncated"] is False
+    (shown,) = found["deploys"]
+    assert (shown["id"], shown["state"], shown["commit_sha"]) == (
+        str(deploy.id),
+        "finished",
+        "a" * 40,
+    )
+    assert shown["deployed_at"] != shown["received_at"]
+
+
+# ------------------------------------------------------------- T4.3: AC65
+
+
+async def test_five_versions_draw_the_top_four_and_the_rest_together(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    administrator: Client,
+    reader_client: AsyncClient,
+) -> None:
+    """AC65, FR26: no version and the worker's fold are labels, never versions."""
+    rows = (
+        minutes("v1", T0 - HOUR, 90, 50)
+        + minutes("v2", T0, 30, 40)
+        + minutes("", T0, 30, 30)
+        + minutes("__other__", T0, 30, 20)
+        + minutes("v3", T0, 30, 2)
+        + minutes("v4", T0, 30, 1)
+    )
+    write_versions(administrator, acme, rows)
+    seeded = await _release(db, acme, "v2", T0, previous="v1")
+    await _settle(db, T0 + 29 * MINUTE)
+
+    found = await _read(db, acme, reader_client, f"/releases/{seeded.release_id}/rollout")
+
+    assert found["series"] == [
+        {"kind": "version", "version": "v1"},
+        {"kind": "version", "version": "v2"},
+        {"kind": "no_version", "version": None},
+        {"kind": "combined", "version": None},
+        {"kind": "other_versions", "version": None},
+    ]
+    first_rollout_minute = next(
+        row for row in found["minutes"] if row["minute"].startswith(T0.strftime("%Y-%m-%dT%H:%M"))
+    )
+    assert first_rollout_minute["requests"] == [50, 40, 30, 20, 3]
+
+
+class _TimesOut:
+    """A ClickHouse read past the account's time limit (TIMEOUT_EXCEEDED, 159)."""
+
+    async def query(self, *_: Any, **__: Any) -> list[Any]:
+        from clickhouse_connect.driver.exceptions import DatabaseError
+
+        error = DatabaseError("Timeout exceeded")
+        error.code = 159
+        raise error
+
+
+async def test_a_timed_out_errors_read_says_so_and_is_never_an_empty_list(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC68's second half, FR51."""
+    seeded = await _release(db, acme, "v2", T0, previous="v1")
+
+    answer = await _get(db, acme, f"/releases/{seeded.release_id}/errors", repository=_TimesOut())
+
+    assert answer.status_code == 200, answer.text
+    assert (answer.json()["timed_out"], answer.json()["groups"]) == (True, [])

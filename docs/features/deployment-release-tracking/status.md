@@ -2,16 +2,141 @@
 
 ## Lifecycle status
 
-**In development. Step 3 is on `feature/phase-2` (2026-11-09).** The founder approved the specification, design and
-plan on 2026-11-02. Steps 1a, 1b and 2 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder tests
-after Phase 2). Step 3 (markers that can be read, on every chart, including the finding) is built in the worktree, not
-committed, with the carried-over fix to `first_reported_at`'s two readers. Step 4 is next.
+**In development. Step 4 built 2026-11-12, awaiting commit.** The founder approved the specification, design and
+plan on 2026-11-02. Steps 1a, 1b, 2 and 3 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder
+tests after Phase 2). Step 4 (the whole release page) is built in worktree `wt/f28s4`, not committed. Step 5 is next.
 
 
 ## Current task
 
-**Step 3 is on `feature/phase-2`** (*Step 3, built 2026-11-09*, below). No migration and no ADR: nothing in it is
-expensive to reverse. Step 2 is on `feature/phase-2` (migration `0057`, ADR-033).
+**Step 4 built 2026-11-12, awaiting commit** (*Step 4, built 2026-11-12*, below). ClickHouse migrations `000041` and
+`000042`; no Postgres migration; no ADR (the door column is the approved spec's D38, nothing new decided).
+
+## Step 4, built 2026-11-12
+
+The whole release page (plan T4.1 to T4.7), in `wt/f28s4`. What exists now, read from the code:
+
+**The precondition, checked in the code.** The browser-door change (`docs/changes/browser-door`, done 2026-11-07)
+holds: `traceassembly/stages.go` `countsInRollups` keeps a `DOOR_RUM` span out of `counters.Observe`, the one point
+that feeds `service_stats_1m`, `endpoint_stats_1m` and `service_versions_1m` (the version map is fed from
+`observeService` behind it); `traceassembly/browserdoor_test.go` asserts all three tables, and
+`apps/api/tests/test_browser_door_live.py` names `service_versions_1m` among its rollups (`ROLLUPS`). The interim
+`countedVersion` branch in `flatten.go` is gone (`derive.countedVersion` is an unrelated map key).
+
+- **The comparison** (T4.1): `GET /releases/{id}/comparison` gains `incomplete` and `minutes_differing` (FR28, per
+  minute over every compared stretch, a minute only one table holds counting too), `versions_combined` (FR17,
+  `__other__` in a compared minute), `mixed_environments` (FR45, `ENVIRONMENTS_SQL` over stored spans, reading
+  `deployment.environment.name` and falling back to the older `deployment.environment`, as the profile writer does),
+  and `finding` (FR22). Each block names the previous side's stretch (`previous_from`, `previous_to`) and, for the two
+  before-and-after methods, `last_week` (FR25) from `service_stats_1m`, null where expired. The time method now reads
+  `service_stats_1m` (`SERVICE_TOTALS_SQL`), as design 4 step 6 says. Pure parts are in
+  `nexovue_platform.releases`: `ServiceMinute`, `minutes_differing`, `versions_combined`, `last_week_of`,
+  `compared_spans`, `window_for_finding`, `reaches`.
+- **The window from a finding** (T4.1, FR22): `?finding=` (a finding of the release's project, else 404) without a
+  `window` takes the smallest offered window reaching the finding's start, and the answer says whether its window
+  reaches it. The web's own copy of that rule (`windowForFinding`) and the link's `finding_at` are deleted, so one
+  rule decides.
+- **FR46** on `GET /releases`: `naming_differs`, one grouped Postgres statement over the last 24 hours; the list
+  replaces a `not_seen` row's words with "Your CI and your traffic name versions differently: CI sent X, traffic
+  sends Y".
+- **The door on raw rows** (T4.2): ClickHouse `000041_door_on_spans` and `000042_door_on_logs` (a migration here is
+  one statement), `LowCardinality(String)`, outside the sorting keys. The worker writes `consume.StoredDoor`:
+  `browser` for `DOOR_RUM`, `server` otherwise, the words `service_edges_1m.door` already uses; `''` is a row written
+  before. Applied, reverted and reapplied on this session's ClickHouse.
+- **Errors by version** (T4.3, FR29 to FR31, FR51): `GET /releases/{id}/errors` over `ERRORS_BY_VERSION_SQL`, built
+  in `errorgroups/queries.py` from the errors list's own occurrence rows: this version from the period's start, the
+  previous version over the same length before, split at the start; per-table version predicates; a door predicate
+  that leaves browser rows out for a release counted in server traffic (one never seen reads them, labelled "from the
+  browser"); up to 100 groups. A timeout (ClickHouse code 159) answers `timed_out`; raw rows older than the project's
+  raw retention answer `aged_out_on`; `keep_errors: false` answers `may_be_incomplete`.
+- **Rollout share** (T4.3, FR26): `GET /releases/{id}/rollout`, the four busiest series by name then "other
+  versions", with no version and `__other__` as labels.
+- **Sender details** (T4.3, FR54): `GET /releases/{id}/sender-details` takes `CurrentIdentity`, so a token or a ticket
+  is refused (403 for a token); `metadata` only for owners, admins and members (`READS_SENDER_METADATA`, D46), a
+  viewer reading `metadata_withheld`.
+- **The release** (T4.4): `GET /releases/{id}` gains `deploys` (id, the sender's time, our arrival time, state,
+  commit) and, per period, `later_findings` on its service from the start's own minute to its end, up to 50 (AC41).
+- **The page** (T4.5): the sentence, warnings, the window's sentence, blocks with a last-week column (a line of its
+  own on a phone) and FR49's caution with links to errors by version and the service's page for the same minutes,
+  the rollout chart (`TrendChart`'s existing `distinctColours` mode, F20's, so `TrendChart` did not change) with a
+  table of the latest shares, errors by version with the caution beside the list, "Started after this release", the
+  facts led by "Link from your CI" (https only, `noreferrer`, `no-referrer`), each deploy's two times when over 15
+  minutes apart, and what the CI sent, metadata in a closed `<details>`. Each section loads and fails on its own; a
+  missing release reads "No such release". `/releases` gains the coverage strip (services with coverage `none`).
+- **Retention** (T4.6): `releases/retention.py`: deploys by `created_at` and releases by `last_activity_at` past the
+  project's derived retention, the shortest plan's first; both for a project or organization deleted longer ago than
+  the shortest plan's derived retention. `jobs/expiry.sweep` now guards each table: a failing one is logged by name and
+  the rest go on.
+- **The words and raw reads** (T4.7): `apps/api/tests/test_release_words.py`.
+
+**Readings made while building** (none blocking; each open to overrule):
+
+- **Errors are compared over equal lengths:** this version from the start to the window's end or now, the previous
+  version over the same length before the start. The design says "the same durations" without placing them.
+- **The rollout read spans the comparison's read** (an hour, or the window, before the start, to the settled minute).
+- **A finding that started before the period** gives no window and no sentence; its "Back to the finding" link stays.
+- **The version predicates in `ERRORS_BY_VERSION_SQL` only narrow the read:** each side's count already requires its
+  version, and `HAVING` drops empty groups, so removing them changes no answer (seen in the removal run, below).
+
+**Tests, each seen failing first.** All were written after the code and checked by removal: the behaviour taken out,
+the test run and seen failing, the code restored (outputs in this session's scratch space):
+
+- Live, `test_releases_live.py` (+16): without per-minute completeness, AC36's failed `(False, 0) != (True, 1)`;
+  without combined versions or the environment read, AC67's failed; without last week, AC29's; with the finding
+  ignored, AC64's `(1, False) != (6, True)`; with FR46's tally at one, AC78's listed `payments`; without the door
+  predicate, AC69's listed `FromAPage` as new; without the sampling flag or the aged-out check, FR31's and FR30's;
+  without the metadata gate, AC76's (a viewer saw it); without the minute floor or the period's end, AC41's; without
+  grouping the rest, AC65's named v3 and v4; with no deploys, the facts test; without step 5, AC32's read
+  `no_version_no_deploy`; without the serving window, AC23's read `idle`; with every read error treated as failure,
+  AC68's timeout test. **Not seen failing:** removing the version predicates (above): they are pruning only.
+- `test_platform_releases.py` (+9): the time method on version rows, the previous stretch, the smallest window and
+  last week on side by side each failed.
+- `test_release_sync_live.py` (+4, AC74): release retention left out of the sweep, deploys lapsing by the sender's
+  time, the deleted-project clause, the per-table guard, and the project's own retention (replaced by 30) each failed.
+- `test_release_words.py` (6): "impact" in a screen string, "Caused by" in a response, "Due to" in the setup page, a
+  scheduler statement reading `spans`, and a duration in `ENVIRONMENTS_SQL` each failed.
+- Go: `flatten_test.go` and the log `flatten_test.go` failed with the door left unset (`""` for every door);
+  `block_test.go` failed with the column left out (`30 columns, the table has 31`); `consume/door_test.go` failed
+  with the browser word changed.
+- Web: `ReleaseScreen.test.ts` (new, 19) and `ReleasesScreen.test.ts` (+2): every reading dim (AC84), the caution
+  always shown (AC79), no last-week line (AC65), the environments warning dropped, the finding not sent (FR22), the
+  link's `rel` and `referrerPolicy` dropped (AC44), any url linked, the timeout ignored (FR51), FR46's words unused
+  (AC78), `__other__` labelled as other versions (FR26), the viewer's withheld metadata shown, later findings not
+  listed, and the coverage strip unfiltered each failed. `comparison.test.ts` lost the window-choice tests with the
+  rule it held, and gained the warnings, FR49 and last-week tests. The old page tests in `ReleasesScreen.test.ts` moved
+  into `ReleaseScreen.test.ts`. Every test pins the clock (`vi.useFakeTimers({ toFake: ["Date"] })`).
+- `test_releases.py` (+8): the error kinds, the rollout's labels, the metadata roles, and no sender text on the new
+  models, written after the code. `test_read_surface_structure.py` failed naming `get_errors`, then passed with them
+  listed and in `setup/api.md`; `sender-details` is not on the surface, as a person-only route.
+
+**Counts.** Offline, every store pointed at an unreachable port so live suites skip on purpose (`apps/api`,
+`apps/scheduler`, `packages/py-platform`, `packages/contracts`, `tools/release-demo`, `tools/detection-seed`, `-n 2`):
+11,817 passed, 124 skipped, 5 failed. `test_read_surface_structure.py` failed on the two new reader routes (its
+seen-failing record); with `get_errors` and `get_rollout` added it passed. `test_install_secrets.py`'s 4 read the
+offline run's own `NEXOVUE_KAFKA_BROKERS`; without it, both files: 114 passed. A first run with this session's stores
+reachable also ran other features' live suites against these bare stores (no gate seed, no Kafka): `test_services_live`
+and `test_llm_observability_live` errored for that reason, not run further. Live, on this session's own Postgres and ClickHouse (containers `f28s4-pg`, `f28s4-ch`,
+ports 35432 and 38123): `test_releases_live.py`, `test_errorgroups_live.py`, `test_findings_api_live.py`,
+`test_deploys_live.py`, `test_deletion_live.py`, `test_release_sync_live.py`, `test_release_facts_live.py`,
+`test_detection_prune_live.py`, `test_slo_prune_live.py`, `test_detection_release_neutrality_live.py`: 189 passed. Go,
+`apps/workers`: 28 packages ok; `go vet` and `golangci-lint` clean. Web, the whole suite: 2,294 passed (183 files),
+browser SDK 124. `uv run mypy .` (1,002 files), `ruff check .`, `ruff format --check .`,
+`pnpm -r --if-present run typecheck`, `biome check` on the touched folders and `verify-tokens.js`: clean.
+
+**Not run (deferred to hardening, as the brief says):** the errors read's cost at 24 hours on seeded data, and the
+2-second first-numbers target (AC67): both measurements; Design QA at 375px and in a browser (AC75 beyond what jsdom
+can show); Playwright; the *Judgeable* run with `tools/release-demo` and the full dev stack; `just check` (the
+coordinator's); `test_erasure_live.py` (no table added).
+
+**Found in the self-review, left as they are** (none blocking):
+
+- **Low:** `releases/service.errors_by_version` proves the project readable twice (once through the release), one
+  extra Postgres read per request.
+- **Low:** opened from a finding, the window tabs show "1 hour" selected until the comparison answers with the window it
+  chose.
+- **Low:** the token-refusal live test reaches the app's dependency overrides through the client's private transport.
+- **Not measured:** the comparison now reads up to four statements (versions, totals, last week, environments), and the
+  environments read scans one service's stored spans over the compared stretch, up to about two days.
 
 ## Step 3, built 2026-11-09
 
@@ -418,12 +543,28 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
-Coordinator: review and commit Step 3 (no migration, no ADR). Then Step 4, the whole release page. T2.10's timed new
-person and Step 3's Design QA are the founder's, after Phase 2. `docs/architecture/database.md` gains the new tables
-in T5.7, as planned.
+Coordinator: review and commit Step 4 (ClickHouse `000041`, `000042`, re-chained if numbers moved; no Postgres
+migration, no ADR). Then Step 5. Deferred to hardening: the errors read's cost at 24 hours, the 2-second target, Design
+QA at 375px, Playwright and the `tools/release-demo` judging. T2.10's timed new person and Steps 3 and 4's Design QA
+are the founder's, after Phase 2. `docs/architecture/database.md` gains the new tables in T5.7, as planned.
 
 
 ## Open decisions
+
+**From Step 4, none blocking; each built as recommended, open to overrule.**
+
+- **The list's "Versions were combined on `checkout`" state is not built.** The design lists it among `/releases`'
+  states, but the list reads Postgres alone (AC81) and only ClickHouse knows. Options: carry it in T5.6's stored reading
+  (recommended: the job already reads the comparison 30 minutes in, and the list stays Postgres-only); or read
+  ClickHouse per list request, which AC81 forbids.
+- **FR45's warning in the Deploys section is not built.** FR45 names the release page and the Deploys section; Step 4's
+  tasks name only the page. Options: add it with T5.6, which already edits `DeploysSection.tsx`, from the stored
+  `mixed_environments` (recommended: no ClickHouse read in settings); or a live read per section open.
+- **A section moving from skeleton to numbers is not announced** (spec, *Accessibility*); only the opening sentence is
+  (`role=status`). Options: `aria-live="polite"` on each section's body (recommended, small), for Design QA to judge.
+- **The errors-by-version window is this version's start to the window's end, and the same length before** (reading
+  above). Options: keep (recommended: equal lengths, as FR29 says); or both versions over the same minutes, which
+  would read a rollout's old version as "in both".
 
 **From Step 3, none blocking; each built as recommended, open to overrule.**
 
@@ -478,6 +619,7 @@ The customer conversations (foundation item 8) and the browser-door change (item
   2026-11-02). The plan holds no task for it yet; they are added when the plan is next revised.
   **2026-11-07:** the browser-door change is built (all four steps; its live test asserts `service_versions_1m` too,
   and it deleted `countedVersion`, D55) and is on `feature/phase-2` (2026-11-07) (`docs/changes/browser-door/status.md`).
+  **2026-11-12:** checked in the code and Step 4 built (*Step 4, built 2026-11-12*). Nothing blocks Step 5.
 
 ## Reviews
 
@@ -887,6 +1029,8 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 - The browser-door change is now one record shared with F3 and F19 (plan, foundation section 9).
 
 ## Last updated
+
+2026-11-12: Step 4 built in `wt/f28s4`, awaiting commit.
 
 2026-11-09: Step 3 committed to `feature/phase-2`, with the carried-over fix to `first_reported_at`'s two readers.
 Earlier the same day: Step 2 committed to `feature/phase-2`; the founder's answer on failed and rolled-back reports

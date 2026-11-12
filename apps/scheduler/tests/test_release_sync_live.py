@@ -654,3 +654,165 @@ def test_job_arguments_are_ids_only() -> None:
     assert set(request.kwargs) == {"project_id"}
     assert request.queue == RELEASES_QUEUE
     assert request.expires_seconds == sync.JOB_EXPIRES_SECONDS
+
+
+# ------------------------------------------------------------- retention, AC74
+#
+# `releases/retention.py` through the expiry sweep. Ages are counted in whole days
+# from the database's own clock, so no assertion depends on the hour a test runs in.
+
+from nexovue_scheduler.jobs import expiry  # noqa: E402
+from nexovue_scheduler.releases import retention as release_retention  # noqa: E402
+
+
+async def _aged_release(
+    engine: AsyncEngine, tenant: AlertTenant, version: str, *, idle_days: int
+) -> uuid.UUID:
+    async with engine.begin() as connection:
+        found = await connection.scalar(
+            text(
+                """
+                INSERT INTO releases (org_id, project_id, service_name, version,
+                                      first_seen_at, last_activity_at)
+                VALUES (:org_id, :project_id, 'checkout', :version,
+                        now() - make_interval(days => :days),
+                        now() - make_interval(days => :days))
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "version": version,
+                "days": idle_days,
+            },
+        )
+    assert isinstance(found, uuid.UUID)
+    return found
+
+
+async def _aged_deploy(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    *,
+    arrived_days: int,
+    claimed_days: int,
+    release_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    async with engine.begin() as connection:
+        found = await connection.scalar(
+            text(
+                """
+                INSERT INTO deploy_events (org_id, project_id, service_name, version,
+                                           deployed_at, source, delivery_id, release_id,
+                                           created_at)
+                VALUES (:org_id, :project_id, 'checkout', 'v1',
+                        now() - make_interval(days => :claimed), 'ci', :delivery,
+                        :release_id, now() - make_interval(days => :arrived))
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "claimed": claimed_days,
+                "arrived": arrived_days,
+                "delivery": f"retention-{uuid.uuid4()}",
+                "release_id": release_id,
+            },
+        )
+    assert isinstance(found, uuid.UUID)
+    return found
+
+
+async def _left(engine: AsyncEngine, table: str, ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(f"SELECT id FROM {table} WHERE id = ANY(:ids)"), {"ids": list(ids)}
+        )
+    return {row[0] for row in rows}
+
+
+async def test_a_30_day_plan_keeps_29_days_and_drops_31_by_arrival_time(
+    engine: AsyncEngine, acme: AlertTenant
+) -> None:
+    """AC74: by our clock, so a sender's back-dated `deployed_at` shortens nothing; a
+    release lapsing while its deploy lives does not stop the sweep."""
+    old = await _aged_release(engine, acme, "v-old", idle_days=31)
+    young = await _aged_release(engine, acme, "v-young", idle_days=29)
+    gone = await _aged_deploy(engine, acme, arrived_days=31, claimed_days=31)
+    back_dated = await _aged_deploy(engine, acme, arrived_days=1, claimed_days=40)
+    outliving = await _aged_deploy(engine, acme, arrived_days=29, claimed_days=29, release_id=old)
+
+    await expiry.sweep(engine)
+
+    assert await _left(engine, "releases", (old, young)) == {young}
+    assert await _left(engine, "deploy_events", (gone, back_dated, outliving)) == {
+        back_dated,
+        outliving,
+    }
+    async with engine.connect() as connection:
+        kept_release = await connection.scalar(
+            text("SELECT release_id FROM deploy_events WHERE id = :id"), {"id": outliving}
+        )
+    assert kept_release is None
+
+
+async def test_a_395_day_plan_keeps_394_days_and_drops_396(
+    engine: AsyncEngine, acme: AlertTenant
+) -> None:
+    """AC74, on a paid plan."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE organizations SET plan = 'pro' WHERE id = :id"), {"id": acme.org_id}
+        )
+    old = await _aged_release(engine, acme, "v-old", idle_days=396)
+    young = await _aged_release(engine, acme, "v-young", idle_days=394)
+    gone = await _aged_deploy(engine, acme, arrived_days=396, claimed_days=396)
+    kept = await _aged_deploy(engine, acme, arrived_days=394, claimed_days=394)
+
+    await expiry.sweep(engine)
+
+    assert await _left(engine, "releases", (old, young)) == {young}
+    assert await _left(engine, "deploy_events", (gone, kept)) == {kept}
+
+
+async def test_a_long_deleted_project_s_rows_lapse_and_a_newly_deleted_one_s_wait(
+    engine: AsyncEngine, acme: AlertTenant, globex: AlertTenant
+) -> None:
+    """FR40, AC74: past the shortest plan's retention after deletion, whatever their
+    activity."""
+    long_gone = await _aged_release(engine, acme, "v1", idle_days=1)
+    long_gone_deploy = await _aged_deploy(engine, acme, arrived_days=1, claimed_days=1)
+    recent = await _aged_release(engine, globex, "v1", idle_days=1)
+    async with engine.begin() as connection:
+        for tenant, days in ((acme, 31), (globex, 1)):
+            await connection.execute(
+                text(
+                    "UPDATE projects SET deleted_at = now() - make_interval(days => :days) "
+                    "WHERE org_id = :org_id AND id = :id"
+                ),
+                {"days": days, "org_id": tenant.org_id, "id": tenant.project_id},
+            )
+
+    await expiry.sweep(engine)
+
+    assert await _left(engine, "releases", (long_gone, recent)) == {recent}
+    assert await _left(engine, "deploy_events", (long_gone_deploy,)) == set()
+
+
+async def test_one_table_failing_does_not_stop_the_tables_after_it(
+    engine: AsyncEngine, acme: AlertTenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Design 3, *Retention*: the sweep had no per-table guard."""
+    old = await _aged_release(engine, acme, "v-old", idle_days=31)
+    monkeypatch.setattr(
+        expiry,
+        "_EXPIRED",
+        (("no_such_table", "id", "true"), *release_retention.EXPIRED),
+    )
+
+    removed = await expiry.sweep(engine)
+
+    assert removed["no_such_table"] == 0
+    assert await _left(engine, "releases", (old,)) == set()

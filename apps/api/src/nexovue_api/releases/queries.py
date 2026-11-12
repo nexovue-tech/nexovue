@@ -1,8 +1,14 @@
 """F28's reads for `/releases`: Postgres for the record, ClickHouse for the comparison.
 
-Every Postgres statement binds `org_id`. The one ClickHouse statement is a module
+Every Postgres statement binds `org_id`. Every ClickHouse statement is a module
 constant binding the tenant and the project; the repository refuses one that does not.
 The list and the release read Postgres alone (AC81: no ClickHouse per row).
+
+**Stored spans answer two questions only** (BR6, AC34): which errors each version had
+(`ERRORS_BY_VERSION_SQL`, built in `errorgroups/queries.py` from the errors list's own
+occurrence rows) and which environment labels appear (`ENVIRONMENTS_SQL`). Never a
+rate or a latency: sampling keeps every error and about one healthy trace in ten.
+`test_release_words.py` holds this module to it.
 """
 
 from __future__ import annotations
@@ -10,17 +16,27 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform import releases as releases_platform
 from sqlalchemy import Select, and_, case, delete, func, literal, or_, select, tuple_, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import aggregate_order_by, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import DeployEvent, Release, ReleasePeriod, ServiceLastSeen
+from nexovue_api.data.postgres.models import (
+    DeployEvent,
+    Finding,
+    Organization,
+    Plan,
+    Project,
+    Release,
+    ReleasePeriod,
+    ServiceLastSeen,
+)
+from nexovue_api.errorgroups.queries import ERRORS_BY_VERSION_SQL, NANOS_PER_SECOND
 
 # One service's requests, failures and latency buckets per minute and version, in
 # [from, to): what the comparison splits (design 4, `VERSION_MINUTES_SQL`). No version
@@ -57,6 +73,131 @@ async def version_minutes(
             "service_name": service_name,
             "from_minute": start,
             "to_minute": end,
+        },
+    )
+
+
+# The same service and span from `service_stats_1m`, per minute (design 4,
+# `SERVICE_TOTALS_SQL`): FR28's check that no version row went missing, the time
+# method's numbers, and last week's (FR25).
+SERVICE_TOTALS_SQL: Final = """
+SELECT toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests,
+       sum(error_count) AS errors,
+       sumForEachMerge(latency_buckets) AS buckets
+FROM service_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name = {service_name:String}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY minute
+ORDER BY minute
+"""
+
+
+async def service_minutes(
+    repository: TenantScopedRepository,
+    *,
+    project_id: uuid.UUID,
+    service_name: str,
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, Any]]:
+    return await repository.query(
+        SERVICE_TOTALS_SQL,
+        {
+            "project_id": str(project_id),
+            "service_name": service_name,
+            "from_minute": start,
+            "to_minute": end,
+        },
+    )
+
+
+# Which environment labels one service's stored spans carry in a window (FR45, D39):
+# presence only, so sampling does not matter. The current name first, the older
+# `deployment.environment` where a span has only that, as the profile writer reads
+# them (`profilewriting/rows.go`). Both clocks are bounded, as the errors list does,
+# so the read prunes partitions. Never a rate (BR6).
+ENVIRONMENTS_SQL: Final = """
+SELECT DISTINCT environment
+FROM (
+    SELECT if(
+               ifNull(resource_attrs.deployment.environment.name.:String, '') != '',
+               ifNull(resource_attrs.deployment.environment.name.:String, ''),
+               ifNull(resource_attrs.deployment.environment.:String, '')
+           ) AS environment
+    FROM spans
+    WHERE tenant_id = {tenant_id:String}
+      AND project_id = {project_id:String}
+      AND service_name = {service_name:String}
+      AND timestamp >= {from_time:DateTime64(9)}
+      AND timestamp < {to_time:DateTime64(9)}
+      AND received_at >= {received_from:DateTime64(9)}
+      AND received_at < {received_to:DateTime64(9)}
+)
+WHERE environment != ''
+LIMIT {limit:UInt32}
+"""
+# Two labels are enough to warn.
+_ENVIRONMENTS_ENOUGH: Final = 2
+
+
+async def environments(
+    repository: TenantScopedRepository,
+    *,
+    project_id: uuid.UUID,
+    service_name: str,
+    start: datetime,
+    end: datetime,
+    clock_slack: timedelta,
+) -> list[str]:
+    rows = await repository.query(
+        ENVIRONMENTS_SQL,
+        {
+            "project_id": str(project_id),
+            "service_name": service_name,
+            "from_time": start,
+            "to_time": end,
+            "received_from": start - clock_slack,
+            "received_to": end + clock_slack,
+            "limit": _ENVIRONMENTS_ENOUGH,
+        },
+    )
+    return sorted(str(row["environment"]) for row in rows)
+
+
+async def errors_by_version(
+    repository: TenantScopedRepository,
+    *,
+    project_id: uuid.UUID,
+    this_version: str,
+    previous_version: str,
+    service_name: str,
+    split_at: datetime,
+    start: datetime,
+    end: datetime,
+    clock_slack: timedelta,
+    server_door_only: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Error groups of two versions of one service: this version's from `split_at` to
+    `end`, the previous version's from `start` to `split_at` (FR29)."""
+    return await repository.query(
+        ERRORS_BY_VERSION_SQL,
+        {
+            "project_id": str(project_id),
+            "service_name": service_name,
+            "this_version": this_version,
+            "previous_version": previous_version,
+            "split_nanos": int(split_at.timestamp()) * NANOS_PER_SECOND,
+            "from_time": start,
+            "to_time": end,
+            "received_from": start - clock_slack,
+            "received_to": end + clock_slack,
+            "browser_door_too": 0 if server_door_only else 1,
+            "limit": limit,
         },
     )
 
@@ -1003,3 +1144,153 @@ async def latest_period_per_service(
         )
     )
     return (await session.execute(statement)).all()
+
+
+# ---------------------------------------------------- the release page (T4.1, T4.4)
+
+
+async def raw_retention_days(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> int | None:
+    """How long the project keeps raw spans and logs, as `project_retention` reads it
+    (migration 0005): the project's own limit within its plan's."""
+    found: int | None = await session.scalar(
+        select(func.least(Project.retention_days, Plan.raw_retention_days))
+        .join(Organization, Organization.id == Project.org_id)
+        .join(Plan, Plan.slug == Organization.plan)
+        .where(
+            Project.org_id == org_id,
+            Project.id == project_id,
+            Organization.deleted_at.is_(None),
+        )
+    )
+    return found
+
+
+async def project_finding(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, finding_id: uuid.UUID
+) -> Finding | None:
+    """A finding of this project, for the window a comparison opened from it takes."""
+    found: Finding | None = await session.scalar(
+        select(Finding).where(
+            Finding.org_id == org_id, Finding.project_id == project_id, Finding.id == finding_id
+        )
+    )
+    return found
+
+
+async def deploys_of(
+    session: AsyncSession, *, org_id: uuid.UUID, release_id: uuid.UUID
+) -> Sequence[Any]:
+    """A release's reported deploys, oldest claim first: facts only, no sender text."""
+    return (
+        await session.execute(
+            select(
+                DeployEvent.id,
+                DeployEvent.deployed_at,
+                DeployEvent.created_at,
+                DeployEvent.state,
+                DeployEvent.commit_sha,
+            )
+            .where(DeployEvent.org_id == org_id, DeployEvent.release_id == release_id)
+            .order_by(DeployEvent.deployed_at, DeployEvent.created_at, DeployEvent.id)
+        )
+    ).all()
+
+
+async def sender_text_of(
+    session: AsyncSession, *, org_id: uuid.UUID, release_id: uuid.UUID
+) -> Sequence[Any]:
+    """What each sender wrote beside a release's deploys (FR54): served to a person
+    alone, by `sender-details`."""
+    return (
+        await session.execute(
+            select(
+                DeployEvent.id,
+                DeployEvent.deployed_at,
+                DeployEvent.url,
+                DeployEvent.source,
+                DeployEvent.event_metadata,
+            )
+            .where(DeployEvent.org_id == org_id, DeployEvent.release_id == release_id)
+            .order_by(DeployEvent.deployed_at, DeployEvent.created_at, DeployEvent.id)
+        )
+    ).all()
+
+
+async def findings_from(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    start: datetime,
+    end: datetime | None,
+    limit: int,
+) -> Sequence[Any]:
+    """Findings on one service that started in [start, end), oldest first (FR34). The
+    caller passes the start's own minute, so a finding in that minute is after it."""
+    statement = select(
+        Finding.id,
+        Finding.title,
+        Finding.severity,
+        Finding.state,
+        Finding.started_at,
+    ).where(
+        Finding.org_id == org_id,
+        Finding.project_id == project_id,
+        Finding.service_name == service_name,
+        Finding.started_at >= start,
+    )
+    if end is not None:
+        statement = statement.where(Finding.started_at < end)
+    statement = statement.order_by(Finding.started_at, Finding.id).limit(limit)
+    return (await session.execute(statement)).all()
+
+
+# FR46: two versions told and never seen beside one seen and never told (a guess).
+NAMING_REPORTED_ONLY: Final = 2
+NAMING_SEEN_ONLY: Final = 1
+
+
+async def naming_differs(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    since: datetime,
+) -> Sequence[Any]:
+    """FR46: each service whose releases since `since` hold at least two versions the
+    CI reported and traffic never carried, beside at least one traffic carried and the
+    CI never reported, with the newest of each. Grouped in the statement, so the read
+    is one row per such service."""
+    reported_only = and_(Release.first_reported_at >= since, Release.first_seen_at.is_(None))
+    seen_only = and_(Release.first_seen_at >= since, Release.first_reported_at.is_(None))
+    newest_reported = func.array_agg(
+        aggregate_order_by(Release.version, Release.first_reported_at.desc())
+    ).filter(reported_only)
+    newest_seen = func.array_agg(
+        aggregate_order_by(Release.version, Release.first_seen_at.desc())
+    ).filter(seen_only)
+    return (
+        await session.execute(
+            select(
+                Release.service_name,
+                newest_reported[1].label("reported_version"),
+                newest_seen[1].label("seen_version"),
+            )
+            .where(
+                Release.org_id == org_id,
+                Release.project_id == project_id,
+                or_(reported_only, seen_only),
+            )
+            .group_by(Release.service_name)
+            .having(
+                and_(
+                    func.count().filter(reported_only) >= NAMING_REPORTED_ONLY,
+                    func.count().filter(seen_only) >= NAMING_SEEN_ONLY,
+                )
+            )
+            .order_by(Release.service_name)
+        )
+    ).all()

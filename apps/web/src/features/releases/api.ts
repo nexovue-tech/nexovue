@@ -41,6 +41,13 @@ export interface ReleaseRow {
   last_state: string | null;
 }
 
+/** FR46: a service whose CI and traffic name versions differently, newest of each. */
+export interface NamingDiffers {
+  service_name: string;
+  reported_version: string;
+  seen_version: string;
+}
+
 export interface ReleaseList {
   releases: ReleaseRow[];
   total: number;
@@ -50,6 +57,25 @@ export interface ReleaseList {
   latest: { id: string; service_name: string; version: string; started_at: string } | null;
   window_from: string;
   window_to: string;
+  naming_differs: NamingDiffers[];
+}
+
+/** A finding on the service that started while a period served (FR34). */
+export interface LaterFinding {
+  id: string;
+  title: string;
+  severity: string;
+  state: string;
+  started_at: string;
+}
+
+/** One reported deploy, facts only: the sender's time beside our arrival time. */
+export interface DeployFact {
+  id: string;
+  deployed_at: string;
+  received_at: string;
+  state: "started" | "finished" | "failed" | "rolled_back";
+  commit_sha: string | null;
 }
 
 export interface Period {
@@ -60,6 +86,9 @@ export interface Period {
   previous_version: string | null;
   already_running: boolean;
   is_return: boolean;
+  /** Oldest first. */
+  later_findings: LaterFinding[];
+  later_findings_truncated: boolean;
 }
 
 export interface Release {
@@ -78,6 +107,8 @@ export interface Release {
   last_state: string | null;
   /** Newest first. */
   periods: Period[];
+  /** Oldest claim first. */
+  deploys: DeployFact[];
 }
 
 export interface Side {
@@ -97,11 +128,16 @@ export interface Block {
   method: Method;
   from: string;
   to: string;
+  /** The previous side's stretch: the same minutes side by side, before otherwise. */
+  previous_from: string;
+  previous_to: string;
   minutes_compared: number;
   this_version: Side;
   previous_version: Side;
   failure_share: CellReading;
   p95: CellReading;
+  /** FR25: the whole service a week earlier; before-and-after methods only. */
+  last_week: Side | null;
 }
 
 export interface Comparison {
@@ -117,6 +153,58 @@ export interface Comparison {
   traffic: { this_version: Side; previous_version: Side } | null;
   other_versions: string[];
   numbers_kept_days: number;
+  incomplete: boolean;
+  minutes_differing: number;
+  versions_combined: boolean;
+  mixed_environments: boolean;
+  /** Opened from a finding that started after the period (FR22). */
+  finding: { id: string; started_at: string; reaches: boolean } | null;
+}
+
+export type ErrorKind = "new_here" | "gone_here" | "in_both" | "this_version";
+
+export interface VersionErrorGroup {
+  group_id: string;
+  exception_type: string;
+  message_template: string;
+  kind: ErrorKind;
+  this_occurrences: number;
+  previous_occurrences: number;
+  from_browser: boolean;
+}
+
+export interface VersionErrors {
+  period_id: string;
+  version: string;
+  previous_version: string | null;
+  from: string;
+  to: string;
+  window_hours: number;
+  groups: VersionErrorGroup[];
+  truncated: boolean;
+  timed_out: boolean;
+  aged_out_on: string | null;
+  may_be_incomplete: boolean;
+  browser_door_read: boolean;
+}
+
+export type RolloutSeriesKind = "version" | "no_version" | "combined" | "other_versions";
+
+export interface Rollout {
+  period_id: string;
+  series: Array<{ kind: RolloutSeriesKind; version: string | null }>;
+  minutes: Array<{ minute: string; requests: number[] }>;
+  as_of: string | null;
+  compared_to: string;
+}
+
+export interface SenderDeploy {
+  deploy_id: string;
+  deployed_at: string;
+  url: string | null;
+  source: string;
+  metadata: Record<string, string> | null;
+  metadata_withheld: boolean;
 }
 
 export interface ReleaseFilters {
@@ -170,21 +258,84 @@ export function useRelease(releaseId: string) {
   });
 }
 
+/**
+ * The comparison. `windowHours` undefined lets the API choose: an hour, or, opened
+ * from a finding, the smallest window reaching it (FR22).
+ */
 export function useComparison(
   releaseId: string,
   periodId: string | undefined,
-  windowHours: WindowHours,
+  windowHours: WindowHours | undefined,
+  findingId: string | undefined,
 ) {
   return useQuery({
-    queryKey: ["release-comparison", releaseId, periodId ?? "", windowHours],
+    queryKey: ["release-comparison", releaseId, periodId ?? "", windowHours ?? "", findingId ?? ""],
     queryFn: ({ signal }) =>
       apiClient.get<Comparison>(`releases/${encodeURIComponent(releaseId)}/comparison`, {
-        searchParams: { period: periodId, window: windowHours },
+        searchParams: { period: periodId, window: windowHours, finding: findingId },
         signal,
       }),
     refetchInterval: (query) =>
       query.state.data?.reason === "too_recent" || query.state.data?.as_of
         ? COMPARISON_REFRESH_MS
         : false,
+  });
+}
+
+export function useVersionErrors(releaseId: string, periodId: string, windowHours: number) {
+  return useQuery({
+    queryKey: ["release-errors", releaseId, periodId, windowHours],
+    queryFn: ({ signal }) =>
+      apiClient.get<VersionErrors>(`releases/${encodeURIComponent(releaseId)}/errors`, {
+        searchParams: { period: periodId, window: windowHours },
+        signal,
+      }),
+  });
+}
+
+export function useRollout(releaseId: string, periodId: string, windowHours: number) {
+  return useQuery({
+    queryKey: ["release-rollout", releaseId, periodId, windowHours],
+    queryFn: ({ signal }) =>
+      apiClient.get<Rollout>(`releases/${encodeURIComponent(releaseId)}/rollout`, {
+        searchParams: { period: periodId, window: windowHours },
+        signal,
+      }),
+    refetchInterval: (query) => (query.state.data?.as_of ? COMPARISON_REFRESH_MS : false),
+  });
+}
+
+/** What senders wrote (FR54): a person's read, never a token's. */
+export function useSenderDetails(releaseId: string) {
+  return useQuery({
+    queryKey: ["release-sender-details", releaseId],
+    queryFn: ({ signal }) =>
+      apiClient.get<{ deploys: SenderDeploy[] }>(
+        `releases/${encodeURIComponent(releaseId)}/sender-details`,
+        { signal },
+      ),
+  });
+}
+
+export interface CoverageList {
+  at: string;
+  services: Array<{
+    service_name: string;
+    coverage: "deploys_and_versions" | "deploys_only" | "versions_only" | "none";
+    last_reported_at: string | null;
+    first_heard_at: string | null;
+  }>;
+}
+
+/** Each service's coverage now (FR38): the list names those we hear nothing about. */
+export function useCoverage(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["release-coverage", projectId],
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<CoverageList>("releases/coverage", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
   });
 }

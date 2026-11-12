@@ -9,13 +9,21 @@ import { TextField } from "@/shared/components/TextField";
 import { useDetectionSettings } from "@/shared/detection/api";
 import { shortVersion } from "@/shared/format/version";
 import { formatZonedTime } from "@/shared/format/zoned";
+import { useCan } from "@/shared/identity";
 import { useProjectSelection } from "@/shared/projects";
 import { useLiveWindow, useWindowPhrase } from "@/shared/selection";
-import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
+import { SETUP_DOCS_PATH, setupDocUrl } from "@/shared/setup-docs";
 
-import type { ReleaseFilters, ReleaseList, ReleaseRow } from "./api";
-import { useReleases } from "./api";
-import { activityWords, basisWords, latestWords, stateWords, windowCount } from "./release-words";
+import type { NamingDiffers, ReleaseFilters, ReleaseList, ReleaseRow } from "./api";
+import { useCoverage, useReleases } from "./api";
+import {
+  activityWords,
+  basisWords,
+  latestWords,
+  namingDiffersWords,
+  stateWords,
+  windowCount,
+} from "./release-words";
 
 /**
  * `/releases` (F28 design): every release with a period in the window, newest first, so a
@@ -82,6 +90,7 @@ export function ReleasesScreen() {
           Filter
         </Button>
       </form>
+      <CoverageStrip projectId={projectId} />
       {releases.isPending ? <SkeletonRows rows={4} label="Loading releases" /> : null}
       {releases.isError ? (
         <InlineFailure
@@ -167,7 +176,13 @@ function Listing({
     <section aria-label="Releases" className="flex flex-col gap-3">
       <ul className="flex flex-col divide-y divide-line border-line border-y">
         {list.releases.map((release) => (
-          <Row key={release.period_id} release={release} zone={zone} now={now} />
+          <Row
+            key={release.period_id}
+            release={release}
+            differs={list.naming_differs.find((each) => each.service_name === release.service_name)}
+            zone={zone}
+            now={now}
+          />
         ))}
       </ul>
       {onNext || onPrevious ? (
@@ -190,10 +205,13 @@ function Listing({
 
 function Row({
   release,
+  differs,
   zone,
   now,
 }: {
   release: ReleaseRow;
+  /** FR46: this service's CI and traffic name versions differently. */
+  differs: NamingDiffers | undefined;
   zone: string | undefined;
   now: number;
 }) {
@@ -218,12 +236,14 @@ function Row({
         </span>
         <span className="text-ink-dim">{basisWords(release.basis)}</span>
         <span className="text-ink">
-          {activityWords(release.activity, {
-            startedAt: release.started_at,
-            lastSeenAt: release.last_seen_at,
-            zone,
-            now,
-          })}
+          {release.activity === "not_seen" && differs !== undefined
+            ? namingDiffersWords(differs)
+            : activityWords(release.activity, {
+                startedAt: release.started_at,
+                lastSeenAt: release.last_seen_at,
+                zone,
+                now,
+              })}
           {flags.length > 0 ? <span className="text-ink-dim"> · {flags.join(" · ")}</span> : null}
         </span>
         <span className="text-ink-dim">
@@ -231,5 +251,35 @@ function Row({
         </span>
       </Link>
     </li>
+  );
+}
+
+const STRIP_LINK = "text-brand-text hover:underline";
+
+/**
+ * The services we hear nothing about (design, *Coverage strip*), in one line: a real
+ * absence, said, never a blank (BR4). The setup link only for those who can act.
+ */
+function CoverageStrip({ projectId }: { projectId: string | undefined }) {
+  const coverage = useCoverage(projectId);
+  const canSetUp = useCan("manage_credentials");
+  const silent = (coverage.data?.services ?? [])
+    .filter((service) => service.coverage === "none")
+    .map((service) => service.service_name);
+  if (silent.length === 0) return null;
+  return (
+    <p className="max-w-prose break-words text-ink-dim text-sm">
+      We receive no deploy information for {silent.join(", ")}.{" "}
+      {canSetUp ? (
+        <Link to="/settings/projects" hash="deploys" className={STRIP_LINK}>
+          Set up deploy reporting
+        </Link>
+      ) : (
+        "An owner or admin can set this up in project settings."
+      )}{" "}
+      <a href={setupDocUrl("deploys")} className={STRIP_LINK}>
+        How releases are found
+      </a>
+    </p>
   );
 }

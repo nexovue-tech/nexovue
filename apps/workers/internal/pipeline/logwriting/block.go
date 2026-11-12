@@ -31,6 +31,7 @@ type logBlock struct {
 	exceptionType    *proto.ColLowCardinality[string]
 	exceptionMessage proto.ColStr
 	timestampSource  *proto.ColLowCardinality[string]
+	door             *proto.ColLowCardinality[string]
 
 	// columns names each column exactly as the table declares it, so the server
 	// matches on name rather than on position. Built once; it is also the
@@ -48,6 +49,7 @@ func newLogBlock() *logBlock {
 		severity:        new(proto.ColStr).LowCardinality(),
 		exceptionType:   new(proto.ColStr).LowCardinality(),
 		timestampSource: new(proto.ColStr).LowCardinality(),
+		door:            new(proto.ColStr).LowCardinality(),
 	}
 	// The column carries its own precision; without it ch-go cannot encode a
 	// time and the server would be told the wrong type.
@@ -72,6 +74,7 @@ func newLogBlock() *logBlock {
 		{Name: "exception_type", Data: block.exceptionType},
 		{Name: "exception_message", Data: &block.exceptionMessage},
 		{Name: "timestamp_source", Data: block.timestampSource},
+		{Name: "door", Data: block.door},
 	}
 	return block
 }
@@ -94,6 +97,7 @@ func (b *logBlock) append(row logRow) {
 	b.exceptionType.Append(row.ExceptionType)
 	b.exceptionMessage.Append(row.ExceptionMessage)
 	b.timestampSource.Append(row.TimestampSource)
+	b.door.Append(row.Door)
 }
 
 func (b *logBlock) rows() int { return b.timestamp.Rows() }

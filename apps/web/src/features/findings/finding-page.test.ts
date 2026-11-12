@@ -705,7 +705,6 @@ describe("the release before a finding (AC40, every row of the wording table)", 
     expect(comparisonSearch(fact(), finding({ id: "f-9", started_at: STARTED }))).toEqual({
       period: "period-1",
       finding: "f-9",
-      finding_at: STARTED,
     });
   });
 });

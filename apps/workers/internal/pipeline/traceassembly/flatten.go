@@ -80,6 +80,9 @@ type spanRow struct {
 	// the only evidence of who published the message: the consumer starts its
 	// own trace and links back, so `parent_span_id` names nothing.
 	Links []spanLink
+	// Door is `consume.StoredDoor` of the envelope: whether this span came through
+	// the browser door, whose site key anyone can read (F28 D38).
+	Door string
 	// Peer is what a caller-side span says about what it called. Carried for
 	// edge derivation and never written: it is only ever read to name a callee
 	// that sent us nothing of its own.
@@ -199,6 +202,7 @@ func flattenSpan(
 		ExceptionType:     exception.Type,
 		ExceptionMessage:  exception.Message,
 		Links:             spanLinks(span.GetLinks()),
+		Door:              consume.StoredDoor(envelope.GetDoor()),
 		Peer:              peerOf(attributes, rpc.system),
 		// Carried for the sampler alone, which reads an explicit `rv` out of it
 		// when a producer upstream has already fixed the trace's randomness. Not

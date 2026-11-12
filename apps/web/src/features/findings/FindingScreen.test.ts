@@ -822,7 +822,7 @@ describe("the release before this finding (F28 AC40, AC43)", () => {
       (link) => link.textContent === "Compare the versions",
     );
     expect(compare?.getAttribute("href")).toMatch(
-      /^\/releases\/release-1\?period=period-1&finding=f-1&finding_at=/,
+      /^\/releases\/release-1\?period=period-1&finding=f-1$/,
     );
   });
 

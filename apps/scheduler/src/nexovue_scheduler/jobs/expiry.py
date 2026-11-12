@@ -2,18 +2,23 @@
 detection keeps only for a while (`detection/retention.py`), the evidence job's hour
 (`evidence/retention.py`), AI runs and monthly usage past 13 months
 (`nexovue_platform.ai_records`), chat's questions past their project's derived retention
-and its records past 13 months (`nexovue_platform.assistant_records`), and what reliability
+and its records past 13 months (`nexovue_platform.assistant_records`), what reliability
 targets keep: a deleted target past restoring, and figures past 400 days
-(`slos/retention.py`). A deleted dashboard past its 30 days goes with its versions
-(`purge_deleted_dashboards`).
+(`slos/retention.py`), and F28's deploys and releases (`releases/retention.py`). A deleted
+dashboard past its 30 days goes with its versions (`purge_deleted_dashboards`).
 
 Every read of the first group already ignores a lapsed row, so for them this
 sweep is about disk, never correctness — a missed run leaves rows that answer
 nothing. Detection's are different: a closed finding past its project's derived
 retention still names services, so a missed run keeps telemetry text a day
 longer than the plan says (security m4). It deletes in batches so a backlog is
-cleared in bites, never one long lock. One table that fails is logged and skipped, so it
-never keeps the tables after it, or the spent jobs, from being cleared (F4 AC35).
+cleared in bites, never one long lock.
+
+**One table failing does not stop the others** (F4 AC35; F28 design 3, *Retention*): its
+error is logged with the table's name, what it removed before the failure is kept and
+counted, and the sweep goes on to the next. A sweep that stopped at the first failure would
+keep every later table's rows, and the spent jobs, past their plan, and nobody would see
+why until the next run failed the same way.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from nexovue_scheduler.evidence import retention as evidence_retention
 from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
+from nexovue_scheduler.releases import retention as release_retention
 from nexovue_scheduler.slos import retention as slo_retention
 
 logger = get_logger(__name__)
@@ -57,6 +63,7 @@ _EXPIRED: Final = (
     *ai_records.EXPIRED,
     *assistant_records.EXPIRED,
     *slo_retention.EXPIRED,
+    *release_retention.EXPIRED,
 )
 
 
@@ -90,28 +97,33 @@ async def sweep(engine: AsyncEngine, *, now: datetime | None = None) -> dict[str
         "dashboards": await purge_deleted_dashboards(engine, now=at),
     }
     for table, key, lapsed in _EXPIRED:
-        try:
-            removed[table] = await _clear(engine, table, key, lapsed)
-        except SQLAlchemyError as error:
-            reason = repr(getattr(error, "orig", error))
-            logger.error("an expiry table failed; the rest still run", table=table, error=reason)
+        removed[table] = await _expire(engine, table, key, lapsed)
     removed["jobs"] = await queue.sweep_spent(engine)
     return removed
 
 
-async def _clear(engine: AsyncEngine, table: str, key: str, lapsed: str) -> int:
+async def _expire(engine: AsyncEngine, table: str, key: str, lapsed: str) -> int:
+    """One table's lapsed rows, batch by batch. Each batch commits on its own, so a failure
+    keeps what went before it, and that count is what this returns."""
     statement = text(
         # Every part is a constant above; nothing here came from a caller.
         f"DELETE FROM {table} WHERE ({key}) IN "
         f"(SELECT {key} FROM {table} WHERE {lapsed} LIMIT :batch)"
     )
     total = 0
-    while True:
-        async with engine.begin() as connection:
-            deleted = (await connection.execute(statement, {"batch": BATCH})).rowcount
-        total += deleted
-        if deleted < BATCH:
-            return total
+    try:
+        while True:
+            async with engine.begin() as connection:
+                deleted = (await connection.execute(statement, {"batch": BATCH})).rowcount
+            total += deleted
+            if deleted < BATCH:
+                return total
+    except SQLAlchemyError as error:
+        reason = repr(getattr(error, "orig", error))
+        logger.error(
+            "an expiry table failed; the rest still run", table=table, removed=total, error=reason
+        )
+        return total
 
 
 @task(SWEEP_EXPIRED_TASK)

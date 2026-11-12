@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 
 	tracesvc "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -524,5 +525,21 @@ func TestSpanLinksAreFlattened(t *testing.T) {
 	}
 	if !strings.Contains(links[0].Attributes, `"batch":3`) {
 		t.Errorf("link attributes = %q, want the batch size", links[0].Attributes)
+	}
+}
+
+// F28 D38, AC69: a stored span says whether it came through the browser door,
+// whose site key anyone can read, so a server release's errors can leave it out.
+func TestAStoredSpanSaysWhichDoorItCameThrough(t *testing.T) {
+	cases := map[nexovuev1.Door]string{
+		nexovuev1.Door_DOOR_RUM:       consume.StoredDoorBrowser,
+		nexovuev1.Door_DOOR_OTLP:      consume.StoredDoorServer,
+		nexovuev1.Door_DOOR_SYNTHETIC: consume.StoredDoorServer,
+	}
+	for door, want := range cases {
+		row := flattenOne(t, marshalEnvelope(t, "", spanOptions{door: door}))
+		if row.Door != want {
+			t.Errorf("%s: span stored under door %q, want %q", door, row.Door, want)
+		}
 	}
 }

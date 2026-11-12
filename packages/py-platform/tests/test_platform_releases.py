@@ -19,6 +19,7 @@ from nexovue_platform import releases
 from nexovue_platform.releases import (
     Comparison,
     PeriodToCompare,
+    ServiceMinute,
     VersionMinute,
     bucket_p95,
     choose_method,
@@ -432,3 +433,99 @@ def test_the_time_method_s_moment_is_a_reported_period_s_start() -> None:
     report, which may be a failed deploy or an earlier period's."""
     assert releases.reported_moment(FINDING, releases.REPORTED) == FINDING
     assert releases.reported_moment(FINDING, releases.SEEN) is None
+
+
+# ---------------------------------------------- Step 4: what a comparison also says
+
+
+def _totals(first: datetime, count: int, *, requests: int, errors: int = 0) -> list[ServiceMinute]:
+    return [
+        ServiceMinute(first + MINUTE * offset, requests, errors, _buckets(requests))
+        for offset in range(count)
+    ]
+
+
+def test_each_block_names_the_previous_side_s_stretch() -> None:
+    """Side by side reads the same minutes; before and after the equal stretch before."""
+    rolling = _compare(_rolling(new_errors=0, old_errors=0))
+    (side_by_side,) = rolling.blocks
+    assert (side_by_side.previous_start, side_by_side.previous_end) == (
+        side_by_side.start,
+        side_by_side.end,
+    )
+    replaced = _compare(
+        _minutes("v1", START - HOUR, 60, requests=100) + _minutes("v2", START, 40, requests=100),
+        to=START + 40 * MINUTE,
+    )
+    (after,) = replaced.blocks
+    assert (after.previous_start, after.previous_end) == (START - 40 * MINUTE, START)
+
+
+def test_the_time_method_reads_the_service_s_own_totals() -> None:
+    """Design 4, step 6: `service_stats_1m`, not the empty version's rows."""
+    rows = _minutes("", START - HOUR, 120, requests=100)
+    totals = _totals(START - HOUR, 60, requests=100) + _totals(START, 60, requests=100, errors=9)
+    found = choose_method(
+        _period(reported_at=START),
+        rows,
+        to=START + HOUR,
+        window=HOUR,
+        expired_before=START - timedelta(days=30),
+        totals=totals,
+    )
+    (block,) = found.blocks
+    assert block.this_version.errors == 540
+
+
+def test_one_minute_short_in_24_hours_is_one_minute_differing() -> None:
+    """AC36, FR28: per minute, and a minute only one table holds differs too."""
+    versions = _minutes("v2", START, 1440, requests=10)
+    totals = _totals(START, 1440, requests=10)
+    spans = ((START, START + 24 * HOUR),)
+    assert releases.minutes_differing(versions, totals, spans) == 0
+    assert releases.minutes_differing(versions[:700] + versions[701:], totals, spans) == 1
+    outside = _totals(START + 25 * HOUR, 1, requests=10)
+    assert releases.minutes_differing(versions, totals + outside, spans) == 0
+
+
+def test_combined_versions_count_only_in_compared_minutes() -> None:
+    """AC67, FR17."""
+    other = _minutes("__other__", START + 5 * MINUTE, 1, requests=2)
+    spans = ((START, START + HOUR),)
+    assert releases.versions_combined(other, spans) is True
+    assert releases.versions_combined(other, ((START, START + MINUTE),)) is False
+
+
+def test_last_week_is_the_service_a_week_before_for_before_and_after_only() -> None:
+    """FR25, AC65: last week for the two before-and-after methods, never side by side."""
+    week = timedelta(days=7)
+    replaced = _compare(
+        _minutes("v1", START - HOUR, 60, requests=100) + _minutes("v2", START, 40, requests=100),
+        to=START + 40 * MINUTE,
+    )
+    (after,) = replaced.blocks
+    last_week = _totals(START - week, 40, requests=50, errors=1)
+    found = releases.last_week_of(after, last_week)
+    assert found is not None
+    assert (found.requests, found.errors) == (2000, 40)
+    assert releases.last_week_of(after, []) is None
+    (side_by_side,) = _compare(_rolling(new_errors=0, old_errors=0)).blocks
+    assert releases.last_week_of(side_by_side, last_week) is None
+
+
+@pytest.mark.parametrize(
+    ("finding_after", "window", "reaches"),
+    [
+        (30 * MINUTE, HOUR, True),
+        (HOUR, HOUR, True),
+        (5 * HOUR, 6 * HOUR, True),
+        (7 * HOUR, 24 * HOUR, True),
+        (30 * HOUR, 24 * HOUR, False),
+    ],
+)
+def test_opened_from_a_finding_the_smallest_window_that_reaches_it(
+    finding_after: timedelta, window: timedelta, reaches: bool
+) -> None:
+    """FR22, AC64."""
+    found = releases.window_for_finding(START, START + finding_after)
+    assert (found.window, found.reaches) == (window, reaches)

@@ -219,16 +219,16 @@ Needs the F6 change listed in *Preconditions*.
 *Judgeable:* With `tools/release-demo`, run `rolling`, `swap`, `no-version` plus a webhook, `rollback` and `cold-start`. Each must read differently and honestly. See new errors in the new version with the caution. See a seeded finding
 listed as "Started after this release". Read an old release whose numbers have expired. Open a release from a finding 5 hours later and read the window it chose.
 
-- [ ] **T4.1** — `releases/queries.py`, `service.py` · `time_before_after`, last week, per-minute completeness, `versions_combined`, the window chosen from a finding, every FR21 reason, environment check, FR46's read on `GET /releases` · proved by `test_releases.py`, `test_releases_live.py` (AC29 including last week, AC30, AC32, AC36, AC64, AC65, AC67, AC78)
-- [ ] **T4.2** — `deploy/clickhouse/migrations/000039_door_on_spans_and_logs.up.sql`, `.down.sql` (*new*), `traceassembly/flatten.go`, the log pipeline's row builder · `door` on raw rows · proved by `flatten_test.go`, and a log pipeline test
-- [ ] **T4.3** — `releases/router.py`, `service.py`, `queries.py`, `errorgroups/queries.py` · `/errors`, `/rollout`, with two per-table version predicates in the pattern of `_ONE_SERVICE_PLACEHOLDER`, a door predicate, and timeout words. `/releases/{id}/sender-details`, with its role check · proved by `test_errorgroups.py`, `test_releases_live.py` (AC68, AC69, AC76), `test_tenant_chokepoint_structure.py`. The errors read's cost is measured at 24 hours on seeded data and reported, with the 1-hour default taken if it is poor. The 2-second target is measured once (AC67)
-- [ ] **T4.4** — `releases/service.py`, `queries.py` · later findings, activity, states, events on `GET /releases/{id}` · proved by `test_releases_live.py`
+- [x] **T4.1** — *Built 2026-11-12. The finding's window is chosen by the API (`?finding=`, `nexovue_platform.releases.window_for_finding`); the web's copy and the link's `finding_at` are deleted. The time method reads `service_stats_1m`. No Postgres migration was needed.* `releases/queries.py`, `service.py` · `time_before_after`, last week, per-minute completeness, `versions_combined`, the window chosen from a finding, every FR21 reason, environment check, FR46's read on `GET /releases` · proved by `test_releases.py`, `test_releases_live.py` (AC29 including last week, AC30, AC32, AC36, AC64, AC65, AC67, AC78)
+- [x] **T4.2** — *Built 2026-11-12 as `000041_door_on_spans` and `000042_door_on_logs` (000039 and 000040 were taken; a migration here is one statement). Values are the edges rollup's, `browser` or `server`, from `consume.StoredDoor`.* `deploy/clickhouse/migrations/000039_door_on_spans_and_logs.up.sql`, `.down.sql` (*new*), `traceassembly/flatten.go`, the log pipeline's row builder · `door` on raw rows · proved by `flatten_test.go`, and a log pipeline test
+- [x] **T4.3** — *Built 2026-11-12. The errors read's cost at 24 hours and the 2-second target are not measured: performance measurements are deferred to hardening (status).* `releases/router.py`, `service.py`, `queries.py`, `errorgroups/queries.py` · `/errors`, `/rollout`, with two per-table version predicates in the pattern of `_ONE_SERVICE_PLACEHOLDER`, a door predicate, and timeout words. `/releases/{id}/sender-details`, with its role check · proved by `test_errorgroups.py`, `test_releases_live.py` (AC68, AC69, AC76), `test_tenant_chokepoint_structure.py`. The errors read's cost is measured at 24 hours on seeded data and reported, with the 1-hour default taken if it is poor. The 2-second target is measured once (AC67)
+- [x] **T4.4** — *Built 2026-11-12.* `releases/service.py`, `queries.py` · later findings, activity, states, events on `GET /releases/{id}` · proved by `test_releases_live.py`
   (AC23, AC41)
-- [ ] **T4.5** — `features/releases/ReleaseScreen.tsx`, `ReleasesScreen.tsx`, `comparison.ts`, `api.ts`, `shared/components/TrendChart.tsx` (categorical mode) · every section and
+- [x] **T4.5** — *Built 2026-11-12. `TrendChart` needed no change: its `distinctColours` mode (F20) is the categorical mode. Design QA at 375px is not run (status).* `features/releases/ReleaseScreen.tsx`, `ReleasesScreen.tsx`, `comparison.ts`, `api.ts`, `shared/components/TrendChart.tsx` (categorical mode) · every section and
   state, per-section failure, phone blocks, refetch, table of shares, FR46's words, FR49's and FR50's sentences · proved by `ReleaseScreen.test.ts` (*new*; AC43, AC44, AC65, AC68, AC75, AC79, AC80, AC84), `ReleasesScreen.test.ts` (AC78)
-- [ ] **T4.6** — `apps/scheduler/src/nexovue_scheduler/releases/retention.py` (*new*), `jobs/expiry.py` · the project's derived retention, the shortest-plan guard, the deleted-project clause · proved by
+- [x] **T4.6** — *Built 2026-11-12, with a per-table guard in `jobs/expiry.sweep`.* `apps/scheduler/src/nexovue_scheduler/releases/retention.py` (*new*), `jobs/expiry.py` · the project's derived retention, the shortest-plan guard, the deleted-project clause · proved by
   `test_release_sync_live.py` (AC74)
-- [ ] **T4.7** — `apps/api/tests/test_release_words.py` (*new*) · searches F28's source, web strings and setup page for the
+- [x] **T4.7** — *Built 2026-11-12.* `apps/api/tests/test_release_words.py` (*new*) · searches F28's source, web strings and setup page for the
   forbidden words (AC37), and proves only the two named statements touch `spans` (AC34). A search cannot prove there is no implied cause, so Review checks that too
 
 ### Step 5 — What other features need, and telling people
@@ -285,7 +285,7 @@ no test server is rented (item 9). The whole-server fit on 16 GB waits for Oracl
 - [ ] F6 merged
 - [x] Step 1a cost gate: passed on demo data, 2026-11-07 ([report](../../research/release-rollup-cost-2026-11-07.md)). Its alert evaluation start delay row was added to T1.10 by the founder's answer of 2026-11-08, measured there, and passed
 - [x] ~~The one round of customer conversations held, before Step 1b (foundation item 8)~~ No longer a gate (foundation item 27, 2026-11-08)
-- [ ] F6 browser-door change, before Step 4. F28 owns it (foundation item 22, approved 2026-11-02); its tasks are added when this plan is next revised
+- [x] F6 browser-door change, before Step 4: `docs/changes/browser-door`, done 2026-11-07; checked in the code on 2026-11-12 (status, *Step 4*)
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review
@@ -322,5 +322,5 @@ being treated as a formality.
 
 ## Outcome
 
-Steps 1a, 1b and 2 built (Step 2 on 2026-11-08, awaiting commit; T2.10 waits for the founder's test after Phase 2).
-Steps 3 to 6 not started.
+Steps 1a, 1b, 2 and 3 on `feature/phase-2` (T2.10 waits for the founder's test after Phase 2). Step 4 built
+2026-11-12, awaiting commit. Steps 5 and 6 not started.

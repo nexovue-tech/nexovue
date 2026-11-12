@@ -321,3 +321,22 @@ func TestSyntheticEvidenceIsWrittenOnlyFromTheProbersDoor(t *testing.T) {
 		})
 	}
 }
+
+// F28 D38, AC69: a stored log record says whether it came through the browser door,
+// so an exception a site key sent under a server version is not a server release's.
+func TestAStoredRecordSaysWhichDoorItCameThrough(t *testing.T) {
+	cases := map[nexovuev1.Door]string{
+		nexovuev1.Door_DOOR_RUM:  consume.StoredDoorBrowser,
+		nexovuev1.Door_DOOR_OTLP: consume.StoredDoorServer,
+	}
+	for door, want := range cases {
+		payload := decoded{
+			envelope: &nexovuev1.Envelope{TenantId: "tenant-a", ProjectId: "project-a", Door: door},
+			request:  requestWithOneRecord(errorRecord()),
+		}
+		out := payload.rows(testStamps())
+		if len(out.rows) != 1 || out.rows[0].Door != want {
+			t.Errorf("%s: stored %+v, want one record under door %q", door, out.rows, want)
+		}
+	}
+}

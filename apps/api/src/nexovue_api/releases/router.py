@@ -1,10 +1,12 @@
-"""`/releases` (F28): the list, one release, and its comparison.
+"""`/releases` (F28): the list, one release, its comparison, its errors by version, its
+rollout share, and what its senders wrote.
 
 Reads are on the read surface (ADR-017): a person or a read token, scoped to its
-project. The whole prefix is on the telemetry rate-limit tier (design, *Rate limits*),
-though only the comparison reads ClickHouse; the list and the release read Postgres
-alone (AC81). Fixed paths under `/releases` are declared before `/{release_id}`, whose
-wildcard would otherwise take them as an id.
+project, except `sender-details`, which serves sender text to a signed-in person alone
+(FR54, D45). The whole prefix is on the telemetry rate-limit tier (design, *Rate
+limits*); the list and the release read Postgres alone (AC81). Fixed paths under
+`/releases` are declared before `/{release_id}`, whose wildcard would otherwise take
+them as an id.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from nexovue_api.auth.dependencies import CurrentReader, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.releases import service
 from nexovue_api.releases.schemas import (
@@ -24,12 +26,17 @@ from nexovue_api.releases.schemas import (
     MarkerList,
     ReleaseList,
     ReleaseView,
+    Rollout,
+    SenderDetails,
+    VersionErrors,
 )
 from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/releases", tags=["releases"])
 
 ProjectId = Annotated[uuid.UUID, Query(description="Project whose releases these are")]
+PeriodId = Annotated[uuid.UUID | None, Query(description="The latest period if unset")]
+WindowHours = Annotated[int | None, Query(description="Hours from the period's start: 1, 6, 24")]
 
 
 @router.get("", summary="Releases with a period in the window, newest first")
@@ -107,9 +114,11 @@ async def get_comparison(
     db: DbSession,
     repository: TenantRepository,
     release_id: uuid.UUID,
-    period: Annotated[uuid.UUID | None, Query(description="The latest period if unset")] = None,
-    window: Annotated[
-        int | None, Query(description="Hours from the period's start: 1, 6, 24")
+    period: PeriodId = None,
+    window: WindowHours = None,
+    finding: Annotated[
+        uuid.UUID | None,
+        Query(description="Opened from this finding: the smallest window reaching its start"),
     ] = None,
 ) -> ComparisonView:
     return await service.compare(
@@ -119,5 +128,59 @@ async def get_comparison(
         release_id=release_id,
         period_id=period,
         window_hours=service.window_hours_of(window),
+        finding_id=finding,
         now=datetime.now(UTC),
     )
+
+
+@router.get(
+    "/{release_id}/errors",
+    summary="Error groups new in this version, gone in it, or in both",
+)
+async def get_errors(
+    reader: CurrentReader,
+    db: DbSession,
+    repository: TenantRepository,
+    release_id: uuid.UUID,
+    period: PeriodId = None,
+    window: WindowHours = None,
+) -> VersionErrors:
+    return await service.errors_by_version(
+        db,
+        repository,
+        reader=reader,
+        release_id=release_id,
+        period_id=period,
+        window_hours=service.window_hours_of(window),
+        now=datetime.now(UTC),
+    )
+
+
+@router.get("/{release_id}/rollout", summary="Each version's requests per minute around a period")
+async def get_rollout(
+    reader: CurrentReader,
+    db: DbSession,
+    repository: TenantRepository,
+    release_id: uuid.UUID,
+    period: PeriodId = None,
+    window: WindowHours = None,
+) -> Rollout:
+    return await service.rollout(
+        db,
+        repository,
+        reader=reader,
+        release_id=release_id,
+        period_id=period,
+        window_hours=service.window_hours_of(window),
+        now=datetime.now(UTC),
+    )
+
+
+@router.get(
+    "/{release_id}/sender-details",
+    summary="What the CI wrote beside each deploy; for a signed-in person, never a token",
+)
+async def get_sender_details(
+    identity: CurrentIdentity, db: DbSession, release_id: uuid.UUID
+) -> SenderDetails:
+    return await service.sender_details(db, identity=identity, release_id=release_id)
