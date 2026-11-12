@@ -3,11 +3,11 @@ import { CHART_HEIGHT } from "@/shared/components/TrendChart";
 import type { DeployMarker } from "@/shared/deploy-markers";
 import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatDuration } from "@/shared/format/duration";
-import { formatCount, formatPercent } from "@/shared/format/number";
+import { formatCount, formatPercent, NUMBER_LOCALE, UNKNOWN } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 
-import type { NodeName, PanelHeight, StoredPanel } from "./api";
+import type { MetricAttribute, NodeName, PanelHeight, Series, StoredPanel } from "./api";
 import type { OkResult } from "./kept-readings";
 
 /**
@@ -77,6 +77,45 @@ function nodeLineName(node: NodeName | null | undefined): string {
   return `reported by ${visibleEscapes(node.reporter)}`;
 }
 
+/** A metric reading's own decimals: a gauge may be fractional or below zero, unlike a count. */
+const METRIC_DECIMALS = 2;
+/** OTel's unit for "a plain number" (UCUM's unity). */
+const UNITY = "1";
+
+/**
+ * A metric reading in the unit its SDK sent (UCUM, as OTel spells it): a duration, bytes,
+ * or a number with its unit written after it, escaped since a unit is customer text.
+ * A gauge may fall below zero, so only a non-number is a dash.
+ */
+export function metricFormat(unit: string): (value: number) => string {
+  if (unit === "ms") return (value) => formatDuration(value);
+  if (unit === "s") return (value) => formatDuration(value * MS_PER_SECOND);
+  if (unit === "By") return (value) => formatDecimalBytes(value);
+  const suffix = unit === "" || unit === UNITY ? "" : ` ${visibleEscapes(unit)}`;
+  return (value) =>
+    Number.isFinite(value)
+      ? `${value.toLocaleString(NUMBER_LOCALE, { maximumFractionDigits: METRIC_DECIMALS })}${suffix}`
+      : UNKNOWN;
+}
+
+/** A chosen series' name: its attributes, each escaped (FR61), or the metric with none. */
+export function attributesName(attributes: readonly MetricAttribute[]): string {
+  return attributes
+    .map(({ key, value }) => `${visibleEscapes(key)}=${visibleEscapes(value)}`)
+    .join(", ");
+}
+
+/** A metric series' one line: its chosen attributes, or every series combined. */
+function metricLineName(panel: StoredPanel, series: Series, combined: number): string {
+  const metric = typeof panel.settings.metric === "string" ? panel.settings.metric : "";
+  const named = series.attributes && series.attributes.length > 0;
+  if (named) return attributesName(series.attributes ?? []);
+  if (panel.settings.series !== null && panel.settings.series !== undefined) {
+    return visibleEscapes(metric);
+  }
+  return `${visibleEscapes(metric)} · ${formatCount(combined)} series combined`;
+}
+
 /** One drawn line: what it is called, the service it links to, and its readings. */
 export interface ChartLine {
   name: string;
@@ -122,6 +161,8 @@ export function timeChart(panel: StoredPanel, reading: OkResult): TimeChart {
   const topN = panel.kind === "top_services_trend";
   const topNodes = panel.kind === "top_nodes_trend";
   const node = NODE_KINDS.has(panel.kind);
+  const metric = panel.kind === "metric_series";
+  const combined = reading.series_combined ?? 0;
 
   return {
     lines: reading.series.map((series) => ({
@@ -131,7 +172,9 @@ export function timeChart(panel: StoredPanel, reading: OkResult): TimeChart {
           ? nodeLineName(series.node)
           : node
             ? series.label
-            : (READING_NAMES[series.label] ?? series.label),
+            : metric
+              ? metricLineName(panel, series, combined)
+              : (READING_NAMES[series.label] ?? series.label),
       ...(topN && series.service !== undefined && series.service !== null
         ? { service: series.service }
         : {}),
@@ -147,11 +190,16 @@ export function timeChart(panel: StoredPanel, reading: OkResult): TimeChart {
             values: reading.series.map((series) => valueAt(series.points, filling)),
           },
     bucketSeconds: reading.bucket_seconds,
-    format: node ? nodeFormat(reading0) : readingFormat(reading0),
+    format: metric
+      ? metricFormat(reading.units?.[0] ?? "")
+      : node
+        ? nodeFormat(reading0)
+        : readingFormat(reading0),
     tone: node ? 2 : (TONES[reading0] ?? 1),
     distinctColours: topN || topNodes,
-    // A node's reading is a level, not a count: read off zero (design, *Chart upgrades*).
-    yRange: node ? "fit" : "zero",
+    // A node's reading and a gauge are levels, not counts: read off zero (design, *Chart
+    // upgrades*). A sum's line is what it rose, which starts from zero.
+    yRange: node || (metric && panel.settings.shape === "gauge") ? "fit" : "zero",
     height: chartHeight(panel.height),
   };
 }

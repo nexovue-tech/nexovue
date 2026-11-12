@@ -38,6 +38,7 @@ from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.deploys import service as deploys
 from nexovue_api.deploys.service import EMPTY_DEPLOY_HISTORY
 from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.metrics import queries as metric_queries
 from nexovue_api.ratelimit.charge import Refused
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.releases import service as releases
@@ -733,11 +734,14 @@ def test_t7_1_only_what_stays_broken_counts_never_what_passes_by_itself() -> Non
     def results(*states: str) -> Any:
         return {f"p_{index}": SimpleNamespace(state=state) for index, state in enumerate(states)}
 
-    counted = ("not_in_project", "ambiguous", "over_limit", "unknown_kind")
+    counted = ("not_in_project", "ambiguous", "over_limit", "unknown_kind", "series_changed")
     passing = ("refused", "timed_out", "failed", "needs_service", "paused_by_operator", "ok")
 
-    assert service.count_not_reading(results(*counted)) == 4
-    assert service.count_not_reading(results(*passing, "window_too_wide", "empty")) == 0
+    assert service.count_not_reading(results(*counted)) == 5
+    assert (
+        service.count_not_reading(results(*passing, "window_too_wide", "empty", "too_many_series"))
+        == 0
+    )
 
 
 async def test_nfr10_a_support_view_reads_and_moves_no_last_opened(
@@ -984,7 +988,9 @@ def test_an_answer_a_panel_cannot_draw_fails_that_panel_alone() -> None:
     key = scan_of(panel)
     assert key is not None, "a project trend panel reads one scan"
     entry = service._Entry(panel, cast(Any, SimpleNamespace(scan=key)), scan=key)
-    plan = service._Plan(entries=[entry], scans=(key,), over_limit=frozenset(), window=(NOW, NOW))
+    plan = service._Plan(
+        entries=[entry], scans=(key,), over_limit=frozenset(), distinct=1, window=(NOW, NOW)
+    )
     outcomes = {key: _served(NodeLine(bucket_seconds=60, points=[]))}
 
     result = service._result(entry, plan, outcomes, {}, None)
@@ -1258,8 +1264,19 @@ async def test_ac95_a_check_runs_one_statement_bound_to_the_id_its_name_resolved
             7,
         ),
         ("check_trend", {"check": "Login", "signal": "uptime"}, 30),
+        (
+            "metric_series",
+            {
+                "metric": "orders",
+                "shape": "gauge",
+                "service": None,
+                "series": None,
+                "aggregation": "mean",
+            },
+            7,
+        ),
     ],
-    ids=["seven-days", "thirty-days"],
+    ids=["seven-days", "thirty-days", "metric-series-seven-days"],
 )
 async def test_ac23_a_raw_panel_over_its_window_reads_window_too_wide_and_runs_no_scan(
     monkeypatch: pytest.MonkeyPatch, kind: str, settings: dict[str, Any], limit: int
@@ -1398,3 +1415,203 @@ def test_t5_6c_a_save_meets_the_install_s_panel_cap_and_refresh_floor() -> None:
     with pytest.raises(InvalidRequestError, match="every 300 seconds"):
         compile_within(definition, DashboardLimits(refresh_floor_seconds=300))
     assert compile_within(definition, DashboardLimits()).worst_case_scans == 3
+
+
+# ------------------------------------------------------------- Step 8: metric series
+
+A_HASH: Final = "13040248669695784898"
+CHOSEN_SUM: Final = metric_queries.narrowed(
+    metric_queries.METRIC_SUM_SERIES_SQL, service=True, series=True
+)
+ALL_GAUGE: Final = metric_queries.narrowed(metric_queries.METRIC_GAUGE_SERIES_SQL, service=False)
+SUM_REPORTS: Final = metric_queries.narrowed(metric_queries.METRIC_SUM_REPORTS_SQL, service=True)
+
+
+def _metric(panel_id: str = "p_metric", **settings: Any) -> dict[str, Any]:
+    chosen = {
+        "metric": "orders_processed",
+        "shape": "sum",
+        "service": "checkout",
+        "series": A_HASH,
+        "aggregation": "sum",
+    }
+    return _panel(panel_id, "metric_series", **(chosen | settings))
+
+
+def _metric_rows(
+    *, series: int = 2, units: tuple[str, ...] = ("1",), attributes: str = '{"region":"eu"}'
+) -> list[dict[str, Any]]:
+    start = int(WINDOW_START.timestamp()) * 1_000_000_000
+    return [
+        {
+            "bucket_nanos": start + minute * 60_000_000_000,
+            "value": float(10 + minute),
+            "series": series,
+            "units": list(units),
+            "attributes_json": attributes,
+        }
+        for minute in range(3)
+    ]
+
+
+async def test_t8_2_a_chosen_series_draws_its_line_labelled_by_its_attributes_with_one_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(_metric()))
+    store, charge = _Store({CHOSEN_SUM: _metric_rows()}), _Charge()
+
+    answer = await batch.read(cast(Any, store), charge=charge)
+
+    panel = answer["panels"]["p_metric"]
+    assert panel["state"] == "ok"
+    [line] = panel["series"]
+    assert line["label"] == "orders_processed"
+    assert line["attributes"] == [{"key": "region", "value": "eu"}]
+    assert [value for _, value in line["points"]] == [10.0, 11.0, 12.0]
+    assert (panel["series_combined"], panel["units"]) == (2, ["1"])
+    # Served, so the second read is never asked for, and only one scan is charged.
+    assert [sql for sql, _ in store.statements] == [CHOSEN_SUM]
+    assert store.statements[0][1]["series_hash"] == int(A_HASH)
+    assert charge.claims == 1
+
+
+async def test_ac115_a_chosen_series_gone_while_the_metric_reports_reads_series_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(
+        monkeypatch,
+        _definition(_metric(), _metric("p_other", series="42")),
+    )
+    store, charge = _Store({CHOSEN_SUM: [], SUM_REPORTS: [{"series_hash": 7}]}), _Charge()
+
+    answer = await batch.read(cast(Any, store), charge=charge)
+
+    assert answer["panels"]["p_metric"] == {"state": "series_changed", "kind": "metric_series"}
+    assert answer["panels"]["p_other"] == {"state": "series_changed", "kind": "metric_series"}
+    # Two series reads, then one further read shared by both, each one charged.
+    assert [sql for sql, _ in store.statements] == [CHOSEN_SUM, CHOSEN_SUM, SUM_REPORTS]
+    assert store.ran(SUM_REPORTS)[0]["service_name"] == "checkout"
+    assert charge.claims == 3
+    assert batch.not_reading == [2]
+
+
+async def test_fr16_a_chosen_series_of_a_metric_that_stopped_reads_as_quiet_not_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = NOW - timedelta(days=2)
+    batch = _Batch(monkeypatch, _definition(_metric()), last_seen={"checkout": seen})
+    store = _Store({CHOSEN_SUM: [], SUM_REPORTS: []})
+
+    answer = await batch.read(cast(Any, store))
+
+    panel = answer["panels"]["p_metric"]
+    assert (panel["state"], panel["last_seen_at"]) == ("empty", to_iso_millis(seen))
+    assert len(store.ran(SUM_REPORTS)) == 1
+
+
+async def test_a_refused_second_read_says_refused_with_its_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(_metric()))
+    store = _Store({CHOSEN_SUM: [], SUM_REPORTS: [{"series_hash": 7}]})
+
+    answer = await batch.read(cast(Any, store), charge=_Charge(places=1))
+
+    assert answer["panels"]["p_metric"] == {
+        "state": "refused",
+        "kind": "metric_series",
+        "retry_after_seconds": 12,
+    }
+    assert store.ran(SUM_REPORTS) == []
+    assert len(store.ran(CHOSEN_SUM)) == 1
+
+
+async def test_all_series_with_nothing_reads_empty_and_asks_nothing_more(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(_metric(shape="gauge", service=None, series=None)))
+    store = _Store({})
+
+    answer = await batch.read(cast(Any, store))
+
+    assert answer["panels"]["p_metric"]["state"] == "empty"
+    assert [sql for sql, _ in store.statements] == [ALL_GAUGE]
+
+
+async def test_ac52_past_the_cap_reads_too_many_series_and_draws_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexovue_api.metrics.service import MAX_COMBINED_SERIES
+
+    batch = _Batch(monkeypatch, _definition(_metric(shape="gauge", service=None, series=None)))
+    store = _Store({ALL_GAUGE: _metric_rows(series=MAX_COMBINED_SERIES + 1)})
+
+    answer = await batch.read(cast(Any, store))
+
+    assert answer["panels"]["p_metric"] == {
+        "state": "too_many_series",
+        "kind": "metric_series",
+        "limit": MAX_COMBINED_SERIES,
+    }
+
+
+async def test_ac52_at_the_cap_draws_one_line_saying_how_many_it_combined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexovue_api.metrics.service import MAX_COMBINED_SERIES
+
+    batch = _Batch(monkeypatch, _definition(_metric(shape="gauge", service=None, series=None)))
+    store = _Store({ALL_GAUGE: _metric_rows(series=MAX_COMBINED_SERIES)})
+
+    answer = await batch.read(cast(Any, store))
+
+    panel = answer["panels"]["p_metric"]
+    assert len(panel["series"]) == 1
+    assert panel["series"][0]["attributes"] is None
+    assert panel["series_combined"] == MAX_COMBINED_SERIES
+
+
+async def test_ac51_two_units_are_said_and_no_line_adds_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(_metric(shape="gauge", service=None, series=None)))
+    store = _Store({ALL_GAUGE: _metric_rows(units=("ms", "s"))})
+
+    answer = await batch.read(cast(Any, store))
+
+    panel = answer["panels"]["p_metric"]
+    assert (panel["state"], panel["series"], panel["units"]) == ("ok", [], ["ms", "s"])
+
+
+async def test_a_chosen_series_needs_room_for_its_second_read_under_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The save counted two, so the read does: at a cap of one it is `over_limit`."""
+    batch = _Batch(
+        monkeypatch,
+        _definition(_metric()),
+        limits=DashboardLimits(max_scans_per_read=1),
+    )
+    store = _Store({CHOSEN_SUM: _metric_rows()})
+
+    answer = await batch.read(cast(Any, store))
+
+    assert answer["panels"]["p_metric"] == {"state": "over_limit", "kind": "metric_series"}
+    assert store.statements == []
+
+
+async def test_a_compared_number_reading_over_limit_starts_no_scan_either(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel over the cap starts nothing, though its first read alone would fit."""
+    batch = _Batch(
+        monkeypatch,
+        _definition(_project_number()),
+        limits=DashboardLimits(max_scans_per_read=1),
+    )
+    store, charge = _Store({}), _Charge()
+
+    answer = await batch.read(cast(Any, store), charge=charge)
+
+    assert answer["panels"]["p_number"] == {"state": "over_limit", "kind": "project_number"}
+    assert (store.statements, charge.claims) == ([], 0)

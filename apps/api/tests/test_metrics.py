@@ -789,3 +789,28 @@ class TestTheConditionalHeatmap:
         growing, identical in shape, and a heatmap of nothing."""
         assert "lagInFrame" in queries.HEATMAP_SQL
         assert "PARTITION BY metric_name, explicit_bounds, series_hash" in queries.HEATMAP_SQL
+
+
+class TestSeriesAttributes:
+    """A series' attributes as the builder and a panel's label show them (F20, T8.3)."""
+
+    def test_a_dotted_key_the_store_nested_reads_back_flat_and_in_key_order(self) -> None:
+        rendered = '{"region":"eu","http":{"route":"/orders","method":"GET"}}'
+        assert [(item.key, item.value) for item in service.attributes_of(rendered)] == [
+            ("http.method", "GET"),
+            ("http.route", "/orders"),
+            ("region", "eu"),
+        ]
+
+    def test_a_value_that_is_not_text_keeps_its_json_spelling(self) -> None:
+        rendered = '{"shard":2,"primary":true,"code":"2"}'
+        assert [(item.key, item.value) for item in service.attributes_of(rendered)] == [
+            ("code", "2"),
+            ("primary", "true"),
+            ("shard", "2"),
+        ]
+
+    def test_no_attributes_and_unreadable_text_are_both_none_at_all(self) -> None:
+        assert service.attributes_of("{}") == []
+        assert service.attributes_of("") == []
+        assert service.attributes_of("not json") == []

@@ -1,3 +1,4 @@
+import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime } from "@/shared/format/time";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 
@@ -20,6 +21,7 @@ export const TIME_KINDS: ReadonlySet<string> = new Set([
   "endpoint_trend",
   "check_trend",
   "statement_trend",
+  "metric_series",
 ]);
 
 /** One number, compared or not, and the open-findings count drawn from the context. */
@@ -57,6 +59,7 @@ export const PROJECT_MARKED_KINDS: ReadonlySet<string> = new Set([
   "top_nodes_trend",
   "check_trend",
   "statement_trend",
+  "metric_series",
 ]);
 
 /** A node as the infrastructure screen names it: its container, its host, or its reporter. */
@@ -136,6 +139,7 @@ const SERVICE_KINDS: ReadonlySet<string> = new Set([
   "open_findings",
   "endpoints_table",
   "error_groups_table",
+  "metric_series",
 ]);
 
 /** The service a panel shows, as its heading names it: escaped, or "Picked service". */
@@ -198,6 +202,8 @@ export function panelTitle(panel: StoredPanel): { service?: string; text: string
       return withService(MEASURE_NAMES[stringSetting(panel, "measure")] ?? "Number");
     case "open_findings":
       return withService("Open findings");
+    case "metric_series":
+      return withService(metricTitle(panel));
   }
   const table = TABLE_NAMES[panel.kind];
   if (table) return withService(table(panel));
@@ -223,6 +229,56 @@ export function panelTitle(panel: StoredPanel): { service?: string; text: string
     return { text: panel.title ? visibleEscapes(panel.title) : "Panel" };
   }
   return { text: what };
+}
+
+const AGGREGATION_NAMES: Record<string, string> = {
+  mean: "mean",
+  min: "lowest",
+  max: "highest",
+  sum: "total",
+};
+
+/** "orders_processed", or "orders_processed · all series, total" when every series is one line. */
+function metricTitle(panel: StoredPanel): string {
+  const metric = visibleEscapes(stringSetting(panel, "metric"));
+  if (typeof panel.settings.series === "string") return metric;
+  const how = AGGREGATION_NAMES[stringSetting(panel, "aggregation")] ?? "mean";
+  return `${metric} · all series, ${how}`;
+}
+
+/**
+ * A metric series reading two units in the window draws no line, and says so (AC51).
+ * Undefined when it has one unit or none.
+ */
+export function mixedUnitsWords(
+  panel: StoredPanel,
+  units: readonly string[] | null | undefined,
+): string | undefined {
+  if (panel.kind !== "metric_series" || !units || units.length < 2) return undefined;
+  const named = units.map((unit) => visibleEscapes(unit === "" ? "no unit" : unit)).join(", ");
+  return `${visibleEscapes(stringSetting(panel, "metric"))} arrives in ${units.length} units in this window (${named}), so its series are not added together.`;
+}
+
+/** "Combines 3 series", under a line that adds several together (FR15, AC52). */
+export function combinedWords(
+  panel: StoredPanel,
+  combined: number | null | undefined,
+): string | undefined {
+  if (
+    panel.kind !== "metric_series" ||
+    combined === null ||
+    combined === undefined ||
+    combined < 2
+  ) {
+    return undefined;
+  }
+  return `Combines ${formatCount(combined)} series.`;
+}
+
+/** An edit the reader can make, or who to ask for it (FR65). */
+function askToEdit(context: WordsContext, edit: string): string {
+  if (context.canEdit) return `${edit.charAt(0).toUpperCase()}${edit.slice(1)}.`;
+  return `Ask ${context.owner ? visibleEscapes(context.owner) : "the person who made it"}, or someone who can edit it, to ${edit}.`;
 }
 
 export interface WordsContext {
@@ -265,6 +321,8 @@ function emptyWords(
     case "statement_trend":
     case "database_statements_table":
       return "No statement reported in this window.";
+    case "metric_series":
+      return "This metric has not reported in this window.";
     case "web_vitals_table":
       return "No browser readings in this window.";
     case "dependencies_table":
@@ -314,6 +372,10 @@ export function stateWords(
         ? `${named}. Rename one.`
         : `${named}, so this panel cannot tell which to read.`;
     }
+    case "series_changed":
+      return `${visibleEscapes(stringSetting(panel, "metric"))} still reports, under different attributes. ${askToEdit(context, "choose again")}`;
+    case "too_many_series":
+      return `This metric has more than ${formatCount(result.limit)} series, too many to combine. ${askToEdit(context, "choose one series")}`;
     case "window_too_wide":
       return `This ${TABLE_KINDS.has(panel.kind) ? "table" : "chart"} can show at most ${result.limit_days} days.`;
     case "paused_by_operator":
@@ -343,6 +405,8 @@ export function unread(result: PanelResult): boolean {
     result.state === "refused" ||
     result.state === "over_limit" ||
     result.state === "ambiguous" ||
+    result.state === "series_changed" ||
+    result.state === "too_many_series" ||
     result.state === "unknown_kind"
   );
 }

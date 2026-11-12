@@ -631,6 +631,60 @@ describe("the dashboard view", () => {
     expect(text(section(container, "p_open"))).toContain("1");
   });
 
+  it("draws a metric series and says what it combined, two units and a changed series (Step 8)", async () => {
+    const metric = (id: string, series: string | null) =>
+      panel(id, "metric_series", {
+        metric: "orders_processed",
+        shape: "sum",
+        service: "checkout",
+        series,
+        aggregation: "sum",
+      });
+    const reading = ok() as Extract<PanelResult, { state: "ok" }>;
+    stubApi({
+      ...viewOf(
+        json(
+          batch({
+            p_all: {
+              ...reading,
+              kind: "metric_series",
+              series: reading.series.slice(0, 1).map((line) => ({ ...line, attributes: null })),
+              series_combined: 3,
+              units: ["1"],
+            },
+            p_units: {
+              ...reading,
+              kind: "metric_series",
+              series: [],
+              series_combined: 2,
+              units: ["ms", "s"],
+            },
+            p_changed: { state: "series_changed", kind: "metric_series" },
+          }),
+        ),
+      ),
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(
+        dashboard([metric("p_all", null), metric("p_units", null), metric("p_changed", "42")]),
+      ),
+    });
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(section(container, "p_all")).includes("Combines 3 series."),
+      "the combined line",
+    );
+
+    expect(text(section(container, "p_all"))).toContain("orders_processed · all series, total");
+    expect(text(section(container, "p_all"))).toContain(
+      "All findings and releases in this project",
+    );
+    expect(text(section(container, "p_units"))).toContain(
+      "orders_processed arrives in 2 units in this window (ms, s), so its series are not added together.",
+    );
+    expect(text(section(container, "p_changed"))).toContain(
+      "orders_processed still reports, under different attributes. Choose again.",
+    );
+  });
+
   it("offers a raw panel past its window the widest one it may read (FR17, AC23)", async () => {
     const check = panel("p_check", "check_trend", { check: "Login", signal: "uptime" });
     stubApi({

@@ -11,6 +11,8 @@ import type { WindowChoice } from "@/shared/selection";
 
 import type {
   Definition,
+  MetricSeriesChoice,
+  MetricShape,
   NodeChoice,
   PanelResult,
   PreviewAsk,
@@ -20,6 +22,8 @@ import type {
 } from "./api";
 import {
   useCheckChoices,
+  useMetricChoices,
+  useMetricSeriesChoices,
   useNodeChoices,
   usePanelPreview,
   useServiceChoices,
@@ -30,6 +34,7 @@ import { PanelWords } from "./PanelFrame";
 import { PanelReading } from "./PanelReading";
 import type { NodeRef } from "./panel-words";
 import { KNOWN_KINDS, MEASURE_NAMES, nodeName, nodeOf, signalOf, stateWords } from "./panel-words";
+import { attributesName } from "./time-lines";
 
 /**
  * What a panel shows, chosen in the side sheet (F20, T3.3; FR23, FR24).
@@ -44,9 +49,12 @@ import { KNOWN_KINDS, MEASURE_NAMES, nodeName, nodeOf, signalOf, stateWords } fr
  * **Apply reads once.** Each Apply is one charged read of this one panel, inside the
  * sheet, with the live window; typing reads nothing (AC135).
  *
- * Step 4 added the top-N chart and one machine's metric; Step 5 adds every other kind:
+ * Step 4 added the top-N chart and one machine's metric; Step 5 added every other kind:
  * endpoints, the top machines, checks and statements by their real names, numbers with
- * their comparison, open findings and the ranked tables.
+ * their comparison, open findings and the ranked tables. Step 8 adds a metric series: a
+ * name from the project's gauges or sums (`GET /metrics?shape=`), and for a named service
+ * one of its attribute combinations (`GET /metrics/{name}/series`), each label escaped and
+ * each value the hash alone (T8.4, FR61, AC121).
  */
 
 type Kind =
@@ -67,6 +75,7 @@ type Kind =
   | "error_groups_table"
   | "database_statements_table"
   | "web_vitals_table"
+  | "metric_series"
   | "note";
 type Order = "worst" | "slowest";
 
@@ -112,6 +121,10 @@ const KIND_GROUPS: readonly { question: string; kinds: readonly { id: Kind; labe
       ],
     },
     { question: "Browsers", kinds: [{ id: "web_vitals_table", label: "Core Web Vitals" }] },
+    {
+      question: "Your own metrics",
+      kinds: [{ id: "metric_series", label: "One gauge or counter over time" }],
+    },
     { question: "Text", kinds: [{ id: "note", label: "A note" }] },
   ];
 
@@ -129,6 +142,7 @@ const MAY_NAME_SERVICE: ReadonlySet<Kind> = new Set([
   "open_findings",
   "endpoints_table",
   "error_groups_table",
+  "metric_series",
 ]);
 const SIGNAL_KINDS: ReadonlySet<Kind> = new Set([
   "project_trend",
@@ -162,6 +176,17 @@ const PROJECT_MEASURES = [...SERVICE_MEASURES, "service_count"];
 /** A table holds 1 to 20 rows (FR6). */
 const ROW_COUNTS = [5, 10, 20].map((count) => ({ id: String(count), label: String(count) }));
 const DEFAULT_ROWS = "10";
+
+const SHAPES: readonly { id: MetricShape; label: string }[] = [
+  { id: "sum", label: "A counter or total (sum)" },
+  { id: "gauge", label: "A level, such as a queue's depth (gauge)" },
+];
+const AGGREGATIONS = [
+  { id: "sum", label: "Added together" },
+  { id: "mean", label: "Their mean" },
+  { id: "max", label: "The highest" },
+  { id: "min", label: "The lowest" },
+];
 
 const SIGNALS: readonly { id: Signal; label: string }[] = [
   { id: "rate", label: "Rate" },
@@ -232,6 +257,10 @@ interface Form {
   rows: string;
   failingOnly: boolean;
   deviceClass: string;
+  shape: MetricShape;
+  /** A chosen series' hash, or NONE for every series combined. */
+  series: string;
+  aggregation: string;
 }
 
 function setting(panel: StoredPanel | undefined, name: string): string {
@@ -274,6 +303,9 @@ function formOf(panel: StoredPanel | undefined): Form {
     rows: typeof panel?.settings.rows === "number" ? String(panel.settings.rows) : DEFAULT_ROWS,
     failingOnly: panel?.settings.failing_only === true,
     deviceClass: setting(panel, "device_class"),
+    shape: panel?.settings.shape === "gauge" ? "gauge" : "sum",
+    series: setting(panel, "series"),
+    aggregation: setting(panel, "aggregation") || "sum",
   };
 }
 
@@ -411,6 +443,16 @@ function settingsOf(form: Form): Record<string, unknown> {
       return { rows };
     case "web_vitals_table":
       return { device_class: form.deviceClass.trim() === "" ? null : form.deviceClass.trim() };
+    case "metric_series":
+      if (form.metric.trim() === "") return { missing: "Choose a metric, or type its name." };
+      return {
+        metric: form.metric.trim(),
+        shape: form.shape,
+        service: optionalService,
+        // A series is listed per service, so it is chosen only for a named one.
+        series: typeof optionalService === "string" && form.series !== NONE ? form.series : null,
+        aggregation: form.aggregation,
+      };
   }
 }
 
@@ -466,6 +508,19 @@ export function PanelPicker({
   const checks = useCheckChoices(form.kind === "check_trend" ? projectId : undefined);
   const statements = useStatementChoices(
     form.kind === "statement_trend" ? projectId : undefined,
+    choice,
+  );
+  const metricKind = form.kind === "metric_series";
+  const metricNames = useMetricChoices(
+    metricKind ? projectId : undefined,
+    metricKind ? form.shape : undefined,
+    choice,
+  );
+  const namedService = metricKind && !form.wholeProject ? serviceOf(form) : undefined;
+  const metricSeries = useMetricSeriesChoices(
+    projectId !== undefined && typeof namedService === "string" && form.metric.trim() !== ""
+      ? { projectId, metric: form.metric.trim(), service: namedService, shape: form.shape }
+      : undefined,
     choice,
   );
   const preview = usePanelPreview(ask, projectId, choice, undefined);
@@ -552,6 +607,14 @@ export function PanelPicker({
           statements={statements}
           metrics={[...new Set((nodes.data ?? []).flatMap((node) => node.signals))].sort()}
         />
+        {metricKind ? (
+          <MetricFields
+            form={form}
+            update={update}
+            names={metricNames}
+            series={typeof namedService === "string" ? metricSeries : undefined}
+          />
+        ) : null}
         {form.kind === "node_trend" ? (
           <NodeChoiceFields
             form={form}
@@ -1126,4 +1189,117 @@ function StepFiveFields({
     default:
       return null;
   }
+}
+
+/**
+ * A metric series' settings: its shape, a name from the project's metrics of that shape
+ * or typed, and, for a named service, one attribute combination or every series combined
+ * with how they combine (FR6, D33, D48). Every label is escaped; a series' value is its
+ * hash alone, so no attribute value is stored (FR61, AC121).
+ */
+function MetricFields({
+  form,
+  update,
+  names,
+  series,
+}: {
+  form: Form;
+  update: (changes: Partial<Form>) => void;
+  names: { isPending: boolean; isError: boolean; data: string[] | undefined };
+  series:
+    | {
+        isPending: boolean;
+        isError: boolean;
+        data: { series: MetricSeriesChoice[]; truncated: boolean } | undefined;
+      }
+    | undefined;
+}) {
+  const listed = series?.data?.series ?? [];
+  const chosen = listed.some((each) => each.series_hash === form.series) ? form.series : NONE;
+  return (
+    <>
+      <SelectField
+        label="Kind of metric"
+        value={form.shape}
+        options={SHAPES}
+        optionLabel={(shape) => shape.label}
+        onChange={(shape) => update({ shape: shape as MetricShape, metric: NONE, series: NONE })}
+        stacked
+      />
+      {names.isPending ? (
+        <SkeletonRows rows={1} label="Listing metrics" />
+      ) : names.isError ? (
+        <p className="text-sm text-warning-text">Could not list metrics. Type a name instead.</p>
+      ) : (
+        <SelectField
+          label="Metric"
+          value={(names.data ?? []).includes(form.metric) ? form.metric : NONE}
+          options={[
+            {
+              id: NONE,
+              label:
+                (names.data ?? []).length === 0
+                  ? "None of this kind reported in this window"
+                  : "Choose a metric",
+            },
+            ...(names.data ?? []).map((name) => ({ id: name, label: visibleEscapes(name) })),
+          ]}
+          optionLabel={(option) => option.label}
+          onChange={(metric) => update({ metric, series: NONE })}
+          stacked
+        />
+      )}
+      <TextField
+        label="Or type its name"
+        name="typed-metric"
+        value={form.metric}
+        onChange={(metric) => update({ metric, series: NONE })}
+        hint={
+          form.metric === ""
+            ? "For a metric that has not reported in this window."
+            : `Reads as: ${visibleEscapes(form.metric)}`
+        }
+        required={false}
+      />
+      {series === undefined ? (
+        <p className="text-ink-dim text-sm">
+          Every series is combined into one line. Name a service to choose one series.
+        </p>
+      ) : series.isPending ? (
+        <SkeletonRows rows={1} label="Listing series" />
+      ) : series.isError ? (
+        <p className="text-sm text-warning-text">
+          Could not list this metric's series. Every series is combined into one line.
+        </p>
+      ) : (
+        <>
+          <SelectField
+            label="Series"
+            value={chosen}
+            options={[
+              { id: NONE, label: "Every series, combined into one line" },
+              ...listed.map((each) => ({
+                id: each.series_hash,
+                label: attributesName(each.attributes) || "No attributes",
+              })),
+            ]}
+            optionLabel={(option) => option.label}
+            onChange={(picked) => update({ series: picked })}
+            stacked
+          />
+          {series.data?.truncated ? (
+            <p className="text-ink-dim text-xs">Showing the busiest {listed.length} series.</p>
+          ) : null}
+        </>
+      )}
+      <SelectField
+        label="Series combine as"
+        value={form.aggregation}
+        options={AGGREGATIONS}
+        optionLabel={(option) => option.label}
+        onChange={(aggregation) => update({ aggregation })}
+        stacked
+      />
+    </>
+  );
 }

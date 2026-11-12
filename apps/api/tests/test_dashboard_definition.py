@@ -786,8 +786,8 @@ def test_every_kind_naming_a_service_lists_it_for_showing_this_service() -> None
     assert compiled.uses_picker is True
 
 
-def test_every_kind_in_the_spec_s_table_is_known_but_the_two_later_ones() -> None:
-    """FR6's list, less `metric_series` (plan Step 8) and `slo_budget` (Step 10)."""
+def test_every_kind_in_the_spec_s_table_is_known_but_slo_budget() -> None:
+    """FR6's list, less `slo_budget` (plan Step 10)."""
     known = {panel.model_fields["kind"].annotation.__args__[0] for panel in _known_panels()}
     assert known == {
         "project_trend",
@@ -796,7 +796,128 @@ def test_every_kind_in_the_spec_s_table_is_known_but_the_two_later_ones() -> Non
         "node_trend",
         "note",
         *STEP_5,
+        "metric_series",
     }
+
+
+# ---------------------------------------------------------------- Step 8's metric series
+
+# A hash past 2**53, which a browser's number would round: why it travels as digits.
+A_HASH: Final = "13040248669695784898"
+A_METRIC_SERIES: Final = {
+    "metric": "orders_processed",
+    "shape": "sum",
+    "service": "checkout",
+    "series": A_HASH,
+    "aggregation": "sum",
+}
+
+
+def _series(**settings: Any) -> dict[str, Any]:
+    return _panel("p_series", kind="metric_series", settings=A_METRIC_SERIES | settings)
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {},
+        {"shape": "gauge", "aggregation": "mean"},
+        {"service": None, "series": None},
+        {"service": {"picker": True}},
+        {"series": "0"},
+        {"series": "18446744073709551615"},
+        {"aggregation": "min"},
+        {"aggregation": "max"},
+        {"metric": "x" * 255},
+    ],
+    ids=["chosen", "gauge", "all", "picker", "zero", "uint64-max", "min", "max", "long-name"],
+)
+def test_every_allowed_metric_series_setting_is_accepted(settings: dict[str, Any]) -> None:
+    document = _document(panels=[_series(**settings)], service_picker=True)
+    _accepted(document)
+
+    [panel] = definition.parse_stored(document["definition"]).panels
+    assert panel.kind == "metric_series"
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"shape": "histogram"},
+        {"aggregation": "median"},
+        {"series": "18446744073709551616"},
+        {"series": "-1"},
+        {"series": "0x1f"},
+        {"series": 13040248669695784898},
+        {"metric": ""},
+        {"metric": "x" * 256},
+        {"metric": "nul\x00"},
+        {"attributes": {"region": "eu"}},
+    ],
+    ids=[
+        "histogram",
+        "aggregation",
+        "past-uint64",
+        "negative",
+        "hex",
+        "a-number",
+        "metric-empty",
+        "metric-too-long",
+        "metric-nul",
+        "attribute-values",
+    ],
+)
+def test_ac4_ac121_a_metric_series_setting_outside_the_table_is_refused(
+    settings: dict[str, Any],
+) -> None:
+    """A file holds the hash and never the attributes (AC121); a hash is digits only."""
+    _refused(_document(panels=[_series(**settings)]))
+
+
+def test_ac67_a_metric_series_saved_small_is_refused() -> None:
+    panel = _series() | {"height": "small"}
+    assert "cannot be small" in _refused(_document(panels=[panel]))
+
+
+def test_a_chosen_series_counts_two_scans_and_all_series_one() -> None:
+    """The chosen series' second read counts at save (design, *`series_changed`*), and is
+    one per metric and service, whichever series of it a panel chose."""
+    panels = [
+        _series() | {"id": "p_eu"},
+        _series(series="42") | {"id": "p_us"},
+        _series(series=None) | {"id": "p_all"},
+        _series(series=None, aggregation="mean") | {"id": "p_mean"},
+    ]
+    compiled = compiling.compile_definition(_accepted(_document(panels=panels)).definition)
+
+    reports = compiling.ScanKey(
+        reader=compiling.METRIC_REPORTS, service="checkout", metric="orders_processed", shape="sum"
+    )
+    assert compiled.worst_case_scans == 5
+    assert compiled.scans.count(reports) == 1
+    assert [panel.fallback for panel in compiled.panels] == [reports, reports, None, None]
+
+
+def test_a_picked_metric_series_and_its_second_read_resolve_together() -> None:
+    panels = [_series(service={"picker": True})]
+    compiled = compiling.compile_definition(
+        _accepted(_document(panels=panels, service_picker=True)).definition
+    )
+    [panel] = compiled.panels
+
+    scan = compiling.resolve(panel.scan, picked="cart")
+    fallback = compiling.resolve(panel.fallback, picked="cart")
+    assert scan is not None and fallback is not None
+    assert (scan.service, fallback.service, scan.series_hash) == ("cart", "cart", A_HASH)
+    assert compiling.resolve(panel.fallback, picked=None) is None
+    assert compiled.uses_picker is True
+
+
+def test_a_metric_series_naming_a_service_lists_it_for_showing_this_service() -> None:
+    compiled = compiling.compile_definition(
+        _accepted(_document(panels=[_series(service="payments")])).definition
+    )
+    assert compiled.service_names == ["payments"]
 
 
 def _known_panels() -> list[Any]:

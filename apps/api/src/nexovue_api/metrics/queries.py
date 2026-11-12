@@ -376,3 +376,255 @@ FROM (
 WHERE bucket_nanos >= {{from_nanos:Int64}}
 ORDER BY metric_name, bucket_nanos
 """
+
+
+# ------------------------------------------------------------ metric series (F20, Step 8)
+#
+# A dashboard's `metric_series` panel: one gauge or sum over time, one chosen series or all
+# of them combined into one line (F20 design section 8). Every statement here binds tenant,
+# project and metric, and the dashboard structure test holds each `SELECT` to the project
+# (AC85).
+#
+# **One real series is `(service_name, host, container, instance, series_hash)`.**
+# `series_hash` hashes the data point's attributes alone, so two instances of one service
+# reporting equal attributes share it, and must still be two series (AC50): their running
+# totals are separate counters, and subtracting one from the other is the fault
+# `HISTOGRAM_SQL` has (docs/changes/metrics-histogram-subtracts-across-instances). The
+# resource paths are constants, read as `infrastructure/queries.py` reads them.
+#
+# **A row is not unique** (a redelivered batch is kept), so every statement first takes one
+# reading per series and instant, and never counts or adds stored rows.
+
+# The optional narrowing, spliced on comment markers like the catalogue's: the service
+# (absent for "all services") and the chosen series. Both are bound, never spliced.
+SERVICE_PLACEHOLDER: Final = "/* service */"
+SERIES_PLACEHOLDER: Final = "/* series */"
+SERVICE_CLAUSE: Final = "AND service_name = {service_name:String}"
+SERIES_CLAUSE: Final = "AND series_hash = {series_hash:UInt64}"
+
+# How the series of one bucket combine into the line's one value (spec, `aggregation`).
+# Bound as a value and chosen inside the statement, so no SQL is built from it.
+AGGREGATIONS: Final = ("mean", "min", "max", "sum")
+_COMBINED: Final = """multiIf(
+        {aggregation:String} = 'min', min(reading),
+        {aggregation:String} = 'max', max(reading),
+        {aggregation:String} = 'sum', sum(reading),
+        avg(reading)
+    )"""
+
+# A gauge: the mean of each series' readings in each bucket, then the chosen aggregation
+# across series. The series count and the units are the window's, over every bucket.
+METRIC_GAUGE_SERIES_SQL: Final = f"""
+SELECT
+    bucket_nanos,
+    {_COMBINED} AS value,
+    any(series_total) AS series,
+    any(unit_list) AS units,
+    any(attributes_json) AS attributes_json
+FROM (
+    SELECT
+        {_BUCKET_NANOS} AS bucket_nanos,
+        avg(value) AS reading,
+        uniqExact((service_name, host, container, instance, series_hash)) OVER () AS series_total,
+        groupUniqArrayArray(groupUniqArray(metric_unit)) OVER () AS unit_list,
+        toJSONString(any(attrs)) AS attributes_json
+    FROM (
+        SELECT
+            service_name,
+            toString(resource_attrs.host.name) AS host,
+            toString(resource_attrs.container.name) AS container,
+            toString(resource_attrs.service.instance.id) AS instance,
+            series_hash,
+            timestamp,
+            any(value) AS value,
+            any(metric_unit) AS metric_unit,
+            any(attrs) AS attrs
+        FROM metrics_gauge
+        WHERE tenant_id = {{tenant_id:String}}
+          AND project_id = {{project_id:String}}
+          AND metric_name = {{metric_name:String}}
+          {SERVICE_PLACEHOLDER} {SERIES_PLACEHOLDER}{_WINDOW}
+        GROUP BY service_name, host, container, instance, series_hash, timestamp
+    )
+    GROUP BY service_name, host, container, instance, series_hash, bucket_nanos
+)
+GROUP BY bucket_nanos
+ORDER BY bucket_nanos
+"""
+
+# A sum, by each series' own temporality, read per row (design section 8):
+#
+# - **Cumulative and monotonic, a counter:** a bucket's contribution is its rise. Each
+#   series' last reading in the bucket less the last in the bucket before it, which
+#   `lagInFrame` reads; one bucket is read before the window for that and dropped after,
+#   as `HEATMAP_SQL` does. **A falling value is a restart, and the value after it is the
+#   contribution**: the counter began again from zero. A fall inside one bucket (its last
+#   reading below its highest) counts the rise up to the highest and then the value after
+#   the restart, so the common restart, to near zero, is counted exactly.
+# - A series with no bucket before it began inside what was read (its start time is at or
+#   after the read's start), so its whole value is its rise; otherwise only what it rose
+#   within its first bucket is known.
+# - **Delta:** each reading is already the bucket's share, so they are added.
+# - **Anything else** (cumulative but not monotonic, or unspecified): read as a gauge, the
+#   mean in the bucket.
+METRIC_SUM_SERIES_SQL: Final = f"""
+SELECT
+    bucket_nanos,
+    {_COMBINED} AS value,
+    any(series_total) AS series,
+    any(unit_list) AS units,
+    any(attributes_json) AS attributes_json
+FROM (
+    SELECT
+        bucket_nanos,
+        contribution AS reading,
+        uniqExact((service_name, host, container, instance, series_hash)) OVER () AS series_total,
+        groupUniqArrayArray(units) OVER () AS unit_list,
+        attributes_json
+    FROM (
+        SELECT
+            service_name,
+            host,
+            container,
+            instance,
+            series_hash,
+            bucket_nanos,
+            units,
+            attributes_json,
+            lagInFrame(toNullable(last)) OVER (
+                PARTITION BY service_name, host, container, instance, series_hash
+                ORDER BY bucket_nanos
+            ) AS previous,
+            if(
+                previous IS NULL,
+                if(began >= {{read_from:DateTime64(3)}}, 0, first),
+                assumeNotNull(previous)
+            ) AS baseline,
+            multiIf(
+                temporality = 'DELTA', total,
+                temporality = 'CUMULATIVE' AND monotonic,
+                    if(
+                        last < peak,
+                        greatest(peak - baseline, 0) + last,
+                        if(last < baseline, last, last - baseline)
+                    ),
+                mean
+            ) AS contribution
+        FROM (
+            SELECT
+                service_name,
+                host,
+                container,
+                instance,
+                series_hash,
+                {_BUCKET_NANOS} AS bucket_nanos,
+                argMax(value, timestamp) AS last,
+                argMin(value, timestamp) AS first,
+                max(value) AS peak,
+                sum(value) AS total,
+                avg(value) AS mean,
+                argMax(started, timestamp) AS began,
+                any(temporality) AS temporality,
+                any(monotonic) AS monotonic,
+                groupUniqArray(metric_unit) AS units,
+                toJSONString(any(attrs)) AS attributes_json
+            FROM (
+                SELECT
+                    service_name,
+                    toString(resource_attrs.host.name) AS host,
+                    toString(resource_attrs.container.name) AS container,
+                    toString(resource_attrs.service.instance.id) AS instance,
+                    series_hash,
+                    timestamp,
+                    any(value) AS value,
+                    any(start_timestamp) AS started,
+                    any(aggregation_temporality) AS temporality,
+                    any(is_monotonic) AS monotonic,
+                    any(metric_unit) AS metric_unit,
+                    any(attrs) AS attrs
+                FROM metrics_sum
+                WHERE tenant_id = {{tenant_id:String}}
+                  AND project_id = {{project_id:String}}
+                  AND metric_name = {{metric_name:String}}
+                  {SERVICE_PLACEHOLDER} {SERIES_PLACEHOLDER}
+                  AND timestamp >= {{read_from:DateTime64(3)}}
+                  AND timestamp < {{to_time:DateTime64(3)}}
+                  AND received_at >= {{received_from:DateTime64(3)}}
+                  AND received_at < {{received_to:DateTime64(3)}}
+                GROUP BY service_name, host, container, instance, series_hash, timestamp
+            )
+            GROUP BY service_name, host, container, instance, series_hash, bucket_nanos
+        )
+    )
+    WHERE bucket_nanos >= {{from_nanos:Int64}}
+)
+GROUP BY bucket_nanos
+ORDER BY bucket_nanos
+"""
+
+# "Does this metric still report, under any attributes?" — the one further read a chosen
+# series that came back empty earns, so it reads `series_changed` rather than "has not
+# reported" (FR16, AC115). One row is enough to answer.
+METRIC_GAUGE_REPORTS_SQL: Final = f"""
+SELECT series_hash
+FROM metrics_gauge
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND metric_name = {{metric_name:String}}
+  {SERVICE_PLACEHOLDER}{_WINDOW}
+LIMIT 1
+"""
+
+METRIC_SUM_REPORTS_SQL: Final = f"""
+SELECT series_hash
+FROM metrics_sum
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND metric_name = {{metric_name:String}}
+  {SERVICE_PLACEHOLDER}{_WINDOW}
+LIMIT 1
+"""
+
+# One service's attribute combinations of a metric, for the builder to choose one
+# (`GET /metrics/{metric_name}/series`, AC83, AC121). The attributes are rendered once per
+# combination, never per row (the 2.29 s note on `_branch`). Busiest first.
+_SERIES_LIST_COLUMNS: Final = """
+    toString(series_hash) AS series_hash,
+    toJSONString(any(attrs)) AS attributes_json,
+    uniqExact(timestamp) AS points,
+    toUnixTimestamp64Nano(max(timestamp)) AS latest_nanos"""
+
+METRIC_GAUGE_SERIES_LIST_SQL: Final = f"""
+SELECT{_SERIES_LIST_COLUMNS}
+FROM metrics_gauge
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name = {{service_name:String}}
+  AND metric_name = {{metric_name:String}}{_WINDOW}
+GROUP BY series_hash
+ORDER BY points DESC, series_hash
+LIMIT {{max_combinations:UInt32}}
+"""
+
+METRIC_SUM_SERIES_LIST_SQL: Final = f"""
+SELECT{_SERIES_LIST_COLUMNS}
+FROM metrics_sum
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name = {{service_name:String}}
+  AND metric_name = {{metric_name:String}}{_WINDOW}
+GROUP BY series_hash
+ORDER BY points DESC, series_hash
+LIMIT {{max_combinations:UInt32}}
+"""
+
+
+def narrowed(sql: str, *, service: bool, series: bool = False) -> str:
+    """A metric series statement narrowed to one service and one chosen series, or not.
+
+    The caller binds `service_name` and `series_hash` exactly when it asks for them here,
+    so a predicate and its binding cannot come apart.
+    """
+    return sql.replace(SERVICE_PLACEHOLDER, SERVICE_CLAUSE if service else "").replace(
+        SERIES_PLACEHOLDER, SERIES_CLAUSE if series else ""
+    )

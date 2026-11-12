@@ -127,3 +127,34 @@ class DurationHeatmapResponse(BaseModel):
     window_start: IsoTimestamp
     window_end: IsoTimestamp
     columns: list[HeatmapColumn] = Field(default_factory=list)
+
+
+class MetricAttribute(BaseModel):
+    """One attribute of a series, its key a dotted path as the SDK sent it. Customer
+    text, which may hold anything: the console shows it through visible escapes (FR61)."""
+
+    key: str
+    value: str
+
+
+class MetricSeriesSummary(BaseModel):
+    """One attribute combination of a metric, which a dashboard panel may choose."""
+
+    # A decimal string: the hash is a UInt64, and a browser's number holds 53 bits.
+    series_hash: str
+    attributes: list[MetricAttribute] = Field(default_factory=list)
+    points: int
+    last_seen: IsoTimestamp
+
+
+class MetricSeriesListResponse(BaseModel):
+    """One service's attribute combinations of one metric (F20, AC83, AC121)."""
+
+    metric_name: str
+    service_name: str
+    shape: str
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    series: list[MetricSeriesSummary] = Field(default_factory=list)
+    # True past `service.MAX_SERIES_COMBINATIONS`: the busiest first, not all of them.
+    truncated: bool = False

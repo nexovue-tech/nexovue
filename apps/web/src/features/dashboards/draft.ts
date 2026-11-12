@@ -216,7 +216,9 @@ function serviceKey(panel: StoredPanel): string {
 /**
  * The reads one panel asks for, keyed as `compile.py` keys them, so equal reads count
  * once: one per service for its rate, errors and latency; one per ranking whatever the
- * row count; one per check name; and a compared number's second read (FR7).
+ * row count; one per check name; a compared number's second read; and a chosen metric
+ * series' second read, one per metric, shape and service, which runs only when the
+ * series comes back empty but is counted at save (FR7, design *`series_changed`*).
  */
 function readsOf(panel: StoredPanel): string[] {
   const setting = (name: string) => JSON.stringify(panel.settings[name] ?? null);
@@ -258,6 +260,13 @@ function readsOf(panel: StoredPanel): string[] {
       return ["statements"];
     case "web_vitals_table":
       return [`vitals:${setting("device_class")}`];
+    case "metric_series": {
+      const metric = `${setting("metric")}:${setting("shape")}:${service}`;
+      const read = `metric:${metric}:${setting("series")}:${setting("aggregation")}`;
+      return panel.settings.series === null || panel.settings.series === undefined
+        ? [read]
+        : [read, `metric-reports:${metric}`];
+    }
     default:
       // A note and open findings read nothing; an unknown kind is never read.
       return [];

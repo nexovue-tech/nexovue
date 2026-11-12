@@ -13,7 +13,7 @@ import { NO_MARKS } from "./time-lines";
  * - A service's chart draws its service's marks and the project-wide findings.
  * - A top-N chart draws those of the services it lists.
  * - A project chart draws them all.
- * - A node, check or statement chart draws all of the project's, and says so, so nobody
+ * - A node, check, statement or metric chart draws all of the project's, and says so, so nobody
  *   reads a checkout finding on a disk chart as a claim about that disk (AC132).
  *
  * A `seen` mark keeps its basis, so it is drawn dotted and never called a deploy (AC122).

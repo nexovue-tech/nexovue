@@ -478,7 +478,7 @@ describe("Step 5's kinds", () => {
         ?.click(),
     );
 
-  it("offers every kind the spec lists but the two later ones (FR6)", async () => {
+  it("offers every kind the spec lists but slo_budget (FR6)", async () => {
     const container = await mount();
     const offered = [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")].map(
       (radio) => radio.value,
@@ -503,6 +503,7 @@ describe("Step 5's kinds", () => {
         "error_groups_table",
         "database_statements_table",
         "web_vitals_table",
+        "metric_series",
         "note",
       ].sort(),
     );
@@ -545,6 +546,158 @@ describe("Step 5's kinds", () => {
       ["error_groups_table", { service: null, rows: 10 }],
       ["check_trend", { check: `Log${RTL_OVERRIDE}in`, signal: "uptime" }],
     ]);
+  });
+});
+
+describe("Step 8's metric series (T8.4)", () => {
+  const HASH = "13040248669695784898";
+  const tick = (container: Element, label: string) =>
+    act(() =>
+      [...container.querySelectorAll("label")]
+        .find((each) => text(each) === label)
+        ?.querySelector<HTMLInputElement>("input[type=checkbox]")
+        ?.click(),
+    );
+  const chooseSeriesKind = (container: Element) =>
+    act(() =>
+      [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+        .find((radio) => radio.value === "metric_series")
+        ?.click(),
+    );
+  const askedFor = (path: string) =>
+    vi
+      .mocked(fetch)
+      .mock.calls.map(([url]) => url as URL)
+      .filter((url) => url.pathname === `${API_PREFIX}${path}`);
+
+  it("lists the shape's metrics and a named service's series, escaped, keeping only the hash", async () => {
+    stubApi({
+      "GET /services": services("checkout"),
+      "GET /metrics": json({
+        metrics: [{ metric_name: "orders_processed" }, { metric_name: `queue${RTL_OVERRIDE}` }],
+      }),
+      "GET /metrics/orders_processed/series": json({
+        series: [
+          {
+            series_hash: HASH,
+            attributes: [{ key: "region", value: `e${RTL_OVERRIDE}u` }],
+            points: 4,
+            last_seen: "2026-11-12T09:00:00.000Z",
+          },
+        ],
+        truncated: false,
+      }),
+    });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+
+    chooseSeriesKind(container);
+    await waitFor(
+      () =>
+        [...container.querySelectorAll("option")].some((each) => each.value === "orders_processed"),
+      "the metrics",
+    );
+    expect(askedFor("/metrics")[0]?.searchParams.get("shape")).toBe("sum");
+    act(() => typeInto(labelled(container, "Metric"), "orders_processed"));
+    act(() => typeInto(labelled(container, "Service"), "checkout"));
+    await waitFor(
+      () => [...container.querySelectorAll("option")].some((each) => each.value === HASH),
+      "the series",
+    );
+    const series = labelled<HTMLSelectElement>(container, "Series");
+    expect([...series.options].map((option) => option.textContent)).toEqual([
+      "Every series, combined into one line",
+      "region=e[U+202E]u",
+    ]);
+    expect(text(container)).not.toContain(RTL_OVERRIDE);
+    const listed = askedFor("/metrics/orders_processed/series")[0];
+    expect(listed?.searchParams.get("service_name")).toBe("checkout");
+    expect(listed?.searchParams.get("shape")).toBe("sum");
+    act(() => typeInto(series, HASH));
+    act(() => button(container, "Add to dashboard")?.click());
+
+    expect(kept.map((panel) => [panel.kind, panel.settings])).toEqual([
+      [
+        "metric_series",
+        {
+          metric: "orders_processed",
+          shape: "sum",
+          service: "checkout",
+          series: HASH,
+          aggregation: "sum",
+        },
+      ],
+    ]);
+  });
+
+  it("combines every series for the whole project, and reads no series list", async () => {
+    stubApi({ "GET /services": services("checkout"), "GET /metrics": json({ metrics: [] }) });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+
+    chooseSeriesKind(container);
+    tick(container, "The whole project");
+    act(() => typeInto(labelled(container, "Kind of metric"), "gauge"));
+    act(() => typeInto(labelled(container, "Or type its name"), "queue.depth"));
+    act(() => typeInto(labelled(container, "Series combine as"), "max"));
+    act(() => button(container, "Add to dashboard")?.click());
+
+    expect(text(container)).toContain("Name a service to choose one series.");
+    expect(kept[0]?.settings).toEqual({
+      metric: "queue.depth",
+      shape: "gauge",
+      service: null,
+      series: null,
+      aggregation: "max",
+    });
+    expect(askedFor("/metrics/queue.depth/series")).toEqual([]);
+  });
+
+  it("drops a chosen series when the panel turns to every service, which has no list", async () => {
+    stubApi({
+      "GET /services": services("checkout"),
+      "GET /metrics": json({ metrics: [{ metric_name: "orders_processed" }] }),
+      "GET /metrics/orders_processed/series": json({
+        series: [
+          {
+            series_hash: HASH,
+            attributes: [{ key: "region", value: "eu" }],
+            points: 4,
+            last_seen: "2026-11-12T09:00:00.000Z",
+          },
+        ],
+        truncated: false,
+      }),
+    });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+
+    chooseSeriesKind(container);
+    act(() => typeInto(labelled(container, "Or type its name"), "orders_processed"));
+    await waitFor(() => container.querySelector("select option[value='checkout']"), "services");
+    act(() => typeInto(labelled(container, "Service"), "checkout"));
+    await waitFor(
+      () => [...container.querySelectorAll("option")].some((each) => each.value === HASH),
+      "the series",
+    );
+    act(() => typeInto(labelled(container, "Series"), HASH));
+    tick(container, "The whole project");
+    act(() => button(container, "Add to dashboard")?.click());
+
+    expect(kept[0]?.settings).toMatchObject({ service: null, series: null });
+  });
+
+  it("refuses a metric series naming no metric, and says why", async () => {
+    stubApi({ "GET /services": services("checkout"), "GET /metrics": json({ metrics: [] }) });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+
+    chooseSeriesKind(container);
+    tick(container, "The whole project");
+    act(() => button(container, "Add to dashboard")?.click());
+
+    expect(kept).toEqual([]);
+    expect(text(container)).toContain("Choose a metric, or type its name.");
   });
 });
 

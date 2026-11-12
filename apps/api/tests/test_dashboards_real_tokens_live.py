@@ -104,6 +104,13 @@ def _routes(dashboard_id: uuid.UUID, project_id: uuid.UUID) -> list[tuple[str, s
             "/dashboard-panels/preview",
             {"project_id": str(project_id), "range": "1h", "definition": document["definition"]},
         ),
+        # The builder's series list hands attribute values over (Step 8, AC121).
+        (
+            "GET",
+            f"/metrics/orders_processed/series?project_id={project_id}"
+            "&service_name=checkout&shape=sum",
+            None,
+        ),
     ]
 
 
@@ -167,3 +174,4 @@ async def test_ac9_no_dashboard_route_is_in_the_read_apis_published_description(
     paths = list(published["paths"])
     assert paths, "the published description lists no path at all"
     assert not [path for path in paths if "dashboard" in path]
+    assert not [path for path in paths if path.endswith("/series")]

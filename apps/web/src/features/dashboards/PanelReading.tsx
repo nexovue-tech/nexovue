@@ -2,7 +2,7 @@ import type { StoredPanel } from "./api";
 import type { OkResult } from "./kept-readings";
 import { NumberPanel } from "./NumberPanel";
 import { PanelWords } from "./PanelFrame";
-import { TABLE_KINDS, TIME_KINDS } from "./panel-words";
+import { combinedWords, mixedUnitsWords, TABLE_KINDS, TIME_KINDS } from "./panel-words";
 import { TablePanel } from "./TablePanel";
 import { TimePanel } from "./TimePanel";
 import type { Marks } from "./time-lines";
@@ -31,7 +31,11 @@ export function PanelReading({
   marks?: Marks;
   asTable?: boolean;
 }) {
+  // Two units cannot be added into one line, so none is drawn (AC51).
+  const mixed = mixedUnitsWords(panel, reading.units);
+  if (mixed !== undefined) return <PanelWords words={mixed} />;
   if (TIME_KINDS.has(panel.kind)) {
+    const combined = combinedWords(panel, reading.series_combined);
     return (
       <TimePanel
         panel={panel}
@@ -42,6 +46,7 @@ export function PanelReading({
         {...(syncKey === undefined ? {} : { syncKey })}
         {...(onDrag === undefined ? {} : { onDrag })}
         {...(marks === undefined ? {} : { marks })}
+        {...(combined === undefined ? {} : { note: combined })}
       />
     );
   }

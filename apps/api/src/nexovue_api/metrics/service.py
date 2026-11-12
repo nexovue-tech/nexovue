@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import json
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from nexovue_api import rollup
+from nexovue_api.dashboardpanels.caps import CAP_WAIT_SECONDS, ScanCaps
+from nexovue_api.dashboardpanels.shared_reads import SHARED_READ_STATEMENT_SECONDS
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.errors.exceptions import InvalidRequestError, RateLimitExceededError
 from nexovue_api.metrics import queries
 from nexovue_api.metrics.schemas import (
     DurationHeatmapResponse,
     HeatmapColumn,
     HistogramLayout,
     HistogramResponse,
+    MetricAttribute,
     MetricCatalogueResponse,
+    MetricSeriesListResponse,
+    MetricSeriesSummary,
     MetricSummary,
 )
 from nexovue_api.window import receive_window
@@ -335,3 +343,262 @@ def _busiest_layout(
         grouped.items(), key=lambda entry: sum(column.total for column in entry[1])
     )
     return (metric_name, unit, list(bounds)), columns
+
+
+# ------------------------------------------------------------ metric series (F20, Step 8)
+
+# The two shapes a dashboard draws as a line (spec, `shape`): a histogram is not one
+# (D49), and the others have no reader.
+SeriesShape = Literal["gauge", "sum"]
+Aggregation = Literal["mean", "min", "max", "sum"]
+
+# Past this many series a combined line stops meaning anything a reader can check, and the
+# read's work grows with it (*guess*, spec AC52). The panel then reads `too_many_series`.
+MAX_COMBINED_SERIES: Final = 1_000
+# The builder's list of one service's combinations, and its widest window (*guesses*, AC121).
+MAX_SERIES_COMBINATIONS: Final = 200
+SERIES_LIST_MAX_DAYS: Final = 7
+
+_SERIES_SQL: Final[dict[str, str]] = {
+    queries.SHAPE_GAUGE: queries.METRIC_GAUGE_SERIES_SQL,
+    queries.SHAPE_SUM: queries.METRIC_SUM_SERIES_SQL,
+}
+_REPORTS_SQL: Final[dict[str, str]] = {
+    queries.SHAPE_GAUGE: queries.METRIC_GAUGE_REPORTS_SQL,
+    queries.SHAPE_SUM: queries.METRIC_SUM_REPORTS_SQL,
+}
+_SERIES_LIST_SQL: Final[dict[str, str]] = {
+    queries.SHAPE_GAUGE: queries.METRIC_GAUGE_SERIES_LIST_SQL,
+    queries.SHAPE_SUM: queries.METRIC_SUM_SERIES_LIST_SQL,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class MetricLine:
+    """A metric series panel's one line, and what the window held behind it."""
+
+    bucket_seconds: int
+    points: list[tuple[datetime, float]]
+    # Distinct series in the window: each service, host, container, instance and
+    # attribute set (AC50, AC52).
+    series: int
+    # Every unit the window's readings carried. More than one, and the line is not drawn,
+    # since adding milliseconds to seconds is not a reading (AC51).
+    units: list[str]
+    # A chosen series' attributes, its label at read time (FR61); empty for "all".
+    attributes: list[MetricAttribute]
+
+
+def _bucket_floor(moment: datetime, bucket_seconds: int) -> datetime:
+    """The start of the bucket holding `moment`, on the grid every trend statement uses."""
+    seconds = int(moment.timestamp())
+    return datetime.fromtimestamp(seconds - seconds % bucket_seconds, moment.tzinfo)
+
+
+async def metric_series(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    metric_name: str,
+    shape: SeriesShape,
+    service_name: str | None,
+    series_hash: str | None,
+    aggregation: Aggregation,
+    from_time: datetime,
+    to_time: datetime,
+) -> MetricLine:
+    """One gauge or sum over the window, one series or all of them as one line.
+
+    A sum reads one bucket before the window, so the first bucket's rise has something to
+    be measured from (`queries.METRIC_SUM_SERIES_SQL`); a gauge needs none.
+    """
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    first_bucket = _bucket_floor(from_time, bucket_seconds)
+    read_from = first_bucket - timedelta(seconds=bucket_seconds)
+    received_from, received_to = receive_window(read_from, to_time)
+    parameters: dict[str, Any] = {
+        "project_id": project_id,
+        "metric_name": metric_name,
+        "aggregation": aggregation,
+        "bucket_seconds": bucket_seconds,
+        "from_time": from_time,
+        "to_time": to_time,
+        "read_from": read_from,
+        "from_nanos": int(first_bucket.timestamp()) * NANOSECONDS_PER_SECOND,
+        "received_from": received_from,
+        "received_to": received_to,
+    }
+    if service_name is not None:
+        parameters["service_name"] = service_name
+    if series_hash is not None:
+        parameters["series_hash"] = int(series_hash)
+
+    rows = await repository.query(
+        queries.narrowed(
+            _SERIES_SQL[shape], service=service_name is not None, series=series_hash is not None
+        ),
+        parameters,
+    )
+    first = rows[0] if rows else None
+    return MetricLine(
+        bucket_seconds=bucket_seconds,
+        points=[
+            (values.nanos_to_datetime(row["bucket_nanos"]), float(row["value"])) for row in rows
+        ],
+        series=int(first["series"]) if first else 0,
+        units=sorted({values.text(unit) for unit in first["units"]}) if first else [],
+        attributes=(
+            attributes_of(values.text(first["attributes_json"]))
+            if first and series_hash is not None
+            else []
+        ),
+    )
+
+
+async def metric_reports(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    metric_name: str,
+    shape: SeriesShape,
+    service_name: str | None,
+    from_time: datetime,
+    to_time: datetime,
+) -> bool:
+    """Whether the metric reported in the window under any attributes at all (FR16)."""
+    received_from, received_to = receive_window(from_time, to_time)
+    parameters: dict[str, Any] = {
+        "project_id": project_id,
+        "metric_name": metric_name,
+        "from_time": from_time,
+        "to_time": to_time,
+        "received_from": received_from,
+        "received_to": received_to,
+    }
+    if service_name is not None:
+        parameters["service_name"] = service_name
+    rows = await repository.query(
+        queries.narrowed(_REPORTS_SQL[shape], service=service_name is not None), parameters
+    )
+    return bool(rows)
+
+
+async def list_series_within_raw_limits(
+    repository: TenantScopedRepository,
+    caps: ScanCaps,
+    *,
+    org_id: str,
+    project_id: str,
+    metric_name: str,
+    shape: SeriesShape,
+    service_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> MetricSeriesListResponse:
+    """`list_series` under a raw dashboard read's limits (AC121): a raw place in the
+    process's dashboard caps, and the shared reads' fixed statement limit. A busy process
+    refuses with a real wait rather than queueing raw reads behind the panels."""
+    _refuse_a_wide_window(from_time, to_time)
+    place = await caps.acquire(org_id, raw=True, wait_seconds=CAP_WAIT_SECONDS)
+    if place is None:
+        raise RateLimitExceededError(
+            "Too many reads of raw telemetry are running; try again shortly.",
+            retry_after_seconds=SHARED_READ_STATEMENT_SECONDS,
+        )
+    try:
+        return await list_series(
+            repository.bounded_by(SHARED_READ_STATEMENT_SECONDS),
+            project_id=project_id,
+            metric_name=metric_name,
+            shape=shape,
+            service_name=service_name,
+            from_time=from_time,
+            to_time=to_time,
+        )
+    finally:
+        place.release()
+
+
+def _refuse_a_wide_window(from_time: datetime, to_time: datetime) -> None:
+    if to_time - from_time > timedelta(days=SERIES_LIST_MAX_DAYS):
+        raise InvalidRequestError(
+            f"A metric's series are listed over at most {SERIES_LIST_MAX_DAYS} days.",
+            max_days=SERIES_LIST_MAX_DAYS,
+        )
+
+
+async def list_series(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    metric_name: str,
+    shape: SeriesShape,
+    service_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> MetricSeriesListResponse:
+    """One service's attribute combinations of a metric, busiest first (AC83, AC121).
+
+    One service and at most `SERIES_LIST_MAX_DAYS`, because this reads raw points and is
+    the first read to hand attribute values to anyone (design section 8).
+    """
+    _refuse_a_wide_window(from_time, to_time)
+    received_from, received_to = receive_window(from_time, to_time)
+    rows = await repository.query(
+        _SERIES_LIST_SQL[shape],
+        {
+            "project_id": project_id,
+            "service_name": service_name,
+            "metric_name": metric_name,
+            "from_time": from_time,
+            "to_time": to_time,
+            "received_from": received_from,
+            "received_to": received_to,
+            # One past the cap, so a full list is told apart from a cut one.
+            "max_combinations": MAX_SERIES_COMBINATIONS + 1,
+        },
+    )
+    return MetricSeriesListResponse(
+        metric_name=metric_name,
+        service_name=service_name,
+        shape=shape,
+        window_start=from_time,
+        window_end=to_time,
+        series=[
+            MetricSeriesSummary(
+                series_hash=values.text(row["series_hash"]),
+                attributes=attributes_of(values.text(row["attributes_json"])),
+                points=int(row["points"]),
+                last_seen=values.nanos_to_datetime(row["latest_nanos"]),
+            )
+            for row in rows[:MAX_SERIES_COMBINATIONS]
+        ],
+        truncated=len(rows) > MAX_SERIES_COMBINATIONS,
+    )
+
+
+def attributes_of(rendered: str) -> list[MetricAttribute]:
+    """A series' attributes as dotted keys and text, in key order.
+
+    ClickHouse's JSON type reads a dot as a path, so `http.route` comes back nested; the
+    flat key is what the SDK sent and what a reader recognises. Values that are not text
+    keep their JSON spelling, so `1` and `"1"` stay apart.
+    """
+    try:
+        document = json.loads(rendered) if rendered else {}
+    except json.JSONDecodeError:
+        return []
+    flat: list[MetricAttribute] = []
+
+    def walk(prefix: str, value: Any) -> None:
+        if isinstance(value, dict) and value:
+            for key, inner in value.items():
+                walk(f"{prefix}.{key}" if prefix else str(key), inner)
+            return
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        flat.append(MetricAttribute(key=prefix, value=text))
+
+    if isinstance(document, dict):
+        for key, inner in document.items():
+            walk(str(key), inner)
+    return sorted(flat, key=lambda attribute: attribute.key)

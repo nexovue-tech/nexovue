@@ -20,6 +20,8 @@ from nexovue_api.dashboards.compile import (
     ENDPOINT_TREND,
     ENDPOINTS_RANKED,
     ERROR_GROUPS,
+    METRIC_REPORTS,
+    METRIC_SERIES,
     NODE_TREND,
     PROJECT_TOTALS,
     PROJECT_TREND,
@@ -42,6 +44,7 @@ from nexovue_api.errorgroups import service as errorgroups
 from nexovue_api.errorgroups.schemas import ErrorGroupSummary
 from nexovue_api.infrastructure import service as infrastructure
 from nexovue_api.infrastructure.schemas import NodeTrendPoint
+from nexovue_api.metrics import service as metrics
 from nexovue_api.releases.service import CoverageBook
 from nexovue_api.rum import service as rum
 from nexovue_api.rum.schemas import WebVitalSummary
@@ -472,6 +475,64 @@ async def web_vitals(
     return _ranked(answer.vitals)
 
 
+async def metric_series(
+    repository: TenantScopedRepository,
+    project_id: str,
+    scan: ScanKey,
+    window_start: datetime,
+    window_end: datetime,
+    context: ScanContext,
+) -> Answer:
+    """One gauge or sum as one line: a chosen series, or every series combined (T8.2)."""
+    if scan.metric is None or scan.shape not in SERIES_SHAPES or scan.aggregation is None:
+        raise ValueError("a metric series scan names its metric, shape and aggregation")
+    line = await metrics.metric_series(
+        repository,
+        project_id=project_id,
+        metric_name=scan.metric,
+        shape=SERIES_SHAPES[scan.shape],
+        service_name=scan.service,
+        series_hash=scan.series_hash,
+        aggregation=AGGREGATIONS[scan.aggregation],
+        from_time=window_start,
+        to_time=window_end,
+    )
+    return _kept(line, len(line.points))
+
+
+async def metric_reports(
+    repository: TenantScopedRepository,
+    project_id: str,
+    scan: ScanKey,
+    window_start: datetime,
+    window_end: datetime,
+    context: ScanContext,
+) -> Answer:
+    """Whether the metric reports under any attributes: a chosen series' second read."""
+    if scan.metric is None or scan.shape not in SERIES_SHAPES:
+        raise ValueError("a metric reports scan names its metric and shape")
+    reports = await metrics.metric_reports(
+        repository,
+        project_id=project_id,
+        metric_name=scan.metric,
+        shape=SERIES_SHAPES[scan.shape],
+        service_name=scan.service,
+        from_time=window_start,
+        to_time=window_end,
+    )
+    return _kept(reports, 1)
+
+
+# The definition's values, as the metrics service's own literals.
+SERIES_SHAPES: Final[dict[str, metrics.SeriesShape]] = {"gauge": "gauge", "sum": "sum"}
+AGGREGATIONS: Final[dict[str, metrics.Aggregation]] = {
+    "mean": "mean",
+    "min": "min",
+    "max": "max",
+    "sum": "sum",
+}
+
+
 def _answer(trend: Trend) -> Answer:
     return _kept(trend, len(trend.points))
 
@@ -501,11 +562,22 @@ READERS: Final[dict[str, Reader]] = {
     ERROR_GROUPS: error_groups,
     SLOW_STATEMENTS: slow_statements,
     WEB_VITALS: web_vitals,
+    METRIC_SERIES: metric_series,
+    METRIC_REPORTS: metric_reports,
 }
 # Readers of raw telemetry rather than rollups (FR6's "Raw data" rows), held to the
 # smaller process cap and to a window limit (FR17).
 RAW_READERS: Final[frozenset[str]] = frozenset(
-    {NODE_TREND, TOP_NODES_TREND, CHECK_TREND, STATEMENT_TREND, ERROR_GROUPS, SLOW_STATEMENTS}
+    {
+        NODE_TREND,
+        TOP_NODES_TREND,
+        CHECK_TREND,
+        STATEMENT_TREND,
+        ERROR_GROUPS,
+        SLOW_STATEMENTS,
+        METRIC_SERIES,
+        METRIC_REPORTS,
+    }
 )
 # Raw readers of one series, which may read the longer window (FR17).
 SINGLE_SERIES_READERS: Final[frozenset[str]] = frozenset({NODE_TREND, CHECK_TREND})

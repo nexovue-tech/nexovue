@@ -178,7 +178,18 @@ export interface Series {
   service?: string | null;
   /** A top-nodes chart's line: the node it is. */
   node?: NodeName | null;
+  /**
+   * A chosen metric series' attributes, its label at read time. Customer text: shown only
+   * through the visible escapes (FR61).
+   */
+  attributes?: MetricAttribute[] | null;
   points: [string, number][];
+}
+
+/** One attribute of a metric series, its key a dotted path as the SDK sent it. */
+export interface MetricAttribute {
+  key: string;
+  value: string;
 }
 
 export interface NodeName {
@@ -216,8 +227,13 @@ export type PanelResult =
       series: Series[];
       number?: NumberReading | null;
       rows?: TableRow[] | null;
+      /** A metric series: how many series its one line combines (FR15, AC52). */
+      series_combined?: number | null;
+      /** Every unit a metric series' readings carried; more than one draws no line (AC51). */
+      units?: string[] | null;
     }
   | { state: "empty"; kind: string; read_at: string; last_seen_at: string | null }
+  | { state: "too_many_series"; kind: string; limit: number }
   | { state: "refused"; kind: string; retry_after_seconds: number }
   | { state: "window_too_wide"; kind: string; limit_days: number }
   | {
@@ -228,6 +244,7 @@ export type PanelResult =
         | "timed_out"
         | "failed"
         | "ambiguous"
+        | "series_changed"
         | "paused_by_operator";
       kind: string;
     }
@@ -493,6 +510,79 @@ export function useStatementChoices(projectId: string | undefined, choice: Windo
       });
     },
     select: (response) => response.statements,
+  });
+}
+
+/** The two shapes a metric series panel draws as a line (FR6). */
+export type MetricShape = "gauge" | "sum";
+
+/** A metric's names in one shape, busiest first, through the catalogue (T8.4). */
+export function useMetricChoices(
+  projectId: string | undefined,
+  shape: MetricShape | undefined,
+  choice: WindowChoice,
+) {
+  return useQuery({
+    queryKey: ["dashboard-metric-choices", projectId, shape, windowCacheKey(choice)] as const,
+    enabled: projectId !== undefined && shape !== undefined,
+    queryFn: ({ signal }) => {
+      const window = resolveChoice(choice);
+      return apiClient.get<{ metrics: { metric_name: string }[] }>("metrics", {
+        searchParams: { project_id: projectId, from: window.from, to: window.to, shape },
+        signal,
+      });
+    },
+    select: (response) => response.metrics.map((metric) => metric.metric_name),
+  });
+}
+
+/** One attribute combination of a metric, which a panel may choose by its hash (AC83). */
+export interface MetricSeriesChoice {
+  /** Decimal digits: the hash is 64 bits, more than a number here holds. */
+  series_hash: string;
+  attributes: MetricAttribute[];
+  points: number;
+  last_seen: string;
+}
+
+/** The series list reads at most this many days (AC121); a wider window lists its last 7. */
+export const SERIES_LIST_MAX_DAYS = 7;
+const MS_PER_DAY = 86_400_000;
+
+/** The window the series list may read: the builder's, or its last 7 days. */
+export function seriesListWindow(window: { from: string; to: string }): {
+  from: string;
+  to: string;
+} {
+  const earliest = Date.parse(window.to) - SERIES_LIST_MAX_DAYS * MS_PER_DAY;
+  return Date.parse(window.from) < earliest
+    ? { from: new Date(earliest).toISOString(), to: window.to }
+    : window;
+}
+
+export function useMetricSeriesChoices(
+  ask: { projectId: string; metric: string; service: string; shape: MetricShape } | undefined,
+  choice: WindowChoice,
+) {
+  return useQuery({
+    queryKey: ["dashboard-metric-series", ask, windowCacheKey(choice)] as const,
+    enabled: ask !== undefined,
+    queryFn: ({ signal }) => {
+      const window = seriesListWindow(resolveChoice(choice));
+      return apiClient.get<{ series: MetricSeriesChoice[]; truncated: boolean }>(
+        `metrics/${encodeURIComponent(ask?.metric ?? "")}/series`,
+        {
+          searchParams: {
+            project_id: ask?.projectId,
+            service_name: ask?.service,
+            shape: ask?.shape,
+            from: window.from,
+            to: window.to,
+          },
+          signal,
+        },
+      );
+    },
   });
 }
 

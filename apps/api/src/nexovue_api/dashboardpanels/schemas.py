@@ -4,7 +4,7 @@ A model per state, so a `failed` panel cannot carry values and a drawing mistake
 cannot paint zeros (BR5, AC20). Times are spelled as every telemetry screen spells them
 (`wire.IsoTimestamp`). Notes and open findings are not here: the console draws them
 from the definition and the panel context, so they survive any ClickHouse failure.
-`series_changed` and `too_many_series` arrive with metric series (plan Step 8).
+`series_changed` and `too_many_series` belong to metric series (plan Step 8).
 
 **One `ok` shape for every kind**, since the state is the discriminator: a chart fills
 `series`, a number `number`, and a table `rows`, each row the model its own screen
@@ -23,6 +23,7 @@ from nexovue_api.dashboards.definition import MAX_PANELS, Definition, PanelId, S
 from nexovue_api.dashboards.ranges import RangeId
 from nexovue_api.dbstats.schemas import StatementCost
 from nexovue_api.errorgroups.schemas import ErrorGroupSummary
+from nexovue_api.metrics.schemas import MetricAttribute
 from nexovue_api.rum.schemas import WebVitalSummary
 from nexovue_api.servicemap.schemas import ServiceEdge
 from nexovue_api.services.schemas import EndpointHealth, ServiceHealth
@@ -46,6 +47,8 @@ class Series(BaseModel):
     label: str
     service: str | None = None
     node: NodeName | None = None
+    # A chosen metric series' attributes, its label at read time, shown as text (FR61).
+    attributes: list[MetricAttribute] | None = None
     points: list[tuple[IsoTimestamp, float]]
 
 
@@ -91,6 +94,10 @@ class OkPanel(BaseModel):
     number: NumberReading | None = None
     # A table's rows, already cut to the panel's own count, in the store's order.
     rows: list[TableRow] | None = None
+    # A metric series' series combined into its one line (FR15, AC52), and every unit its
+    # readings carried. More than one unit draws no line, since they cannot be added (AC51).
+    series_combined: int | None = None
+    units: list[str] | None = None
 
 
 class EmptyPanel(BaseModel):
@@ -149,6 +156,23 @@ class AmbiguousPanel(BaseModel):
     kind: str
 
 
+class SeriesChangedPanel(BaseModel):
+    """The chosen series reported nothing in the window, and the metric still reports under
+    other attributes: adding one attribute changes the hash, so "has not reported" would be
+    false (FR16, AC115)."""
+
+    state: Literal["series_changed"] = "series_changed"
+    kind: str
+
+
+class TooManySeriesPanel(BaseModel):
+    """More series than one line can honestly combine; nothing is drawn (AC52)."""
+
+    state: Literal["too_many_series"] = "too_many_series"
+    kind: str
+    limit: int
+
+
 class WindowTooWidePanel(BaseModel):
     """A raw panel over a window wider than its reader may read; no scan ran (FR17)."""
 
@@ -181,6 +205,8 @@ PanelResult = Annotated[
     | TimedOutPanel
     | FailedPanel
     | AmbiguousPanel
+    | SeriesChangedPanel
+    | TooManySeriesPanel
     | WindowTooWidePanel
     | PausedByOperatorPanel
     | UnknownKindPanel,

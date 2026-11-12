@@ -145,6 +145,14 @@ DASHBOARD_STATEMENTS: Final = (
     ("nexovue_api.rum.queries", "VITAL_SUMMARY_SQL"),
     ("nexovue_api.errorgroups.queries", "_ERROR_GROUPS_TEMPLATE"),
     ("nexovue_api.dbstats.queries", "SLOW_STATEMENTS_SQL"),
+    # Step 8's metric series (T8.2): the line, its second read, and the builder's list
+    # of one service's attribute combinations (T8.3).
+    ("nexovue_api.metrics.queries", "METRIC_GAUGE_SERIES_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_SUM_SERIES_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_GAUGE_REPORTS_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_SUM_REPORTS_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_GAUGE_SERIES_LIST_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_SUM_SERIES_LIST_SQL"),
 )
 
 # ADR-023: the one module that may write telemetry. Every other module in either

@@ -17,9 +17,9 @@ which the console only ever shows as text with such characters made visible; onl
 is refused there, because Postgres cannot store it.
 
 Step 2 knew three kinds; Step 4 added `top_services_trend` and `node_trend` (plan, T4.1,
-T4.2); Step 5 adds the rest of the spec's list but `metric_series` and `slo_budget` (FR6;
-plan T5.1a to T5.2). Every value marked as a cap is the spec's *guess* until plan T5.7
-measures it.
+T4.2); Step 5 added the rest of the spec's list but `metric_series` and `slo_budget` (FR6;
+plan T5.1a to T5.2); Step 8 adds `metric_series` (T8.2). Every value marked as a cap is the
+spec's *guess* until plan T5.7 measures it.
 """
 
 from __future__ import annotations
@@ -337,6 +337,41 @@ class NoteSettings(_Strict):
     text: NoteText
 
 
+# A metric's name, bound in SQL as the metrics route binds it (`metrics/router.MetricName`).
+MetricName = Annotated[
+    str, StringConstraints(min_length=1, max_length=NAME_MAX_LENGTH), AfterValidator(_refuse_nul)
+]
+# The two shapes a line can be drawn from (spec, `shape`); a histogram is not one (D49).
+MetricShape = Literal["gauge", "sum"]
+Aggregation = Literal["mean", "min", "max", "sum"]
+# A `series_hash` is a UInt64, stored as its decimal digits: a browser's number holds 53
+# bits, and a file must carry the hash and no attribute values (FR42, AC121).
+UINT64_MAX: Final = 2**64 - 1
+SERIES_HASH_PATTERN: Final = r"^[0-9]{1,20}$"
+
+
+def _a_uint64(value: str) -> str:
+    if int(value) > UINT64_MAX:
+        raise ValueError("a series hash is at most 18446744073709551615")
+    return value
+
+
+SeriesHash = Annotated[
+    str, StringConstraints(pattern=SERIES_HASH_PATTERN), AfterValidator(_a_uint64)
+]
+
+
+class MetricSeriesSettings(_Strict):
+    """One gauge or sum over time: one chosen series, or all combined into one line (FR6,
+    D33, D48). `service` None reads every service; `series` None combines every series."""
+
+    metric: MetricName
+    shape: MetricShape
+    service: ServiceRef | None
+    series: SeriesHash | None
+    aggregation: Aggregation
+
+
 class _Panel(_Strict):
     id: PanelId
     title: Label | None
@@ -456,6 +491,11 @@ class NotePanel(_Panel):
     settings: NoteSettings
 
 
+class MetricSeriesPanel(_TimePanel):
+    kind: Literal["metric_series"]
+    settings: MetricSeriesSettings
+
+
 KnownPanel = (
     ProjectTrendPanel
     | ServiceTrendPanel
@@ -475,6 +515,7 @@ KnownPanel = (
     | DatabaseStatementsTablePanel
     | WebVitalsTablePanel
     | NotePanel
+    | MetricSeriesPanel
 )
 Panel = Annotated[KnownPanel, Field(discriminator="kind")]
 TIME_KINDS: Final = frozenset(
@@ -487,6 +528,7 @@ TIME_KINDS: Final = frozenset(
         "endpoint_trend",
         "check_trend",
         "statement_trend",
+        "metric_series",
     }
 )
 

@@ -17,6 +17,12 @@ named `checkout` beside them is a second (spec, *The templates*). At read time
 `check_id` in the displayed project before any scan, and the scan's key carries that
 id, so one name on two projects can never share a read.
 
+**A chosen metric series counts as two** (design, *`series_changed`*). Its own read, and,
+only when that comes back empty, one further charged read asking whether the metric still
+reports under other attributes. The second is the panel's `fallback`: it counts in the
+worst case at save, and holds its place under the scan cap at read time, but runs only
+when needed.
+
 **Tables read their kind's fullest page.** A table key holds no row count: the store
 returns the first `MAX_TABLE_ROWS` of its ranking, and each panel shows its own first
 rows of it. The ranking is the store's, so a panel's first five are the route's own
@@ -37,6 +43,7 @@ from nexovue_api.dashboards.definition import (
     EndpointTrendPanel,
     ErrorGroupsTablePanel,
     KnownPanel,
+    MetricSeriesPanel,
     NodeRef,
     NodeTrendPanel,
     Picker,
@@ -74,6 +81,11 @@ DEPENDENCIES: Final = "dependencies"
 ERROR_GROUPS: Final = "error_groups"
 SLOW_STATEMENTS: Final = "slow_statements"
 WEB_VITALS: Final = "web_vitals"
+METRIC_SERIES: Final = "metric_series"
+# Whether a metric reports under any attributes: a chosen series' second read (FR16).
+METRIC_REPORTS: Final = "metric_reports"
+# Readers that run only when their panel's first read asks for them.
+FALLBACK_READERS: Final = frozenset({METRIC_REPORTS})
 
 AnyPanel = KnownPanel | UnknownPanel
 
@@ -110,9 +122,14 @@ class ScanKey:
     # one read answers rate, errors and latency alike.
     order: str | None = None
     count: int | None = None
-    # A node chart's node, and a node or top-nodes chart's metric (FR6).
+    # A node chart's node, and a node, top-nodes or metric series chart's metric (FR6).
     node: NodeIdentity | None = None
     metric: str | None = None
+    # A metric series' shape, its chosen series (the hash, as decimal digits), and how
+    # its series combine into one line.
+    shape: str | None = None
+    series_hash: str | None = None
+    aggregation: str | None = None
     # An endpoint chart's endpoint: its span kind and span name.
     span_kind: str | None = None
     endpoint: str | None = None
@@ -134,10 +151,13 @@ class CompiledPanel:
     scan: ScanKey | None
     # A compared number's read of the previous window.
     compare: ScanKey | None = None
+    # A chosen metric series' further read, run only when its own comes back empty.
+    fallback: ScanKey | None = None
 
     @property
     def keys(self) -> tuple[ScanKey, ...]:
-        return tuple(key for key in (self.scan, self.compare) if key is not None)
+        """Every read this panel may need: what the worst case and the scan cap count."""
+        return tuple(key for key in (self.scan, self.compare, self.fallback) if key is not None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +238,14 @@ def scan_of(panel: AnyPanel) -> ScanKey | None:
             return ScanKey(reader=SLOW_STATEMENTS)
         case WebVitalsTablePanel(settings=settings):
             return ScanKey(reader=WEB_VITALS, device_class=settings.device_class)
+        case MetricSeriesPanel(settings=settings):
+            return replace(
+                _for_service(METRIC_SERIES, panel),
+                metric=settings.metric,
+                shape=settings.shape,
+                series_hash=settings.series,
+                aggregation=settings.aggregation,
+            )
     return None
 
 
@@ -228,10 +256,29 @@ def compare_of(panel: AnyPanel, scan: ScanKey | None) -> ScanKey | None:
     return replace(scan, previous=True) if panel.settings.compare else None
 
 
+def fallback_of(scan: ScanKey | None) -> ScanKey | None:
+    """A chosen metric series' second read: does the metric report under any attributes,
+    from the same service or picker? One key per metric, shape and service, so every
+    chosen series of one metric shares it."""
+    if scan is None or scan.reader != METRIC_SERIES or scan.series_hash is None:
+        return None
+    return ScanKey(
+        reader=METRIC_REPORTS,
+        service=scan.service,
+        picked=scan.picked,
+        metric=scan.metric,
+        shape=scan.shape,
+    )
+
+
 def compile_panel(panel: AnyPanel) -> CompiledPanel:
     scan = scan_of(panel)
     return CompiledPanel(
-        panel_id=panel.id, kind=panel.kind, scan=scan, compare=compare_of(panel, scan)
+        panel_id=panel.id,
+        kind=panel.kind,
+        scan=scan,
+        compare=compare_of(panel, scan),
+        fallback=fallback_of(scan),
     )
 
 

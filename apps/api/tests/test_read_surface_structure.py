@@ -157,6 +157,9 @@ def test_every_surface_route_is_a_get(key: str) -> None:
 # on `CurrentReader`, so a panels handler that dropped its gate would still read as
 # guarded to the rule above; each F20 handler must name its gate instead.
 DASHBOARD_ROUTERS: Final = ("nexovue_api/dashboards/", "nexovue_api/dashboardpanels/")
+# F20 handlers in another package's router. The series list hands attribute values to the
+# builder, which may be personal data, so no token reads it (design section 8, AC9, AC121).
+DASHBOARD_HANDLERS_ELSEWHERE: Final = ("nexovue_api/metrics/router.py:list_series",)
 DASHBOARD_GATES: Final = ("CurrentIdentity", "MayEditDashboards", "MayPurgeDashboards")
 
 
@@ -164,13 +167,16 @@ def _dashboard_handlers() -> list[tuple[str, ast.AsyncFunctionDef | ast.Function
     return [
         (key, node)
         for key, node, decorators in _handlers()
-        if key.startswith(DASHBOARD_ROUTERS) and any("router." in d for d in decorators)
+        if (key.startswith(DASHBOARD_ROUTERS) or key in DASHBOARD_HANDLERS_ELSEWHERE)
+        and any("router." in d for d in decorators)
     ]
 
 
 def test_the_dashboard_handlers_were_found() -> None:
     """A rule that parsed nothing passes for the wrong reason."""
-    assert len(_dashboard_handlers()) >= 8
+    found = {key for key, _ in _dashboard_handlers()}
+    assert len(found) >= 8
+    assert set(DASHBOARD_HANDLERS_ELSEWHERE) <= found
 
 
 @pytest.mark.parametrize("key", [key for key, _ in _dashboard_handlers()])

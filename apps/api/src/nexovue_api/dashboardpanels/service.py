@@ -12,10 +12,12 @@ The sequence, and why each step is where it is:
 4. **Compile.** Each stored panel parses alone (an unknown one reads `unknown_kind`),
    what Postgres or the install already decides needs no scan (`needs_service`, a check
    `not_in_project` or `ambiguous`, `window_too_wide`, `paused_by_operator`), equal
-   scans merge, and keys past the scan cap read `over_limit` with no scan.
+   scans merge, and keys past the scan cap read `over_limit` with no scan. A chosen
+   metric series' second read holds its place under the cap from here.
 5. **Scan in layout order**, 4 at once, each through the shared reads (kept, joined or
    led), under one deadline counted from the request's arrival (D25). An abandoned
-   request starts nothing more.
+   request starts nothing more. Then the second reads that a chosen metric series which
+   came back empty asks for, and only those (design, *`series_changed`*).
 6. **Assemble** one state per panel. A failure never takes the page (FR14).
 
 **A draft** (`POST /preview`, T3.1) takes the same path from step 4, and the same
@@ -67,7 +69,9 @@ from nexovue_api.dashboardpanels.schemas import (
     PausedByOperatorPanel,
     RefusedPanel,
     Series,
+    SeriesChangedPanel,
     TimedOutPanel,
+    TooManySeriesPanel,
     UnknownKindPanel,
     WindowTooWidePanel,
 )
@@ -88,6 +92,7 @@ from nexovue_api.dashboards import service as dashboards
 from nexovue_api.dashboards.compile import (
     CHECK_TREND,
     ERROR_GROUPS,
+    FALLBACK_READERS,
     CompiledPanel,
     ScanKey,
     compile_panel,
@@ -99,6 +104,7 @@ from nexovue_api.dashboards.definition import (
     Definition,
     EndpointTrendPanel,
     KnownPanel,
+    MetricSeriesPanel,
     NodeTrendPanel,
     ProjectNumberPanel,
     ProjectTrendPanel,
@@ -116,6 +122,7 @@ from nexovue_api.dashboards.ranges import RangeId, window_for
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Project
 from nexovue_api.deploys import service as deploys
+from nexovue_api.metrics.service import MAX_COMBINED_SERIES, MetricLine
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.releases import service as releases
 from nexovue_api.services.schemas import OverviewPoint, TrendPoint
@@ -296,9 +303,11 @@ async def read_panels(
 
 # What the list calls "not reading" (design, *The list*): panels that will not read until a
 # person changes the dashboard or the project. A transient state (refused, timed out, failed,
-# a service not yet picked) is never counted, since it passes by itself. Step 8's
-# `series_changed` joins this when the kind exists (T8.2).
-NOT_READING_STATES: Final = frozenset({"not_in_project", "ambiguous", "over_limit", "unknown_kind"})
+# a service not yet picked) is never counted, since it passes by itself. A chosen metric
+# series whose attributes changed reads nothing until someone chooses again (T8.2).
+NOT_READING_STATES: Final = frozenset(
+    {"not_in_project", "ambiguous", "over_limit", "unknown_kind", "series_changed"}
+)
 
 
 def count_not_reading(panels: dict[str, PanelResult]) -> int:
@@ -395,19 +404,30 @@ class _Entry:
     compiled: CompiledPanel
     scan: ScanKey | None = None
     compare: ScanKey | None = None
+    # A chosen metric series' second read, run only when `scan` comes back empty.
+    fallback: ScanKey | None = None
     decided: PanelResult | None = None
 
     @property
     def keys(self) -> tuple[ScanKey, ...]:
+        """Every read this panel may need, which the scan cap counts as the save did."""
+        return tuple(key for key in (self.scan, self.compare, self.fallback) if key is not None)
+
+    @property
+    def read_keys(self) -> tuple[ScanKey, ...]:
+        """The reads it always needs."""
         return tuple(key for key in (self.scan, self.compare) if key is not None)
 
 
 @dataclass(frozen=True, slots=True)
 class _Plan:
     entries: list[_Entry]
-    # Distinct keys within the cap, in layout order, and those past it.
+    # Distinct keys within the cap that a readable panel needs, in layout order, and those
+    # past it.
     scans: tuple[ScanKey, ...]
     over_limit: frozenset[ScanKey]
+    # Every distinct key the panels asked for: what the log's merge count is taken from.
+    distinct: int
     window: Window
 
 
@@ -489,10 +509,17 @@ def _plan(
 ) -> _Plan:
     entries = [_entry(panel, pre_read=pre_read, limits=limits, window=window) for panel in panels]
     keys = tuple(dict.fromkeys(key for entry in entries for key in entry.keys))
+    over_limit = frozenset(keys[limits.max_scans_per_read :])
+    # A panel reading `over_limit` starts nothing: a key within the cap that only such a
+    # panel needs (a compared number's first read, a chosen series' own) is not scanned.
+    needed = {
+        key for entry in entries if not over_limit.intersection(entry.keys) for key in entry.keys
+    }
     return _Plan(
         entries=entries,
-        scans=keys[: limits.max_scans_per_read],
-        over_limit=frozenset(keys[limits.max_scans_per_read :]),
+        scans=tuple(key for key in keys[: limits.max_scans_per_read] if key in needed),
+        over_limit=over_limit,
+        distinct=len(keys),
         window=window,
     )
 
@@ -526,7 +553,8 @@ def _entry(
             panel, compiled, decided=WindowTooWidePanel(kind=panel.kind, limit_days=limit)
         )
     compare = resolve(compiled.compare, picked=pre_read.picked)
-    return _Entry(panel, compiled, scan=scan, compare=compare)
+    fallback = resolve(compiled.fallback, picked=pre_read.picked)
+    return _Entry(panel, compiled, scan=scan, compare=compare, fallback=fallback)
 
 
 def _window_limit_days(scan: ScanKey, pre_read: _PreRead, limits: DashboardLimits) -> int | None:
@@ -599,9 +627,11 @@ async def _scan_and_assemble(
         finally:
             permits.release()
 
-    outcomes = dict(
-        zip(plan.scans, await asyncio.gather(*(scan(key) for key in plan.scans)), strict=True)
-    )
+    async def scan_all(keys: Sequence[ScanKey]) -> dict[ScanKey, Outcome]:
+        return dict(zip(keys, await asyncio.gather(*(scan(key) for key in keys)), strict=True))
+
+    outcomes = await scan_all([key for key in plan.scans if key.reader not in FALLBACK_READERS])
+    outcomes |= await scan_all(_fallbacks_wanted(plan, outcomes))
     panels: dict[str, PanelResult] = {}
     filling_at = scanning.now if scanning.live else None
     for entry in plan.entries:
@@ -609,6 +639,28 @@ async def _scan_and_assemble(
         if result is not None:
             panels[entry.panel.id] = result
     return panels, outcomes
+
+
+def _fallbacks_wanted(plan: _Plan, outcomes: dict[ScanKey, Outcome]) -> list[ScanKey]:
+    """The second reads asked for: a chosen metric series whose own read was served and
+    drew nothing (design, *`series_changed`*). In layout order, each once."""
+    wanted = [
+        entry.fallback
+        for entry in plan.entries
+        if entry.fallback is not None
+        and entry.fallback not in plan.over_limit
+        and entry.scan is not None
+        and _served_nothing(outcomes.get(entry.scan))
+    ]
+    return list(dict.fromkeys(wanted))
+
+
+def _served_nothing(outcome: Outcome | None) -> bool:
+    return (
+        isinstance(outcome, Served)
+        and isinstance(outcome.answer.value, MetricLine)
+        and not outcome.answer.value.points
+    )
 
 
 def _result(
@@ -626,7 +678,7 @@ def _result(
     if any(key in plan.over_limit for key in entry.keys):
         return OverLimitPanel(kind=panel.kind)
     served: list[Served] = []
-    for key in entry.keys:
+    for key in entry.read_keys:
         outcome = outcomes[key]
         if isinstance(outcome, RefusedRead):
             return RefusedPanel(kind=panel.kind, retry_after_seconds=outcome.retry_after_seconds)
@@ -640,6 +692,7 @@ def _result(
         key=entry.scan,
         served=served[0],
         compared=served[1] if len(served) > 1 else None,
+        reports=outcomes.get(entry.fallback) if entry.fallback is not None else None,
         last_seen=last_seen,
         filling_at=filling_at,
         previous_window=_window_of(entry.compare, plan.window) if entry.compare else None,
@@ -662,6 +715,8 @@ class _Drawing:
     key: ScanKey
     served: Served
     compared: Served | None
+    # A chosen metric series' second read, when its own drew nothing.
+    reports: Outcome | None
     last_seen: dict[str, datetime]
     filling_at: datetime | None
     previous_window: Window | None
@@ -676,6 +731,8 @@ class _Drawing:
             return self._number(value)
         if isinstance(value, Ranked):
             return self._table(value)
+        if isinstance(value, MetricLine):
+            return self._metric(value)
         return self._chart(value)
 
     def _nothing(self) -> PanelResult:
@@ -703,6 +760,57 @@ class _Drawing:
             incomplete_from=_filling(buckets[-1], bucket_seconds, self.filling_at),
             series=lines,
         )
+
+    def _metric(self, value: MetricLine) -> PanelResult:
+        """A metric series: its states before its line (FR16, AC51, AC52, AC115)."""
+        if not isinstance(self.panel, MetricSeriesPanel):
+            raise TypeError(f"a {self.panel.kind} panel cannot draw a metric series")
+        if value.series > MAX_COMBINED_SERIES:
+            return TooManySeriesPanel(kind=self.panel.kind, limit=MAX_COMBINED_SERIES)
+        if not value.points:
+            return self._no_metric()
+        buckets = [at for at, _ in value.points]
+        # Two units cannot be added, so the line is not drawn and the units are said (AC51).
+        lines = (
+            []
+            if len(value.units) > 1
+            else [
+                Series(
+                    label=self.panel.settings.metric,
+                    attributes=value.attributes if self.key.series_hash is not None else None,
+                    points=value.points,
+                )
+            ]
+        )
+        return OkPanel(
+            kind=self.panel.kind,
+            read_at=self.read_at,
+            bucket_seconds=value.bucket_seconds,
+            data_starts_at=buckets[0],
+            data_ends_at=buckets[-1],
+            incomplete_from=_filling(buckets[-1], value.bucket_seconds, self.filling_at),
+            series=lines,
+            series_combined=value.series,
+            units=value.units,
+        )
+
+    def _no_metric(self) -> PanelResult:
+        """Nothing for the series. A chosen one asks whether the metric still reports
+        under other attributes: then it is `series_changed`, never "has not reported"."""
+        if self.key.series_hash is None:
+            return self._nothing()
+        reports = self.reports
+        if isinstance(reports, RefusedRead):
+            return RefusedPanel(
+                kind=self.panel.kind, retry_after_seconds=reports.retry_after_seconds
+            )
+        if isinstance(reports, TimedOutRead):
+            return TimedOutPanel(kind=self.panel.kind)
+        if isinstance(reports, FailedRead):
+            return FailedPanel(kind=self.panel.kind)
+        if isinstance(reports, Served) and reports.answer.value is True:
+            return SeriesChangedPanel(kind=self.panel.kind)
+        return self._nothing()
 
     def _number(self, value: CoveredTotals | CoveredService) -> PanelResult:
         if not isinstance(self.panel, ProjectNumberPanel | ServiceNumberPanel):
@@ -882,7 +990,7 @@ def _log(
         draft=dashboard_id is None,
         panels=len(plan.entries),
         scans_run=sources["read"],
-        merged=wanted - len(plan.scans) - len(plan.over_limit),
+        merged=wanted - plan.distinct,
         kept_answers_used=sources["kept"],
         joined=sources["joined"],
         refused=states["refused"],

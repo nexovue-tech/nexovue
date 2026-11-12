@@ -28,6 +28,7 @@ export function TimePanel({
   onDrag,
   marks = NO_MARKS,
   asTable = false,
+  note,
 }: {
   panel: StoredPanel;
   reading: OkResult;
@@ -37,6 +38,8 @@ export function TimePanel({
   onDrag?: (fromSeconds: number, toSeconds: number) => void;
   marks?: Marks;
   asTable?: boolean;
+  /** One short line under the chart: how many series a metric line combines (AC52). */
+  note?: string;
 }) {
   const chart = useMemo(() => timeChart(panel, reading), [panel, reading]);
   const data = useMemo(() => plotRows(chart), [chart]);
@@ -66,6 +69,7 @@ export function TimePanel({
         dottedSeen
       />
       <ChartLegend readout={readoutAt(chart, cursor, marks, zone)} lines={chart.lines.length} />
+      {note === undefined ? null : <p className="font-mono text-2xs text-ink-dim">{note}</p>}
     </>
   );
 }
