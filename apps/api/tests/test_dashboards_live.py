@@ -18,6 +18,10 @@ with its `basis` and `state` (a signed deploy `reported`, a version only seen in
 naming a service in the window, newest first, past their caps said so (AC32, AC33's data
 halves, AC61, AC117).
 
+Step 9 (T9.1, T9.3): every template saves as it is (AC80); `POST /dashboards/validate`
+passes an exported file back equal and holding no id (AC40), refuses a hostile file in
+words with nothing written (AC41, AC128, AC139), and refuses a viewer (AC128).
+
 ClickHouse is absent from every route here but the batch: the tenant repository is
 F22's stub, which fails if a read runs before the request's commit.
 """
@@ -41,7 +45,7 @@ from test_findings_cases_live import Team, _call, _client, _team, db  # noqa: F4
 
 from nexovue_api.audit import service as audit
 from nexovue_api.dashboards import service as dashboards
-from nexovue_api.dashboards.templates import START_FROM_OVERVIEW
+from nexovue_api.dashboards.templates import INFRASTRUCTURE, SERVICE_HEALTH, START_FROM_OVERVIEW
 from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     Dashboard,
@@ -247,6 +251,8 @@ def test_ac8_every_dashboard_write_passes_the_support_views_method_gate() -> Non
         dashboards_router.create_dashboard,
         dashboards_router.replace_dashboard,
         dashboards_router.delete_dashboard,
+        # A file's check writes nothing, and is still refused (AC128).
+        dashboards_router.validate_dashboard,
         # A draft's read is refused too, though it changes nothing (AC8).
         panels_router.preview_panels,
     ):
@@ -655,22 +661,187 @@ async def test_ac38_opening_a_template_writes_no_row(db: AsyncSession, acme: Tea
     answer = await _call(db, acme, acme.viewer, "GET", "/dashboards/templates")
 
     assert answer.status_code == 200
-    [template] = answer.json()["templates"]
-    assert template["id"] == START_FROM_OVERVIEW
-    assert [panel["kind"] for panel in template["document"]["definition"]["panels"]] == [
-        "project_trend"
-    ] * 3
+    assert [template["id"] for template in answer.json()["templates"]] == [
+        START_FROM_OVERVIEW,
+        SERVICE_HEALTH,
+        INFRASTRUCTURE,
+    ]
     assert await db.scalar(select(func.count()).select_from(Dashboard)) == before
 
 
-async def test_a_template_saves_as_it_is(db: AsyncSession, acme: Team) -> None:  # noqa: F811
-    template = (await _call(db, acme, acme.member, "GET", "/dashboards/templates")).json()
+async def test_ac80_every_template_saves_as_it_is(db: AsyncSession, acme: Team) -> None:  # noqa: F811
+    answer = (await _call(db, acme, acme.member, "GET", "/dashboards/templates")).json()
 
-    saved = await _call(
-        db, acme, acme.member, "POST", "/dashboards", template["templates"][0]["document"]
+    for template in answer["templates"]:
+        saved = await _call(db, acme, acme.member, "POST", "/dashboards", template["document"])
+        assert saved.status_code == 201, (template["id"], saved.text)
+        assert saved.json()["definition"] == template["document"]["definition"]
+
+
+# ------------------------------------------- T9.3: import's check (FR42, D53)
+
+
+def _exported(saved: dict[str, Any]) -> dict[str, Any]:
+    """What the console's export writes (`transfer.ts`): the document alone (FR42)."""
+    return {key: saved[key] for key in ("title", "description", "definition")}
+
+
+async def test_ac40_export_then_import_gives_an_equal_document_holding_no_ids(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    check = {
+        "id": "p_login",
+        "kind": "check_trend",
+        "title": None,
+        "width": 4,
+        "height": "medium",
+        "settings": {"check": "Login", "signal": "uptime"},
+    }
+    saved = await _create(db, acme, panels=[*_document()["definition"]["panels"], check])
+    read = (await _call(db, acme, acme.viewer, "GET", f"/dashboards/{saved['id']}")).json()
+    file = json.dumps(_exported(read))
+
+    checked = await _call(
+        db, globex, globex.member, "POST", "/dashboards/validate", json.loads(file)
     )
 
-    assert saved.status_code == 201, saved.text
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["document"] == json.loads(file)
+    assert checked.json()["panel_count"] == len(read["definition"]["panels"])
+    for identifier in (acme.org_id, acme.project_id, saved["id"], acme.member.id, acme.owner.id):
+        assert str(identifier) not in file
+    assert "version" not in json.loads(file)
+    assert "owner" not in json.loads(file)
+
+
+async def test_ac40_an_imported_document_saves_new_and_over_a_dashboard_with_the_version(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """The draft a file opens is saved as any draft is: new, or over one dashboard naming
+    the version it was read at (FR42)."""
+    existing = await _create(db, acme)
+    file = _document(title="Imported")
+    checked = (await _call(db, acme, acme.member, "POST", "/dashboards/validate", file)).json()
+
+    created = await _call(db, acme, acme.member, "POST", "/dashboards", checked["document"])
+    over = await _save(db, acme, existing, **checked["document"] | {"title": "Over it"})
+    stale = await _save(db, acme, existing, **checked["document"] | {"title": "Stale"})
+
+    assert created.status_code == 201, created.text
+    assert over.status_code == 200, over.text
+    assert over.json()["version"] == existing["version"] + 1
+    assert stale.status_code == 409
+
+
+def _too_many_reads() -> dict[str, Any]:
+    """21 compared numbers on 21 services: 42 reads, past the 40 one page may make."""
+    numbers = [
+        {
+            "id": f"p_{index}",
+            "kind": "service_number",
+            "title": None,
+            "width": 3,
+            "height": "small",
+            "settings": {"service": f"svc-{index}", "measure": "p95_ms", "compare": True},
+        }
+        for index in range(21)
+    ]
+    return _document(panels=numbers)
+
+
+def _note(panel_id: str, text: str) -> dict[str, Any]:
+    return {
+        "id": panel_id,
+        "kind": "note",
+        "title": None,
+        "width": 12,
+        "height": "small",
+        "settings": {"text": text},
+    }
+
+
+def _hostile_files() -> dict[str, dict[str, Any]]:
+    query_kind = _document()
+    query_kind["definition"]["panels"][0]["kind"] = "query"
+    sql = _document()
+    sql["definition"]["panels"][0]["settings"]["sql"] = "SELECT * FROM organizations"
+    another_org = _document()
+    another_org["definition"]["panels"][0]["settings"]["org_id"] = str(uuid.uuid4())
+    # Eleven notes of 2,000 three-byte characters: each note within its own bound, the
+    # whole about 66 KiB, so only the document's size refuses it (AC139).
+    oversized = _document(panels=[_note(f"p_note_{index}", "€" * 2_000) for index in range(11)])
+    return {
+        "a query kind": query_kind,
+        "sql": sql,
+        "an id of another organization": another_org,
+        "a javascript link": _document(links=[{"label": "x", "url": "javascript:alert(1)"}]),
+        "a link with a person in it": _document(
+            links=[{"label": "x", "url": "https://wiki.example@evil.test/"}]
+        ),
+        "too many reads": _too_many_reads(),
+        "a newer format": _document(schema_version=2),
+        "over 64 KiB": oversized,
+    }
+
+
+@pytest.mark.parametrize("hostile", list(_hostile_files()))
+async def test_ac128_ac139_a_hostile_file_is_refused_in_words_and_nothing_is_written(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    hostile: str,
+) -> None:
+    before_rows = await db.scalar(select(func.count()).where(Dashboard.org_id == acme.org_id))
+    before_entries = await db.scalar(
+        select(func.count()).where(AuditLogEntry.org_id == acme.org_id)
+    )
+
+    refused = await _call(
+        db, acme, acme.member, "POST", "/dashboards/validate", _hostile_files()[hostile]
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] or refused.json()["errors"]
+    assert await db.scalar(select(func.count()).where(Dashboard.org_id == acme.org_id)) == (
+        before_rows
+    )
+    assert await db.scalar(select(func.count()).where(AuditLogEntry.org_id == acme.org_id)) == (
+        before_entries
+    )
+
+
+async def test_ac139_ac41_the_refusals_say_what_is_wrong(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    files = _hostile_files()
+
+    newer = (
+        await _call(db, acme, acme.member, "POST", "/dashboards/validate", files["a newer format"])
+    ).json()
+    size = (
+        await _call(db, acme, acme.member, "POST", "/dashboards/validate", files["over 64 KiB"])
+    ).json()
+    reads = (
+        await _call(db, acme, acme.member, "POST", "/dashboards/validate", files["too many reads"])
+    ).json()
+
+    assert "made by a newer version of nexovue" in json.dumps(newer["errors"])
+    assert "A dashboard is at most 64 KiB" in size["detail"]
+    assert "would need 42 reads" in reads["detail"]
+
+
+async def test_ac128_a_viewer_and_a_support_view_cannot_check_a_file(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    viewer = await _call(db, acme, acme.viewer, "POST", "/dashboards/validate", _document())
+    member = await _call(db, acme, acme.member, "POST", "/dashboards/validate", _document())
+
+    assert viewer.status_code == 403
+    assert member.status_code == 200
 
 
 # ---------------------------------------------------------- T2.14, AC61

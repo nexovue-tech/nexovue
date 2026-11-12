@@ -1,4 +1,5 @@
-import { Link } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
 import type { Column } from "@/shared/components/DataTable";
@@ -11,7 +12,12 @@ import { visibleEscapes } from "@/shared/format/visible-escapes";
 import { useCan } from "@/shared/identity";
 
 import type { DashboardSummary } from "./api";
-import { useDashboards, useDashboardTemplates, useDeletedDashboards } from "./api";
+import {
+  handOverImported,
+  useDashboards,
+  useDashboardTemplates,
+  useDeletedDashboards,
+} from "./api";
 import type { ListColumn, ListOrder } from "./dashboard-list";
 import {
   DEFAULT_ORDER,
@@ -22,7 +28,9 @@ import {
   notReadingWords,
   STALE_AFTER_DAYS,
   sortRows,
+  startingPoints,
 } from "./dashboard-list";
+import { ImportFile } from "./FileTransfer";
 import { RecentlyDeleted } from "./RecentlyDeleted";
 
 /**
@@ -34,7 +42,11 @@ import { RecentlyDeleted } from "./RecentlyDeleted";
  * reading" where the last stamped read found some. Each state is designed: loading, failed,
  * empty for an editor (each starting point, then a blank dashboard, FR39), empty for a
  * viewer, and no results with a way to clear the filter. Recently deleted lists what a
- * delete hid. A viewer is offered nothing that would fail (AC7).
+ * delete hid. A viewer is offered nothing that would fail (AC7), import included (FR42).
+ *
+ * A starting point already saved reads "Open" and goes to it (FR39). A file that passes
+ * the API's check opens in the builder as an unsaved draft; one that does not is refused
+ * here in words, and nothing opens.
  *
  * `now` is the clock "2 hours ago" and "not opened for 30 days" count from.
  */
@@ -49,19 +61,32 @@ export function DashboardListScreen({ now = Date.now() }: { now?: number }) {
   const [order, setOrder] = useState<ListOrder>(DEFAULT_ORDER);
   const [typed, setTyped] = useState("");
   const [showDeleted, setShowDeleted] = useState(false);
+  const client = useQueryClient();
+  const navigate = useNavigate();
 
   const startAction = canEdit ? (
     <div className="flex flex-wrap gap-2">
-      {(templates.data ?? []).map((template) => (
-        <Link
-          key={template.id}
-          to="/dashboards/new"
-          search={{ template: template.id }}
-          className={ACTION_CLASS}
-        >
-          {template.name}
-        </Link>
-      ))}
+      {startingPoints(templates.data ?? [], dashboards.data ?? []).map((point) =>
+        point.kind === "open" ? (
+          <Link
+            key={point.templateId}
+            to="/dashboards/$dashboardId"
+            params={{ dashboardId: point.dashboardId }}
+            className={ACTION_CLASS}
+          >
+            {visibleEscapes(point.label)}
+          </Link>
+        ) : (
+          <Link
+            key={point.templateId}
+            to="/dashboards/new"
+            search={{ template: point.templateId }}
+            className={ACTION_CLASS}
+          >
+            {point.label}
+          </Link>
+        ),
+      )}
       <Link to="/dashboards/new" search={{}} className={ACTION_CLASS}>
         New dashboard
       </Link>
@@ -71,9 +96,22 @@ export function DashboardListScreen({ now = Date.now() }: { now?: number }) {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="font-semibold text-ink text-lg">Dashboards</h1>
-        {hasRows ? startAction : null}
+        <div className="flex flex-wrap items-start gap-2">
+          {hasRows ? startAction : null}
+          {canEdit ? (
+            <ImportFile
+              label="Import"
+              onOpened={(document) =>
+                void navigate({
+                  to: "/dashboards/new",
+                  search: { file: handOverImported(client, document) },
+                })
+              }
+            />
+          ) : null}
+        </div>
       </header>
       {hasRows ? (
         <input
@@ -148,7 +186,7 @@ function Body({
     return canEdit ? (
       <EmptyState
         title="No dashboards yet"
-        detail="Start from Overview: its three charts, as a draft to change, name and keep."
+        detail="Start from a template, as a draft to change, name and keep. Nothing is saved until you save it."
         action={startAction}
       />
     ) : (

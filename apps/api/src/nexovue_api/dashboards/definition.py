@@ -37,6 +37,7 @@ from pydantic import (
     StringConstraints,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -545,6 +546,20 @@ class Definition(_Strict):
     service_picker: bool
     links: Annotated[list[Link], Field(max_length=MAX_LINKS)]
     panels: list[Panel]
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _not_newer(cls, value: object) -> object:
+        """A file from a newer install is refused in words, not as "should be 1" (AC41).
+        `true` would otherwise pass as 1, so a format is a whole number and nothing else."""
+        if isinstance(value, bool):
+            raise ValueError("the format is a whole number")
+        if isinstance(value, int) and value > SCHEMA_VERSION:
+            raise ValueError(
+                f"this dashboard is in format {value}, made by a newer version of nexovue; "
+                f"this install reads format {SCHEMA_VERSION}. Upgrade nexovue to open it"
+            )
+        return value
 
     @model_validator(mode="after")
     def _panels_fit(self) -> Definition:

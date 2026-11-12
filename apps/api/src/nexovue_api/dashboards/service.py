@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.dashboards import queries
+from nexovue_api.dashboards.compile import CompiledDefinition
 from nexovue_api.dashboards.definition import (
     DashboardDocument,
     canonical_json,
@@ -48,6 +49,7 @@ from nexovue_api.dashboards.schemas import (
     OpenFindings,
     PlanRetention,
     ReplaceDashboard,
+    ValidatedDocument,
     VersionResponse,
     VersionsResponse,
     VersionSummary,
@@ -244,6 +246,27 @@ def templates() -> DashboardTemplatesResponse:
     )
 
 
+def _checked(document: DashboardDocument, limits: DashboardLimits) -> CompiledDefinition:
+    """What a save and a file share past the validator's fields: 64 KiB, the install's
+    panel cap and refresh floor, and the worst case of reads (FR7)."""
+    check_size(document)
+    return compile_within(document.definition, limits)
+
+
+def validate_document(
+    document: DashboardDocument, *, limits: DashboardLimits = CODE_LIMITS
+) -> ValidatedDocument:
+    """A file's check before anything opens (FR42, D53): a save's own checks, with no
+    read of either store and no write. What passes comes back as the validator read it, so
+    the draft the console opens is the document that passed, never the file's own text."""
+    compiled = _checked(document, limits)
+    return ValidatedDocument(
+        document=document,
+        panel_count=compiled.panel_count,
+        worst_case_reads=compiled.worst_case_scans,
+    )
+
+
 # ------------------------------------------------------------------ writing
 
 
@@ -255,8 +278,7 @@ async def create_dashboard(
     now: datetime,
     limits: DashboardLimits = CODE_LIMITS,
 ) -> DashboardResponse:
-    check_size(document)
-    compiled = compile_within(document.definition, limits)
+    compiled = _checked(document, limits)
     await queries.hold_the_organizations_dashboards(db, org_id=identity.org_id)
     counted = await queries.counts(db, org_id=identity.org_id)
     if counted.live >= LIVE_DASHBOARDS_CAP:

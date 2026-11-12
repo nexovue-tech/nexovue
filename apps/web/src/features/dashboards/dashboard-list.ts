@@ -1,6 +1,7 @@
 import type { SortDirection } from "@/shared/components/DataTable";
+import { savedUnder } from "@/shared/dashboards-for-service";
 
-import type { DashboardSummary } from "./api";
+import type { DashboardSummary, DashboardTemplate } from "./api";
 
 /**
  * How the dashboard list is ordered, filtered and marked (F20, FR36, AC45, AC46, AC81).
@@ -95,4 +96,30 @@ export function isStale(row: DashboardSummary, now: number): boolean {
 export function notReadingWords(count: number): string | undefined {
   if (count <= 0) return undefined;
   return `${count} ${count === 1 ? "panel" : "panels"} not reading`;
+}
+
+/** One of FR39's starting points: open the one saved from it, or start a draft from it. */
+export type StartingPoint =
+  | { kind: "open"; templateId: string; dashboardId: string; label: string }
+  | { kind: "start"; templateId: string; label: string };
+
+/**
+ * The templates in the API's order (FR39's), each offered as "Open" once a dashboard holds
+ * its title, so the list never invites a second copy (FR39, D20).
+ */
+export function startingPoints(
+  templates: readonly DashboardTemplate[],
+  rows: readonly Pick<DashboardSummary, "id" | "title">[],
+): StartingPoint[] {
+  return templates.map((template) => {
+    const saved = savedUnder(template.document.title, rows);
+    return saved
+      ? {
+          kind: "open",
+          templateId: template.id,
+          dashboardId: saved.id,
+          label: `Open ${saved.title}`,
+        }
+      : { kind: "start", templateId: template.id, label: template.name };
+  });
 }

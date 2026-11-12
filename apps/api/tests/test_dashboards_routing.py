@@ -1,9 +1,10 @@
 """Each dashboard path reaches its own handler, through the real app (F20, T2.13, AC24).
 
 The batch has a prefix of its own so no route order is load-bearing (D41), and
-`/dashboards/templates` is declared before `/dashboards/{dashboard_id}`, whose wildcard
-would otherwise take it as an id. Matched the way Starlette matches a request, in the
-order `create_app()` installed the routes: a real request, read for the route it reached.
+`/dashboards/templates` and `/dashboards/validate` are declared before
+`/dashboards/{dashboard_id}`, whose wildcard would otherwise take them as an id. Matched
+the way Starlette matches a request, in the order `create_app()` installed the routes: a
+real request, read for the route it reached.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ PATHS: Final = [
     ("GET", "/dashboard-panels/read", "read_panels"),
     ("POST", "/dashboard-panels/preview", "preview_panels"),
     ("GET", "/dashboards/templates", "list_templates"),
+    ("POST", "/dashboards/validate", "validate_dashboard"),
     ("GET", "/dashboards", "list_dashboards"),
     ("POST", "/dashboards", "create_dashboard"),
     ("GET", "/dashboards/0190e3f4-0000-7000-8000-000000000001", "get_dashboard"),

@@ -24,6 +24,8 @@ import type {
 import { DashboardEditScreen, NewDashboardScreen } from "@/features/dashboards/DashboardEditScreen";
 import { DashboardListScreen } from "@/features/dashboards/DashboardListScreen";
 import { DashboardScreen } from "@/features/dashboards/DashboardScreen";
+import type { NewDashboardSearch } from "@/features/dashboards/dashboard-search";
+import { parseNewDashboardSearch } from "@/features/dashboards/dashboard-search";
 import { MAX_LINKS, MAX_PANELS, MAX_SCANS_PER_READ } from "@/features/dashboards/draft";
 import type { DetectionStatus } from "@/shared/detection/headline";
 import type { TestRole } from "@/shared/identity.test-util";
@@ -207,14 +209,16 @@ async function mountAt(initial: string) {
   const fresh = createRoute({
     getParentRoute: () => rootRoute,
     path: "/dashboards/new",
-    validateSearch: (search: Record<string, unknown>) => ({
-      template: typeof search.template === "string" ? search.template : undefined,
-    }),
-    component: () =>
-      createElement(NewDashboardScreen, {
-        // The app's registered routes type this; a test tree is not registered.
-        templateId: (fresh.useSearch() as { template?: string }).template,
-      }),
+    validateSearch: parseNewDashboardSearch,
+    component: () => {
+      // The app's registered routes type this; a test tree is not registered.
+      const search = fresh.useSearch() as NewDashboardSearch;
+      return createElement(NewDashboardScreen, {
+        templateId: search.template,
+        service: search.service,
+        fileId: search.file,
+      });
+    },
   });
   const view = createRoute({
     getParentRoute: () => rootRoute,
@@ -598,6 +602,139 @@ describe("saving (T3.5)", () => {
       "Give the dashboard a title.",
     );
     expect(calls.some((call) => call.method === "PUT")).toBe(false);
+  });
+});
+
+describe("a starting point for a service, and a file (Step 9)", () => {
+  const PICKED = { picker: true };
+  const SERVICE_HEALTH = {
+    title: "Service health",
+    description: "",
+    definition: {
+      ...dashboard().definition,
+      service_picker: true,
+      panels: [panel("s_rate", "service_trend", { service: PICKED, signal: "rate" })],
+    },
+  };
+  const IMPORTED = {
+    title: "From a file",
+    description: "Exported elsewhere.",
+    definition: { ...dashboard().definition, panels: [RATE] },
+  };
+
+  async function choose(container: Element, contents: unknown) {
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error("no file input");
+    const file = new File([JSON.stringify(contents)], "board.json", { type: "application/json" });
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  it("opens Service health with the picker on the service, and saves it to open there (FR41, AC38)", async () => {
+    const calls = stubApi({
+      "GET /dashboards/templates": json({
+        templates: [{ id: "service_health", name: "Service health", document: SERVICE_HEALTH }],
+      }),
+      "POST /dashboards": json({ ...dashboard(), title: "Service health" }, 201),
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(dashboard()),
+      "GET /dashboard-panels/read": json(answer({ p_rate: ok() })),
+    });
+    const { container, router } = await mountAt(
+      "/dashboards/new?template=service_health&service=checkout",
+    );
+    await ready(container);
+
+    expect(text(container)).toContain("Panels that follow the picker show checkout here.");
+    await waitFor(() => calls.some((call) => call.path === "/dashboard-panels/preview"), "a read");
+    const [preview] = calls.filter((call) => call.path === "/dashboard-panels/preview");
+    expect(preview.body).toMatchObject({ service: "checkout" });
+    expect(calls.some((call) => call.method === "POST" && call.path === "/dashboards")).toBe(false);
+
+    await act(async () => button(container, "Save")?.click());
+    await waitFor(() => router.state.location.pathname !== "/dashboards/new", "the saved page");
+    expect(router.state.location.pathname).toBe(`/dashboards/${DASHBOARD_ID}`);
+    expect(router.state.location.search).toMatchObject({ service: "checkout" });
+  });
+
+  it("opens a checked file from the list as an unsaved draft, and saves it new (FR42)", async () => {
+    const calls = stubApi({
+      "GET /dashboards": json({ dashboards: [] }),
+      "GET /dashboards/templates": json({ templates: [] }),
+      "POST /dashboards/validate": json({
+        document: IMPORTED,
+        panel_count: 1,
+        worst_case_reads: 1,
+      }),
+      "POST /dashboards": json(dashboard([RATE], 1), 201),
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(dashboard([RATE], 1)),
+      "GET /dashboard-panels/read": json(answer({ p_rate: ok() })),
+    });
+    const { container, router } = await mountAt("/dashboards");
+    await waitFor(() => button(container, "Import"), "the import");
+
+    // The file's own text never opens: only the document the check passed back does.
+    await choose(container, { ...IMPORTED, title: "As the file spelled it" });
+    await ready(container);
+
+    expect(router.state.location.pathname).toBe("/dashboards/new");
+    expect(text(container)).toContain("Imported, not yet saved.");
+    expect((field(container, "Title") as HTMLInputElement).value).toBe("From a file");
+    expect(calls.some((call) => call.method === "POST" && call.path === "/dashboards")).toBe(false);
+
+    await act(async () => button(container, "Save")?.click());
+    await waitFor(
+      () => calls.some((call) => call.path === "/dashboards" && call.method === "POST"),
+      "the save",
+    );
+    const [created] = calls.filter((call) => call.method === "POST" && call.path === "/dashboards");
+    expect(created.body).toEqual(IMPORTED);
+  });
+
+  it("says an imported draft is gone after a reload, rather than opening anything unchecked", async () => {
+    stubApi({});
+    const { container } = await mountAt(
+      "/dashboards/new?file=0190e3f4-0000-7000-8000-0000000000ff",
+    );
+    await waitFor(() => text(container).includes("no longer open"), "the words");
+
+    expect(text(container)).toContain(
+      "The imported file is no longer open. Import it again from the list.",
+    );
+    expect(container.querySelector('[role="toolbar"]')).toBeNull();
+  });
+
+  it("imports a file over a saved dashboard, and saving names the version it read (FR42)", async () => {
+    const { container, calls } = await openEditor({
+      "POST /dashboards/validate": json({
+        document: IMPORTED,
+        panel_count: 1,
+        worst_case_reads: 1,
+      }),
+      [`PUT /dashboards/${DASHBOARD_ID}`]: json(dashboard([RATE], 5)),
+      "GET /dashboard-panels/read": json(answer({ p_rate: ok() })),
+    });
+    await ready(container);
+
+    await choose(container, IMPORTED);
+    await waitFor(() => text(container).includes("Imported, not yet saved."), "the draft");
+
+    expect((field(container, "Title") as HTMLInputElement).value).toBe("From a file");
+    expect(order(container)).toEqual(["p_rate"]);
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+    await act(async () => button(container, "Save")?.click());
+
+    await waitFor(() => calls.some((call) => call.method === "PUT"), "the save");
+    const [put] = calls.filter((call) => call.method === "PUT");
+    expect(put.body).toEqual({ ...IMPORTED, version: 4 });
+  });
+
+  it("offers a viewer no import over a dashboard", async () => {
+    const { container } = await openEditor({}, "viewer");
+    await waitFor(() => text(container).length > 0, "the page");
+
+    expect(container.querySelector('input[type="file"]')).toBeNull();
   });
 });
 

@@ -138,3 +138,35 @@ export function inDisplayMode(pathname: string, search: Record<string, unknown>)
   const match = DISPLAY_PATH.exec(pathname);
   return match !== null && match[1] !== "new" && parseDashboardSearch(search).display === 1;
 }
+
+/**
+ * What the builder's address for a new dashboard carries (F20, FR39, FR41, FR42): the
+ * starting point, the service a picker previews with, and the one-off id of a checked file
+ * waiting in the query cache. The file itself never rides in an address.
+ */
+export interface NewDashboardSearch {
+  template?: string;
+  service?: string;
+  file?: string;
+}
+
+/** A template's id, as `templates.py` spells them. */
+const TEMPLATE_ID = /^[a-z0-9_]{1,64}$/;
+
+export function parseNewDashboardSearch(search: Record<string, unknown>): NewDashboardSearch {
+  const parsed: NewDashboardSearch = {};
+  if (typeof search.template === "string" && TEMPLATE_ID.test(search.template)) {
+    parsed.template = search.template;
+  }
+  if (
+    typeof search.service === "string" &&
+    search.service.length > 0 &&
+    search.service.length <= SERVICE_NAME_MAX_LENGTH
+  ) {
+    parsed.service = search.service;
+  }
+  if (typeof search.file === "string" && IDENTIFIER.test(search.file)) {
+    parsed.file = search.file;
+  }
+  return parsed;
+}

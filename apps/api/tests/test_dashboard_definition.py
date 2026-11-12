@@ -25,8 +25,9 @@ from typing import Any, Final
 import pytest
 from pydantic import ValidationError
 
+from nexovue_api.dashboardpanels.scans import RAW_READERS
 from nexovue_api.dashboards import compile as compiling
-from nexovue_api.dashboards import definition, ranges
+from nexovue_api.dashboards import definition, ranges, templates
 from nexovue_api.errors.exceptions import InvalidRequestError
 
 REPOSITORY: Final = Path(__file__).resolve().parents[3]
@@ -246,8 +247,18 @@ def test_ac4_a_lowered_cap_is_the_installs_own() -> None:
     assert refusal.value.extensions["panels_to_remove"] == ["p_3"]
 
 
-def test_a_newer_schema_version_is_refused() -> None:
-    _refused(_document(schema_version=2))
+def test_ac41_a_newer_schema_version_is_refused_plainly() -> None:
+    """Said as a newer install's file, not as "Input should be 1"."""
+    refusal = _refused(_document(schema_version=2))
+
+    assert "format 2, made by a newer version of nexovue" in refusal
+    assert "this install reads format 1" in refusal
+    assert "Input should be" not in refusal
+
+
+@pytest.mark.parametrize("version", [0, "1", True, None])
+def test_a_schema_version_that_is_not_a_version_is_refused(version: object) -> None:
+    assert "newer version" not in _refused(_document(schema_version=version))
 
 
 def test_panel_ids_are_unique_and_short() -> None:
@@ -922,3 +933,87 @@ def test_a_metric_series_naming_a_service_lists_it_for_showing_this_service() ->
 
 def _known_panels() -> list[Any]:
     return list(definition.KnownPanel.__args__)
+
+
+# --------------------------------------------------------------- AC38, AC80
+
+PICKED: Final = {"picker": True}
+HOST_METRICS: Final = (
+    "system.cpu.utilization",
+    "system.memory.utilization",
+    "system.filesystem.usage",
+)
+# The spec's *The templates*, written out here rather than read from `templates.py`: each
+# panel as its kind, width and the settings the table names, in order, then the worst
+# case of reads and how many of them are raw.
+SPEC_TEMPLATES: Final[dict[str, tuple[str, list[tuple[str, int, dict[str, Any]]], int, int]]] = {
+    templates.START_FROM_OVERVIEW: (
+        "Start from Overview",
+        [
+            *(("project_trend", 4, {"signal": signal}) for signal in SIGNALS),
+            ("project_number", 3, {"measure": "service_count"}),
+            ("project_number", 3, {"measure": "requests_per_minute"}),
+            ("project_number", 3, {"measure": "error_rate"}),
+            ("project_number", 3, {"measure": "p95_ms"}),
+            ("services_table", 12, {"order": "worst", "rows": 10}),
+        ],
+        3,
+        0,
+    ),
+    templates.SERVICE_HEALTH: (
+        "Service health",
+        [
+            *(("service_trend", 4, {"service": PICKED, "signal": signal}) for signal in SIGNALS),
+            ("service_number", 3, {"service": PICKED, "measure": "p95_ms", "compare": True}),
+            ("open_findings", 3, {"service": PICKED}),
+            ("endpoints_table", 6, {"service": PICKED, "order": "slowest", "rows": 10}),
+            ("error_groups_table", 12, {"service": PICKED, "rows": 10}),
+        ],
+        5,
+        1,
+    ),
+    templates.INFRASTRUCTURE: (
+        "Infrastructure",
+        [("top_nodes_trend", 4, {"metric": metric, "count": 5}) for metric in HOST_METRICS],
+        3,
+        3,
+    ),
+}
+
+
+def test_fr39_the_templates_are_offered_in_the_specs_order() -> None:
+    assert [(key, name) for key, (name, _) in templates.TEMPLATES.items()] == [
+        (key, name) for key, (name, *_) in SPEC_TEMPLATES.items()
+    ]
+
+
+@pytest.mark.parametrize("template_id", list(SPEC_TEMPLATES))
+def test_ac80_each_template_holds_exactly_the_specs_panels_and_passes_the_validator(
+    template_id: str,
+) -> None:
+    _, panels, scans, raw = SPEC_TEMPLATES[template_id]
+    _, document = templates.TEMPLATES[template_id]
+
+    # Through the validator as a file would come: the same path, no way around it (FR7).
+    parsed = _accepted(document.model_dump(mode="json"))
+    held = [panel.model_dump(mode="json") for panel in parsed.definition.panels]
+    assert [(panel["kind"], panel["width"]) for panel in held] == [
+        (kind, width) for kind, width, _ in panels
+    ]
+    for panel, (_, _, settings) in zip(held, panels, strict=True):
+        assert {name: panel["settings"][name] for name in settings} == settings, panel["id"]
+    compiled = compiling.compile_for_save(parsed.definition)
+    assert compiled.worst_case_scans == scans
+    assert sum(key.reader in RAW_READERS for key in compiled.scans) == raw
+
+
+def test_only_service_health_offers_the_picker() -> None:
+    """*Service health* is one dashboard for every service (D7), and the others name none."""
+    assert {
+        key: document.definition.service_picker
+        for key, (_, document) in templates.TEMPLATES.items()
+    } == {
+        templates.START_FROM_OVERVIEW: False,
+        templates.SERVICE_HEALTH: True,
+        templates.INFRASTRUCTURE: False,
+    }

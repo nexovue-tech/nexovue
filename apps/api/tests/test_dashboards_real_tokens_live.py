@@ -90,6 +90,7 @@ def _routes(dashboard_id: uuid.UUID, project_id: uuid.UUID) -> list[tuple[str, s
         ("GET", "/dashboards", None),
         ("POST", "/dashboards", document),
         ("GET", "/dashboards/templates", None),
+        ("POST", "/dashboards/validate", document),
         ("GET", f"/dashboards/{dashboard_id}", None),
         ("PUT", f"/dashboards/{dashboard_id}", {**document, "version": 1}),
         ("DELETE", f"/dashboards/{dashboard_id}", None),

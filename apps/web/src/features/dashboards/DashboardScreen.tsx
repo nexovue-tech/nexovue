@@ -44,6 +44,7 @@ import {
   liveLink,
   liveWords,
 } from "./copy-link";
+import { ExportFile } from "./FileTransfer";
 import { gridSpans } from "./grid-spans";
 import type { KeepFor, KeptReadings } from "./kept-readings";
 import { allFailing, keptLine, nextExpiry, nextKept } from "./kept-readings";
@@ -492,6 +493,8 @@ export function widestRangeWithin(limitDays: number): (typeof TIME_RANGES)[numbe
 }
 
 const MINUTES_PER_DAY = 1440;
+/** The setup page that turns on host metrics: a collector's hostmetrics receiver. */
+const COLLECTOR_DOC = "collector";
 
 /** How a failed batch reads to the page: refused, given up on at 25 s, or failed. */
 function failureOf(error: unknown, options: { retryScheduled: boolean }): PageLineInput["failure"] {
@@ -750,6 +753,8 @@ function Header({
               said={copied}
               onSaid={onCopied}
             />
+            {/* Anyone who can read it may keep a copy; export writes nothing (FR42, FR27). */}
+            <ExportFile dashboard={dashboard} />
             <button
               type="button"
               onClick={() => address.setDisplay(true)}
@@ -990,6 +995,20 @@ function PanelCell(
             Show the last {range.label}
           </button>
         ) : null}
+      </div>,
+    );
+  }
+  if (result.state === "empty" && panel.kind === "top_nodes_trend" && canEdit) {
+    // No machine sends host metrics until a collector does: where to start (AC129).
+    return frame(
+      <div className="flex flex-col items-start gap-2 text-ink-dim text-sm">
+        <p>{words}</p>
+        <a
+          href={setupDocUrl(COLLECTOR_DOC)}
+          className="inline-flex min-h-11 items-center text-brand underline md:min-h-0"
+        >
+          Read the collector setup
+        </a>
       </div>,
     );
   }

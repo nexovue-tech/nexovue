@@ -21,7 +21,9 @@ import {
 /**
  * The dashboard list (F20, T7.2; FR36, FR58, AC45, AC46, AC47, AC81, AC96): columns, sort
  * buttons with `aria-sort`, the 30-day mark, "3 panels not reading", a former member, the
- * title filter and each state. The clock is pinned and passed in.
+ * title filter and each state. Step 9 (T9.1, T9.3): the starting points in FR39's order, a
+ * saved one as "Open", and import's states (FR42, AC128, AC139). The clock is pinned and
+ * passed in.
  */
 
 const ago = (days: number) => new Date(NOW - days * DAY_MS).toISOString();
@@ -43,8 +45,18 @@ function row(title: string, changes: Partial<DashboardSummary> = {}): DashboardS
   };
 }
 
+/** The API's three starting points, in its order (FR39), each with its document's title. */
+const template = (id: string, name: string, title: string) => ({
+  id,
+  name,
+  document: { title, description: "", definition: {} },
+});
 const TEMPLATES = {
-  templates: [{ id: "start_from_overview", name: "Start from Overview", document: {} }],
+  templates: [
+    template("start_from_overview", "Start from Overview", "Overview"),
+    template("service_health", "Service health", "Service health"),
+    template("infrastructure", "Infrastructure", "Infrastructure"),
+  ],
 };
 
 function lists(live: DashboardSummary[], deleted: DashboardSummary[] = []) {
@@ -205,21 +217,176 @@ describe("the filter and the states (AC81, FR58)", () => {
     ).toBeGreaterThan(1);
   });
 
-  it("offers an editor each starting point, then a blank dashboard, when there is none", async () => {
+  it("offers an editor each starting point in FR39's order, then a blank dashboard (FR39)", async () => {
     const { container } = await mountScreen(screen(), lists([]));
 
     expect(text(container)).toContain("No dashboards yet");
-    expect([...container.querySelectorAll("a")].map((each) => text(each))).toEqual([
+    expect(text(container)).toContain("Nothing is saved until you save it.");
+    const links = [...container.querySelectorAll("a")];
+    expect(links.map((each) => text(each))).toEqual([
       "Start from Overview",
+      "Service health",
+      "Infrastructure",
       "New dashboard",
     ]);
+    // Each opens as a draft: a link, never a save (AC38).
+    expect(links.map((each) => each.getAttribute("href"))).toEqual([
+      "/dashboards/new?template=start_from_overview",
+      "/dashboards/new?template=service_health",
+      "/dashboards/new?template=infrastructure",
+      "/dashboards/new",
+    ]);
+    expect(buttonNamed(container, "Import")).toBeDefined();
   });
 
-  it("tells a viewer to ask a member, and offers nothing to create", async () => {
+  it("tells a viewer to ask a member, and offers nothing to create or import", async () => {
     const { container } = await mountScreen(screen(), lists([]), "viewer");
 
     expect(text(container)).toContain("Ask a member to create one.");
     expect(container.querySelectorAll("a")).toHaveLength(0);
+    expect(buttonNamed(container, "Import")).toBeUndefined();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+  });
+});
+
+describe("starting points already saved (FR39, D20)", () => {
+  it("offers a saved template as Open, straight to it, and never a second copy", async () => {
+    const saved = row("service HEALTH", { id: "sh-1" });
+    const { container } = await mountScreen(screen(), lists([row("Checkout on-call"), saved]));
+
+    const links = [...container.querySelectorAll("header a")];
+    expect(links.map((each) => text(each))).toEqual([
+      "Start from Overview",
+      "Open service HEALTH",
+      "Infrastructure",
+      "New dashboard",
+    ]);
+    expect(links[1].getAttribute("href")).toBe("/dashboards/sh-1");
+  });
+});
+
+/** A chosen file, as the browser hands it to the input. */
+async function choose(container: Element, file: File): Promise<void> {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  if (!input) throw new Error("no file input");
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+}
+
+const DOCUMENT = {
+  title: "Imported board",
+  description: "",
+  definition: {
+    schema_version: 1,
+    refresh_seconds: 60,
+    default_range: null,
+    service_picker: false,
+    links: [],
+    panels: [],
+  },
+};
+
+const fileOf = (body: string, name = "board.json") =>
+  new File([body], name, { type: "application/json" });
+
+describe("import (FR42, AC128, AC139)", () => {
+  it("sends a file to the check, and opens what passed in the builder", async () => {
+    const answer = lists([]);
+    const { container, calls, router } = await mountScreen(screen(), (request) =>
+      request.path === "/dashboards/validate"
+        ? json({ document: DOCUMENT, panel_count: 0, worst_case_reads: 0 })
+        : answer(request),
+    );
+
+    await choose(container, fileOf(JSON.stringify(DOCUMENT)));
+
+    const sent = calls.filter((call) => call.path === "/dashboards/validate");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ method: "POST", body: DOCUMENT });
+    expect(router.state.location.pathname).toBe("/dashboards/new");
+    expect(router.state.location.search).toEqual({ file: expect.any(String) });
+    // Nothing is written by importing: the draft is saved only from the builder (FR42).
+    expect(calls.filter((call) => call.method === "POST" && call.path === "/dashboards")).toEqual(
+      [],
+    );
+  });
+
+  it("refuses a 65 KiB file in words, sending nothing (AC139)", async () => {
+    const { container, calls, router } = await mountScreen(screen(), lists([]));
+
+    await choose(container, fileOf(`{"title":"${"x".repeat(65 * 1024)}"}`));
+
+    expect(text(container)).toContain("This file was not opened:");
+    expect(text(container)).toContain(
+      "This file is 66 KiB, and a dashboard file is at most 64 KiB.",
+    );
+    expect(calls.filter((call) => call.path === "/dashboards/validate")).toEqual([]);
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("refuses a file that is not JSON, sending nothing", async () => {
+    const { container, calls } = await mountScreen(screen(), lists([]));
+
+    await choose(container, fileOf("SELECT * FROM organizations"));
+
+    expect(text(container)).toContain("This file is not a dashboard file: it is not JSON.");
+    expect(calls.filter((call) => call.path === "/dashboards/validate")).toEqual([]);
+  });
+
+  it("says what the check refused, field by field, and opens nothing (AC128, AC41)", async () => {
+    const answer = lists([]);
+    const { container, router } = await mountScreen(screen(), (request) =>
+      request.path === "/dashboards/validate"
+        ? problem(422, "Request validation failed", {
+            errors: [
+              {
+                field: "body.definition.links.0.url",
+                reason: "Value error, must be an https address",
+              },
+              {
+                field: "body.definition.schema_version",
+                reason:
+                  "Value error, this dashboard is in format 2, made by a newer version of nexovue",
+              },
+            ],
+          })
+        : answer(request),
+    );
+
+    await choose(container, fileOf(JSON.stringify(DOCUMENT)));
+
+    expect(text(container)).toContain("This file was not opened:");
+    expect(text(container)).toContain("Link 1 address: must be an https address");
+    expect(text(container)).toContain(
+      "Format: this dashboard is in format 2, made by a newer version of nexovue",
+    );
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("says the check could not run, and tries the same file again on request", async () => {
+    const answer = lists([]);
+    let down = true;
+    const { container, calls, router } = await mountScreen(screen(), (request) => {
+      if (request.path !== "/dashboards/validate") return answer(request);
+      return down
+        ? problem(503, "unavailable")
+        : json({ document: DOCUMENT, panel_count: 0, worst_case_reads: 0 });
+    });
+
+    await choose(container, fileOf(JSON.stringify(DOCUMENT)));
+    expect(text(container)).toContain("Could not check the file.");
+    expect(router.state.location.pathname).toBe("/");
+
+    down = false;
+    await act(async () => buttonNamed(container, "Try again")?.click());
+    await settle();
+
+    const sent = calls.filter((call) => call.path === "/dashboards/validate");
+    expect(sent.map((call) => call.body)).toEqual([DOCUMENT, DOCUMENT]);
+    expect(router.state.location.pathname).toBe("/dashboards/new");
   });
 });
 

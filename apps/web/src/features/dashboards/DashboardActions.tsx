@@ -11,6 +11,7 @@ import { useCan } from "@/shared/identity";
 import type { Dashboard, DashboardDocument } from "./api";
 import { useCreateDashboard, useDashboards, useDeleteDashboard } from "./api";
 import { PurgeConfirm } from "./PurgeConfirm";
+import { downloadDashboard, EXPORT_WARNING } from "./transfer";
 import { Versions } from "./Versions";
 
 /**
@@ -24,7 +25,6 @@ import { Versions } from "./Versions";
  * (FR68). Its own component so the read view can mount it as well (plan TF.1).
  */
 
-const EXPORT_TYPE = "application/json";
 const RESTORABLE_DAYS = 30;
 const COPY_SUFFIX = " (copy)";
 
@@ -128,10 +128,7 @@ export function DashboardActions({
             <em>{visibleEscapes(dashboard.title)}</em>
             {sentence}
           </p>
-          <p className="text-ink-dim">
-            Export it first to keep a copy. The file includes notes, links, service names and host
-            names.
-          </p>
+          <p className="text-ink-dim">Export it first to keep a copy. {EXPORT_WARNING}</p>
           <div className="flex flex-wrap gap-2">
             <Button
               pending={remove.isPending}
@@ -140,7 +137,7 @@ export function DashboardActions({
             >
               Delete
             </Button>
-            <Button variant="secondary" onClick={() => exportDocument(dashboard)}>
+            <Button variant="secondary" onClick={() => downloadDashboard(dashboard)}>
               Export it first
             </Button>
             <Button variant="secondary" onClick={keep}>
@@ -238,24 +235,4 @@ function Duplicate({
 
 function apiWords(error: unknown): string {
   return (error as ApiError).problem?.detail ?? "Could not make the copy. Try again.";
-}
-
-/**
- * The dashboard document alone: no organization, owner, dashboard id or version, so a
- * file works in another organization and says nothing about this one (FR42).
- */
-function exportDocument(dashboard: Dashboard): void {
-  const document_: DashboardDocument = {
-    title: dashboard.title,
-    description: dashboard.description,
-    definition: dashboard.definition,
-  };
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(document_, null, 2)], { type: EXPORT_TYPE }),
-  );
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${dashboard.title.replace(/[^\w.-]+/g, "-") || "dashboard"}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
 }

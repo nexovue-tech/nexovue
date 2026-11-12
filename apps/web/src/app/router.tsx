@@ -11,7 +11,10 @@ import {
 import { parseNewRuleSearch } from "@/features/alerts/search";
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
-import { parseDashboardSearch } from "@/features/dashboards/dashboard-search";
+import {
+  parseDashboardSearch,
+  parseNewDashboardSearch,
+} from "@/features/dashboards/dashboard-search";
 import { ERROR_FILTERS, parseErrorGroupSearch } from "@/features/errors/filters";
 import { parseFeedSearch } from "@/features/findings/feed-filter";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
@@ -571,18 +574,18 @@ function DashboardRoute() {
   return <DashboardScreen key={dashboardId} dashboardId={dashboardId} />;
 }
 
-// The builder: a draft from a starting point (`?template=`), or a blank one.
+// The builder: a draft from a starting point (`?template=`, with a picked `?service=`), a
+// checked file (`?file=`), or a blank one.
 const newDashboardRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/dashboards/new",
   component: NewDashboardRoute,
-  validateSearch: (search: Record<string, unknown>): { template?: string } =>
-    typeof search.template === "string" ? { template: search.template } : {},
+  validateSearch: parseNewDashboardSearch,
 });
 
 function NewDashboardRoute() {
-  const { template } = newDashboardRoute.useSearch();
-  return <NewDashboardScreen templateId={template} />;
+  const { template, service, file } = newDashboardRoute.useSearch();
+  return <NewDashboardScreen templateId={template} service={service} fileId={file} />;
 }
 
 const editDashboardRoute = createRoute({

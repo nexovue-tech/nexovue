@@ -22,6 +22,86 @@ export interface DashboardsForService {
   more: boolean;
 }
 
+/**
+ * The live dashboard holding a title, ignoring case, as the API's unique index does (D20).
+ * A template saved under its own title is found this way: the list's "Open" (FR39) and a
+ * service's "Open Service health for checkout" (FR41) rest on it.
+ */
+export function savedUnder<Row extends { title: string }>(
+  title: string,
+  rows: readonly Row[],
+): Row | undefined {
+  const wanted = title.toLowerCase();
+  return rows.find((row) => row.title.toLowerCase() === wanted);
+}
+
+/** *Service health*'s id in `GET /dashboards/templates` (`dashboards/templates.py`). */
+export const SERVICE_HEALTH = "service_health";
+
+interface TemplateSummary {
+  id: string;
+  name: string;
+  document: { title: string };
+}
+
+/** The organization's live dashboards, as the list answers: only what finding one needs. */
+interface DashboardTitle {
+  id: string;
+  title: string;
+}
+
+/** What a service's screen offers for *Service health* (FR41, AC138). */
+export type ServiceHealthOffer =
+  | { kind: "pending" }
+  | { kind: "failed"; error: unknown; retry: () => void }
+  | { kind: "open"; dashboardId: string; title: string }
+  | { kind: "start"; templateId: string }
+  | { kind: "none" };
+
+/**
+ * Whether *Service health* is saved, read from the list and the templates. Under the
+ * "for-service" key, so a save anywhere reads it again (`features/dashboards/api.ts`).
+ */
+export function useServiceHealthOffer(): ServiceHealthOffer {
+  const templates = useQuery({
+    queryKey: ["dashboards", "for-service", "templates"] as const,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ templates: TemplateSummary[] }>("dashboards/templates", { signal }),
+    // Fixed in the code: nothing a person does changes them.
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const dashboards = useQuery({
+    queryKey: ["dashboards", "for-service", "titles"] as const,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ dashboards: DashboardTitle[] }>("dashboards", { signal }),
+  });
+  if (templates.isError || dashboards.isError) {
+    return {
+      kind: "failed",
+      error: templates.error ?? dashboards.error,
+      retry: () => {
+        if (templates.isError) void templates.refetch();
+        if (dashboards.isError) void dashboards.refetch();
+      },
+    };
+  }
+  if (templates.data === undefined || dashboards.data === undefined) return { kind: "pending" };
+  return serviceHealthOffer(templates.data.templates, dashboards.data.dashboards);
+}
+
+/** Open the one saved, or start one: never a second copy (FR41, AC138). */
+export function serviceHealthOffer(
+  templates: readonly TemplateSummary[],
+  dashboards: readonly DashboardTitle[],
+): ServiceHealthOffer {
+  const template = templates.find((each) => each.id === SERVICE_HEALTH);
+  if (template === undefined) return { kind: "none" };
+  const saved = savedUnder(template.document.title, dashboards);
+  return saved
+    ? { kind: "open", dashboardId: saved.id, title: saved.title }
+    : { kind: "start", templateId: template.id };
+}
+
 export function useDashboardsForService(service: string) {
   return useQuery({
     queryKey: ["dashboards", "for-service", service] as const,

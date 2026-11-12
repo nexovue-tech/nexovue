@@ -28,6 +28,7 @@ import {
   addressWindow,
   inDisplayMode,
   parseDashboardSearch,
+  parseNewDashboardSearch,
 } from "./dashboard-search";
 import type { DashboardAddress } from "./use-dashboard-address";
 import { useDashboardAddress } from "./use-dashboard-address";
@@ -325,5 +326,26 @@ describe("the address wins for this page (T6.2)", () => {
     await settle();
     expect(readSelection().projectId).toBe(A);
     expect(router?.history.location.search).not.toContain(B);
+  });
+});
+
+describe("the builder's address for a new dashboard (FR39, FR41, FR42)", () => {
+  const FILE = "0190e3f4-0000-7000-8000-0000000000ff";
+
+  it("keeps a template's id, a service and a file's one-off id", () => {
+    expect(
+      parseNewDashboardSearch({ template: "service_health", service: "checkout", file: FILE }),
+    ).toEqual({ template: "service_health", service: "checkout", file: FILE });
+  });
+
+  it("drops what cannot be one: a template id of any other shape, a long name, a file that is not an id", () => {
+    expect(
+      parseNewDashboardSearch({
+        template: "../service_health",
+        service: "x".repeat(256),
+        file: '{"title":"a file"}',
+      }),
+    ).toEqual({});
+    expect(parseNewDashboardSearch({ template: 7, service: "", file: null })).toEqual({});
   });
 });

@@ -12,6 +12,7 @@ import { DurationHeatmap } from "@/shared/components/DurationHeatmap";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { StartFromThisService } from "@/shared/components/StartFromThisService";
 import type { ChartSpan } from "@/shared/components/TrendChart";
 import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import type { DeployMarker } from "@/shared/deploy-markers";
@@ -161,6 +162,7 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
               projectId={projectId}
               window={undefined}
             />
+            <StartFromThisService service={serviceName} projectId={projectId} />
           </>
         )
       }

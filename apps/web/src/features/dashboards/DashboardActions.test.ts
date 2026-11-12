@@ -211,7 +211,7 @@ describe("delete (AC136)", () => {
     act(() => button(container, "Delete this dashboard")?.click());
 
     expect(text(container.querySelector("fieldset"))).toContain(
-      "The file includes notes, links, service names and host names.",
+      "Export it first to keep a copy. This file includes notes, links, service names and host names.",
     );
     await act(async () => button(container, "Export it first")?.click());
 

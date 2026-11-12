@@ -211,6 +211,8 @@ POLICY_OF: Final = {
     "nexovue_api/dashboards/router.py:delete_dashboard": "MayEditDashboards",
     "nexovue_api/dashboards/router.py:restore_dashboard": "MayEditDashboards",
     "nexovue_api/dashboards/router.py:purge_dashboard": "MayPurgeDashboards",
+    # Import's check writes nothing, and a viewer gets no import (FR42, AC128).
+    "nexovue_api/dashboards/router.py:validate_dashboard": "MayEditDashboards",
     "nexovue_api/slos/router.py:create_slo_exclusion": "MayConfigureSlos",
     "nexovue_api/slos/router.py:remove_slo_exclusion": "MayConfigureSlos",
     # A draft's read: gated as a write, because only an editor has a draft (FR10).

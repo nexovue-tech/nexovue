@@ -8,6 +8,7 @@ import {
   nextOrder,
   notReadingWords,
   sortRows,
+  startingPoints,
 } from "./dashboard-list";
 
 /** The list's order, filter and marks as data (F20, FR36, AC45, AC46, AC81). */
@@ -122,5 +123,49 @@ describe("marks (AC45)", () => {
     expect(notReadingWords(3)).toBe("3 panels not reading");
     expect(notReadingWords(1)).toBe("1 panel not reading");
     expect(notReadingWords(0)).toBeUndefined();
+  });
+});
+
+describe("the starting points (FR39)", () => {
+  const template = (id: string, name: string, title: string) => ({
+    id,
+    name,
+    document: {
+      title,
+      description: "",
+      definition: {
+        schema_version: 1 as const,
+        refresh_seconds: null,
+        default_range: null,
+        service_picker: false,
+        links: [],
+        panels: [],
+      },
+    },
+  });
+  const templates = [
+    template("start_from_overview", "Start from Overview", "Overview"),
+    template("service_health", "Service health", "Service health"),
+    template("infrastructure", "Infrastructure", "Infrastructure"),
+  ];
+
+  it("keeps the API's order, and offers each to start while none is saved", () => {
+    expect(startingPoints(templates, [row("a", { title: "Checkout" })])).toEqual([
+      { kind: "start", templateId: "start_from_overview", label: "Start from Overview" },
+      { kind: "start", templateId: "service_health", label: "Service health" },
+      { kind: "start", templateId: "infrastructure", label: "Infrastructure" },
+    ]);
+  });
+
+  it("offers a saved one as Open, by the dashboard's own title and id", () => {
+    const points = startingPoints(templates, [row("ov", { title: "overview" })]);
+
+    expect(points[0]).toEqual({
+      kind: "open",
+      templateId: "start_from_overview",
+      dashboardId: "ov",
+      label: "Open overview",
+    });
+    expect(points.slice(1).map((point) => point.kind)).toEqual(["start", "start"]);
   });
 });

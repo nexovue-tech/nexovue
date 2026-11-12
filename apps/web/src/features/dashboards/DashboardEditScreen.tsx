@@ -1,8 +1,9 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
-import { ApiError, isConflict, isNotFound } from "@/shared/api-client";
+import { type ApiError, isConflict, isNotFound } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
 import { Permitted } from "@/shared/components/Permitted";
 import { SelectField } from "@/shared/components/SelectField";
@@ -16,6 +17,7 @@ import { useSelection } from "@/shared/selection";
 
 import type { Dashboard, DashboardDocument, PanelResult, PreviewAsk, StoredPanel } from "./api";
 import {
+  takeImported,
   useCreateDashboard,
   useDashboard,
   useDashboardContext,
@@ -37,6 +39,7 @@ import {
   reduceDraft,
   worstCaseReads,
 } from "./draft";
+import { ImportFile } from "./FileTransfer";
 import { gridSpans } from "./grid-spans";
 import { LinksEditor } from "./LinksEditor";
 import { NotePanel } from "./NotePanel";
@@ -47,6 +50,7 @@ import type { ActionKey } from "./PanelToolbar";
 import { PanelToolbar } from "./PanelToolbar";
 import { KNOWN_KINDS, stateWords } from "./panel-words";
 import { SideSheet } from "./SideSheet";
+import { refusalWords } from "./transfer";
 
 /**
  * The builder (F20, Step 3): `/dashboards/new` and `/dashboards/$dashboardId/edit`.
@@ -60,6 +64,11 @@ import { SideSheet } from "./SideSheet";
  * so a colleague's save in between is a conflict that keeps this draft on screen (FR19,
  * AC10). Leaving warns only while something differs from what is stored (FR20, AC133).
  * A viewer is refused the screen, never shown a form that fails (AC7).
+ *
+ * **A starting point, a service and a file** (Step 9). A template opens as the draft; with
+ * a `service`, panels following the picker preview with it and the saved dashboard opens on
+ * it (FR41). A checked file opens as the draft, new or over a saved dashboard, and saving
+ * it is an ordinary save naming the version it was read at (FR42).
  */
 
 const WHO_MAY = "an owner, an admin or a member";
@@ -67,6 +76,10 @@ const WHO_MAY = "an owner, an admin or a member";
 const NARROW_QUERY = "(max-width: 63.98rem)";
 const COLUMNS = 12;
 const COPY_SUFFIX = " (copy)";
+const IMPORTED = "Imported, not yet saved.";
+const NOT_SAVED = "Could not save this dashboard. Try again.";
+const IMPORTED_OVER =
+  "Imported, not yet saved. Saving replaces this dashboard, and keeps the version it replaces.";
 
 const REFRESH_CHOICES = [
   { id: "30", label: "Every 30 seconds" },
@@ -92,10 +105,24 @@ export function DashboardEditScreen({ dashboardId }: { dashboardId: string }) {
   );
 }
 
-export function NewDashboardScreen({ templateId }: { templateId?: string }) {
+export function NewDashboardScreen({
+  templateId,
+  service,
+  fileId,
+}: {
+  templateId?: string;
+  /** The service a picker's panels preview with, and the saved dashboard opens on (FR41). */
+  service?: string;
+  /** A checked file waiting in the query cache (FR42). */
+  fileId?: string;
+}) {
   return (
     <Permitted action="edit_dashboards" who={WHO_MAY}>
-      <NewFromTemplate templateId={templateId} />
+      {fileId !== undefined ? (
+        <NewFromFile fileId={fileId} />
+      ) : (
+        <NewFromTemplate templateId={templateId} service={service} />
+      )}
     </Permitted>
   );
 }
@@ -127,7 +154,27 @@ function EditExisting({ dashboardId }: { dashboardId: string }) {
   );
 }
 
-function NewFromTemplate({ templateId }: { templateId?: string }) {
+/**
+ * A file's draft, read once from where the list left it. A reload finds nothing, and says
+ * so, rather than opening anything the API has not checked.
+ */
+function NewFromFile({ fileId }: { fileId: string }) {
+  const client = useQueryClient();
+  const [imported] = useState(() => takeImported(client, fileId));
+  if (imported === undefined) {
+    return (
+      <div className="flex flex-col items-start gap-2 p-6 text-ink">
+        <p>The imported file is no longer open. Import it again from the list.</p>
+        <Link to="/dashboards" className="text-brand underline">
+          Dashboards
+        </Link>
+      </div>
+    );
+  }
+  return <Builder stored={imported} notice={IMPORTED} />;
+}
+
+function NewFromTemplate({ templateId, service }: { templateId?: string; service?: string }) {
   const templates = useDashboardTemplates();
   const stored = useMemo(() => {
     if (templateId === undefined) return blankDocument();
@@ -137,7 +184,7 @@ function NewFromTemplate({ templateId }: { templateId?: string }) {
     return <SkeletonRows rows={6} label="Opening the starting point" />;
   }
   // An unknown starting point opens a blank draft rather than nothing.
-  return <Builder stored={stored ?? blankDocument()} />;
+  return <Builder stored={stored ?? blankDocument()} service={service} />;
 }
 
 function documentOf(dashboard: Dashboard): DashboardDocument {
@@ -185,10 +232,16 @@ function Builder({
   stored,
   saved,
   onReload,
+  service,
+  notice,
 }: {
   stored: DashboardDocument;
   saved?: Dashboard;
   onReload?: () => void;
+  /** The service the picker's panels preview with (FR41). */
+  service?: string;
+  /** Said once the draft opens: where it came from, and that nothing is saved yet. */
+  notice?: string;
 }) {
   const navigate = useNavigate();
   const { projectId, window: choice } = useSelection();
@@ -199,7 +252,9 @@ function Builder({
   const narrow = useNarrow();
 
   const [draft, setDraft] = useState(() => draftOf(stored));
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(notice ?? "");
+  // Where the draft came from, on screen until saved; the live region says it once.
+  const [origin, setOrigin] = useState(notice);
   const [readings, setReadings] = useState<Record<string, PanelResult>>({});
   const [sheet, setSheet] = useState<SheetState | undefined>();
   const [problems, setProblems] = useState<string[]>([]);
@@ -229,7 +284,7 @@ function Builder({
         : undefined,
     [stored],
   );
-  const page = usePanelPreview(opening, projectId, choice, undefined);
+  const page = usePanelPreview(opening, projectId, choice, service);
   useEffect(() => {
     const answer = page.data;
     // What Apply read since is newer, so it wins.
@@ -288,6 +343,15 @@ function Builder({
     setMessage("Restored as a draft. Save to keep it.");
   };
 
+  // A checked file over this dashboard: the draft, saved as any draft is, against the
+  // version it was read at (FR42).
+  const importOver = (document: DashboardDocument) => {
+    change({ type: "reset", document }, null);
+    setReadings({});
+    setMessage(IMPORTED_OVER);
+    setOrigin(IMPORTED_OVER);
+  };
+
   const openSheet = (panel?: StoredPanel) => {
     const width = panel?.width ?? 4;
     setSheet({
@@ -315,8 +379,15 @@ function Builder({
     await to();
   };
 
+  // A dashboard started from a service opens on it (FR41).
   const toSaved = (id: string) =>
-    leaveTo(() => navigate({ to: "/dashboards/$dashboardId", params: { dashboardId: id } }));
+    leaveTo(() =>
+      navigate({
+        to: "/dashboards/$dashboardId",
+        params: { dashboardId: id },
+        search: service ? { service } : {},
+      }),
+    );
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -338,7 +409,7 @@ function Builder({
         );
         return;
       }
-      setProblems(refusals(error));
+      setProblems(refusalWords(error, NOT_SAVED));
     }
   };
 
@@ -350,7 +421,7 @@ function Builder({
       });
       await toSaved(copy.id);
     } catch (error) {
-      setProblems(refusals(error));
+      setProblems(refusalWords(error, NOT_SAVED));
     }
   };
 
@@ -373,6 +444,12 @@ function Builder({
           <p className="text-ink-dim text-sm">
             {panels.length} of {MAX_PANELS} panels · {reads} of {MAX_SCANS_PER_READ} reads
           </p>
+          {origin ? <p className="text-ink text-sm">{origin}</p> : null}
+          {service && document_.definition.service_picker ? (
+            <p className="text-ink-dim text-sm">
+              Panels that follow the picker show {visibleEscapes(service)} here.
+            </p>
+          ) : null}
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={cancel} className="min-h-11 md:min-h-0">
@@ -505,6 +582,10 @@ function Builder({
       </div>
 
       {saved ? (
+        <ImportFile label="Import a file over this dashboard" onOpened={importOver} />
+      ) : null}
+
+      {saved ? (
         <DashboardActions
           dashboard={saved}
           onDeleted={() => void leaveTo(() => navigate({ to: "/dashboards" }))}
@@ -534,6 +615,7 @@ function Builder({
             initial={sheet.panel}
             realWidth={sheet.realWidth}
             onKeep={keep}
+            service={service}
           />
         </SideSheet>
       ) : null}
@@ -693,33 +775,4 @@ function checkDraft(document: DashboardDocument, reads: number): string[] {
   }
   if (reads > MAX_SCANS_PER_READ) found.push(tooManyReads(reads));
   return found;
-}
-
-const FIELD_NAMES: readonly [RegExp, (match: RegExpExecArray) => string][] = [
-  [/^body\.title$/, () => "Title"],
-  [/^body\.description$/, () => "Description"],
-  [/^body\.definition\.links\.(\d+)\.url$/, (match) => `Link ${Number(match[1]) + 1} address`],
-  [/^body\.definition\.links\.(\d+)\.label$/, (match) => `Link ${Number(match[1]) + 1} label`],
-  [/^body\.definition\.panels\.(\d+)/, (match) => `Panel ${Number(match[1]) + 1}`],
-];
-
-/** A field path from the API, in the words the screen uses for it. */
-function fieldName(field: string): string {
-  for (const [pattern, name] of FIELD_NAMES) {
-    const match = pattern.exec(field);
-    if (match) return name(match);
-  }
-  return "The dashboard";
-}
-
-/** What the API refused, one sentence each, never the submitted values. */
-function refusals(error: unknown): string[] {
-  if (!(error instanceof ApiError)) return ["Could not save this dashboard. Try again."];
-  const errors = error.problem?.errors;
-  if (Array.isArray(errors) && errors.length > 0) {
-    return (errors as { field?: string; reason?: string }[]).map(
-      (each) => `${fieldName(each.field ?? "")}: ${visibleEscapes(each.reason ?? "refused")}`,
-    );
-  }
-  return [error.problem?.detail ?? "Could not save this dashboard. Try again."];
 }

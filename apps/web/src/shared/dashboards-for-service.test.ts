@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { windowForClosed, windowForOpen } from "./dashboards-for-service";
+import {
+  SERVICE_HEALTH,
+  savedUnder,
+  serviceHealthOffer,
+  windowForClosed,
+  windowForOpen,
+} from "./dashboards-for-service";
 
 /** The window a dashboard opens on from a finding or an incident (F20, FR57, AC102, AC117). */
 
@@ -49,5 +55,37 @@ describe("from something over", () => {
     if (window.kind !== "fixed") return;
     expect(Date.parse(window.to) - Date.parse(window.from)).toBe(30 * 24 * 60 * MIN);
     expect(Date.parse(window.to)).toBeGreaterThan(Date.parse(window.from));
+  });
+});
+
+describe("a saved template, by its title (FR39, FR41, D20)", () => {
+  const templates = [
+    { id: "start_from_overview", name: "Start from Overview", document: { title: "Overview" } },
+    { id: SERVICE_HEALTH, name: "Service health", document: { title: "Service health" } },
+  ];
+
+  it("is the dashboard holding the title, ignoring case as the API's index does", () => {
+    const rows = [
+      { id: "a", title: "Service health (copy)" },
+      { id: "b", title: "SERVICE HEALTH" },
+    ];
+    expect(savedUnder("Service health", rows)).toEqual({ id: "b", title: "SERVICE HEALTH" });
+    expect(savedUnder("Service health", [{ id: "a", title: "Service healthy" }])).toBeUndefined();
+  });
+
+  it("offers Service health to start until it is saved, then only to open (AC138)", () => {
+    expect(serviceHealthOffer(templates, [{ id: "x", title: "Overview" }])).toEqual({
+      kind: "start",
+      templateId: SERVICE_HEALTH,
+    });
+    expect(serviceHealthOffer(templates, [{ id: "sh", title: "service health" }])).toEqual({
+      kind: "open",
+      dashboardId: "sh",
+      title: "service health",
+    });
+  });
+
+  it("offers nothing when the API names no Service health", () => {
+    expect(serviceHealthOffer(templates.slice(0, 1), [])).toEqual({ kind: "none" });
   });
 });

@@ -1025,6 +1025,78 @@ describe("the dashboard at an address (F20, Step 6)", () => {
     expect(theirs).toContain("purge");
   });
 
+  it("offers export to a viewer, saying first what the file holds, and the file names nothing of this install (AC119, AC40)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    stubApi(viewOf(json(batch({ p_rate: ok() }))), "viewer");
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    const exportButton = () =>
+      [...container.querySelectorAll<HTMLButtonElement>("header button")].find(
+        (each) => text(each) === "Export",
+      );
+    await waitFor(exportButton, "export");
+    // Only once the page is drawn: the router builds addresses with the real `URL`.
+    const saved: Blob[] = [];
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: (blob: Blob) => {
+        saved.push(blob);
+        return "blob:dashboard";
+      },
+      revokeObjectURL: () => {},
+    });
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    await act(async () => exportButton()?.click());
+    expect(text(container.querySelector("header"))).toContain(
+      "This file includes notes, links, service names and host names.",
+    );
+    expect(download).not.toHaveBeenCalled();
+    const save = [...container.querySelectorAll<HTMLButtonElement>("header button")].find(
+      (each) => text(each) === "Download Checkout-on-call.json",
+    );
+    await act(async () => save?.click());
+
+    expect(download).toHaveBeenCalledOnce();
+    const file = await saved[0].text();
+    expect(Object.keys(JSON.parse(file)).sort()).toEqual(["definition", "description", "title"]);
+    expect(JSON.parse(file).definition).toEqual(dashboard().definition);
+    expect(file).not.toContain(DASHBOARD_ID);
+    expect(file).not.toContain("Asha");
+  });
+
+  it("points an editor at the collector setup under a host chart no machine reports, and not a viewer (AC129)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const host = panel("h_1", "top_nodes_trend", { metric: "system.cpu.utilization", count: 5 });
+    const empty = json(
+      batch({
+        h_1: { state: "empty", kind: "top_nodes_trend", read_at: at(0), last_seen_at: null },
+      }),
+    );
+    const views = [];
+    for (const role of ["member", "viewer"] as const) {
+      stubApi(
+        {
+          [`GET /dashboards/${DASHBOARD_ID}`]: json(dashboard([host])),
+          [`GET /dashboards/${DASHBOARD_ID}/context`]: json(context()),
+          "GET /dashboard-panels/read": empty,
+        },
+        role,
+      );
+      const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+      await waitFor(() => text(section(container, "h_1")).includes("No machine"), "the words");
+      views.push(section(container, "h_1"));
+    }
+    const [member, viewer] = views;
+
+    expect(text(member)).toContain("No machine has reported this metric in this window.");
+    expect(member?.querySelector("a")?.getAttribute("href")).toBe("/docs/collector");
+    expect(text(member?.querySelector("a") ?? null)).toBe("Read the collector setup");
+    expect(text(viewer)).toContain("No machine has reported this metric in this window.");
+    expect(viewer?.querySelector("a")).toBeNull();
+  });
+
   it("draws a chart only once it has scrolled into view, and keeps it drawn (FR50)", async () => {
     const watching: Array<{ target: Element; fire: (on: boolean) => void }> = [];
     vi.stubGlobal(

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  type AnyRouter,
   createMemoryHistory,
   createRootRoute,
   createRoute,
@@ -75,7 +76,7 @@ export async function mountScreen(
   element: ReactElement,
   answer: (request: Request) => Answer,
   role: TestRole = "member",
-): Promise<{ container: HTMLElement; calls: Request[] }> {
+): Promise<{ container: HTMLElement; calls: Request[]; router: AnyRouter }> {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const calls: Request[] = [];
   vi.stubGlobal(
@@ -113,7 +114,7 @@ export async function mountScreen(
     );
   });
   await settle();
-  return { container, calls };
+  return { container, calls, router };
 }
 
 export function typeInto(input: HTMLInputElement, value: string): void {

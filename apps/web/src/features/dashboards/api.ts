@@ -302,6 +302,49 @@ export function useDashboardTemplates() {
   });
 }
 
+/** A file that passed every check a save makes, as the API read it (FR42, D53). */
+export interface ValidatedDocument {
+  document: DashboardDocument;
+  panel_count: number;
+  worst_case_reads: number;
+}
+
+/**
+ * Import's check: the save's own checks with no read and no write. A refusal is said in
+ * the import's own words, never a toast, since a 422 raises none (`query-client.ts`).
+ */
+export function useValidateDashboard() {
+  return useMutation({
+    mutationKey: ["dashboards", "validate"],
+    mutationFn: (document: unknown) =>
+      apiClient.post<ValidatedDocument>("dashboards/validate", document),
+  });
+}
+
+/**
+ * Where a checked file waits for the builder it opens in, keyed by a one-off id in the
+ * address: nothing a file holds rides in the address, and a reload finds nothing and says
+ * so rather than opening something unchecked.
+ */
+const importedKey = (id: string) => [...dashboardsKey, "imported", id] as const;
+
+export function handOverImported(
+  client: ReturnType<typeof useQueryClient>,
+  document: DashboardDocument,
+): string {
+  const id = crypto.randomUUID();
+  client.setQueryData(importedKey(id), document);
+  return id;
+}
+
+/** The checked document a file opened, or undefined once it is gone. */
+export function takeImported(
+  client: ReturnType<typeof useQueryClient>,
+  id: string,
+): DashboardDocument | undefined {
+  return client.getQueryData<DashboardDocument>(importedKey(id));
+}
+
 export function useDashboard(dashboardId: string) {
   return useQuery({
     queryKey: [...dashboardsKey, dashboardId] as const,

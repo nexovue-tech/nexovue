@@ -482,6 +482,7 @@ export function PanelPicker({
   initial,
   realWidth,
   onKeep,
+  service,
 }: {
   projectId: string | undefined;
   projectName: string;
@@ -496,6 +497,8 @@ export function PanelPicker({
   /** The panel's width on the page, in px, when it could be measured. */
   realWidth: number;
   onKeep: (panel: StoredPanel, reading: PanelResult | undefined) => void;
+  /** The service a panel following the picker previews with, when the builder has one. */
+  service?: string;
 }) {
   const [form, setForm] = useState<Form>(() => formOf(initial));
   const [ask, setAsk] = useState<PreviewAsk | undefined>();
@@ -523,7 +526,7 @@ export function PanelPicker({
       : undefined,
     choice,
   );
-  const preview = usePanelPreview(ask, projectId, choice, undefined);
+  const preview = usePanelPreview(ask, projectId, choice, service);
   const update = (changes: Partial<Form>) => setForm((current) => ({ ...current, ...changes }));
   const candidate = panelOf(form, panelId, initial);
   const kindName = useId();

@@ -20,6 +20,12 @@ one statement bound to the id its name resolved to, with another project's check
 `/dbstats/statements/trend`'s; numbers and tables are their screens' rows, and a compared
 number's previous value is the route's over the previous window (T5.2, T5.3).
 
+Step 9 (T9.1, T9.3): *Start from Overview*, saved, reads Overview's own charts, totals and
+worst services over a fixed day (AC39); each template opened by one person reads no panel
+refused, and *Infrastructure* with no host metrics reads `empty` (AC129's rule); a file
+exported from one organization and imported into another resolves its check by name in the
+importer's project or reads `not_in_project`, and reaches nothing of the exporter's (AC40).
+
 Step 4 (T4.1, T4.2, T4.9): a `top_services_trend` panel chooses its lines in the store
 and from the displayed project alone, each line equal to that service's trend (AC26,
 AC14); a `node_trend` panel for a host late in the alphabet, on a fleet past the fleet
@@ -101,15 +107,20 @@ require_stack(
     remedy="ClickHouse is not reachable — run `just dev`",
 )
 
+# Rows kept ten years, so a case on a fixed day is never aged out under it.
+FIXTURE_RETENTION_DAYS: Final = 3_650
+# The fixed day Step 9's cases write and read, whatever the clock says.
+FIXED_DAY: Final = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+
 FIXTURE_INSERT: Final = """
 INSERT INTO endpoint_stats_1m
     (tenant_id, project_id, service_name, span_kind, span_name, minute,
-     request_count, error_count, latency_quantiles)
+     request_count, error_count, latency_quantiles, derived_retention_days)
 SELECT
     {tenant:String}, {project:String}, {service:String}, 'SERVER', 'GET /orders',
     toDateTime({start:DateTime}) + toIntervalMinute(intDiv(number, {per_minute:UInt32})) AS minute,
     count(), countIf(number % 20 = 0),
-    quantilesState(0.5, 0.95, 0.99)(toFloat64(number % 997))
+    quantilesState(0.5, 0.95, 0.99)(toFloat64(number % 997)), {retention:UInt16}
 FROM numbers({total:UInt32})
 GROUP BY minute
 """
@@ -168,6 +179,7 @@ async def _seed(
                 "start": start.replace(tzinfo=None),
                 "per_minute": per_minute,
                 "total": minutes * per_minute,
+                "retention": FIXTURE_RETENTION_DAYS,
             },
         )
     finally:
@@ -989,13 +1001,14 @@ GAUGE_INSERT: Final = """
 INSERT INTO metrics_gauge
     (timestamp, start_timestamp, received_at, tenant_id, project_id, service_name,
      scope_name, scope_version, metric_name, metric_unit, metric_description,
-     resource_attrs, attrs, flags, value)
+     resource_attrs, attrs, flags, value, retention_days)
 SELECT
     toDateTime64({start:DateTime}, 3) + toIntervalMinute(number) AS at,
     at, at, {tenant:String}, {project:String}, {service:String}, '', '',
     {metric:String}, '', '',
     CAST({resource:String} AS JSON), CAST({attrs:String} AS JSON), 0,
-    if(number % {every:UInt32} = {every:UInt32} - 1, {odd:Float64}, {value:Float64})
+    if(number % {every:UInt32} = {every:UInt32} - 1, {odd:Float64}, {value:Float64}),
+    {retention:UInt16}
 FROM numbers({minutes:UInt32})
 """
 
@@ -1051,6 +1064,7 @@ async def _seed_gauge(
                 "value": value,
                 "odd": value if odd is None else odd,
                 "every": every,
+                "retention": FIXTURE_RETENTION_DAYS,
             },
         )
     finally:
@@ -1510,3 +1524,161 @@ async def test_ac14_the_other_tables_are_their_screens_first_rows(
     assert panels["p_errors"]["rows"] == groups
     assert groups[0]["exception_type"] == "TimeoutError"
     assert panels["p_statements"]["rows"] == statements and statements
+
+
+# ------------------------------------------------- Step 9: templates and import
+
+
+async def _template(client: httpx.AsyncClient, template_id: str) -> dict[str, Any]:
+    answer = await client.get(f"{API_PREFIX}/dashboards/templates")
+    [template] = [each for each in answer.json()["templates"] if each["id"] == template_id]
+    document: dict[str, Any] = template["document"]
+    return document
+
+
+async def test_ac39_start_from_overview_saved_shows_overviews_charts_totals_and_worst(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """FR40 over a fixed window: the template, saved, reads Overview's own numbers. Under
+    8,192 samples a minute, so latency compares to the digit too (AC14)."""
+    for service, per_minute in (("checkout", 50), ("payment", 30), ("search", 7)):
+        await _seed(acme, service, FIXED_DAY, minutes=40, per_minute=per_minute)
+    window = _fixed(FIXED_DAY, 30, acme)
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        document = await _template(client, "start_from_overview")
+        saved = await client.post(f"{API_PREFIX}/dashboards", json=document)
+        assert saved.status_code == 201, saved.text
+        dashboard = await db.get(Dashboard, uuid.UUID(saved.json()["id"]))
+        assert dashboard is not None
+        panels = await _batch(client, dashboard, window)
+        overview = (await client.get(f"{API_PREFIX}/services/overview", params=window)).json()
+        worst = (await client.get(f"{API_PREFIX}/services", params=window | {"limit": 10})).json()
+
+    assert {panel["state"] for panel in panels.values()} == {"ok"}
+    for panel_id, label in (
+        ("p_rate", "requests_per_minute"),
+        ("p_errors", "error_rate"),
+        ("p_latency", "p95_ms"),
+    ):
+        assert _line(panels[panel_id], label) == [point[label] for point in overview["points"]]
+    for measure in ("service_count", "requests_per_minute", "error_rate", "p95_ms"):
+        assert panels[f"n_{measure}"]["number"]["value"] == overview["totals"][measure], measure
+    assert overview["totals"]["service_count"] == 3
+    assert panels["t_worst"]["rows"] == worst["services"]
+    assert [row["service_name"] for row in worst["services"]] != []
+
+
+async def test_ac129_each_template_opened_by_one_person_shows_no_refused_panel(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """AC129's rule, on the read a person opening each template makes: one draft read of
+    every panel, under the real process caps. *Infrastructure*'s three raw reads meet a cap
+    of two, so the third waits; none is refused. With no host metrics, each of its charts
+    reads `empty`, which the console says as "No machine has reported this metric"."""
+    await _seed(acme, "checkout", FIXED_DAY, minutes=40, per_minute=20)
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="checkout",
+            last_seen_at=FIXED_DAY,
+        )
+    )
+    await db.flush()
+    window = _fixed(FIXED_DAY, 30, acme)
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        states: dict[str, dict[str, str]] = {}
+        for template_id in ("start_from_overview", "service_health", "infrastructure"):
+            document = await _template(client, template_id)
+            answer = await client.post(
+                f"{API_PREFIX}/dashboard-panels/preview",
+                json=window | {"service": "checkout", "definition": document["definition"]},
+            )
+            assert answer.status_code == 200, answer.text
+            states[template_id] = {
+                panel_id: panel["state"] for panel_id, panel in answer.json()["panels"].items()
+            }
+
+    for template_id, panel_states in states.items():
+        assert not {"refused", "failed", "timed_out"} & set(panel_states.values()), (
+            template_id,
+            panel_states,
+        )
+    assert states["infrastructure"] == {"h_1": "empty", "h_2": "empty", "h_3": "empty"}
+    assert states["service_health"]["s_rate"] == "ok"
+
+
+async def test_ac40_a_file_imported_into_another_organization_reads_only_its_own_project(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """Exported from one organization and imported into another, a check resolves by name
+    in the importer's project, or reads `not_in_project`, and a service only the exporter
+    has reads nothing of the exporter's (FR42, D28). The file names things; it never
+    reaches them."""
+    importer = _cleaned_after_run(await _team(db, f"Importer{uuid.uuid4().hex[:8]}"))
+    exporter_login = await _check(db, acme, "Login")
+    await _check(db, acme, "Search")
+    importer_login = await _check(db, importer, "Login")
+    await _seed_check(acme, exporter_login, FIXED_DAY, minutes=30)
+    # The importer's own check is down every other minute, the exporter's every fourth.
+    resource = f'{{"synthetic.check.id":"{importer_login.id}"}}'
+    await _seed_gauge(
+        importer,
+        FIXED_DAY,
+        metric="synthetic.check.status",
+        resource=resource,
+        attrs='{"synthetic.check.final":"true"}',
+        minutes=30,
+        value=1.0,
+        odd=0.0,
+        every=2,
+        service="nexovue-prober",
+    )
+    await _seed(acme, "checkout", FIXED_DAY, minutes=30, per_minute=20)
+    panels = (
+        _panel("p_login", "check_trend", check="Login", signal="uptime"),
+        _panel("p_search", "check_trend", check="Search", signal="uptime"),
+        _panel("p_checkout", "service_trend", service="checkout", signal="rate"),
+    )
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        saved = await client.post(
+            f"{API_PREFIX}/dashboards",
+            json={"title": "Exported", "description": "", "definition": _definition(*panels)},
+        )
+        assert saved.status_code == 201, saved.text
+        read = (await client.get(f"{API_PREFIX}/dashboards/{saved.json()['id']}")).json()
+    file = {key: read[key] for key in ("title", "description", "definition")}
+    window = _fixed(FIXED_DAY, 30, importer)
+
+    async with _app_client(db, importer, importer.member, reader) as client:
+        checked = await client.post(f"{API_PREFIX}/dashboards/validate", json=file)
+        assert checked.status_code == 200, checked.text
+        imported = checked.json()["document"]
+        drawn = await client.post(
+            f"{API_PREFIX}/dashboard-panels/preview",
+            json=window | {"definition": imported["definition"]},
+        )
+        own = (await client.get(f"{API_PREFIX}/synthetics/checks/trend", params=window)).json()
+
+    assert imported == file
+    answer = drawn.json()["panels"]
+    [points] = [
+        check["points"] for check in own["checks"] if check["check_id"] == str(importer_login.id)
+    ]
+    assert _line(answer["p_login"], "uptime_percent") == [
+        100.0 * point["successful_runs"] / point["runs"] for point in points if point["runs"]
+    ]
+    # Down every other minute, as the importer's own check was; the exporter's was down
+    # every fourth, which would read 7 or 8 such minutes.
+    assert _line(answer["p_login"], "uptime_percent").count(0.0) >= 14
+    assert answer["p_search"] == {"state": "not_in_project", "kind": "check_trend"}
+    assert answer["p_checkout"]["state"] == "not_in_project"

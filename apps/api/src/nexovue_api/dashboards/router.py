@@ -6,8 +6,8 @@ would learn other projects' service names (D9). Postgres only, and no telemetry
 repository is named here, so `/dashboards` stays on the default rate tier and the
 context answers while ClickHouse is down (design section 2, D24).
 
-`/templates` is declared above `/{dashboard_id}`, whose wildcard would otherwise take
-it as an id (AC24).
+`/templates` and `/validate` are declared above `/{dashboard_id}`, whose wildcard would
+otherwise take them as an id (AC24).
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from nexovue_api.dashboards.schemas import (
     PurgeDashboard,
     ReplaceDashboard,
     RestoreDashboard,
+    ValidatedDocument,
     VersionResponse,
     VersionsResponse,
 )
@@ -90,6 +91,18 @@ async def create_dashboard(
 @router.get("/templates", summary="The starting points a dashboard opens from, as drafts")
 async def list_templates(identity: CurrentIdentity) -> DashboardTemplatesResponse:
     return service.templates()
+
+
+@router.post(
+    "/validate",
+    summary="Check a dashboard file before it opens as a draft: no read, no write",
+)
+async def validate_dashboard(
+    identity: MayEditDashboards, limits: Limits, document: DashboardDocument
+) -> ValidatedDocument:
+    """Import's check (FR42, D53): the browser reads the file and sends it here, and only a
+    document that passes opens. A file is data, so it is checked and never run."""
+    return service.validate_document(document, limits=limits)
 
 
 @router.get("/{dashboard_id}", summary="One dashboard, with its definition and version")

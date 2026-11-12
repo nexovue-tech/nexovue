@@ -120,6 +120,15 @@ class DashboardTemplatesResponse(BaseModel):
     templates: list[DashboardTemplate]
 
 
+class ValidatedDocument(BaseModel):
+    """A file that passed every check a save makes (FR42, D53), as the validator read it,
+    with what it would cost: the console opens this document as an unsaved draft."""
+
+    document: DashboardDocument
+    panel_count: int
+    worst_case_reads: int
+
+
 class PlanRetention(BaseModel):
     raw_days: int
     derived_days: int
