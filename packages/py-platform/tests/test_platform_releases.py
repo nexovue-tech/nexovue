@@ -529,3 +529,142 @@ def test_opened_from_a_finding_the_smallest_window_that_reaches_it(
     """FR22, AC64."""
     found = releases.window_for_finding(START, START + finding_after)
     assert (found.window, found.reaches) == (window, reaches)
+
+
+# ------------------------------------------- Step 5: the stored reading and its words
+
+# AC37's words, which no summary may hold (`apps/api/tests/test_release_words.py`).
+CAUSE_WORDS: Final = (
+    "caused by",
+    "because of this release",
+    "regression from",
+    "bad release",
+    "due to",
+    "introduced by",
+    "triggered",
+    "responsible for",
+    "after deploying",
+    "impact",
+)
+
+
+def _stored(comparison: Comparison) -> dict[str, object]:
+    return releases.stored_reading(
+        reason=comparison.reason,
+        blocks=comparison.blocks,
+        lead=comparison.lead,
+        traffic=comparison.traffic,
+        versions_combined=False,
+        minutes_differing=0,
+    )
+
+
+def test_the_stored_reading_is_the_leading_block_s_words_and_counts_with_no_names() -> None:
+    """FR55, AC81: method, readings and counts; never a version name."""
+    reading = _stored(_compare(_rolling(new_errors=3, old_errors=0), to=START + 40 * MINUTE))
+
+    assert reading == {
+        "reason": None,
+        "versions_combined": False,
+        "minutes_differing": 0,
+        "block": releases.ROLLOUT,
+        "method": releases.SIDE_BY_SIDE,
+        "minutes_compared": 40,
+        "this": {"requests": 4000, "errors": 120, "p95_ms": reading["this"]["p95_ms"]},  # type: ignore[index]
+        "previous": {"requests": 4000, "errors": 0, "p95_ms": reading["previous"]["p95_ms"]},  # type: ignore[index]
+        "failure_share": releases.HIGHER,
+        "failure_share_note": None,
+        "p95": releases.ABOUT_SAME,
+        "p95_note": None,
+    }
+    assert "v2" not in json.dumps(reading) and "v1" not in json.dumps(reading)
+
+
+def test_a_reason_is_stored_with_no_block() -> None:
+    reading = _stored(
+        _compare(_minutes("v2", START, 60, requests=100), period=_period(previous_version=None))
+    )
+    assert reading == {
+        "reason": releases.NO_PREVIOUS_VERSION,
+        "versions_combined": False,
+        "minutes_differing": 0,
+    }
+
+
+def test_the_list_flags_higher_by_version_only() -> None:
+    """FR55, AC81: "failure share higher" or "p95 higher"; nothing for another word, no
+    reading, or the time method."""
+    higher = {"method": releases.SIDE_BY_SIDE, "failure_share": "higher", "p95": "higher"}
+    assert releases.higher_measures(higher) == (releases.FAILURE_SHARE, releases.P95)
+    assert releases.higher_measures(higher | {"p95": "about_same"}) == (releases.FAILURE_SHARE,)
+    assert releases.higher_measures(higher | {"method": releases.VERSION_BEFORE_AFTER}) == (
+        releases.FAILURE_SHARE,
+        releases.P95,
+    )
+    assert releases.higher_measures(higher | {"method": releases.TIME_BEFORE_AFTER}) == ()
+    assert releases.higher_measures({"reason": releases.TOO_RECENT}) == ()
+    assert releases.higher_measures(None) == ()
+
+
+def test_a_summary_states_counts_and_plain_words_and_no_cause() -> None:
+    """FR55, AC82: a line per measure with counts and the plain word."""
+    reading = _stored(_compare(_rolling(new_errors=3, old_errors=0), to=START + 40 * MINUTE))
+
+    lines = releases.summary_lines(reading, version="v2", previous_version="v1")
+
+    assert lines[:2] == [
+        "Side by side over 40 minutes.",
+        "Failure share: 3.0% (120 of 4,000) on v2 against 0.0% (0 of 4,000) on v1, higher.",
+    ]
+    assert lines[2].startswith("p95: ") and lines[2].endswith(", about the same.")
+    assert lines[-1] == releases.NO_SAMPLING_WORDS
+    for line in lines:
+        for word in CAUSE_WORDS:
+            assert word not in line.lower()
+
+
+def test_a_summary_with_no_numbers_says_the_reason() -> None:
+    assert releases.summary_lines(
+        {
+            "reason": releases.TOO_LITTLE_TRAFFIC,
+            "traffic": {"this_requests": 12, "previous_requests": 9},
+        },
+        version="v2",
+        previous_version="v1",
+    ) == ["Too little traffic to compare: 12 requests on v2, 9 requests on v1."]
+    assert releases.summary_lines(
+        {"reason": releases.NO_PREVIOUS_VERSION}, version="v2", previous_version=None
+    ) == [
+        "This is the first version we know of on this service, so there is nothing to "
+        "compare it with."
+    ]
+
+
+def test_a_summary_by_time_names_no_version_and_says_what_mixes() -> None:
+    reading = {
+        "method": releases.TIME_BEFORE_AFTER,
+        "minutes_compared": 60,
+        "this": {"requests": 1000, "errors": 8, "p95_ms": None},
+        "previous": {"requests": 1000, "errors": 2, "p95_ms": None},
+        "failure_share": "higher",
+    }
+    assert releases.summary_lines(reading, version="v2", previous_version=None)[:2] == [
+        "Before and after, by time, over 1 hour. No version in your traffic, so a rolling "
+        "deploy mixes old and new here.",
+        "Failure share: 0.8% (8 of 1,000) after against 0.2% (2 of 1,000) before, higher.",
+    ]
+
+
+def test_a_summary_is_due_30_minutes_after_its_start_or_at_once() -> None:
+    assert releases.summary_countdown(START, START + 10 * MINUTE) == 20 * 60
+    assert releases.summary_countdown(START, START + 3 * HOUR) == 0
+
+
+def test_a_summary_job_carries_ids_only_on_the_releases_queue() -> None:
+    request = releases.summarize_request("org", "project", "period", countdown=90)
+    assert (request.task, request.queue) == (
+        "nexovue_scheduler.releases.summarize_period",
+        "releases",
+    )
+    assert request.kwargs == {"org_id": "org", "project_id": "project", "period_id": "period"}
+    assert (request.org_id, request.countdown_seconds) == ("org", 90)

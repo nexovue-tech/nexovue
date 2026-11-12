@@ -11,10 +11,11 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
+from nexovue_platform.releases import EMPTY_DEPLOY_HISTORY, DeployHistory
+
 from nexovue_api import rollup
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.deploys.service import EMPTY_DEPLOY_HISTORY, DeployHistory
 from nexovue_api.errorgroups import queries
 from nexovue_api.errorgroups.schemas import (
     GROUPED_BY_SDK,

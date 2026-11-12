@@ -1,10 +1,13 @@
-"""F28's release facts in the scheduler, against real Postgres (plan T3.8; D56, AC70, AC73).
+"""F28's release facts in the scheduler, against real Postgres (plan T3.8, T5.2, T5.5;
+D56, AC45, AC70, AC73, AC77).
 
 `release_before` at any age and `releases_near` with the service's own first, each bound
-to one organization and project; `coverage` taking the API's four values from the same
-rows; and FR44's line in a finding's opening notice, read after the claim on its own
-connection: present when a release came first, left out when the read fails or hangs,
-with the notice delivered and the claim standing either way.
+to one organization and project; `deploys_in_window` and `releases_seen_in_window`, two
+organizations with one service and version kept apart (AC77), and a sender's hostile
+free text stored and never read back into a fact (T5.5); `coverage` taking the API's
+four values from the same rows; and FR44's line in a finding's opening notice, read after
+the claim on its own connection: present when a release came first, left out when the
+read fails or hangs, with the notice delivered and the claim standing either way.
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -12,6 +15,7 @@ This suite fails rather than skips when the stack is down; see tests/helpers/liv
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Mapping
@@ -29,6 +33,13 @@ from alert_fixtures import (
     make_tenant,
     postgres_reachable,
     rows,
+)
+from hostile_release_names import (
+    FREE_TEXT_MARKERS,
+    HOSTILE_DELIVERY_IDS,
+    HOSTILE_METADATA,
+    HOSTILE_SOURCES,
+    HOSTILE_VERSIONS,
 )
 from live import require_stack
 from nexovue_platform.email import Delivery, Message
@@ -205,6 +216,145 @@ async def test_facts_are_bound_to_one_organization_and_project(
             lookback=2 * HOUR,
         )
     assert near == []
+
+
+# ------------------------------------------- T5.2, T5.5: the window reads, AC45, AC77
+
+
+async def _hostile_deploy(
+    engine: AsyncEngine, tenant: AlertTenant, version: str, at: datetime, number: int
+) -> uuid.UUID:
+    """A signed deploy carrying every kind of hostile free text a sender can write."""
+    async with engine.begin() as connection:
+        release_id = await connection.scalar(
+            text(
+                """
+                INSERT INTO releases (org_id, project_id, service_name, version,
+                                      first_reported_at, last_reported_at, report_count,
+                                      last_state, last_activity_at)
+                VALUES (:org_id, :project_id, :service, :version, :at, :at, 1, 'finished',
+                        now())
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "service": SERVICE,
+                "version": version,
+                "at": at,
+            },
+        )
+        deploy_id: uuid.UUID = await connection.scalar(
+            text(
+                """
+                INSERT INTO deploy_events (org_id, project_id, version, service_name,
+                                           deployed_at, source, delivery_id, metadata, state,
+                                           commit_sha, url, release_id)
+                VALUES (:org_id, :project_id, :version, :service, :at, :source, :delivery,
+                        CAST(:metadata AS jsonb), 'finished', :sha,
+                        'https://evil.example/runs/1', :release_id)
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "version": version,
+                "service": SERVICE,
+                "at": at,
+                "source": HOSTILE_SOURCES[number % len(HOSTILE_SOURCES)],
+                "delivery": f"{HOSTILE_DELIVERY_IDS[number % len(HOSTILE_DELIVERY_IDS)]}-{number}",
+                "metadata": json.dumps(HOSTILE_METADATA),
+                "sha": "b" * 40,
+                "release_id": release_id,
+            },
+        )
+    return deploy_id
+
+
+async def test_signed_deploys_in_a_window_carry_no_free_text_however_hostile(
+    engine: AsyncEngine, acme: AlertTenant
+) -> None:
+    """AC45, T5.5: the sender's `metadata`, `url`, `source` and `delivery_id` are stored and
+    never read into a fact; the hostile version is carried, as a name F3 aliases."""
+    deploys = [
+        await _hostile_deploy(engine, acme, version, AT - (index + 1) * MINUTE, index)
+        for index, version in enumerate(HOSTILE_VERSIONS)
+    ]
+
+    async with engine.connect() as connection:
+        found = await facts.deploys_in_window(
+            connection,
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            services=[SERVICE],
+            start=AT - HOUR,
+            end=AT,
+        )
+
+    assert sorted(fact.deploy_id for fact in found) == sorted(deploys)
+    assert {fact.version for fact in found} == set(HOSTILE_VERSIONS)
+    assert {(fact.basis, fact.state, fact.commit_sha) for fact in found} == {
+        ("reported", "finished", "b" * 40)
+    }
+    shown = repr(found)
+    for marker in (*FREE_TEXT_MARKERS, "evil.example/runs"):
+        assert marker not in shown
+
+
+async def test_window_reads_never_cross_organizations_with_one_service_and_version(
+    engine: AsyncEngine, acme: AlertTenant, globex: AlertTenant
+) -> None:
+    """AC77: two organizations, one service and one version, each reads its own."""
+    ours = await _hostile_deploy(engine, acme, "v2", AT - 5 * MINUTE, 0)
+    await _hostile_deploy(engine, globex, "v2", AT - 5 * MINUTE, 1)
+    await _release(engine, acme, "v3", AT - 4 * MINUTE)
+    await _release(engine, globex, "v3", AT - 4 * MINUTE)
+
+    async with engine.connect() as connection:
+        deploys = await facts.deploys_in_window(
+            connection,
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            services=[SERVICE],
+            start=AT - HOUR,
+            end=AT,
+        )
+        seen = await facts.releases_seen_in_window(
+            connection,
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service=SERVICE,
+            start=AT - HOUR,
+            end=AT,
+        )
+
+    assert [fact.deploy_id for fact in deploys] == [ours]
+    assert [(fact.version, fact.basis) for fact in seen] == [("v3", "seen")]
+
+
+async def test_versions_seen_in_a_window_are_seen_starts_only_and_never_already_running(
+    engine: AsyncEngine, acme: AlertTenant
+) -> None:
+    """D54: a seen start is F3's `telemetry_text`; a reported one, and a version already
+    running when counting began, are not among them."""
+    await _release(engine, acme, "v1", AT - 50 * MINUTE, already_running=True)
+    await _release(engine, acme, "v2", AT - 30 * MINUTE)
+    await _release(engine, acme, "v3", AT - 10 * MINUTE, seen=False, reported_at=AT - 10 * MINUTE)
+    await _release(engine, acme, "v0", AT - 2 * HOUR)
+
+    async with engine.connect() as connection:
+        seen = await facts.releases_seen_in_window(
+            connection,
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service=SERVICE,
+            start=AT - HOUR,
+            end=AT,
+        )
+
+    assert [(fact.version, fact.basis) for fact in seen] == [("v2", "seen")]
 
 
 # ---------------------------------------------------------------- releases_near

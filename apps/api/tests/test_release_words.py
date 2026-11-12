@@ -59,7 +59,11 @@ F28_STATEMENT_MODULES: Final = (
     *sorted((ROOT / "apps/scheduler/src/nexovue_scheduler/releases").glob("*.py")),
 )
 ERRORS_MODULE: Final = ROOT / "apps/api/src/nexovue_api/errorgroups/queries.py"
-ALLOWED_RAW_READS: Final = frozenset({"ERRORS_BY_VERSION_SQL", "ENVIRONMENTS_SQL"})
+# The scheduler's stored reading reads the same labels by the same statement (T5.2),
+# held equal to the API's by `test_releases.py`.
+ALLOWED_RAW_READS: Final = frozenset(
+    {"ERRORS_BY_VERSION_SQL", "ENVIRONMENTS_SQL", "COMPARED_ENVIRONMENTS_SQL"}
+)
 READS_RAW_ROWS: Final = re.compile(r"\bFROM\s+(spans|logs)\b", re.IGNORECASE)
 # What a rate or a latency would need from a stored span.
 LATENCY_OR_RATE: Final = re.compile(r"duration_ms|quantile|avg\(|/\s*count", re.IGNORECASE)
@@ -189,6 +193,7 @@ def test_neither_raw_read_measures_a_rate_or_a_latency() -> None:
     """AC34, BR6: presence and group counts only."""
     from nexovue_api.errorgroups.queries import ERRORS_BY_VERSION_SQL
     from nexovue_api.releases.queries import ENVIRONMENTS_SQL
+    from nexovue_scheduler.releases.store import COMPARED_ENVIRONMENTS_SQL
 
-    for statement in (ERRORS_BY_VERSION_SQL, ENVIRONMENTS_SQL):
+    for statement in (ERRORS_BY_VERSION_SQL, ENVIRONMENTS_SQL, COMPARED_ENVIRONMENTS_SQL):
         assert not LATENCY_OR_RATE.search(statement), statement

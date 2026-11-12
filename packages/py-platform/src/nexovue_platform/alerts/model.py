@@ -47,6 +47,9 @@ SEVERITY_RANK: Final[dict[str, int]] = {"warning": 1, "critical": 2}
 # project, and resumed (D24); their subject is the project, not an incident or finding.
 # F3 adds `explained`: one follow-up naming a finding's likely place to look, to people
 # only. It tells no news (`FINDING_TOLD_KINDS`) and is never an open alert (FR21, FR22).
+# F28 adds `release_summary`: a project's opted-in report of each release, to one channel
+# people read (FR55, D52). Its subject is a release period; it is never an alert, never
+# pages, and opens no finding.
 NOTIFICATION_KINDS: Final = (
     "opened",
     "escalated",
@@ -59,6 +62,7 @@ NOTIFICATION_KINDS: Final = (
     "stopped",
     "running_again",
     "explained",
+    "release_summary",
 )
 NotificationKind = Literal[
     "opened",
@@ -72,9 +76,12 @@ NotificationKind = Literal[
     "stopped",
     "running_again",
     "explained",
+    "release_summary",
 ]
 # F3's follow-up kind, named once for the writer, the outbox and the composer.
 EXPLAINED: Final = "explained"
+# F28's summary kind, named once for the job, the outbox, the composer and the payloads.
+RELEASE_SUMMARY: Final = "release_summary"
 
 # Kinds whose subject is a project, so the row names neither an incident nor a finding.
 PROJECT_NOTIFICATION_KINDS: Final = ("stopped", "running_again")

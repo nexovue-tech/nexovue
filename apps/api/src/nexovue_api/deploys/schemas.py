@@ -13,7 +13,7 @@ import json
 import re
 import uuid
 from datetime import datetime
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 
 from nexovue_platform import releases
@@ -185,15 +185,20 @@ class DeployBatchAnswer(BaseModel):
 
 
 class DeployEventSummary(BaseModel):
-    """One recorded deploy, as the console lists it."""
+    """One recorded deploy, as `GET /deploys` lists it. No sender text: `metadata`,
+    `url` and `source` are served by `GET /releases/{id}/sender-details` alone, to a
+    signed-in person (FR54, AC76)."""
 
     id: uuid.UUID
     project_id: uuid.UUID
     version: str
     service_name: str
+    # The sender's claim, bounded at the door (FR8).
     deployed_at: datetime
-    source: str
-    metadata: dict[str, Any]
+    # When it arrived: ours.
+    received_at: datetime
+    state: DeployState
+    commit_sha: str | None
 
 
 class DeployEventListResponse(BaseModel):
@@ -251,6 +256,8 @@ class WebhookSecretsResponse(BaseModel):
     current_versions: list[CurrentVersion]
     # FR56: older releases are being removed early.
     over_release_cap: bool
+    # FR45: services whose latest stored reading saw two environments in one project.
+    mixed_environment_services: list[str]
 
 
 class MintedWebhookSecretResponse(WebhookSecretsResponse):

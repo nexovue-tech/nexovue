@@ -43,6 +43,7 @@ from nexovue_platform.checks.sealing import (
     generate_key,
 )
 from nexovue_platform.masking import PLACEHOLDER
+from nexovue_platform.releases import EMPTY_DEPLOY_HISTORY, DeployFact, DeployHistory
 
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.dependencies import get_current_identity as current_identity_dependency
@@ -52,7 +53,6 @@ from nexovue_api.deploys.schemas import (
     MAX_ITEMS,
     MAX_METADATA_BYTES,
     MAX_URL_LENGTH,
-    DeployEventSummary,
 )
 from nexovue_api.deps import get_app_settings, get_db_session
 from nexovue_api.errors.exceptions import (
@@ -775,15 +775,16 @@ async def test_a_body_one_byte_over_the_cap_is_refused_with_the_stated_words() -
 # ------------------------------------------------- the deploy before something
 
 
-def _deployed(version: str, service_name: str, at: datetime) -> DeployEventSummary:
-    return DeployEventSummary(
-        id=uuid.uuid4(),
-        project_id=PROJECT_ID,
-        version=version,
+def _deployed(version: str, service_name: str, at: datetime) -> DeployFact:
+    return DeployFact(
+        deploy_id=uuid.uuid4(),
+        release_id=None,
         service_name=service_name,
+        version=version,
         deployed_at=at,
-        source="webhook",
-        metadata={},
+        received_at=at,
+        state="finished",
+        commit_sha=None,
     )
 
 
@@ -794,7 +795,7 @@ CHECKOUT_NEW: Final = _deployed("1.1.0", "checkout", NOON - timedelta(minutes=4)
 PAYMENTS: Final = _deployed("7.2.1", "payments", NOON - timedelta(minutes=1))
 AFTERWARDS: Final = _deployed("1.2.0", "checkout", NOON + timedelta(minutes=30))
 
-HISTORY: Final = service.DeployHistory([CHECKOUT_OLD, CHECKOUT_NEW, PAYMENTS, AFTERWARDS])
+HISTORY: Final = DeployHistory([CHECKOUT_OLD, CHECKOUT_NEW, PAYMENTS, AFTERWARDS])
 
 
 def test_the_deploy_before_an_instant_is_the_most_recent_one_of_that_service() -> None:
@@ -845,7 +846,7 @@ def test_something_naming_no_service_has_no_deploy_before_it() -> None:
 
 def test_a_project_with_no_recorded_deploys_answers_nothing() -> None:
     """Most projects never send a deploy notification, and that is not a failure."""
-    assert service.EMPTY_DEPLOY_HISTORY.preceding(services=["checkout"], at=NOON) is None
+    assert EMPTY_DEPLOY_HISTORY.preceding(services=["checkout"], at=NOON) is None
 
 
 async def test_both_history_statements_bind_the_organization(
@@ -871,7 +872,8 @@ def test_a_window_that_overflows_the_cap_answers_nothing_rather_than_the_wrong_d
     last deploy before an early instant is one this cannot see. Naming the
     pre-window deploy instead would name one that is provably not the last."""
     horizon = NOON - timedelta(minutes=30)
-    capped = service.DeployHistory([CHECKOUT_NEW, PAYMENTS], known_from=horizon)
+    # CHECKOUT_OLD stands for a deploy the capped read never reached: it is never named.
+    capped = DeployHistory([CHECKOUT_OLD, CHECKOUT_NEW, PAYMENTS], known_from=horizon)
 
     assert capped.preceding(services=["checkout"], at=horizon - timedelta(minutes=1)) is None
 

@@ -53,6 +53,8 @@ export interface DeploySettings {
   last_refusal: LastRefusal | null;
   current_versions: CurrentVersion[];
   over_release_cap: boolean;
+  /** FR45: services whose latest stored reading saw two environments. */
+  mixed_environment_services: string[];
 }
 
 export interface MintedDeploySettings extends DeploySettings {
@@ -66,6 +68,31 @@ export interface WithdrawInput {
 }
 
 const deploySettingsKey = (projectId: string) => ["deploy-settings", projectId] as const;
+
+/**
+ * The kinds of channel people read (`nexovue_platform.alerts.channels.READ_BY_PEOPLE`):
+ * the only ones a release summary may go to, so it never pages (D52, D53).
+ */
+export const SUMMARY_CHANNEL_KINDS = ["owners", "email", "slack", "teams", "discord"] as const;
+
+/** A channel, as the summary's chooser needs it. */
+export interface SummaryChannel {
+  id: string;
+  kind: string;
+  name: string;
+}
+
+/** The organization's channels a summary may go to, read from the existing `GET /channels`. */
+export function useSummaryChannels() {
+  return useQuery({
+    queryKey: ["deploy-settings", "summary-channels"],
+    queryFn: ({ signal }) => apiClient.get<{ channels: SummaryChannel[] }>("channels", { signal }),
+    select: (response) =>
+      response.channels.filter((channel) =>
+        (SUMMARY_CHANNEL_KINDS as readonly string[]).includes(channel.kind),
+      ),
+  });
+}
 
 export function useDeploySettings(projectId: string, openedAt: number) {
   return useQuery({

@@ -20,9 +20,11 @@ past ten a minute one summary (FR12). Warnings wait out quiet hours; criticals
 never do (BR4). PagerDuty and webhooks are read by machines that key on each
 subject, so they get one event per notification and are not shaped.
 
-**A notification has one subject** (ADR-022): an incident, a finding, or — for
-detection stopping and running again (D24) — the project itself. The claim reads
-each through one `Subject`, so everything after it treats them alike.
+**A notification has one subject** (ADR-022): an incident, a finding, a release
+period for a release summary (F28 D52, ADR-066), or — for detection stopping and
+running again (D24) — the project itself. The claim reads each through one `Subject`,
+so everything after it treats them alike. A release period's words are read by
+delivery after the claim, since detection imports this module (AC42).
 
 **One problem is one PagerDuty alert, whichever fires first** (D29, D35). A
 finding and an incident linked on one service share the alert of whichever
@@ -57,6 +59,7 @@ from nexovue_platform.alerts.model import (
     ENDING_KINDS,
     EXPLAINED,
     NEWS_KINDS,
+    RELEASE_SUMMARY,
     SEVERITY_RANK,
     WITHHELD_SAME_NEWS,
     WITHHELD_SERVICE_SNOOZED,
@@ -126,8 +129,9 @@ _DUE: Final = """
 # A notification waits while an earlier one of the same subject on the same
 # channel waits on a retry, so *resolved* never overtakes *opened*. Rows only held
 # by quiet hours or the burst cap (never attempted) do not block: a critical must
-# not wait for a held warning. A project's own notices name neither subject, so
-# the project and both nulls make their subject.
+# not wait for a held warning. A project's own notices name no subject, so the
+# project and the nulls make their subject; each release summary is its period's
+# (F28), so a retry on one summary never holds the next release's.
 _IN_ORDER: Final = """
     NOT EXISTS (
         SELECT 1 FROM notifications AS earlier
@@ -136,6 +140,7 @@ _IN_ORDER: Final = """
           AND earlier.project_id = notifications.project_id
           AND earlier.incident_id IS NOT DISTINCT FROM notifications.incident_id
           AND earlier.finding_id IS NOT DISTINCT FROM notifications.finding_id
+          AND earlier.release_period_id IS NOT DISTINCT FROM notifications.release_period_id
           AND earlier.created_at < notifications.created_at
           AND earlier.attempts > 0
           AND earlier.state IN ('pending', 'delivering')
@@ -225,6 +230,8 @@ _OWN_KEY: Final = """
              THEN 'incident:' || CAST(notifications.incident_id AS text)
          WHEN notifications.finding_id IS NOT NULL
              THEN 'finding:' || CAST(notifications.finding_id AS text)
+         WHEN notifications.release_period_id IS NOT NULL
+             THEN 'release:' || CAST(notifications.release_period_id AS text)
          ELSE 'project:' || CAST(notifications.project_id AS text)
     END
 """
@@ -643,7 +650,8 @@ _TAKEN: Final = text(
            coalesce(notifications.dedup_key, {_OWN_KEY}) AS pagerduty_key,
            {_OWN_KEY} AS own_key,
            adopted.shifts AS adopted_shifts,
-           cause.cause_values
+           cause.cause_values,
+           notifications.release_period_id
     FROM notifications
     JOIN projects
         ON projects.id = notifications.project_id AND projects.org_id = notifications.org_id
@@ -772,7 +780,7 @@ class Channel:
     sealed_secret: bytes | None
 
 
-SubjectKind = Literal["incident", "finding", "project"]
+SubjectKind = Literal["incident", "finding", "release", "project"]
 # A service finding's subject key is this and the service's name, as it was sent.
 SERVICE_KEY_PREFIX: Final = "service:"
 
@@ -1232,6 +1240,8 @@ def _subject(row: Any) -> Subject:
             if row.case_root_id is None or row.case_opened_at is None
             else CaseOfSubject(root_id=row.case_root_id, opened_at=row.case_opened_at),
         )
+    if row.release_period_id is not None:
+        return _release_subject(row)
     # Detection stopping and running again: the project is the subject (D24).
     return Subject(
         kind="project",
@@ -1243,5 +1253,31 @@ def _subject(row: Any) -> Subject:
         rule_id=None,
         rule_name=None,
         condition_kind=DETECTION,
+        detail={},
+    )
+
+
+# F28's release summary: what the composer reads from a release subject's detail (D52).
+RELEASE_DETAIL_VERSION: Final = "version"
+RELEASE_DETAIL_PREVIOUS: Final = "previous_version"
+RELEASE_DETAIL_RELEASE_ID: Final = "release_id"
+RELEASE_DETAIL_READING: Final = "reading"
+
+
+def _release_subject(row: Any) -> Subject:
+    """A release summary's period (D52), named by its id alone. The claim never reads the
+    release tables: detection imports this module, and must reach none of F28's (AC42).
+    Delivery reads the release, its version and its stored reading after the claim, on a
+    connection of its own (`delivery.with_release_summaries`), and fills this in."""
+    return Subject(
+        kind="release",
+        id=row.release_period_id,
+        key="release",
+        label=row.project_name,
+        opened_at=row.created_at,
+        closed_at=None,
+        rule_id=None,
+        rule_name=None,
+        condition_kind=RELEASE_SUMMARY,
         detail={},
     )

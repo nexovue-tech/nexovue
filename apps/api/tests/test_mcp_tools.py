@@ -32,7 +32,8 @@ from nexovue_platform.assistant_tools import (
 
 from nexovue_api import assistant
 from nexovue_api.assistant.server import MCP_PATH, SERVER_INSTRUCTIONS, allowed_hosts
-from nexovue_api.assistant.tools import UNTRUSTED_FIELDS, check_row, window
+from nexovue_api.assistant.tools import UNTRUSTED_FIELDS, check_row, deploy_row, window
+from nexovue_api.deploys.schemas import DeployEventSummary
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.settings import Settings
 
@@ -95,6 +96,7 @@ READS: Final = {
     "opened",
     "reader_of",
     "check_row",
+    "deploy_row",
     "now",
 }
 
@@ -412,3 +414,57 @@ def test_list_checks_sends_the_host_and_never_the_config() -> None:
     assert "SECRET_VALUE" not in rendered
     assert "SECRET_HEADER" not in rendered
     assert "config" not in row
+
+
+# ------------------------------------------------- F28: what list_deploys may send
+
+# AC46's exact list: adding a field to `GET /deploys` must not reach a model unasked.
+DEPLOY_FIELDS: Final = {
+    "id",
+    "version",
+    "service_name",
+    "deployed_at",
+    "commit_sha",
+    "state",
+    "received_at",
+}
+
+
+def _a_deploy() -> DeployEventSummary:
+    at = datetime(2026, 11, 12, 9, 30, tzinfo=UTC)
+    return DeployEventSummary(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        version="v2.1",
+        service_name="checkout",
+        deployed_at=at,
+        received_at=at,
+        state="finished",
+        commit_sha="a" * 40,
+    )
+
+
+def test_list_deploys_sends_exactly_its_fields_and_no_sender_text() -> None:
+    """AC46, FR54: a sender's `metadata`, `url` and `source` are free text, and dumping
+    a model would send whatever it gained next."""
+    row = deploy_row(_a_deploy())
+
+    assert set(row) == DEPLOY_FIELDS
+    assert UNTRUSTED_FIELDS["list_deploys"] == ("deploys[].version", "deploys[].service_name")
+
+
+def test_a_capped_deploy_list_says_it_is_partial() -> None:
+    """AC46, C10: `truncated` was ignored, so a capped list read as whole."""
+    rows = [deploy_row(_a_deploy()) for _ in range(3)]
+
+    whole = json.loads(bounded(rows, subject="deploys", partial=False))
+    cut = json.loads(bounded(rows, subject="deploys", partial=True))
+
+    assert whole["partial"] is False
+    assert "cut" not in whole
+    assert cut["partial"] is True
+    assert cut["cut"] == f"Showing 3 of more than 3 deploys. {NARROW_BY}"
+
+
+def test_the_deploy_tool_passes_the_reads_truncation_on() -> None:
+    assert "partial=answer.truncated" in ast.unparse(_tool_functions()["list_deploys"])

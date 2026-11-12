@@ -257,6 +257,31 @@ async def current_versions(
     return (await session.execute(statement)).all()
 
 
+async def mixed_environment_services(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> list[str]:
+    """FR45 in the Deploys section: services whose latest stored reading found more than
+    one environment label, as the summary job stored it (`mixed_environments`), so the
+    section reads Postgres alone."""
+    latest = (
+        select(ReleasePeriod.service_name, ReleasePeriod.mixed_environments)
+        .where(
+            ReleasePeriod.org_id == org_id,
+            ReleasePeriod.project_id == project_id,
+            ReleasePeriod.mixed_environments.is_not(None),
+        )
+        .distinct(ReleasePeriod.service_name)
+        .order_by(ReleasePeriod.service_name, ReleasePeriod.started_at.desc())
+        .subquery()
+    )
+    statement = (
+        select(latest.c.service_name)
+        .where(latest.c.mixed_environments.is_(True))
+        .order_by(latest.c.service_name)
+    )
+    return list(await session.scalars(statement))
+
+
 # ------------------------------------------------------------------- deploys
 
 

@@ -81,7 +81,7 @@ and reach only the documented read API.**
 | `GET /checks/{check_id}` | One check |
 | `GET /synthetics/checks` | Check results in a window |
 | `GET /synthetics/checks/{check_id}/runs` | One check's recent runs |
-| `GET /deploys` | Recent deploys, newest first. Sending them is a signed step in your pipeline, not a token: see [deploys.md](deploys.md) |
+| `GET /deploys` | Recent deploys, newest first: id, service, version, state, commit, the sender's time and ours, and none of the sender's own text. Sending them is a signed step in your pipeline, not a token: see [deploys.md](deploys.md) |
 | `GET /releases` | A project's releases with a period in the time window, newest first: each version of each service, when its period started, whether it was seen in traffic, reported by your CI, or both, and whether it is serving, replaced or idle. Filter by `service` and `version`; page with `cursor` |
 | `GET /releases/{release_id}` | One release: when it was first and last seen and reported, each period it served, with the version it replaced, whether it came back and the findings on its service that started while it served, and each deploy your CI reported, with its state, commit and when it arrived |
 | `GET /releases/markers` | The releases to mark on a chart of the window, newest first, up to 500 (`truncated` says when more fell in it): each deploy your CI reported, with its state, and each version first seen in traffic. Filter by `service` |

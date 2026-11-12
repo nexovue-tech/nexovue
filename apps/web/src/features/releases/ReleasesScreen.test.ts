@@ -198,3 +198,64 @@ describe("the releases list (AC27)", () => {
     expect(container.querySelector("script")).toBeNull();
   });
 });
+
+describe("the stored reading's flags (AC81, FR55)", () => {
+  const failing = {
+    measure: "failure_share" as const,
+    this_requests: 6012,
+    this_errors: 180,
+    this_p95_ms: 412,
+    previous_requests: 5844,
+    previous_errors: 12,
+    previous_p95_ms: 290,
+  };
+
+  it("shows failure share and p95 higher with their counts, in critical text", async () => {
+    stubApi({
+      "GET /releases": json(listOf([row({ flags: [failing, { ...failing, measure: "p95" }] })])),
+    });
+    const { container } = await mountAt("/releases");
+    await waitFor(
+      () =>
+        readable(container).includes(
+          "Failure share higher: 3.0% (180 of 6,012) against 0.2% (12 of 5,844)",
+        ),
+      "the failure share flag",
+    );
+    expect(readable(container)).toContain("p95 higher: 412 ms against 290 ms");
+    const flagged = [...container.querySelectorAll(".text-critical-text")].map(
+      (each) => each.textContent,
+    );
+    expect(flagged).toEqual([
+      "Failure share higher: 3.0% (180 of 6,012) against 0.2% (12 of 5,844)",
+      "p95 higher: 412 ms against 290 ms",
+    ]);
+  });
+
+  it("shows no flag for any other reading, or none", async () => {
+    stubApi({ "GET /releases": json(listOf([row()])) });
+    const { container } = await mountAt("/releases");
+    await waitFor(() => readable(container).includes("Serving"), "the row");
+    expect(readable(container)).not.toContain("higher");
+    expect(container.querySelector(".text-critical-text")).toBeNull();
+  });
+
+  it("says where versions were combined, once per service", async () => {
+    stubApi({
+      "GET /releases": json(
+        listOf([
+          row({ versions_combined: true }),
+          row({ id: "r2", period_id: "p2", version: "v2.0", versions_combined: true }),
+          row({ id: "r3", period_id: "p3", service_name: "search", versions_combined: false }),
+        ]),
+      ),
+    });
+    const { container } = await mountAt("/releases");
+    await waitFor(
+      () =>
+        readable(container).includes("Versions were combined on checkout: too many in one minute."),
+      "the combined state",
+    );
+    expect(readable(container)).not.toContain("search: too many");
+  });
+});

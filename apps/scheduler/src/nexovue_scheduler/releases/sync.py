@@ -34,6 +34,9 @@ before creating: first never-seen releases of services it has never heard from, 
 the least recently active with no period in service, which is never evicted (FR56).
 A row whose names Postgres cannot hold is skipped and counted (FR18, AC56).
 
+**A new release is summarized** (FR55): each period it opens, unless already running,
+gets its stored reading's job, due 30 minutes after its start (`summary`).
+
 Every statement binds `org_id`, read from the project's own row (F6's m6), except the
 one named in `test_scheduler_postgres_tenancy_structure.py` that finds whose services
 have moved since their last run, across every organization.
@@ -57,7 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.detection.projects import active_projects, fair_order, session_lock
 from nexovue_scheduler.detection.store import ProjectBinding, bind_project
-from nexovue_scheduler.jobs.queue import enqueue_all
+from nexovue_scheduler.jobs.queue import enqueue, enqueue_all
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.releases import OBSERVE_PROJECT_TASK, RELEASES_QUEUE, SWEEP_RELEASES_TASK
@@ -630,7 +633,7 @@ _RELEASE_ID: Final = text(
       AND service_name = :service AND version = :version
     """
 )
-# A retried run, or a second period at one start, writes nothing twice.
+# A retried run, or a second period at one start, writes nothing twice, and returns no id.
 _OPEN_PERIOD: Final = text(
     """
     INSERT INTO release_periods (org_id, release_id, project_id, service_name, started_at,
@@ -639,6 +642,7 @@ _OPEN_PERIOD: Final = text(
     VALUES (:org_id, :release_id, :project_id, :service, :started_at, 'seen', :ended_at,
             :previous_version, :already_running, :is_return)
     ON CONFLICT DO NOTHING
+    RETURNING id
     """
 )
 # A past period only ever gains an end (FR19).
@@ -830,7 +834,7 @@ async def _write(connection: AsyncConnection, binding: ProjectBinding, changes: 
                 _END_PERIOD, {**keys, "id": end.period_id, "ended_at": end.ended_at}
             )
         for period in periods.get((service, version), ()):
-            await connection.execute(
+            opened = await connection.scalar(
                 _OPEN_PERIOD,
                 {
                     **named,
@@ -842,8 +846,31 @@ async def _write(connection: AsyncConnection, binding: ProjectBinding, changes: 
                     "is_return": period.is_return,
                 },
             )
+            if isinstance(opened, uuid.UUID) and not period.already_running:
+                await _queue_summary(connection, binding, opened, period.started_at, changes)
     await connection.execute(
         _SAVE_SYNCED_THROUGH, {**keys, "synced_through": changes.synced_through}
+    )
+
+
+async def _queue_summary(
+    connection: AsyncConnection,
+    binding: ProjectBinding,
+    period_id: uuid.UUID,
+    started_at: datetime,
+    changes: Changes,
+) -> None:
+    """FR55: the new period's reading and summary, due 30 minutes after its start, timed
+    by the newest minute read rather than a clock. A period already running when counting
+    began is not a release (FR43), so it gets none."""
+    await enqueue(
+        connection,
+        releases.summarize_request(
+            binding.org_id,
+            binding.project_id,
+            period_id,
+            countdown=releases.summary_countdown(started_at, changes.synced_through + MINUTE),
+        ),
     )
 
 

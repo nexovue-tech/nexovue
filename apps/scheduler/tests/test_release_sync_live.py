@@ -28,6 +28,7 @@ from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from live import require_stack
 from nexovue_platform import releases as platform_releases
+from settled_minute import settled_minute
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -110,33 +111,10 @@ async def globex(engine: AsyncEngine) -> AsyncIterator[AlertTenant]:
 
 @pytest.fixture
 async def settled(engine: AsyncEngine) -> AsyncIterator[Any]:
-    """Sets the install's settled minute, and puts the one found back afterwards."""
-    async with engine.connect() as connection:
-        before = (
-            await connection.execute(text("SELECT swept_at, settled_minute FROM detection_sweep"))
-        ).one_or_none()
-
-    async def settle(minute: datetime) -> None:
-        async with engine.begin() as connection:
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO detection_sweep (swept_at, settled_minute) VALUES (now(), :minute)
-                    ON CONFLICT (one_row) DO UPDATE SET settled_minute = EXCLUDED.settled_minute
-                    """
-                ),
-                {"minute": minute},
-            )
-
-    yield settle
-    async with engine.begin() as connection:
-        if before is None:
-            await connection.execute(text("DELETE FROM detection_sweep"))
-        else:
-            await connection.execute(
-                text("UPDATE detection_sweep SET settled_minute = :minute"),
-                {"minute": before.settled_minute},
-            )
+    """Sets the install's settled minute, held from the other suites that set it, and puts
+    the one found back afterwards."""
+    async with settled_minute(engine) as settle:
+        yield settle
 
 
 def _quoted(value: str) -> str:
@@ -253,6 +231,48 @@ async def test_a_rolling_deploy_becomes_two_releases_and_the_old_period_ends(
     assert v1.ended_at == T0 + 50 * MINUTE
     assert (v2.started_at, v2.ended_at, v2.previous_version) == (T0 + 40 * MINUTE, None, "v1")
     assert v2.start_basis == "seen" and not v2.already_running
+
+
+async def test_a_new_release_is_summarized_30_minutes_in_and_one_already_running_is_not(
+    engine: AsyncEngine,
+    acme: AlertTenant,
+    administrator: Client,
+    release_store: ReleaseStore,
+    settled: Any,
+) -> None:
+    """FR55, FR43: the sync adds the summary job for the period it opens, due 30 minutes
+    after its start by the newest minute read, never by a clock; a run read again opens
+    nothing and adds nothing."""
+    write_versions(administrator, acme, traffic("v1", T0, 40) + traffic("v2", T0 + 40 * MINUTE, 20))
+    await settled(T0 + 59 * MINUTE)
+
+    await sync.observe_project(engine, release_store, acme.project_id)
+    await sync.observe_project(engine, release_store, acme.project_id)
+
+    async with engine.connect() as connection:
+        queued = list(
+            await connection.execute(
+                text(
+                    """
+                    SELECT queue, kwargs, run_after - created_at AS delay
+                    FROM jobs WHERE org_id = :org_id AND task = :task
+                    """
+                ),
+                {"org_id": acme.org_id, "task": platform_releases.SUMMARIZE_PERIOD_TASK},
+            )
+        )
+        v2_period = await connection.scalar(
+            text(
+                "SELECT p.id FROM release_periods AS p JOIN releases AS r "
+                "ON r.org_id = p.org_id AND r.id = p.release_id "
+                "WHERE p.org_id = :org_id AND r.version = 'v2'"
+            ),
+            {"org_id": acme.org_id},
+        )
+    (job,) = queued
+    assert (job.queue, job.kwargs["period_id"]) == (RELEASES_QUEUE, str(v2_period))
+    # Due at T0 + 70; read through T0 + 59, so the sync's moment is T0 + 60.
+    assert job.delay == 10 * MINUTE
 
 
 async def _reported_before_traffic(

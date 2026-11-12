@@ -39,6 +39,7 @@ from nexovue_platform.checks.sealing import (
 )
 from nexovue_platform.evidence import GATHER_EVIDENCE_TASK
 from nexovue_platform.masking import PLACEHOLDER
+from nexovue_platform.releases import SUMMARIZE_PERIOD_TASK
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -181,6 +182,7 @@ async def _send(
     charge: service.Charge = _always,
     signature: str | None = None,
     project_id: uuid.UUID | None = None,
+    now: datetime | None = None,
 ) -> Any:
     return await service.record_from_webhook(
         db,
@@ -189,6 +191,7 @@ async def _send(
         signature=signature if signature is not None else _sign(body, secret),
         box=BOX,
         charge=charge,
+        now=now,
     )
 
 
@@ -661,6 +664,59 @@ async def test_a_report_opens_a_reported_period_naming_what_it_replaced(
         "reported",
         "v1",
     )
+
+
+# F28 FR55: the webhook's own clock, pinned, for the summary's due time.
+SENT_AT: Final = datetime(2026, 11, 12, 9, 0, tzinfo=UTC)
+
+
+async def _summary_jobs(db: AsyncSession, tenant: ProvisionedTenant) -> list[tuple[str, Any]]:
+    rows = await db.execute(
+        text(
+            "SELECT kwargs, run_after - created_at AS delay FROM jobs "
+            "WHERE org_id = :org_id AND task = :task ORDER BY run_after"
+        ),
+        {"org_id": tenant.organization.id, "task": SUMMARIZE_PERIOD_TASK},
+    )
+    return [(row.kwargs["period_id"], row.delay) for row in rows]
+
+
+async def test_a_period_a_report_opens_is_summarized_30_minutes_after_its_start(
+    db: AsyncSession,
+) -> None:
+    """FR55, design section 6: the webhook adds the summary job in its own transaction,
+    due 30 minutes after the reported start, at once for one already past it. A repeated
+    body, a dry run and a deploy that did not go out add none."""
+    tenant = await _new_tenant(db)
+    _, secret = await _mint(db, tenant)
+    old = _body(_item(version="v1", deployed_at=(SENT_AT - timedelta(hours=2)).isoformat()))
+    new = _body(_item(version="v2", deployed_at=(SENT_AT - timedelta(minutes=10)).isoformat()))
+
+    await _send(db, tenant, secret, old, now=SENT_AT)
+    await _send(db, tenant, secret, new, now=SENT_AT)
+    await _send(db, tenant, secret, new, now=SENT_AT)
+    await _send(
+        db,
+        tenant,
+        secret,
+        _body(_item(version="v3", deployed_at=SENT_AT.isoformat()), dry_run=True),
+        now=SENT_AT,
+    )
+    await _send(
+        db,
+        tenant,
+        secret,
+        _body(_item(version="v4", deployed_at=SENT_AT.isoformat(), state="failed")),
+        now=SENT_AT,
+    )
+
+    v1, v2 = await _release(db, tenant, "v1"), await _release(db, tenant, "v2")
+    assert v1 is not None and v2 is not None
+    ((v1_period,), (v2_period,)) = (await _periods(db, v1.id), await _periods(db, v2.id))
+    assert await _summary_jobs(db, tenant) == [
+        (str(v1_period.id), timedelta(0)),
+        (str(v2_period.id), timedelta(minutes=20)),
+    ]
 
 
 # Founder decision, 2026-11-09: only `started` and `finished` open a period. A failed

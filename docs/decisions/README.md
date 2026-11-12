@@ -45,6 +45,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-045 — The API reads ClickHouse through its own bounded account](ADR-045-the-api-reads-clickhouse-through-its-own-bounded-account.md) — with the F20 design, 2026-11-02; filed 2026-11-11 with F20 Step 5
 - [ADR-047 — One provider interface, three wire formats, no SDK](ADR-047-one-provider-interface-three-wire-formats-no-sdk.md) — with the F3 design, 2026-11-02; filed 2026-11-11 with F3 Step 4
 - [ADR-055 — Chat reads through the API, as the person, on a ticket](ADR-055-chat-reads-through-the-api-as-the-person-on-a-ticket.md) — with the F4 design, 2026-11-02; filed 2026-11-11 with F4 Step 2
+- [ADR-066 — A release summary is a notification about a release period, put into words at send](ADR-066-a-release-summary-is-a-notification-about-a-release-period.md) — with the F28 design, 2026-11-02; filed 2026-11-12 with F28 Step 5. Amends ADR-022
 
 ## Earlier decisions, 0001–0112
 

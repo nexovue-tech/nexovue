@@ -257,6 +257,11 @@ can name people. The recipes above send none.
 
 Deploy secrets are sealed: nobody, owners included, can read one back.
 
+What a sender wrote — `metadata`, `url` and `source` — is shown only to people signed in to
+the console, on a release's page, and `metadata` only to members and above. An API token,
+`GET /api/v1/deploys` and the assistant's `list_deploys` tool carry the deploy's id, service,
+version, state, commit and times, and none of that text.
+
 ## What must be reachable
 
 Your CI must reach the console's address over HTTPS. A hosted runner cannot reach an
@@ -282,6 +287,20 @@ time it could first have been used. What it sent from then on is removed and the
 releases are worked out again; what other secrets sent stays. An owner or admin can also
 remove a single deploy with `DELETE /api/v1/deploys/{deploy_id}`. Both are recorded in
 the audit log.
+
+## A summary of each release, to your team
+
+Off by default. In **Project settings → Deploys → Release summary**, an owner or admin
+can send a summary of every release of the project to one channel your team reads:
+the owners' email, an email list, Slack, Microsoft Teams or Discord. PagerDuty and
+webhook channels are not offered, so a summary never pages anyone.
+
+About 30 minutes after a release starts, its comparison is stored and the summary goes
+out, whatever it reads: the method, failure share and p95 with their counts and a plain
+word — higher, lower, about the same, not clearly different — or why there is nothing to
+compare yet, and a link to the release. It compares numbers; it does not say why they
+moved, and it opens no finding. The release list flags *failure share higher* or *p95
+higher* from the same stored reading. Deleting the chosen channel turns the summary off.
 
 ## After a deploy: reading the comparison from your pipeline
 

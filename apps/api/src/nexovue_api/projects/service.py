@@ -29,6 +29,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Final
 
+from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 from nexovue_platform.detection import DEFAULT_SENSITIVITY, DEFAULT_TIMEZONE
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,7 @@ from nexovue_api.alerts import defaults as alert_defaults
 from nexovue_api.alerts import queries as alert_queries
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Reader
+from nexovue_api.channels import queries as channel_queries
 from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import explanation_queries
@@ -49,6 +51,7 @@ from nexovue_api.projects.schemas import (
     ProjectListResponse,
     ProjectSummary,
     ProjectUpdateRequest,
+    ReleaseSummaryResponse,
     SamplingConfigResponse,
 )
 
@@ -265,6 +268,40 @@ async def write_masking_config(
     return MaskingConfigResponse(project_id=project.id, config=project.masking_config)
 
 
+# F28 FR55, D53: a summary goes only where people read it, so it can never page.
+NOT_A_SUMMARY_CHANNEL: Final = (
+    "Release summaries go to a channel people read (email, Slack, Teams, Discord or the "
+    "owners), in this organization; choose one of those."
+)
+
+
+async def write_release_summary(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    project_id: uuid.UUID,
+    channel_id: uuid.UUID | None,
+) -> ReleaseSummaryResponse:
+    """Send this project's release summaries to one channel people read, or turn them
+    off (null, the default). Another organization's channel, and a PagerDuty or webhook
+    channel, are refused alike (AC83). One audit row either way."""
+    project = await _lock_or_404(session, org_id=org_id, project_id=project_id)
+    if channel_id is not None:
+        channel = await channel_queries.find_channel(session, org_id=org_id, channel_id=channel_id)
+        if channel is None or channel.kind not in READ_BY_PEOPLE:
+            raise InvalidRequestError(NOT_A_SUMMARY_CHANNEL)
+    project.release_summary_channel_id = channel_id
+    audit.record_release_summary_set(
+        session,
+        org_id=org_id,
+        project_id=project_id,
+        channel_id=channel_id,
+        actor_user_id=actor_user_id,
+    )
+    return ReleaseSummaryResponse(project_id=project.id, channel_id=channel_id)
+
+
 async def require_project(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
 ) -> Project:
@@ -402,5 +439,6 @@ def _detail(project: Project) -> ProjectDetail:
         retention_days=project.retention_days,
         sampling_config=project.sampling_config,
         masking_config=project.masking_config,
+        release_summary_channel_id=project.release_summary_channel_id,
         created_at=project.created_at,
     )

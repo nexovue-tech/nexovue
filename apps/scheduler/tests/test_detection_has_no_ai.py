@@ -32,6 +32,14 @@ EVIDENCE = "nexovue_scheduler.evidence"
 EVIDENCE_CONTRACT = "nexovue_platform.evidence"
 # F19's roots (C4): the scheduler's jobs, the shared arithmetic, and the API's routes.
 SLO_ROOTS = ("nexovue_scheduler.slos", "nexovue_platform.slo", "nexovue_api.slos")
+# F28's (AC47): the sync, facts and summary, the shared comparison, and the API's
+# releases and deploy webhook. They feed F3 and the notices, so they judge nothing by AI.
+RELEASE_ROOTS = (
+    "nexovue_scheduler.releases",
+    "nexovue_platform.releases",
+    "nexovue_api.releases",
+    "nexovue_api.deploys",
+)
 
 
 def _modules(package: str) -> list[str]:
@@ -60,6 +68,19 @@ def test_no_slo_module_imports_a_network_client() -> None:
     modules may not hold a client that could reach one."""
     modules = [name for root in SLO_ROOTS for name in _modules(root)]
     assert direct_imports_matching(modules, NETWORK_CLIENTS) == []
+
+
+def test_no_release_module_imports_an_ai_module_even_through_others() -> None:
+    """F28 AC47: every release module, in each process, walked with no exception."""
+    modules = [name for root in RELEASE_ROOTS for name in _modules(root)]
+    assert {
+        "nexovue_scheduler.releases.facts",
+        "nexovue_scheduler.releases.summary",
+        "nexovue_api.releases.router",
+        "nexovue_api.deploys.router",
+    } <= set(modules)
+    reached = ai_imports_reachable_from(modules)
+    assert reached == [], "releases reach AI code:\n" + "\n".join(reached)
 
 
 def test_the_walk_finds_the_ai_import_the_repository_does_have() -> None:

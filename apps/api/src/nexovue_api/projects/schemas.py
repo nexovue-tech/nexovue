@@ -12,7 +12,7 @@ import uuid
 from datetime import date, datetime
 from typing import Annotated, Any, Final
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from nexovue_api.data.postgres.models import NAME_MAX_LENGTH, SLUG_MAX_LENGTH
 from nexovue_api.wire import IsoTimestamp
@@ -77,7 +77,23 @@ class ProjectDetail(BaseModel):
     retention_days: int
     sampling_config: dict[str, Any]
     masking_config: dict[str, Any]
+    # F28 FR55: the channel each release's summary goes to; null is off, the default.
+    release_summary_channel_id: uuid.UUID | None
     created_at: IsoTimestamp
+
+
+class ReleaseSummaryWrite(BaseModel):
+    """Where this project's release summaries go (F28 FR55, D53): one channel people
+    read, or null to turn them off."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel_id: uuid.UUID | None
+
+
+class ReleaseSummaryResponse(BaseModel):
+    project_id: uuid.UUID
+    channel_id: uuid.UUID | None
 
 
 class ProjectCreateRequest(BaseModel):

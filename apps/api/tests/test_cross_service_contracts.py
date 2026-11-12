@@ -409,6 +409,7 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
 
     from nexovue_platform.alerts import tasks as alert_tasks
     from nexovue_platform.checks import task as check_tasks
+    from nexovue_platform.releases import SUMMARIZE_PERIOD_TASK
 
     from nexovue_scheduler import beat
     from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
@@ -431,6 +432,8 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
         SWEEP_EXPIRED_TASK,
         END_LAPSED_GRACE_TASK,
         ERASE_OWED_TASK,
+        # F28 FR55: the deploy webhook adds a period's summary job.
+        SUMMARIZE_PERIOD_TASK,
         *beat.POLL_TASKS.values(),
     }
 

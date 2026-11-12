@@ -17,7 +17,7 @@ from nexovue_platform import releases as platform
 
 from nexovue_api.data.postgres.models import NAME_MAX_LENGTH
 from nexovue_api.errors.exceptions import InvalidRequestError
-from nexovue_api.releases import service
+from nexovue_api.releases import queries, service
 from nexovue_api.releases.schemas import (
     BlockView,
     ComparisonView,
@@ -182,3 +182,16 @@ def test_the_rollout_names_four_and_labels_no_version_and_combined() -> None:
 def test_viewers_do_not_read_sender_metadata() -> None:
     """D46: members and above."""
     assert frozenset({"owner", "admin", "member"}) == service.READS_SENDER_METADATA
+
+
+# ------------------------------------------------------ T5.1, T5.2: one definition
+
+
+def test_the_scheduler_s_comparison_reads_are_the_api_s_word_for_word() -> None:
+    """D26, T5.1: the scheduler cannot import the API, so each owns its statements; they
+    are spliced from the same shared fragments, and must stay the same statement."""
+    from nexovue_scheduler.releases import store
+
+    assert store.COMPARED_VERSION_MINUTES_SQL == queries.VERSION_MINUTES_SQL
+    assert store.COMPARED_SERVICE_MINUTES_SQL == queries.SERVICE_TOTALS_SQL
+    assert store.COMPARED_ENVIRONMENTS_SQL == queries.ENVIRONMENTS_SQL

@@ -21,18 +21,26 @@ about one latency bucket. Every threshold is a starting guess, named below.
 control character, a bidirectional control, a Unicode tag character, or the reserved
 `__other__`. Go cannot import this, so both read
 `packages/contracts/fixtures/release-names.json`.
+
+**What other readers may take** (FR39, AC45; plan T5.1). A deploy leaves the webhook as a
+`DeployFact`, which carries ids, times, a state and a commit and never the sender's free
+text, and `DeployHistory` answers "the deploy before this" from such facts. The
+comparison's ClickHouse statements are spliced from the fragments below, so the API's
+`releases/queries.py` and the scheduler's `releases/store.py` read one definition.
 """
 
 from __future__ import annotations
 
 import math
 import unicodedata
+import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Final
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any, Final
 
+from nexovue_platform.jobs import JobRequest
 from nexovue_platform.slo import BUCKET_COUNT, LOG_EDGES
 
 # ------------------------------------------------------------------- versions
@@ -713,3 +721,388 @@ def window_for_finding(period_start: datetime, finding_start: datetime) -> Findi
 
 def reaches(period_start: datetime, window: timedelta, finding_start: datetime) -> bool:
     return period_start + window >= finding_start
+
+
+# ------------------------------------------------- the facts other readers take
+
+
+@dataclass(frozen=True, slots=True)
+class DeployFact:
+    """One signed deploy event, as every reader outside the webhook takes it (FR39, AC45).
+
+    Ids, times, a state and a commit. The sender's `metadata`, `url`, `source` and
+    `delivery_id` are free text and are never carried: `test_release_facts.py` holds
+    these fields to an exact list."""
+
+    deploy_id: uuid.UUID
+    release_id: uuid.UUID | None
+    service_name: str
+    version: str
+    # The sender's claim, bounded at the door (FR8).
+    deployed_at: datetime
+    # When it arrived: ours, never the sender's.
+    received_at: datetime
+    state: str
+    # Lower-case hex, checked at the door, so it cannot hold words.
+    commit_sha: str | None
+    # A signed record (D54: F3's `verified`). Never a seen version.
+    basis: str = field(default=REPORTED, init=False)
+
+
+class DeployHistory:
+    """The deploys that could precede anything inside one window, ready to ask.
+
+    Built once per request and asked once per row. The alternative is a statement
+    per row, and a page of error groups holds fifty.
+    """
+
+    def __init__(
+        self, deploys: Sequence[DeployFact], *, known_from: datetime | None = None
+    ) -> None:
+        # Most recent first, so `preceding` is the first match rather than a
+        # search for a maximum.
+        self._deploys = sorted(deploys, key=lambda deploy: deploy.deployed_at, reverse=True)
+        self._known_from = known_from
+
+    def preceding(self, *, services: Sequence[str], at: datetime) -> DeployFact | None:
+        """The last deploy of one of these services at or before this instant.
+
+        **This is the deploy *before* the thing, and never the deploy that caused
+        it.** All this knows is that a change shipped and then something happened;
+        an error four minutes later may have been triggered by traffic, by a
+        dependency, or by a change nobody notified us of at all. The order is a
+        fact and the cause is not, so every caller — and every screen reading
+        what a caller returns — has to say the first and never imply the second.
+
+        A group with no services matches nothing: there is no service whose
+        deploys could have come first. An instant before `known_from` matches
+        nothing either: the reading did not reach back that far, and the deploy
+        it would name is provably not the last.
+        """
+        if self._known_from is not None and at < self._known_from:
+            return None
+
+        wanted = set(services)
+        return next(
+            (
+                deploy
+                for deploy in self._deploys
+                if deploy.deployed_at <= at and deploy.service_name in wanted
+            ),
+            None,
+        )
+
+
+EMPTY_DEPLOY_HISTORY: Final = DeployHistory([])
+
+# ClickHouse fragments the comparison's statements are spliced from (design 4, D26).
+# Each service owns its full statement under its own tenant chokepoint; these are the
+# parts whose meaning must not differ between them.
+VERSION_MINUTE_COLUMNS: Final = """toUnixTimestamp(minute) AS minute_epoch,
+       version,
+       sum(request_count) AS requests,
+       sum(error_count) AS errors,
+       sumForEachMerge(latency_buckets) AS buckets"""
+SERVICE_MINUTE_COLUMNS: Final = """toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests,
+       sum(error_count) AS errors,
+       sumForEachMerge(latency_buckets) AS buckets"""
+# A span's environment label (FR45, D39): the current name first, the older
+# `deployment.environment` where a span has only that, as the profile writer reads them
+# (`profilewriting/rows.go`). Presence only, so sampling does not matter.
+SPAN_ENVIRONMENT: Final = """if(
+               ifNull(resource_attrs.deployment.environment.name.:String, '') != '',
+               ifNull(resource_attrs.deployment.environment.name.:String, ''),
+               ifNull(resource_attrs.deployment.environment.:String, '')
+           )"""
+# Two labels are enough to warn.
+ENVIRONMENTS_ENOUGH: Final = 2
+
+
+def version_minute_of(row: Mapping[str, Any]) -> VersionMinute:
+    """A `VERSION_MINUTE_COLUMNS` row."""
+    return VersionMinute(
+        minute=datetime.fromtimestamp(int(row["minute_epoch"]), UTC),
+        version=str(row["version"]),
+        requests=int(row["requests"]),
+        errors=int(row["errors"]),
+        buckets=tuple(int(count) for count in row["buckets"]),
+    )
+
+
+def service_minute_of(row: Mapping[str, Any]) -> ServiceMinute:
+    """A `SERVICE_MINUTE_COLUMNS` row."""
+    return ServiceMinute(
+        minute=datetime.fromtimestamp(int(row["minute_epoch"]), UTC),
+        requests=int(row["requests"]),
+        errors=int(row["errors"]),
+        buckets=tuple(int(count) for count in row["buckets"]),
+    )
+
+
+# ------------------------------------------------------------ the stored reading
+
+# How long after a period starts its reading is stored, and its summary sent (FR55; a
+# starting guess).
+SUMMARY_AFTER: Final = timedelta(minutes=30)
+# The methods whose `higher` the list flags (FR55): by version, never by time alone.
+FLAGGED_METHODS: Final = frozenset({SIDE_BY_SIDE, VERSION_BEFORE_AFTER})
+FAILURE_SHARE: Final = "failure_share"
+P95: Final = "p95"
+
+
+def stored_reading(
+    *,
+    reason: str | None,
+    blocks: Sequence[Block],
+    lead: str | None,
+    traffic: tuple[Side, Side] | None,
+    versions_combined: bool,
+    minutes_differing: int,
+) -> dict[str, object]:
+    """`release_periods.last_reading` (FR55, AC81): the leading block's method, words and
+    counts, or the reason there is none. Never a name, so a version planted in telemetry
+    is never stored here, and the words are read again at send time."""
+    led = next((block for block in blocks if block.kind == lead), None)
+    reading: dict[str, object] = {
+        "reason": reason,
+        "versions_combined": versions_combined,
+        "minutes_differing": minutes_differing,
+    }
+    if traffic is not None:
+        reading["traffic"] = {
+            "this_requests": traffic[0].requests,
+            "previous_requests": traffic[1].requests,
+        }
+    if led is None:
+        return reading
+    return reading | {
+        "block": led.kind,
+        "method": led.method,
+        "minutes_compared": led.minutes_compared,
+        "this": _counts(led.this_version),
+        "previous": _counts(led.previous_version),
+        FAILURE_SHARE: led.failure_share.reading,
+        f"{FAILURE_SHARE}_note": led.failure_share.note,
+        P95: led.p95.reading,
+        f"{P95}_note": led.p95.note,
+    }
+
+
+def _counts(side: Side) -> dict[str, object]:
+    return {"requests": side.requests, "errors": side.errors, "p95_ms": side.p95_ms}
+
+
+def higher_measures(reading: Mapping[str, object] | None) -> tuple[str, ...]:
+    """The list's flags (FR55, AC81): each measure a version method read as `higher`,
+    in the order the list shows them; nothing for any other reading, or none."""
+    if not reading or reading.get("method") not in FLAGGED_METHODS:
+        return ()
+    return tuple(measure for measure in (FAILURE_SHARE, P95) if reading.get(measure) == HIGHER)
+
+
+# ----------------------------------------------------------- the summary's job
+
+# The scheduler's queue for release work (D31), named here so the API's webhook can add
+# a summary job to it without importing the scheduler.
+RELEASES_QUEUE: Final = "releases"
+SUMMARIZE_PERIOD_TASK: Final = "nexovue_scheduler.releases.summarize_period"
+# A failed ClickHouse read is tried twice more; the job reads three statements of at
+# most 10 seconds each (`releases/store.py`).
+SUMMARY_MAX_ATTEMPTS: Final = 3
+SUMMARY_SOFT_LIMIT_SECONDS: Final = 40
+SUMMARY_HARD_LIMIT_SECONDS: Final = 55
+
+
+def summarize_request(
+    org_id: Any, project_id: Any, period_id: Any, *, countdown: float = 0
+) -> JobRequest:
+    """One period's stored reading and summary (FR55). Ids only, as job arguments are
+    stored readably."""
+    return JobRequest(
+        task=SUMMARIZE_PERIOD_TASK,
+        queue=RELEASES_QUEUE,
+        kwargs={
+            "org_id": str(org_id),
+            "project_id": str(project_id),
+            "period_id": str(period_id),
+        },
+        org_id=str(org_id),
+        countdown_seconds=countdown,
+        max_attempts=SUMMARY_MAX_ATTEMPTS,
+        soft_limit_seconds=SUMMARY_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=SUMMARY_HARD_LIMIT_SECONDS,
+    )
+
+
+def summary_countdown(started_at: datetime, now: datetime) -> float:
+    """Seconds until a period's reading is due: `SUMMARY_AFTER` past its start, at once
+    for one that opened late, as a first sync's periods do."""
+    return max(0.0, (started_at + SUMMARY_AFTER - now).total_seconds())
+
+
+# --------------------------------------------------------- the summary's words
+
+# FR24's plain words, as the release page says them.
+READING_WORDS: Final = {
+    HIGHER: "higher",
+    LOWER: "lower",
+    ABOUT_SAME: "about the same",
+    NOT_CLEARLY_DIFFERENT: "not clearly different",
+}
+NO_SAMPLING_WORDS: Final = "Counts assume you do not sample before sending."
+ORDER_NOT_CAUSE: Final = "Order only, not cause."
+VERSIONS_COMBINED_WORDS: Final = (
+    "Versions were combined: too many in one minute, so a version's count may be short."
+)
+_REASON_WORDS: Final = {
+    TOO_RECENT: "Under 5 settled minutes were read.",
+    NO_PREVIOUS_VERSION: (
+        "This is the first version we know of on this service, so there is nothing to "
+        "compare it with."
+    ),
+    NUMBERS_EXPIRED: "Numbers for this release have expired.",
+    NO_VERSION_NO_DEPLOY: (
+        "No version in your traffic, and no deploy reported, so we cannot compare."
+    ),
+    NEW_VERSION_NOT_SEEN: (
+        "Reported, never seen in traffic. The rollout may have failed, or the version "
+        "text may differ."
+    ),
+    NO_REQUEST_TRAFFIC: (
+        "We count requests from server traces and queue consumers. This service sends "
+        "none, so we can mark its deploys but cannot compare them."
+    ),
+}
+_METHOD_LEADS: Final = {
+    SIDE_BY_SIDE: "Side by side over {over}.",
+    VERSION_BEFORE_AFTER: (
+        "Before and after, by version, over {over}. Different times of day can move these numbers."
+    ),
+    TIME_BEFORE_AFTER: (
+        "Before and after, by time, over {over}. No version in your traffic, so a rolling "
+        "deploy mixes old and new here."
+    ),
+}
+_SMALLEST_SHOWN_PERCENT: Final = 0.1
+_MINUTES_PER_HOUR: Final = 60
+
+
+def summary_lines(
+    reading: Mapping[str, Any] | None, *, version: str, previous_version: str | None
+) -> list[str]:
+    """A release summary's lines below its headline (FR55, D52): the method, a line per
+    measure with counts and the plain word, or the reason's words. No verdict, and no
+    word of cause (AC37, AC82). The names are the caller's to flatten and escape."""
+    if not reading:
+        return ["No reading was stored for this release; open it to compare."]
+    method = reading.get("method")
+    if method not in _METHOD_LEADS:
+        return [_reason_line(reading, version=version, previous_version=previous_version)]
+    by_version = method != TIME_BEFORE_AFTER
+    this, previous = _sides(reading)
+    over = _stretch(int(_number(reading.get("minutes_compared"))))
+    lines = [
+        _METHOD_LEADS[str(method)].format(over=over),
+        _failure_line(reading, this, previous, version, previous_version, by_version),
+    ]
+    if by_version:
+        lines.append(_p95_line(reading, this, previous))
+    if reading.get("versions_combined"):
+        lines.append(VERSIONS_COMBINED_WORDS)
+    lines.append(NO_SAMPLING_WORDS)
+    return lines
+
+
+def _reason_line(reading: Mapping[str, Any], *, version: str, previous_version: str | None) -> str:
+    reason = reading.get("reason")
+    if reason == TOO_LITTLE_TRAFFIC:
+        traffic = reading.get("traffic")
+        if not isinstance(traffic, Mapping):
+            return "Too little traffic to compare."
+        mine, theirs = (
+            _count(traffic.get("this_requests")),
+            _count(traffic.get("previous_requests")),
+        )
+        return (
+            f"Too little traffic to compare: {mine} on {version}, "
+            f"{theirs} on {previous_version or 'the previous version'}."
+        )
+    return _REASON_WORDS.get(str(reason), "Open the release to read its comparison.")
+
+
+def _sides(reading: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    this, previous = reading.get("this"), reading.get("previous")
+    return (
+        this if isinstance(this, Mapping) else {},
+        previous if isinstance(previous, Mapping) else {},
+    )
+
+
+def _failure_line(
+    reading: Mapping[str, Any],
+    this: Mapping[str, Any],
+    previous: Mapping[str, Any],
+    version: str,
+    previous_version: str | None,
+    by_version: bool,
+) -> str:
+    word = READING_WORDS.get(str(reading.get(FAILURE_SHARE)))
+    if word is None:
+        return "Failure share: too little traffic to read."
+    mine, theirs = _failure_share(this), _failure_share(previous)
+    if by_version:
+        sides = (
+            f"{mine} on {version} against {theirs} on {previous_version or 'the previous version'}"
+        )
+    else:
+        sides = f"{mine} after against {theirs} before"
+    return f"Failure share: {sides}, {word}."
+
+
+def _p95_line(
+    reading: Mapping[str, Any], this: Mapping[str, Any], previous: Mapping[str, Any]
+) -> str:
+    if reading.get(f"{P95}_note") == WARM_UP_NOTE:
+        return f"p95: left out for each version's first {_whole_minutes(WARM_UP)} minutes."
+    word = READING_WORDS.get(str(reading.get(P95)))
+    if word is None:
+        return "p95: too little traffic to read."
+    return (
+        f"p95: {_milliseconds(this.get('p95_ms'))} against "
+        f"{_milliseconds(previous.get('p95_ms'))}, {word}."
+    )
+
+
+def _failure_share(side: Mapping[str, Any]) -> str:
+    requests, errors = int(_number(side.get("requests"))), int(_number(side.get("errors")))
+    if requests <= 0:
+        return "—"
+    percent = 100 * errors / requests
+    shown = (
+        f"<{_SMALLEST_SHOWN_PERCENT}%"
+        if 0 < percent < _SMALLEST_SHOWN_PERCENT
+        else f"{percent:.1f}%"
+    )
+    return f"{shown} ({errors:,} of {requests:,})"
+
+
+def _milliseconds(value: object) -> str:
+    return f"{round(_number(value)):,} ms" if isinstance(value, int | float) else "—"
+
+
+def _count(value: object) -> str:
+    requests = int(_number(value))
+    return f"{requests:,} {'request' if requests == 1 else 'requests'}"
+
+
+def _number(value: object) -> float:
+    return float(value) if isinstance(value, int | float) else 0.0
+
+
+def _stretch(minutes: int) -> str:
+    """ "42 minutes", or "1 hour" on the hour, as the page's `stretchWords`."""
+    if minutes >= _MINUTES_PER_HOUR and minutes % _MINUTES_PER_HOUR == 0:
+        hours = minutes // _MINUTES_PER_HOUR
+        return f"{hours} {'hour' if hours == 1 else 'hours'}"
+    return f"{minutes} {'minute' if minutes == 1 else 'minutes'}"

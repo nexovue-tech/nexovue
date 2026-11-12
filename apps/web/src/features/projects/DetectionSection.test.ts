@@ -36,6 +36,7 @@ const PROJECT: ProjectDetail = {
   retention_days: 30,
   sampling_config: {},
   masking_config: {},
+  release_summary_channel_id: null,
   created_at: "2026-09-01T09:00:00Z",
 };
 const STATS: FindingStats = {
@@ -61,6 +62,7 @@ const NO_DEPLOY_INTAKE = {
   last_refusal: null,
   current_versions: [],
   over_release_cap: false,
+  mixed_environment_services: [],
 };
 
 const mounted: Root[] = [];

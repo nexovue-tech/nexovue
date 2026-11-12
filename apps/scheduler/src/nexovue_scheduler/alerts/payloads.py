@@ -13,7 +13,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from nexovue_platform.alerts.model import ENDING_KINDS
+from nexovue_platform.alerts.model import ENDING_KINDS, RELEASE_SUMMARY
 
 from nexovue_scheduler.alerts.messages import AlertMessage
 
@@ -22,6 +22,8 @@ from nexovue_scheduler.alerts.messages import AlertMessage
 _RED: Final = "#d92d20"
 _AMBER: Final = "#f79009"
 _GREEN: Final = "#12b76a"
+# F28's release summary: a report, not an alert. Amber would read as a verdict.
+_NEUTRAL: Final = "#98a2b3"
 
 # The version of the webhook body's schema (FR4). A change a receiver would have
 # to handle is a new version, never an edit to this one. Version 2 added findings
@@ -64,6 +66,8 @@ def discord_text(text: str) -> str:
 
 
 def colour(message: AlertMessage) -> str:
+    if message.kind == RELEASE_SUMMARY:
+        return _NEUTRAL
     if message.kind == "resolved":
         return _GREEN
     return _RED if message.severity == "critical" else _AMBER
@@ -114,7 +118,12 @@ def discord(message: AlertMessage) -> bytes:
 
 def teams(message: AlertMessage) -> bytes:
     """An Adaptive Card, which is what a Teams Workflows webhook posts."""
-    accent = {"#d92d20": "Attention", "#f79009": "Warning", "#12b76a": "Good"}[colour(message)]
+    accent = {
+        _RED: "Attention",
+        _AMBER: "Warning",
+        _GREEN: "Good",
+        _NEUTRAL: "Default",
+    }[colour(message)]
     card: dict[str, Any] = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",

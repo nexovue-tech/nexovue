@@ -4,20 +4,30 @@ import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Tabs } from "@/shared/components/Tabs";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { shortVersion } from "@/shared/format/version";
+import { useCan } from "@/shared/identity";
 import { setupDocUrl } from "@/shared/setup-docs";
 
-import type { DeploySecret, DeploySettings, MintedDeploySecret, RecipeKind } from "./deploys-api";
+import { useProject, useSaveReleaseSummary } from "./api";
+import type {
+  DeploySecret,
+  DeploySettings,
+  MintedDeploySecret,
+  RecipeKind,
+  SummaryChannel,
+} from "./deploys-api";
 import {
   MAX_DEPLOY_SECRETS,
   recipe,
   refusalSentence,
   useDeploySettings,
   useMintDeploySecret,
+  useSummaryChannels,
   useWithdrawDeploySecret,
   webhookUrl,
 } from "./deploys-api";
@@ -89,6 +99,7 @@ function Loaded({ projectId, settings }: { projectId: string; settings: DeploySe
       <RotationSteps />
       <Recipes url={url} />
       <CurrentVersions settings={settings} />
+      <ReleaseSummary projectId={projectId} />
     </>
   );
 }
@@ -123,9 +134,18 @@ function Intake({ settings }: { settings: DeploySettings }) {
           Older releases are being removed early: this project has over 50,000.
         </p>
       ) : null}
+      {settings.mixed_environment_services.length > 0 ? (
+        <p className="mt-2 max-w-prose break-words text-ink">
+          {TWO_ENVIRONMENTS} Seen on {settings.mixed_environment_services.join(", ")}.
+        </p>
+      ) : null}
     </div>
   );
 }
+
+/** FR45, as the release page says it; read from what the summary job stored. */
+const TWO_ENVIRONMENTS =
+  "Two environments appear to share this project, so these comparisons mix them.";
 
 function when(iso: string | null): string {
   return iso === null ? "Not yet" : formatRelativeTime(iso);
@@ -380,4 +400,81 @@ function CurrentVersions({ settings }: { settings: DeploySettings }) {
       </ul>
     </div>
   );
+}
+
+const SUMMARY_OFF: SummaryChannel = { id: "off", kind: "", name: "Off" };
+
+/**
+ * FR55, D53: off by default, or every release to one channel people read. It lists the
+ * organization's channels people read, never PagerDuty or a webhook, so a summary never
+ * pages; deleting the channel turns it off. Changing it is an owner's or admin's.
+ */
+function ReleaseSummary({ projectId }: { projectId: string }) {
+  const project = useProject(projectId);
+  const channels = useSummaryChannels();
+  const save = useSaveReleaseSummary(projectId);
+  const mayChange = useCan("configure_projects");
+  const saved = project.data?.release_summary_channel_id ?? null;
+  const [chosen, setChosen] = useState<string | undefined>();
+  const value = chosen ?? saved ?? SUMMARY_OFF.id;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="font-medium text-ink text-sm">Release summary</p>
+      <p className="max-w-prose text-ink-dim text-sm">
+        Off by default. When on, each release of this project is summarized 30 minutes in, with its
+        counts, to one channel people read. It never pages, and it does not say why numbers moved.
+      </p>
+      {project.isPending || channels.isPending ? (
+        <SkeletonRows rows={1} label="Loading the release summary setting" />
+      ) : project.isError || channels.isError ? (
+        <InlineFailure
+          title="The release summary setting could not be loaded"
+          error={project.error ?? channels.error}
+          onRetry={() => {
+            void project.refetch();
+            void channels.refetch();
+          }}
+        />
+      ) : mayChange ? (
+        <div className="flex flex-wrap items-end gap-3">
+          <SelectField
+            stacked
+            capped
+            label="Send to"
+            value={value}
+            options={[SUMMARY_OFF, ...channels.data]}
+            optionLabel={(channel) => channel.name}
+            onChange={setChosen}
+          />
+          <Button
+            variant="secondary"
+            pending={save.isPending}
+            pendingLabel="Saving…"
+            disabled={value === (saved ?? SUMMARY_OFF.id)}
+            onClick={() =>
+              save.mutate(value === SUMMARY_OFF.id ? null : value, {
+                onSuccess: () => setChosen(undefined),
+              })
+            }
+          >
+            Save
+          </Button>
+        </div>
+      ) : (
+        <p className="max-w-prose text-ink-dim text-sm">
+          {summaryState(saved, channels.data)} An owner or admin can change this.
+        </p>
+      )}
+      {save.error ? (
+        <InlineFailure title="The release summary was not changed" error={save.error} />
+      ) : null}
+    </div>
+  );
+}
+
+function summaryState(saved: string | null, channels: SummaryChannel[]): string {
+  if (saved === null) return "Off.";
+  const channel = channels.find((each) => each.id === saved);
+  return channel ? `Sent to ${channel.name}.` : "On.";
 }

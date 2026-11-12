@@ -37,6 +37,7 @@ from nexovue_platform.alerts.model import (
     NOTIFICATION_KINDS,
     NOTIFICATION_STATES,
     PROJECT_NOTIFICATION_KINDS,
+    RELEASE_SUMMARY,
     SEVERITIES,
     WITHHELD_REASONS,
 )
@@ -421,12 +422,22 @@ class Project(Base):
     detection_sensitivity: Mapped[str] = mapped_column(
         String(SHORT_LABEL_LENGTH), nullable=False, server_default=DEFAULT_SENSITIVITY
     )
+    # F28 FR55, D53: the one channel people read that gets a summary of every release.
+    # Null is off, the default; deleting the channel turns it off (0074).
+    release_summary_channel_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("notification_channels.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[CreatedAt]
     deleted_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_projects_org_id_slug"),
         Index("ix_projects_org_id", "org_id"),
+        Index(
+            "ix_projects_release_summary_channel_id",
+            "release_summary_channel_id",
+            postgresql_where=text("release_summary_channel_id IS NOT NULL"),
+        ),
         # F22: what later tables key on, so the database refuses a cross-tenant key (0068).
         Index("uq_projects_org_id_id", "org_id", "id", unique=True),
         CheckConstraint(
@@ -1510,8 +1521,9 @@ class Incident(Base):
 class Notification(Base):
     """A decision to tell one channel about one subject: the outbox (ADR-013).
 
-    The subject is an incident, a finding (ADR-022), or for the project kinds —
-    detection stopped and running again (D24) — the project alone.
+    The subject is an incident, a finding (ADR-022), a release period for a release
+    summary (F28 D52, ADR-066), or for the project kinds — detection stopped and
+    running again (D24) — the project alone.
     """
 
     __tablename__ = "notifications"
@@ -1528,6 +1540,10 @@ class Notification(Base):
     )
     finding_id: Mapped[uuid.UUID | None] = mapped_column(
         UuidType, ForeignKey("findings.id", ondelete="CASCADE"), nullable=True
+    )
+    # A release summary's period (F28 D52): counts are read at send, never frozen here.
+    release_period_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("release_periods.id", ondelete="CASCADE"), nullable=True
     )
     channel_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("notification_channels.id", ondelete="CASCADE"), nullable=False
@@ -1560,6 +1576,8 @@ class Notification(Base):
     __table_args__ = (
         UniqueConstraint("incident_id", "channel_id", "kind", "sequence"),
         UniqueConstraint("finding_id", "channel_id", "kind", "sequence"),
+        # A summary's `sequence` is always 0, so a retried job inserts nothing twice.
+        UniqueConstraint("release_period_id", "channel_id", "kind", "sequence"),
         Index(
             "uq_notifications_project_id_channel_id_kind_sequence_project",
             "project_id",
@@ -1567,12 +1585,18 @@ class Notification(Base):
             "kind",
             "sequence",
             unique=True,
-            postgresql_where=text("incident_id IS NULL AND finding_id IS NULL"),
+            postgresql_where=text(
+                "incident_id IS NULL AND finding_id IS NULL AND release_period_id IS NULL"
+            ),
         ),
         CheckConstraint(
-            "num_nonnulls(incident_id, finding_id) = "
+            "num_nonnulls(incident_id, finding_id, release_period_id) = "
             f"CASE WHEN kind IN ({_quoted(PROJECT_NOTIFICATION_KINDS)}) THEN 0 ELSE 1 END",
             name="names_one_subject",
+        ),
+        CheckConstraint(
+            f"(kind = '{RELEASE_SUMMARY}') = (release_period_id IS NOT NULL)",
+            name="release_summary_names_its_period",
         ),
         CheckConstraint(f"kind IN ({_quoted(NOTIFICATION_KINDS)})", name="kind_is_known"),
         CheckConstraint(f"state IN ({_quoted(NOTIFICATION_STATES)})", name="state_is_known"),

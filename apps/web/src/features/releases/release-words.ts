@@ -4,12 +4,13 @@
  * a deploy (BR3).
  */
 
+import { formatCount, formatPercent } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatGap } from "@/shared/format/time";
 import { shortVersion } from "@/shared/format/version";
 import { formatZonedTime } from "@/shared/format/zoned";
 
-import type { Activity, Basis, NamingDiffers } from "./api";
+import type { Activity, Basis, NamingDiffers, StoredFlag } from "./api";
 
 const MS_PER_MINUTE = 60_000;
 /** A reported version not seen yet reads "waiting" this long (spec, *States*; a guess). */
@@ -84,4 +85,30 @@ export function latestWords(
 /** FR46, in place of the "never seen" words on that service's rows (AC78). */
 export function namingDiffersWords(differs: NamingDiffers): string {
   return `Your CI and your traffic name versions differently: CI sent ${shortVersion(differs.reported_version)}, traffic sends ${shortVersion(differs.seen_version)}`;
+}
+
+function failureShare(errors: number, requests: number): string {
+  const share = formatPercent(requests > 0 ? errors / requests : null);
+  return `${share} (${formatCount(errors)} of ${formatCount(requests)})`;
+}
+
+function milliseconds(value: number | null): string {
+  return value === null ? "—" : `${formatCount(value)} ms`;
+}
+
+/**
+ * FR55, AC81: "Failure share higher: 3.0% (180 of 6,012) against 0.2% (12 of 5,844)", or
+ * "p95 higher: 412 ms against 290 ms", from the reading a job stored. Numbers, not a
+ * verdict: the new version against the one it replaced, in the order the page reads.
+ */
+export function flagWords(flag: StoredFlag): string {
+  if (flag.measure === "failure_share") {
+    return `Failure share higher: ${failureShare(flag.this_errors, flag.this_requests)} against ${failureShare(flag.previous_errors, flag.previous_requests)}`;
+  }
+  return `p95 higher: ${milliseconds(flag.this_p95_ms)} against ${milliseconds(flag.previous_p95_ms)}`;
+}
+
+/** The list's over-cap state (design, `/releases`), from the stored readings (FR17). */
+export function combinedWords(services: string[]): string {
+  return `Versions were combined on ${services.join(", ")}: too many in one minute.`;
 }

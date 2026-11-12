@@ -54,11 +54,15 @@ def bounded(
     untrusted: Sequence[str] = (),
     max_rows: int = MAX_ROWS,
     max_characters: int = MAX_CHARACTERS,
+    partial: bool | None = None,
 ) -> str:
     """Render rows as JSON, cut to the caps, saying so when it cut (F36, FR34).
 
     `total` is how many there were, when the caller knows; without it the count of rows
-    given is all that can be claimed, and the note says "at least". `untrusted` names the
+    given is all that can be claimed, and the note says "at least". `partial` is for a tool
+    whose read was itself capped (F28 AC46): True says rows were left out before they
+    reached here. Given at all, the envelope carries `partial`, true when anything was left
+    out, here or before. `untrusted` names the
     fields carrying text written outside nexovue, as paths ("logs[].body"); the label is
     part of the envelope, never of a row, so planted text cannot unlabel itself.
     """
@@ -77,10 +81,18 @@ def bounded(
             envelope[subject] = kept
             body = json.dumps(envelope, default=str, ensure_ascii=False)
 
-    if len(kept) == len(rows) and (total is None or total <= len(rows)):
-        return body
+    cut = len(kept) < len(rows) or (total is not None and total > len(rows)) or bool(partial)
+    if partial is not None:
+        envelope["partial"] = cut
+    if not cut:
+        return body if partial is None else json.dumps(envelope, default=str, ensure_ascii=False)
 
-    counted = str(total) if total is not None else f"at least {len(rows)}"
+    if total is not None:
+        counted = str(total)
+    elif partial:
+        counted = f"more than {len(rows)}"
+    else:
+        counted = f"at least {len(rows)}"
     envelope[subject] = kept
     envelope["cut"] = f"Showing {len(kept)} of {counted} {subject}. {NARROW_BY}"
     return json.dumps(envelope, default=str, ensure_ascii=False)

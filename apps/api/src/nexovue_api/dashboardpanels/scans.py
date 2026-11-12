@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
+from nexovue_platform.releases import EMPTY_DEPLOY_HISTORY, DeployHistory
+
 from nexovue_api.dashboardpanels.shared_reads import Answer
 from nexovue_api.dashboards.compile import (
     CHECK_TREND,
@@ -39,7 +41,6 @@ from nexovue_api.dashboards.definition import MAX_TABLE_ROWS
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.dbstats import service as dbstats
 from nexovue_api.dbstats.schemas import StatementCost, StatementTrendPoint
-from nexovue_api.deploys.service import EMPTY_DEPLOY_HISTORY, DeployHistory
 from nexovue_api.errorgroups import service as errorgroups
 from nexovue_api.errorgroups.schemas import ErrorGroupSummary
 from nexovue_api.infrastructure import service as infrastructure

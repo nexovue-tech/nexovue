@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any, Final, cast
 
 import pytest
+from nexovue_platform.releases import EMPTY_DEPLOY_HISTORY
 from sqlalchemy.exc import OperationalError
 
 from nexovue_api.auth.dependencies import Identity
@@ -36,7 +37,6 @@ from nexovue_api.dashboards.definition import Definition
 from nexovue_api.dashboards.limits import DashboardLimits
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.deploys import service as deploys
-from nexovue_api.deploys.service import EMPTY_DEPLOY_HISTORY
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.metrics import queries as metric_queries
 from nexovue_api.ratelimit.charge import Refused

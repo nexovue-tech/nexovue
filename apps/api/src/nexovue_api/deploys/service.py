@@ -201,8 +201,9 @@ async def record_from_webhook(
     org_id = secret.org_id
     await queries.mark_secret_used(session, org_id=org_id, secret_id=secret.id)
 
+    moment = now or datetime.now(UTC)
     try:
-        batch = _parse(body, now=now or datetime.now(UTC))
+        batch = _parse(body, now=moment)
     except _RefusedBodyError as refusal:
         await queries.record_refusal(
             session,
@@ -243,6 +244,7 @@ async def record_from_webhook(
         secret_id=secret.id,
         batch=batch,
         charge=charge,
+        now=moment,
     )
     await queries.record_deploy_arrival(session, org_id=org_id, project_id=project_id)
     return DeployBatchAnswer(
@@ -278,6 +280,7 @@ async def _store(
     secret_id: uuid.UUID,
     batch: DeployBatch,
     charge: Charge,
+    now: datetime,
 ) -> _Stored:
     # One order for every writer, the sync's, so row locks are always taken alike (AC51).
     items = sorted(batch.deploys, key=lambda one: (one.service_name, one.version, one.delivery_id))
@@ -341,7 +344,13 @@ async def _store(
             releases.FiledReport(item.service_name, release_id, item.deployed_at, item.state)
         )
 
-    await releases.place_periods(session, org_id=org_id, project_id=project_id, filed=filed)
+    opened = await releases.place_periods(
+        session, org_id=org_id, project_id=project_id, filed=filed
+    )
+    # FR55: each period a report opened is read, and summarized, 30 minutes in.
+    await releases.queue_summaries(
+        session, org_id=org_id, project_id=project_id, opened=opened, now=now
+    )
     if new:
         first = next(item.delivery_id for item in batch.deploys if item.delivery_id in new)
         audit.record_deploy_batch_recorded(
@@ -634,6 +643,9 @@ async def _secrets_response(
             for row in versions
         ],
         over_release_cap=held >= release_rules.RELEASES_PER_PROJECT,
+        mixed_environment_services=await queries.mixed_environment_services(
+            session, org_id=org_id, project_id=project_id
+        ),
     )
 
 
@@ -653,52 +665,6 @@ def _listed(row: ProjectWebhookSecret) -> WebhookSecret:
 MAX_CORRELATED_DEPLOYS: Final = 1_000
 
 
-class DeployHistory:
-    """The deploys that could precede anything inside one window, ready to ask.
-
-    Built once per request and asked once per row. The alternative is a statement
-    per row, and a page of error groups holds fifty.
-    """
-
-    def __init__(
-        self, deploys: Sequence[DeployEventSummary], *, known_from: datetime | None = None
-    ) -> None:
-        # Most recent first, so `preceding` is the first match rather than a
-        # search for a maximum.
-        self._deploys = sorted(deploys, key=lambda deploy: deploy.deployed_at, reverse=True)
-        self._known_from = known_from
-
-    def preceding(self, *, services: Sequence[str], at: datetime) -> DeployEventSummary | None:
-        """The last deploy of one of these services at or before this instant.
-
-        **This is the deploy *before* the thing, and never the deploy that caused
-        it.** All this knows is that a change shipped and then something happened;
-        an error four minutes later may have been triggered by traffic, by a
-        dependency, or by a change nobody notified us of at all. The order is a
-        fact and the cause is not, so every caller — and every screen reading
-        what a caller returns — has to say the first and never imply the second.
-
-        A group with no services matches nothing: there is no service whose
-        deploys could have come first. An instant before `known_from` matches
-        nothing either — see `history_for_window`.
-        """
-        if self._known_from is not None and at < self._known_from:
-            return None
-
-        wanted = set(services)
-        return next(
-            (
-                deploy
-                for deploy in self._deploys
-                if deploy.deployed_at <= at and deploy.service_name in wanted
-            ),
-            None,
-        )
-
-
-EMPTY_DEPLOY_HISTORY: Final = DeployHistory([])
-
-
 async def history_for_window(
     session: AsyncSession,
     *,
@@ -706,8 +672,9 @@ async def history_for_window(
     project_id: uuid.UUID,
     from_time: datetime,
     to_time: datetime,
-) -> DeployHistory:
-    """Every deploy that can precede an instant inside this window.
+) -> release_rules.DeployHistory:
+    """Every deploy that can precede an instant inside this window, as plain facts
+    (`nexovue_platform.releases.DeployHistory`, shared with the scheduler).
 
     Two statements, and between them the answer is exact rather than bounded by
     a lookback somebody picked. Anything asked about lies inside the window, so
@@ -735,14 +702,14 @@ async def history_for_window(
         limit=MAX_CORRELATED_DEPLOYS,
     )
     if len(inside) == MAX_CORRELATED_DEPLOYS:
-        return DeployHistory(
-            [_summary(event) for event in inside], known_from=inside[-1].deployed_at
+        return release_rules.DeployHistory(
+            [_fact(event) for event in inside], known_from=inside[-1].deployed_at
         )
 
     before = await queries.latest_deploy_per_service_before(
         session, org_id=org_id, project_id=project_id, before=from_time
     )
-    return DeployHistory([_summary(event) for event in (*inside, *before)])
+    return release_rules.DeployHistory([_fact(event) for event in (*inside, *before)])
 
 
 async def list_for_project(
@@ -758,6 +725,20 @@ async def list_for_project(
     )
 
 
+def _fact(event: DeployEvent) -> release_rules.DeployFact:
+    """No sender text leaves here (FR39, AC45)."""
+    return release_rules.DeployFact(
+        deploy_id=event.id,
+        release_id=event.release_id,
+        service_name=event.service_name,
+        version=event.version,
+        deployed_at=event.deployed_at,
+        received_at=event.created_at,
+        state=event.state,
+        commit_sha=event.commit_sha,
+    )
+
+
 def _summary(event: DeployEvent) -> DeployEventSummary:
     return DeployEventSummary(
         id=event.id,
@@ -765,6 +746,7 @@ def _summary(event: DeployEvent) -> DeployEventSummary:
         version=event.version,
         service_name=event.service_name,
         deployed_at=event.deployed_at,
-        source=event.source,
-        metadata=event.event_metadata,
+        received_at=event.created_at,
+        state=event.state,
+        commit_sha=event.commit_sha,
     )

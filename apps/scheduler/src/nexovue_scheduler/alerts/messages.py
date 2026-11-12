@@ -18,14 +18,19 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from nexovue_platform.alerts.model import EXPLAINED, SEVERITY_RANK
+from nexovue_platform.alerts.model import EXPLAINED, RELEASE_SUMMARY, SEVERITY_RANK
 from nexovue_platform.detection import ADOPTION_AFTER_DAYS
 from nexovue_platform.evidence import deploy_rate_words, display_name
+from nexovue_platform.releases import ORDER_NOT_CAUSE, summary_lines
 
 from nexovue_scheduler.alerts import slo_words as _slo_words
 from nexovue_scheduler.alerts.outbox import (
     EXPLAINED_CAUSE,
     EXPLAINED_LAST_IN_WINDOW,
+    RELEASE_DETAIL_PREVIOUS,
+    RELEASE_DETAIL_READING,
+    RELEASE_DETAIL_RELEASE_ID,
+    RELEASE_DETAIL_VERSION,
     Notice,
     Subject,
     one_line,
@@ -90,6 +95,8 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
         return _compose_finding(notice, app_base_url=app_base_url)
     if notice.subject.kind == "project":
         return _compose_project(notice, app_base_url=app_base_url)
+    if notice.subject.kind == "release":
+        return _compose_release(notice, app_base_url=app_base_url)
     return _compose_incident(notice, app_base_url=app_base_url)
 
 
@@ -250,6 +257,8 @@ def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMes
     if len(notices) == 1:
         return compose(notices[0], app_base_url=app_base_url)
     messages = [compose(notice, app_base_url=app_base_url) for notice in notices]
+    if all(message.kind == RELEASE_SUMMARY for message in messages):
+        return _summaries_alone(messages, app_base_url=app_base_url)
     alerts = [message for message in messages if message.kind != EXPLAINED]
     unfurl = all(message.unfurl for message in messages)
     if not alerts:
@@ -309,6 +318,21 @@ def _follow_ups_alone(messages: list[AlertMessage], *, app_base_url: str) -> Ale
         rule_name="",
         manage_link=None,
         unfurl=False,
+    )
+
+
+def _summaries_alone(messages: list[AlertMessage], *, app_base_url: str) -> AlertMessage:
+    """F28: only release summaries are due, as a quiet-hours digest holds them: one line
+    each, under a count, never an alarm. In a digest mixed with alerts a summary is one
+    line among them, counted with the alerts: a stated limit (design section 6)."""
+    return AlertMessage(
+        kind=RELEASE_SUMMARY,
+        severity=messages[0].severity,
+        summary=f"{len(messages)} release summaries",
+        details=tuple(message.summary for message in messages),
+        link=f"{app_base_url.rstrip('/')}/releases",
+        rule_name="",
+        manage_link=None,
     )
 
 
@@ -549,6 +573,39 @@ def _compose_project(notice: Notice, *, app_base_url: str) -> AlertMessage:
         # The feed is the front door (F20 Step 1, FR1): the project's notice lands
         # on `/`, and `test_alert_links.py` holds every link to the console's routes.
         link=f"{base}/",
+        rule_name="",
+        manage_link=None,
+    )
+
+
+def _compose_release(notice: Notice, *, app_base_url: str) -> AlertMessage:
+    """F28's release summary (FR55, D52): "Release summary: v2.1 of checkout", the
+    stored reading's method and a line per measure with counts and the plain word, or
+    the reason's words, then "Order only, not cause". The reading holds no names; the
+    version names are read at send and pass `one_line`, and the channel escapes them
+    after. No severity tag and no verdict: it is a report, not an alert."""
+    base = app_base_url.rstrip("/")
+    subject = notice.subject
+    detail = subject.detail
+    if not isinstance(detail.get(RELEASE_DETAIL_VERSION), str):
+        # Delivery names the release after the claim; one deleted since has no words.
+        raise UnwritableNoticeError("the release this summary is about is gone")
+    version = one_line(str(detail.get(RELEASE_DETAIL_VERSION) or ""))
+    previous = detail.get(RELEASE_DETAIL_PREVIOUS)
+    reading = detail.get(RELEASE_DETAIL_READING)
+    lines = summary_lines(
+        reading if isinstance(reading, dict) else None,
+        version=version,
+        previous_version=one_line(previous) if isinstance(previous, str) else None,
+    )
+    lines.append(f"Started: {_moment(subject.opened_at)}.")
+    lines.append(ORDER_NOT_CAUSE)
+    return AlertMessage(
+        kind=RELEASE_SUMMARY,
+        severity=notice.severity,
+        summary=f"Release summary: {version} of {subject.label}",
+        details=tuple(lines),
+        link=f"{base}/releases/{detail.get(RELEASE_DETAIL_RELEASE_ID)}",
         rule_name="",
         manage_link=None,
     )

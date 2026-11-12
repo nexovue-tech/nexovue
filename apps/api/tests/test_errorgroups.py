@@ -13,11 +13,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from nexovue_platform.releases import DeployFact, DeployHistory
 
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedRepository
-from nexovue_api.deploys.schemas import DeployEventSummary
-from nexovue_api.deploys.service import DeployHistory
 from nexovue_api.errorgroups import queries, service
 from nexovue_api.errorgroups.schemas import GROUPED_BY_SDK, GROUPED_BY_TEMPLATE
 from nexovue_api.errors.exceptions import NotFoundError
@@ -505,15 +504,16 @@ async def test_the_query_is_bounded_on_our_receive_clock_as_well_as_the_customer
 FIRST_SEEN = values.nanos_to_datetime(_OCCURRED_NANOS)
 
 
-def _deploy(version: str, service_name: str, at: datetime) -> DeployEventSummary:
-    return DeployEventSummary(
-        id=uuid.uuid4(),
-        project_id=uuid.uuid4(),
-        version=version,
+def _deploy(version: str, service_name: str, at: datetime) -> DeployFact:
+    return DeployFact(
+        deploy_id=uuid.uuid4(),
+        release_id=None,
         service_name=service_name,
+        version=version,
         deployed_at=at,
-        source="webhook",
-        metadata={},
+        received_at=at,
+        state="finished",
+        commit_sha=None,
     )
 
 

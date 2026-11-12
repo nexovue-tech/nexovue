@@ -19,6 +19,8 @@ import { useCoverage, useReleases } from "./api";
 import {
   activityWords,
   basisWords,
+  combinedWords,
+  flagWords,
   latestWords,
   namingDiffersWords,
   stateWords,
@@ -172,8 +174,16 @@ function Listing({
       </p>
     );
   }
+  const combined = [
+    ...new Set(
+      list.releases.filter((each) => each.versions_combined).map((each) => each.service_name),
+    ),
+  ];
   return (
     <section aria-label="Releases" className="flex flex-col gap-3">
+      {combined.length > 0 ? (
+        <p className="max-w-prose break-words text-ink-dim text-sm">{combinedWords(combined)}</p>
+      ) : null}
       <ul className="flex flex-col divide-y divide-line border-line border-y">
         {list.releases.map((release) => (
           <Row
@@ -245,6 +255,11 @@ function Row({
                 now,
               })}
           {flags.length > 0 ? <span className="text-ink-dim"> · {flags.join(" · ")}</span> : null}
+          {release.flags.map((flag) => (
+            <span key={flag.measure} className="block text-critical-text">
+              {flagWords(flag)}
+            </span>
+          ))}
         </span>
         <span className="text-ink-dim">
           Started {formatZonedTime(release.started_at, { zone, now })}

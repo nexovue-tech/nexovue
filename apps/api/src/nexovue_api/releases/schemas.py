@@ -27,6 +27,18 @@ class _Out(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class StoredFlag(_Out):
+    """ "Failure share higher" or "p95 higher", with the counts behind it (FR55)."""
+
+    measure: Literal["failure_share", "p95"]
+    this_requests: int
+    this_errors: int
+    this_p95_ms: float | None
+    previous_requests: int
+    previous_errors: int
+    previous_p95_ms: float | None
+
+
 class ReleaseRow(_Out):
     """One release in the list, by its newest period in the window."""
 
@@ -43,6 +55,11 @@ class ReleaseRow(_Out):
     is_return: bool
     last_seen_at: datetime | None
     last_state: str | None
+    # FR55, from the reading a job stored 30 minutes in, never a ClickHouse read here
+    # (AC81): each measure a version method read as higher, with its counts.
+    flags: list[StoredFlag]
+    # FR17, from the same reading: the worker combined versions in a compared minute.
+    versions_combined: bool
 
 
 class LatestRelease(_Out):

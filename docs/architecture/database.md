@@ -14,6 +14,15 @@ Anomaly detection (F6, migrations 0041 to 0049) added:
 
 Every other new table carries `org_id` and is deleted with its project.
 
+Deployment and release tracking (F28; `0054`, `0057`, `0074`, `0075`, numbered as merged) added:
+
+- `releases` (ADR-029), one row per project, service and version, telling what reported it and what was counted, and `release_periods`, each stretch one served, with `last_reading` (the comparison's words and counts stored 30 minutes in, never a name) and `mixed_environments` (FR45), which `/releases` and the Deploys section read so neither touches ClickHouse; `release_sync_state`, how far the release sync has read each project's version rollup; `deploy_intake_state`, what each project's webhook last received;
+- on `deploy_events` (ADR-033): the signed `delivery_id`, the sender's `state`, `commit_sha` and `url`, the release it filed under and the sealed secret that signed it, each with `ON DELETE SET NULL` so a deploy outlives both; secrets are sealed (`project_webhook_secrets.sealed_secret`) and shown once;
+- `notifications.release_period_id` (ADR-066): a release summary's subject, a third beside the incident and the finding, held to one subject by `names_one_subject` and to its own kind by `release_summary_names_its_period`, with its own unique key; the project key excludes rows naming a period;
+- `projects.release_summary_channel_id` (D53), the channel people read that gets each release's summary, null by default, set to null when the channel is deleted.
+
+Deploys and releases are deleted past the project's derived retention, measured by arrival and never the sender's time (`nexovue_scheduler/releases/retention.py`), and with a project or organization deleted for longer than the shortest plan's derived retention.
+
 Migration 0037 (ADR-020) added ten logged tables for what Redis used to hold: `sessions`, `one_time_tokens`, `view_as_tickets`, `totp_enrolments`, `totp_challenges`, `totp_spent_codes`, `jobs` (the scheduler's queue), `job_results`, `alert_evaluation_status` and `rate_limit_windows`. Every short-lived row carries `expires_at`, reads filter on it, and the scheduler's expiry sweep (`sweep_expired`, every 60 seconds) deletes lapsed rows. They are deliberately not `UNLOGGED`: a crash or failover would empty them. The same sweep deletes what anomaly detection keeps only for a while (`nexovue_scheduler/detection/retention.py`): closed findings once their project's derived retention has passed, because they name services and endpoints, and `intake_refusals`, `detection_events` and `baseline_shifts` after the 30 days the baseline job reads back.
 
 Schema changes use Alembic migrations in `apps/api/migrations/`.

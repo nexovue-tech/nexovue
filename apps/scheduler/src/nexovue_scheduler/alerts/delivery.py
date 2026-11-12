@@ -36,6 +36,9 @@ BUDGET_SECONDS: Final = 20.0
 # F28 FR44's read, including the wait for a connection (D51; a guess). Against the
 # claim's 60-second lease, and at most one per claim, since a claim holds one channel.
 RELEASE_READ_SECONDS: Final = 0.5
+# F28 FR55: a release summary's words are its release's, so a read that fails sends
+# nothing and the batch is tried again, as a receiver's failure would be.
+SUMMARY_UNREAD_REASON: Final = "not sent yet: the release could not be read"
 
 
 @dataclass(slots=True)
@@ -64,7 +67,14 @@ async def deliver_due(
         if not claimed.channels:
             break
         for claimed_batch in claimed.batches:
-            writable = await _without_unwritable(engine, claimed_batch, outbound.app_base_url)
+            read = await with_release_summaries(engine, claimed_batch)
+            if read is None:
+                unread = outbox.SendResult(outcome="retry", reason=SUMMARY_UNREAD_REASON)
+                async with engine.begin() as connection:
+                    recorded = await outbox.record(connection, claimed_batch, unread, now=now())
+                _count(report, recorded)
+                continue
+            writable = await _without_unwritable(engine, read, outbound.app_base_url)
             report.dropped += len(claimed_batch.notices) - (
                 0 if writable is None else len(writable.notices)
             )
@@ -114,6 +124,53 @@ async def _without_unwritable(
         await outbox.drop_unwritable(connection, batch, unwritable, reason=outbox.UNWRITABLE_REASON)
     kept = tuple(notice for notice in batch.notices if notice.id not in unwritable)
     return replace(batch, notices=kept) if kept else None
+
+
+async def with_release_summaries(engine: AsyncEngine, batch: outbox.Batch) -> outbox.Batch | None:
+    """The batch with each release summary's release, version and stored reading in its
+    subject (F28 FR55, D52), read after the claim committed on a connection of its own,
+    as FR44's line is: detection imports the outbox, which therefore reads no release
+    table (AC42). Counts are read at send, never frozen into the row. None when the read
+    failed, so the batch is tried again rather than sent without its words; a period
+    deleted since is left unnamed, and dropped as unwritable."""
+    wanted = [notice.subject.id for notice in batch.notices if notice.subject.kind == "release"]
+    if not wanted:
+        return batch
+    try:
+        async with asyncio.timeout(RELEASE_READ_SECONDS), engine.connect() as connection:
+            periods = await facts.summarized_periods(
+                connection, org_id=batch.channel.org_id, period_ids=wanted
+            )
+    except Exception as unread:  # any failure retries the batch; nothing is sent
+        logger.warning(
+            "release summary not read", batch_id=str(batch.id), reason=type(unread).__name__
+        )
+        return None
+    return replace(
+        batch,
+        notices=tuple(_summarized(notice, periods) for notice in batch.notices),
+    )
+
+
+def _summarized(
+    notice: outbox.Notice, periods: dict[uuid.UUID, facts.SummarizedPeriod]
+) -> outbox.Notice:
+    period = periods.get(notice.subject.id) if notice.subject.kind == "release" else None
+    if period is None:
+        return notice
+    named = replace(
+        notice.subject,
+        key=f"{outbox.SERVICE_KEY_PREFIX}{period.service_name}",
+        label=period.service_name,
+        opened_at=period.started_at,
+        detail={
+            outbox.RELEASE_DETAIL_RELEASE_ID: str(period.release_id),
+            outbox.RELEASE_DETAIL_VERSION: period.version,
+            outbox.RELEASE_DETAIL_PREVIOUS: period.previous_version,
+            outbox.RELEASE_DETAIL_READING: period.last_reading,
+        },
+    )
+    return replace(notice, subject=named)
 
 
 async def with_release_line(engine: AsyncEngine, batch: outbox.Batch) -> outbox.Batch:

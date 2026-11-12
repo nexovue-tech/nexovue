@@ -878,3 +878,139 @@ def test_slack_never_previews_a_follow_up_s_links() -> None:
     body = json.loads(payloads.slack(compose(_explained(), app_base_url=BASE)))
 
     assert body["unfurl_links"] is False and body["unfurl_media"] is False
+
+
+# ------------------------------------------ F28 FR55: a release summary (T5.6, D52)
+
+SUMMARY_PERIOD = uuid.uuid4()
+SUMMARY_RELEASE = uuid.uuid4()
+SIDE_BY_SIDE_READING: dict[str, Any] = {
+    "reason": None,
+    "versions_combined": False,
+    "minutes_differing": 0,
+    "block": "rollout",
+    "method": "side_by_side",
+    "minutes_compared": 30,
+    "this": {"requests": 6012, "errors": 180, "p95_ms": 412.4},
+    "previous": {"requests": 5844, "errors": 12, "p95_ms": 398.0},
+    "failure_share": "higher",
+    "failure_share_note": None,
+    "p95": "about_same",
+    "p95_note": None,
+}
+# AC37's words, which a summary may never hold.
+CAUSE_WORDS = (
+    "caused by",
+    "because of this release",
+    "regression from",
+    "bad release",
+    "due to",
+    "introduced by",
+    "triggered",
+    "responsible for",
+    "after deploying",
+    "impact",
+)
+
+
+def _summary(
+    reading: dict[str, Any] | None = SIDE_BY_SIDE_READING,
+    *,
+    version: str = "v2.1",
+    service: str = "checkout",
+) -> Notice:
+    return Notice(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind="release_summary",
+        severity="warning",
+        created_at=OPENED_AT,
+        attempts=0,
+        pagerduty_key=f"release:{SUMMARY_PERIOD}",
+        subject=Subject(
+            kind="release",
+            id=SUMMARY_PERIOD,
+            key=f"service:{service}",
+            label=service,
+            opened_at=OPENED_AT,
+            closed_at=None,
+            rule_id=None,
+            rule_name=None,
+            condition_kind="release_summary",
+            detail={
+                "release_id": str(SUMMARY_RELEASE),
+                "version": version,
+                "previous_version": "v2.0",
+                "reading": reading,
+            },
+        ),
+    )
+
+
+def test_a_release_summary_states_counts_and_plain_words_with_no_verdict() -> None:
+    """FR55, AC82: the headline, a line per measure with counts and the plain word, and
+    "Order only, not cause"; no severity tag, and the release page as its link."""
+    message = compose(_summary(), app_base_url=BASE)
+
+    assert message.summary == "Release summary: v2.1 of checkout"
+    assert message.details == (
+        "Side by side over 30 minutes.",
+        "Failure share: 3.0% (180 of 6,012) on v2.1 against 0.2% (12 of 5,844) on v2.0, higher.",
+        "p95: 412 ms against 398 ms, about the same.",
+        "Counts assume you do not sample before sending.",
+        "Started: 2026-09-19 14:03 UTC.",
+        "Order only, not cause.",
+    )
+    assert message.link == f"{BASE}/releases/{SUMMARY_RELEASE}"
+    assert message.kind == "release_summary"
+    for line in (message.summary, *message.details):
+        assert not line.startswith("[")
+        for word in CAUSE_WORDS:
+            assert word not in line.lower()
+
+
+def test_a_release_with_no_numbers_says_the_reason() -> None:
+    """AC82: whatever its reading, every release is told, with the reason's words."""
+    message = compose(_summary({"reason": "no_previous_version"}), app_base_url=BASE)
+    assert message.details[0] == (
+        "This is the first version we know of on this service, so there is nothing to "
+        "compare it with."
+    )
+    assert message.details[-1] == "Order only, not cause."
+
+
+def test_a_hostile_version_in_a_summary_is_one_line_and_escaped_by_the_channel() -> None:
+    """AC82: through `one_line`, then the channel's escaping."""
+    message = compose(
+        _summary(version="v2\nRule: forged <script>", service="<b>checkout</b>"),
+        app_base_url=BASE,
+    )
+    assert message.summary == "Release summary: v2 Rule: forged <script> of <b>checkout</b>"
+    assert all("\n" not in line for line in message.details)
+    slack = payloads.slack(message_for("slack", message)).decode()
+    assert "<script>" not in slack and "&lt;script&gt;" in slack
+    assert "<b>" not in slack
+
+
+def test_a_release_summary_is_neutral_never_amber_or_red() -> None:
+    """Design section 6: amber would read as a verdict."""
+    message = compose(_summary(), app_base_url=BASE)
+    assert payloads.colour(message) == "#98a2b3"
+    card = json.loads(payloads.teams(message))
+    assert card["attachments"][0]["content"]["body"][0]["color"] == "Default"
+
+
+def test_summaries_alone_read_as_a_count_and_never_as_alerts() -> None:
+    """Design section 6: "3 release summaries" when every notice is one."""
+    message = compose_batch((_summary(), _summary(), _summary()), app_base_url=BASE)
+    assert message.summary == "3 release summaries"
+    assert message.details == ("Release summary: v2.1 of checkout",) * 3
+    assert message.link == f"{BASE}/releases"
+    assert payloads.colour(message) == "#98a2b3"
+
+
+def test_a_summary_in_a_mixed_digest_is_one_line_among_the_alerts() -> None:
+    """The stated limit: counted with the alerts, as one line."""
+    message = compose_batch((_notice("opened"), _summary()), app_base_url=BASE)
+    assert message.summary == "[critical] 2 alerts"
+    assert "Release summary: v2.1 of checkout" in message.details

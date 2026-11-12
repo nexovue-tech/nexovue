@@ -29,6 +29,7 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.detection.baselines",
     "nexovue_scheduler.slos.job",
     "nexovue_scheduler.releases.sync",
+    "nexovue_scheduler.releases.summary",
     "nexovue_scheduler.cases",
     "nexovue_scheduler.evidence.gather",
 )

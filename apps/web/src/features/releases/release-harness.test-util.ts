@@ -42,6 +42,8 @@ export function row(overrides: Partial<ReleaseRow> = {}): ReleaseRow {
     is_return: false,
     last_seen_at: minutesAgo(1),
     last_state: null,
+    flags: [],
+    versions_combined: false,
     ...overrides,
   };
 }

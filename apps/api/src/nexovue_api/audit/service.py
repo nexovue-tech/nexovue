@@ -145,6 +145,9 @@ PROJECT_DELETED: Final = "project.deleted"
 # what leaves the customer's process, and it is the only edit here whose blast
 # radius is other people's secrets.
 PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"
+# F28 (FR55, D53): where a project's release summary goes, or that it stopped. A
+# channel people read is told of every release from then on.
+PROJECT_RELEASE_SUMMARY_SET: Final = "project.release_summary_set"
 # F6. A person's word on a finding changes what detection judges from then on, and
 # a mute or snooze decides whether anyone is woken (FR19 to FR22). Each records
 # its reason, and adoption is recorded by the scheduler as the system (FR21).
@@ -1173,6 +1176,25 @@ def record_project_deleted(
         actor_user_id=actor_user_id,
         action=PROJECT_DELETED,
         target=_target(PROJECT_TARGET, project_id),
+    )
+
+
+def record_release_summary_set(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    channel_id: uuid.UUID | None,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """A project's release summary was sent to a channel, or turned off (null)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=PROJECT_RELEASE_SUMMARY_SET,
+        target=_target(PROJECT_TARGET, project_id),
+        detail={"channel_id": None if channel_id is None else str(channel_id)},
     )
 
 

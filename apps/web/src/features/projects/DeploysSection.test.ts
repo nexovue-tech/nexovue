@@ -11,7 +11,7 @@ import {
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
 
@@ -37,8 +37,18 @@ const PROJECT: ProjectDetail = {
   retention_days: 30,
   sampling_config: {},
   masking_config: {},
+  release_summary_channel_id: null,
   created_at: "2026-09-01T09:00:00Z",
 };
+const PROJECT_PATH = `/api/v1/projects/${PROJECT_ID}`;
+const SUMMARY_PATH = `${PROJECT_PATH}/release-summary`;
+// The organization's channels: two people read, two machines read.
+const CHANNELS = [
+  { id: "owners-1", kind: "owners", name: "Organization owners" },
+  { id: "slack-1", kind: "slack", name: "#releases" },
+  { id: "pager-1", kind: "pagerduty", name: "On-call pager" },
+  { id: "hook-1", kind: "webhook", name: "Deploy bot" },
+];
 
 function settings(overrides: Partial<DeploySettings> = {}): DeploySettings {
   return {
@@ -51,6 +61,7 @@ function settings(overrides: Partial<DeploySettings> = {}): DeploySettings {
     last_refusal: null,
     current_versions: [],
     over_release_cap: false,
+    mixed_environment_services: [],
     ...overrides,
   };
 }
@@ -93,12 +104,16 @@ const json = (body: unknown, status = 200) =>
 function stubApi({
   role = "owner",
   current = settings(),
+  summaryChannel = null,
 }: {
   role?: TestRole;
   current?: DeploySettings;
+  summaryChannel?: string | null;
 } = {}) {
   let listed = current;
+  let project: ProjectDetail = { ...PROJECT, release_summary_channel_id: summaryChannel };
   const calls: string[] = [];
+  const saved: unknown[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: URL, init?: RequestInit) => {
@@ -114,6 +129,14 @@ function stubApi({
         return json(answer, 201);
       }
       if (url.pathname === SETTINGS_PATH) return json(listed);
+      if (url.pathname === SUMMARY_PATH && method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as { channel_id: string | null };
+        saved.push(body);
+        project = { ...project, release_summary_channel_id: body.channel_id };
+        return json({ project_id: PROJECT_ID, channel_id: body.channel_id });
+      }
+      if (url.pathname === PROJECT_PATH) return json(project);
+      if (url.pathname === "/api/v1/channels") return json({ channels: CHANNELS });
       if (url.pathname === "/api/v1/findings/stats") return json(NO_FINDINGS);
       // The other sections' lists, all empty: this suite is about one section.
       if (method === "GET") {
@@ -129,7 +152,7 @@ function stubApi({
       throw new Error(`no stub for ${method} ${url.pathname}`);
     }),
   );
-  return { calls };
+  return { calls, saved };
 }
 
 async function settle() {
@@ -323,3 +346,65 @@ describe("the recipes", () => {
     ).toMatch(/^The whole body, /);
   });
 });
+
+describe("FR45 and FR55 in the section", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-12T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("warns that two environments share the project, from the stored reading", async () => {
+    stubApi({ current: settings({ mixed_environment_services: ["checkout", "search"] }) });
+    const container = await section();
+
+    expect(text(container)).toContain(
+      "Two environments appear to share this project, so these comparisons mix them. Seen on checkout, search.",
+    );
+  });
+
+  it("says nothing of environments when no reading saw two", async () => {
+    stubApi();
+    const container = await section();
+
+    expect(text(container)).not.toContain("Two environments");
+  });
+
+  it("is off by default and offers only channels people read", async () => {
+    stubApi();
+    const container = await section();
+
+    const select = container.querySelector<HTMLSelectElement>("#deploys select");
+    expect(select?.value).toBe("off");
+    expect([...(select?.options ?? [])].map((option) => option.textContent)).toEqual([
+      "Off",
+      "Organization owners",
+      "#releases",
+    ]);
+    expect(buttonLabelled(container, "Save").disabled).toBe(true);
+  });
+
+  it("saves the chosen channel, and null to turn it off", async () => {
+    const { saved } = stubApi({ summaryChannel: "owners-1" });
+    const container = await section();
+    const select = container.querySelector<HTMLSelectElement>("#deploys select");
+    expect(select?.value).toBe("owners-1");
+
+    await choose(select, "slack-1");
+    await click(buttonLabelled(container, "Save"));
+    await choose(container.querySelector<HTMLSelectElement>("#deploys select"), "off");
+    await click(buttonLabelled(container, "Save"));
+
+    expect(saved).toEqual([{ channel_id: "slack-1" }, { channel_id: null }]);
+  });
+});
+
+async function choose(select: HTMLSelectElement | null, value: string) {
+  if (!select) throw new Error("no channel chooser");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+    setter?.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+}

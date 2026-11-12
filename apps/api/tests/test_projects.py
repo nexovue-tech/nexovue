@@ -120,6 +120,7 @@ class Tenant:
             org_id=self.organization.id, kind="owners", name="Organization owners", config={}
         )
         self.owners_channel.id = uuid.uuid4()
+        self.channels: list[NotificationChannel] = [self.owners_channel]
 
         # Empty by default: the ordinary project has no outbound work scheduled,
         # and a test that wants the refusal adds one.
@@ -133,6 +134,14 @@ class Tenant:
         # reduced to the one column the project list reads. Empty by default,
         # which is a project nothing has ever reported for.
         self.metered_days: dict[uuid.UUID, list[date]] = {}
+
+    def add_channel(self, kind: str) -> NotificationChannel:
+        channel = NotificationChannel(
+            org_id=self.organization.id, kind=kind, name=f"{kind} channel", config={}
+        )
+        channel.id = uuid.uuid4()
+        self.channels.append(channel)
+        return channel
 
     def add_explanation(self, project: Project, wording_state: str) -> FindingExplanation:
         explanation = FindingExplanation(
@@ -157,6 +166,7 @@ class Tenant:
         project.retention_days = 30
         project.sampling_config = {}
         project.masking_config = {}
+        project.release_summary_channel_id = None
         return project
 
     def add_check(self) -> Check:
@@ -267,6 +277,16 @@ class FakeControlPlane:
             return None
         if selected == "NotificationChannel" and "owners" in values:
             return next((tenant.owners_channel for tenant in self._tenants_binding(values)), None)
+        if selected == "NotificationChannel":  # find_channel: by organization and id
+            return next(
+                (
+                    channel
+                    for tenant in self._tenants_binding(values)
+                    for channel in tenant.channels
+                    if channel.id in values
+                ),
+                None,
+            )
         raise AssertionError(f"the fake store has no answer for {selected!r}")
 
     async def scalars(self, statement: Any) -> _Rows:
@@ -1079,6 +1099,82 @@ async def test_writing_config_for_another_organizations_project_is_a_404(
     assert globex.project.masking_config == {}
 
 
+# ------------------------------------------------- F28 FR55: the release summary
+
+
+async def _summary_to(db: FakeControlPlane, acme: Tenant, channel_id: uuid.UUID | None) -> Any:
+    return await service.write_release_summary(
+        _store(db),
+        org_id=acme.organization.id,
+        actor_user_id=acme.user.id,
+        project_id=acme.project.id,
+        channel_id=channel_id,
+    )
+
+
+@pytest.mark.parametrize("kind", ["owners", "email", "slack", "teams", "discord"])
+async def test_a_project_s_release_summary_goes_to_a_channel_people_read_and_is_audited(
+    db: FakeControlPlane, acme: Tenant, kind: str
+) -> None:
+    """FR55, D53, AC83: one channel people read; one audit row."""
+    channel = acme.owners_channel if kind == "owners" else acme.add_channel(kind)
+
+    answer = await _summary_to(db, acme, channel.id)
+
+    assert answer.channel_id == channel.id
+    assert acme.project.release_summary_channel_id == channel.id
+    (entry,) = db.entries
+    assert entry.action == audit.PROJECT_RELEASE_SUMMARY_SET == "project.release_summary_set"
+    assert entry.actor_user_id == acme.user.id
+    assert entry.detail == {"channel_id": str(channel.id)}
+
+
+async def test_turning_the_summary_off_is_null_and_audited(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    acme.project.release_summary_channel_id = acme.owners_channel.id
+
+    answer = await _summary_to(db, acme, None)
+
+    assert answer.channel_id is None
+    assert _summary_channel(acme) is None
+    (entry,) = db.entries
+    assert entry.detail == {"channel_id": None}
+
+
+def _summary_channel(tenant: Tenant) -> uuid.UUID | None:
+    return tenant.project.release_summary_channel_id
+
+
+@pytest.mark.parametrize("whose", ["pagerduty", "webhook", "another organization's"])
+async def test_a_machine_channel_or_another_organization_s_is_refused(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant, whose: str
+) -> None:
+    """AC83: 422 for a PagerDuty or webhook channel, and for another organization's,
+    alike; nothing changes and nothing is audited."""
+    channel = (
+        globex.add_channel("slack")
+        if whose == "another organization's"
+        else acme.add_channel(whose)
+    )
+
+    with pytest.raises(InvalidRequestError):
+        await _summary_to(db, acme, channel.id)
+
+    assert acme.project.release_summary_channel_id is None
+    assert db.entries == []
+
+
+async def test_a_project_reads_where_its_summary_goes(db: FakeControlPlane, acme: Tenant) -> None:
+    """D53: `GET /projects/{project_id}` carries it, so no other read is needed."""
+    assert (
+        await service.get(_store(db), org_id=acme.organization.id, project_id=acme.project.id)
+    ).release_summary_channel_id is None
+    acme.project.release_summary_channel_id = acme.owners_channel.id
+    detail = await service.get(_store(db), org_id=acme.organization.id, project_id=acme.project.id)
+    assert detail.release_summary_channel_id == acme.owners_channel.id
+
+
 # ---------------------------------------------------------------- routes
 
 
@@ -1196,6 +1292,48 @@ async def test_a_bad_slug_is_refused_before_it_reaches_the_service(
         )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("role", ["member", "viewer"])
+async def test_the_release_summary_route_refuses_a_member_and_a_viewer(
+    db: FakeControlPlane, acme: Tenant, role: str
+) -> None:
+    """AC83: under `CONFIGURE_PROJECTS`, which owners and admins hold."""
+    acme.user.role = role
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        response = await client.put(
+            f"{API_PREFIX}/projects/{acme.project.id}/release-summary",
+            json={"channel_id": str(acme.owners_channel.id)},
+        )
+
+    assert response.status_code == 403
+    assert acme.project.release_summary_channel_id is None
+
+
+async def test_the_release_summary_route_answers_422_for_a_machine_channel(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    pagerduty = acme.add_channel("pagerduty")
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        refused = await client.put(
+            f"{API_PREFIX}/projects/{acme.project.id}/release-summary",
+            json={"channel_id": str(pagerduty.id)},
+        )
+        chosen = await client.put(
+            f"{API_PREFIX}/projects/{acme.project.id}/release-summary",
+            json={"channel_id": str(acme.owners_channel.id)},
+        )
+
+    assert refused.status_code == 422
+    assert chosen.status_code == 200
+    assert chosen.json() == {
+        "project_id": str(acme.project.id),
+        "channel_id": str(acme.owners_channel.id),
+    }
 
 
 def test_the_policy_that_guards_these_routes_refuses_a_member() -> None:

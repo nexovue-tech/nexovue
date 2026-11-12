@@ -36,8 +36,7 @@ from nexovue_platform.assistant_tools import UNTRUSTED_NOTE, bounded
 from pydantic import BaseModel
 
 from nexovue_api.alerts.schemas import IncidentSummary
-from nexovue_api.assistant.tools import UNTRUSTED_FIELDS, CheckRow
-from nexovue_api.deploys.schemas import DeployEventSummary
+from nexovue_api.assistant.tools import UNTRUSTED_FIELDS, CheckRow, DeployRow
 from nexovue_api.detection.schemas import ServiceDetection
 from nexovue_api.errorgroups.schemas import ErrorGroupDetailResponse, ErrorGroupSummary
 from nexovue_api.findings.schemas import Finding, FindingDetail
@@ -75,7 +74,7 @@ SHAPES: Final[dict[str, tuple[str, type[BaseModel]]]] = {
     "list_error_groups": ("error_groups", ErrorGroupSummary),
     "list_incidents": ("incidents", IncidentSummary),
     "list_checks": ("checks", CheckRow),
-    "list_deploys": ("deploys", DeployEventSummary),
+    "list_deploys": ("deploys", DeployRow),
     "list_traces": ("traces", TraceSummary),
     "list_findings": ("findings", Finding),
     "get_finding": ("finding", FindingDetail),
@@ -115,6 +114,9 @@ ALLOWED: Final[dict[str, dict[str, str]]] = {
         "incident[].notifications[].kind": "closed vocabulary",
         "incident[].notifications[].state": "closed vocabulary",
         "incident[].zone": "an IANA zone, judged against the zone database at write",
+    },
+    "list_deploys": {
+        "deploys[].commit_sha": "lower-case hex, checked at the door (F28 FR8)",
     },
     "list_traces": {
         "traces[].trace_id": "a hex id",

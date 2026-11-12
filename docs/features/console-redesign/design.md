@@ -46,6 +46,10 @@ this?" is the most common real cause and currently unanswerable. The cheapest ho
 marker on every time series plus a list where deploys are the subject, not a new top-level entry
 competing with the signals.
 
+> **Overtaken by F28's D25 (approved 2026-11-02, built 2026-11-08):** releases have their own entry,
+> *Releases*, in Signals after Errors. A release is evidence a person reads, from traffic as well as
+> from CI, and the feed stays home. The markers on every series stand as IA3 says.
+
 **IA4 — The post-onboarding destination changes.** A new customer currently lands on `/traces`, the
 most technical screen in the product, when the question they had was "did it work." The destination
 becomes a confirmation.
@@ -200,7 +204,8 @@ The sidebar's three groups become four, because the front door is no longer a pl
 ```
 
 Fourteen sidebar entries become thirteen. Deploys gains no entry (IA3) — it appears as markers on
-every series and as a list within the screen where deploys are the subject.
+every series and as a list within the screen where deploys are the subject. *Since F28 (D25):*
+*Releases* is an entry in Signals, after Errors.
 
 The dashboard surface's placement is **blocked on OD2** — until it is defined, there is nowhere
 correct to put it. Everything else in this document is independent of that answer.

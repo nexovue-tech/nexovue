@@ -66,6 +66,8 @@ export interface ProjectDetail {
   retention_days: number;
   sampling_config: SamplingDocument;
   masking_config: MaskingDocument;
+  /** F28 FR55: the channel each release's summary goes to; null is off, the default. */
+  release_summary_channel_id: string | null;
   created_at: string;
 }
 
@@ -186,6 +188,18 @@ export function useSaveMaskingConfig(projectId: string | undefined) {
         config,
         confirm_disabling: confirmDisabling,
       }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId) }),
+  });
+}
+
+/** F28 FR55, D53: one channel people read gets a summary of every release, or none. */
+export function useSaveReleaseSummary(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["projects", "release-summary"],
+    mutationFn: (channelId: string | null) =>
+      apiClient.put(`projects/${projectId}/release-summary`, { channel_id: channelId }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId) }),
   });
 }

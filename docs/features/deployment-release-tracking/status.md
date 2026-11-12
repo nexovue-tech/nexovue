@@ -2,15 +2,133 @@
 
 ## Lifecycle status
 
-**In development. Step 4 built 2026-11-12, awaiting commit.** The founder approved the specification, design and
+**In development. Step 5 built 2026-11-12, committed 2026-11-12.** The founder approved the specification, design and
 plan on 2026-11-02. Steps 1a, 1b, 2 and 3 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder
-tests after Phase 2). Step 4 (the whole release page) is built in worktree `wt/f28s4`, not committed. Step 5 is next.
+tests after Phase 2). Step 4 (the whole release page) and Step 5 (what other features need, and telling people) are
+committed 2026-11-12, locally, not pushed. Step 6 (launch claims) is next.
 
 
 ## Current task
 
-**Step 4 built 2026-11-12, awaiting commit** (*Step 4, built 2026-11-12*, below). ClickHouse migrations `000041` and
-`000042`; no Postgres migration; no ADR (the door column is the approved spec's D38, nothing new decided).
+**Step 5 built 2026-11-12, committed 2026-11-12** (*Step 5, built 2026-11-12*, below). Postgres migrations `0074`
+and `0075`, on F4's `0073`; no ClickHouse migration; ADR-066.
+
+## Step 5, built 2026-11-12
+
+What other features need, and telling people (plan T5.1 to T5.7), in `wt/f28s5`. What exists now, read from the code:
+
+- **One deploy fact, one history** (T5.1): `nexovue_platform.releases` holds `DeployFact` (ids, the sender's time and
+  ours, state, commit, `basis` always `reported`; no `metadata`, `url`, `source` or `delivery_id`) and `DeployHistory`
+  with `EMPTY_DEPLOY_HISTORY`, moved from `deploys/service.py`. The API's `history_for_window` builds facts; errors,
+  F20's panel scans (one import line) and the scheduler's facts use the one type. The comparison's ClickHouse column
+  lists and environment expression are shared fragments (`VERSION_MINUTE_COLUMNS`, `SERVICE_MINUTE_COLUMNS`,
+  `SPAN_ENVIRONMENT`) with their row converters; the API's statements and the scheduler's are equal word for word.
+- **The comparison for the scheduler** (T5.2): `facts.release_comparison(store, connection, ...)` reads the period, its
+  previous version's start, the settled minute and the plan's derived retention (`project_retention`) from Postgres,
+  and the version minutes, totals and environment labels through `releases/store.py`'s new project-bound reads; then
+  the shared `choose_method`. `ComparisonFact` carries no other version names and no sender text.
+- **No AI** (T5.3): F28's packages in every process are walked by `test_detection_has_no_ai.py`.
+- **MCP and `GET /deploys`** (T5.4): `list_deploys` sends `DeployRow`, exactly `id`, `version`, `service_name`,
+  `deployed_at`, `commit_sha`, `state`, `received_at`, and the envelope says `partial` when the read was capped
+  (`bounded(..., partial=)`). `DeployEventSummary` lost `source` and `metadata` and gained `received_at`, `state` and
+  `commit_sha`.
+- **The hostile fixture** (T5.5): `apps/scheduler/tests/hostile_release_names.py`, versions that pass the name check
+  and free text a sender can write; stored live and never read back into a fact.
+- **The stored reading and the summary** (T5.6): `releases/summary.py`'s job, on the `releases` queue, added by the
+  sync for each period it opens (timed from the newest minute read, not a clock) and by the webhook for each period a
+  report opens; a start that moved later, or a comparison under 5 settled minutes (for at most 30 minutes more), puts
+  it back. It stores `last_reading` (the leading block's method, words and counts, or the reason; never a name) and
+  `mixed_environments`, and with `projects.release_summary_channel_id` set writes one `release_summary` notice on that
+  channel, joined by organization and only if people read it, `sequence` 0, `ON CONFLICT DO NOTHING`. A period
+  `already_running` gets neither. Delivery reads the release, versions and reading after the claim on its own
+  connection and retries the batch if that read fails; the words are `nexovue_platform.releases.summary_lines` with
+  "Order only, not cause", coloured neutral; "3 release summaries" when only summaries are due. `PUT
+  /projects/{id}/release-summary` under `CONFIGURE_PROJECTS` refuses another organization's channel and PagerDuty
+  and webhook channels (422), audits `project.release_summary_set`, and `GET /projects/{id}` returns the value. The
+  list shows *Failure share higher* and *p95 higher* with counts in critical text, and "Versions were combined on X:
+  too many in one minute", from Postgres alone. The Deploys section shows FR45's warning from the stored readings and
+  the opt-in, listing only channels people read.
+- **Documents** (T5.7): `database.md`, the deploy-events spec, IA3's note, the catalogue, the setup pages
+  (`deploys.md`: the summary and who sees sender text; `api.md`), design section 6's *as built* rows, ADR-066.
+
+**Readings made while building** (none blocking; each open to overrule, also under *Open decisions*):
+
+- **The claim reads no release table; delivery does.** Design section 6 joined `release_periods` and `releases` in
+  `_TAKEN`. Detection imports the outbox, and T1.12's isolation test (AC42) refuses any module it reaches that names a
+  release table; it failed on that join. The read moved to `delivery.py`, after the claim, as FR44's is (ADR-066).
+- **The time method's reading is stored and summarized, but never flagged.** FR55 reads the flag from the two version
+  methods; a by-time summary carries the design's "a rolling deploy mixes old and new" sentence.
+- **The job is added by the webhook as well as the sync.** Design section 6 names the sync; a period a report opens is
+  not opened by the sync, so without the webhook's job a reported-only release would never be summarized (AC82: every
+  period).
+- **A failed job is retried twice, then gives up silently**: that period has no reading and no summary.
+
+**Tests, each seen failing first** (the behaviour removed, the test run and seen failing, the code restored and checked
+byte-equal by a script; outputs in this session's scratch space, `seen-failing*.log`):
+
+- `test_deploys.py`, `test_errorgroups.py` (re-pointed): a deploy at the instant no longer preceding it failed two;
+  the `known_from` guard removed failed the overflow test only once it held a deploy older than the cap's reach (it
+  passed before: strengthened).
+- `test_release_facts.py` (new, 8): a `metadata` field on `DeployFact` failed the allow list and the free-text test;
+  `source` selected by `_DEPLOYS_IN_WINDOW` failed the statement test; versions combined forced false, and two labels
+  read as one, each failed; the store handed another project failed.
+- `test_releases.py` (+1): the scheduler's totals statement written without the shared fragment failed.
+- `test_release_facts_live.py` (+3): the window read without its organization and project failed AC77's; seen
+  starts with `already_running` failed; `source` read as the commit failed the hostile test.
+- `test_detection_has_no_ai.py` (+1): `import mcp.server` in `summary.py` failed.
+- `test_mcp_tools.py` (+3): a `source` key added to the row, `partial` ignored by `bounded`, and `partial=False` in the
+  tool each failed. `test_mcp_injection.py` judges `DeployRow`.
+- `test_releases_live.py` (+1 test, AC76 extended): `source` put back on `GET /deploys` failed; flags from the time
+  method failed AC81's list test.
+- `test_platform_releases.py` (+8): a version name in the stored reading, flags by time, and reason words replaced
+  each failed.
+- `test_alert_messages.py` (+6): no "Order only, not cause", no `one_line`, amber in place of neutral, and no
+  summaries-alone shape each failed.
+- `test_release_summary_live.py` (new, 11): the summary written for an `already_running` period, to a PagerDuty
+  channel, twice on a retry (no `ON CONFLICT`), before its 30 minutes; a name stored; the release not named at
+  delivery; an unread release sent anyway; the outbox's order without the period (with the second summary's
+  `created_at` later: an equal one passed, strengthened); the comparison without its tenant binding; each failed. In
+  the database, `release_summary_names_its_period` dropped failed the refusal test (an `opened` row naming a period;
+  the first version, which `names_one_subject` also refused, passed: rewritten), the project key without `release_period_id
+  IS NULL` failed "told once", and the channel's foreign key without `SET NULL` failed the deletion test; each put
+  back and checked with `\d`.
+- `test_release_sync_live.py` (+1), `test_deploys_live.py` (+1): the sync's and the webhook's job left out each failed.
+- `test_projects.py` (+11): the people-read check, the audit row, the policy (`CurrentIdentity`) and the detail's value
+  each failed; `test_authorization_coverage.py` failed with the policy changed; `test_alert_vocabulary.py` failed
+  with the kind left out of `0074`'s copy; `test_cross_service_contracts.py` failed with the task module unregistered.
+- `test_detection_isolation.py` failed on the design's `_TAKEN` join (the reading above); `test_release_words.py`
+  failed on the scheduler's environments read (now named in its allow list); the scheduler Postgres tenancy test
+  failed on a read of `plans` (now `project_retention`).
+- Web: `DeploysSection.test.ts` (+4) failed with FR45's warning hidden, machine channels offered, and "Off" saved as
+  "off"; `ReleasesScreen.test.ts` (+3) failed with no flags, dim flags, and no combined state. Clocks pinned
+  (`vi.useFakeTimers({ toFake: ["Date"] })`); Python decisions take `now` built from the rows.
+
+**Counts.** Offline, every store at a closed port (`apps/api`, `apps/scheduler`, `packages/py-platform`,
+`packages/contracts`, `tools/release-demo`, `tools/detection-seed`, `-n 2`): 11,876 passed, 125 skipped, 0 failed.
+Live, on this session's own Postgres and ClickHouse (containers `f28s5-pg`, `f28s5-ch`, ports 35432 and 38123, each
+port checked before every run): `test_releases_live`, `test_deploys_live`, `test_errorgroups_live`,
+`test_findings_api_live`, `test_deletion_live`, `test_projects_live`, `test_channels_live`, `test_release_facts_live`,
+`test_release_summary_live`, `test_release_sync_live`, `test_alert_delivery_live`, `test_alert_outbox_live`,
+`test_outbox_golden_live`, `test_detection_release_neutrality_live`, `test_detection_prune_live`,
+`test_slo_prune_live`, `-n 2`: 270 passed; the three suites that write the settled minute, twice more in parallel:
+67 passed each. A first parallel run failed one summary test: two suites committed the install-wide settled minute
+at once; both now hold one advisory lock while they own it (`apps/scheduler/tests/settled_minute.py`). Migrations
+`0074` and `0075` (then numbered `0078` and `0079`) applied, `0075` reverted and reapplied, `0074`'s downgrade refused as written. Web, whole suite:
+2,301 passed (183 files). `uv run mypy .` (1,009 files), `ruff check .`, `ruff format --check .`,
+`pnpm -r --if-present run typecheck`, `biome check` on the touched folders and `verify-tokens.js`: clean. Go not
+touched.
+
+**Not run (deferred to hardening):** Playwright, a browser or phone check of the list's flags and the Deploys section,
+Design QA at 375px, the *Judgeable* run with `tools/release-demo` (one notice after a demo rollout), a real send to
+Slack, Teams, Discord or email (only the delivery path's fakes ran), and `just check` (the coordinator's).
+
+**Found in the self-review, left as they are** (none blocking):
+
+- **Low:** the summary job and the sync hold a Postgres connection open while ClickHouse answers (up to 10 seconds a
+  read, three reads), as the sync already did.
+- **Low:** the outbox's PagerDuty and burn statements still match subjects by incident and finding alone; a summary
+  never reaches PagerDuty and is never news, so none of them sees one.
+- **Low:** a project whose chosen channel is muted gets its summaries dropped as any alert is, and recorded so.
 
 ## Step 4, built 2026-11-12
 
@@ -543,23 +661,34 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
-Coordinator: review and commit Step 4 (ClickHouse `000041`, `000042`, re-chained if numbers moved; no Postgres
-migration, no ADR). Then Step 5. Deferred to hardening: the errors read's cost at 24 hours, the 2-second target, Design
+Steps 4 (ClickHouse `000041`, `000042`) and 5 (Postgres `0074`, `0075`; ADR-066) committed 2026-11-12. Next, Step 6. Deferred to hardening: the errors read's cost at 24 hours, the 2-second target, Design
 QA at 375px, Playwright and the `tools/release-demo` judging. T2.10's timed new person and Steps 3 and 4's Design QA
 are the founder's, after Phase 2. `docs/architecture/database.md` gains the new tables in T5.7, as planned.
 
 
 ## Open decisions
 
+**From Step 5, none blocking; each built as recommended, open to overrule.**
+
+- **The release summary's words are read by delivery, not the claim** (ADR-066). Design section 6 joined the release
+  tables in `_TAKEN`; AC42's isolation test refuses it, since detection imports the outbox. Options: keep (recommended:
+  both approved rules hold, and a failed read retries the batch instead of holding the claim); or exempt the outbox
+  from the isolation test, which weakens AC42.
+- **A by-time reading is stored and summarized, never flagged.** Options: keep (recommended: FR55 flags from the two
+  version methods, and the summary names the method's limit); or store nothing for it.
+- **The webhook adds the summary job too.** Options: keep (recommended: otherwise a reported-only release is never
+  summarized, against AC82); or a sweep that finds due periods, which needs one cross-tenant statement.
+- **A job that fails three times leaves the period with no reading and no summary.** Options: keep, logged
+  (recommended for now); or a later sweep for periods past due with no reading.
+- **The list's flag and combined state come from the reading stored 30 minutes in**, so a later change in the
+  release's numbers is shown on its page, not on the list. Options: keep (FR55); or store again at a later time.
+
 **From Step 4, none blocking; each built as recommended, open to overrule.**
 
-- **The list's "Versions were combined on `checkout`" state is not built.** The design lists it among `/releases`'
-  states, but the list reads Postgres alone (AC81) and only ClickHouse knows. Options: carry it in T5.6's stored reading
-  (recommended: the job already reads the comparison 30 minutes in, and the list stays Postgres-only); or read
-  ClickHouse per list request, which AC81 forbids.
-- **FR45's warning in the Deploys section is not built.** FR45 names the release page and the Deploys section; Step 4's
-  tasks name only the page. Options: add it with T5.6, which already edits `DeploysSection.tsx`, from the stored
-  `mixed_environments` (recommended: no ClickHouse read in settings); or a live read per section open.
+- ~~**The list's "Versions were combined on `checkout`" state is not built.**~~ Built in Step 5 from the stored
+  reading, as recommended.
+- ~~**FR45's warning in the Deploys section is not built.**~~ Built in Step 5 from the stored `mixed_environments`,
+  as recommended.
 - **A section moving from skeleton to numbers is not announced** (spec, *Accessibility*); only the opening sentence is
   (`role=status`). Options: `aria-live="polite"` on each section's body (recommended, small), for Design QA to judge.
 - **The errors-by-version window is this version's start to the window's end, and the same length before** (reading
@@ -1030,7 +1159,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-12: Step 4 built in `wt/f28s4`, awaiting commit.
+2026-11-12: Steps 4 and 5 committed, Step 5's migrations re-chained to `0074` and `0075` on F4's `0073`. Earlier the same day: Step 5 built in `wt/f28s5`, and Step 4 in `wt/f28s4`.
 
 2026-11-09: Step 3 committed to `feature/phase-2`, with the carried-over fix to `first_reported_at`'s two readers.
 Earlier the same day: Step 2 committed to `feature/phase-2`; the founder's answer on failed and rolled-back reports

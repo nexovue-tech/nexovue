@@ -234,6 +234,8 @@ def _row(kind: str) -> SimpleNamespace:
     return SimpleNamespace(
         incident_id=uuid.uuid4() if kind == "incident" else None,
         finding_id=uuid.uuid4() if kind == "finding" else None,
+        # F28: a release summary's period; its words are read by delivery after the claim.
+        release_period_id=None,
         project_id=uuid.uuid4(),
         subject_key=f"service:{_HOSTILE_NAME}",
         subject_label=_HOSTILE_NAME,

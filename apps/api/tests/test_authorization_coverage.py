@@ -271,6 +271,8 @@ POLICY_OF: Final = {
     "nexovue_api/projects/router.py:delete_project": "MayConfigureProjects",
     "nexovue_api/projects/router.py:replace_sampling_config": "MayConfigureProjects",
     "nexovue_api/projects/router.py:replace_masking_config": "MayConfigureProjects",
+    # F28 FR55, D53: where a project's release summaries go (AC83).
+    "nexovue_api/projects/router.py:set_release_summary": "MayConfigureProjects",
     "nexovue_api/apikeys/router.py:create_api_key": "MayManageCredentials",
     "nexovue_api/apikeys/router.py:revoke_api_key": "MayManageCredentials",
     # The platform surface (`docs/changes/super-admin-in-the-console/`): nexovue's

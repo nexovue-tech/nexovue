@@ -20,7 +20,8 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform import releases as releases_platform
-from sqlalchemy import Select, and_, case, delete, func, literal, or_, select, tuple_, update
+from nexovue_platform.jobs import ENQUEUE, JobRequest
+from sqlalchemy import Select, and_, case, delete, func, literal, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import aggregate_order_by, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -38,21 +39,23 @@ from nexovue_api.data.postgres.models import (
 )
 from nexovue_api.errorgroups.queries import ERRORS_BY_VERSION_SQL, NANOS_PER_SECOND
 
+# The shared fragments (`nexovue_platform.releases`), bound as module constants: the
+# scheduler's `releases/store.py` splices the same ones.
+_VERSION_MINUTE_COLUMNS: Final = releases_platform.VERSION_MINUTE_COLUMNS
+_SERVICE_MINUTE_COLUMNS: Final = releases_platform.SERVICE_MINUTE_COLUMNS
+_SPAN_ENVIRONMENT: Final = releases_platform.SPAN_ENVIRONMENT
+
 # One service's requests, failures and latency buckets per minute and version, in
 # [from, to): what the comparison splits (design 4, `VERSION_MINUTES_SQL`). No version
 # and the worker's fold are read too, so the method can see a service with no version.
-VERSION_MINUTES_SQL: Final = """
-SELECT toUnixTimestamp(minute) AS minute_epoch,
-       version,
-       sum(request_count) AS requests,
-       sum(error_count) AS errors,
-       sumForEachMerge(latency_buckets) AS buckets
+VERSION_MINUTES_SQL: Final = f"""
+SELECT {_VERSION_MINUTE_COLUMNS}
 FROM service_versions_1m
-WHERE tenant_id = {tenant_id:String}
-  AND project_id = {project_id:String}
-  AND service_name = {service_name:String}
-  AND minute >= {from_minute:DateTime}
-  AND minute < {to_minute:DateTime}
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name = {{service_name:String}}
+  AND minute >= {{from_minute:DateTime}}
+  AND minute < {{to_minute:DateTime}}
 GROUP BY minute, version
 ORDER BY minute, version
 """
@@ -80,17 +83,14 @@ async def version_minutes(
 # The same service and span from `service_stats_1m`, per minute (design 4,
 # `SERVICE_TOTALS_SQL`): FR28's check that no version row went missing, the time
 # method's numbers, and last week's (FR25).
-SERVICE_TOTALS_SQL: Final = """
-SELECT toUnixTimestamp(minute) AS minute_epoch,
-       sum(request_count) AS requests,
-       sum(error_count) AS errors,
-       sumForEachMerge(latency_buckets) AS buckets
+SERVICE_TOTALS_SQL: Final = f"""
+SELECT {_SERVICE_MINUTE_COLUMNS}
 FROM service_stats_1m
-WHERE tenant_id = {tenant_id:String}
-  AND project_id = {project_id:String}
-  AND service_name = {service_name:String}
-  AND minute >= {from_minute:DateTime}
-  AND minute < {to_minute:DateTime}
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name = {{service_name:String}}
+  AND minute >= {{from_minute:DateTime}}
+  AND minute < {{to_minute:DateTime}}
 GROUP BY minute
 ORDER BY minute
 """
@@ -116,32 +116,24 @@ async def service_minutes(
 
 
 # Which environment labels one service's stored spans carry in a window (FR45, D39):
-# presence only, so sampling does not matter. The current name first, the older
-# `deployment.environment` where a span has only that, as the profile writer reads
-# them (`profilewriting/rows.go`). Both clocks are bounded, as the errors list does,
+# presence only (`SPAN_ENVIRONMENT`). Both clocks are bounded, as the errors list does,
 # so the read prunes partitions. Never a rate (BR6).
-ENVIRONMENTS_SQL: Final = """
+ENVIRONMENTS_SQL: Final = f"""
 SELECT DISTINCT environment
 FROM (
-    SELECT if(
-               ifNull(resource_attrs.deployment.environment.name.:String, '') != '',
-               ifNull(resource_attrs.deployment.environment.name.:String, ''),
-               ifNull(resource_attrs.deployment.environment.:String, '')
-           ) AS environment
+    SELECT {_SPAN_ENVIRONMENT} AS environment
     FROM spans
-    WHERE tenant_id = {tenant_id:String}
-      AND project_id = {project_id:String}
-      AND service_name = {service_name:String}
-      AND timestamp >= {from_time:DateTime64(9)}
-      AND timestamp < {to_time:DateTime64(9)}
-      AND received_at >= {received_from:DateTime64(9)}
-      AND received_at < {received_to:DateTime64(9)}
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND service_name = {{service_name:String}}
+      AND timestamp >= {{from_time:DateTime64(9)}}
+      AND timestamp < {{to_time:DateTime64(9)}}
+      AND received_at >= {{received_from:DateTime64(9)}}
+      AND received_at < {{received_to:DateTime64(9)}}
 )
 WHERE environment != ''
-LIMIT {limit:UInt32}
+LIMIT {{limit:UInt32}}
 """
-# Two labels are enough to warn.
-_ENVIRONMENTS_ENOUGH: Final = 2
 
 
 async def environments(
@@ -162,7 +154,7 @@ async def environments(
             "to_time": end,
             "received_from": start - clock_slack,
             "received_to": end + clock_slack,
-            "limit": _ENVIRONMENTS_ENOUGH,
+            "limit": releases_platform.ENVIRONMENTS_ENOUGH,
         },
     )
     return sorted(str(row["environment"]) for row in rows)
@@ -245,6 +237,7 @@ def _in_window(
             ReleasePeriod.previous_version,
             ReleasePeriod.already_running,
             ReleasePeriod.is_return,
+            ReleasePeriod.last_reading,
             func.row_number()
             .over(
                 partition_by=ReleasePeriod.release_id,
@@ -271,6 +264,7 @@ def _in_window(
             overlapping.c.previous_version,
             overlapping.c.already_running,
             overlapping.c.is_return,
+            overlapping.c.last_reading,
             latest.c.ended_at.label("latest_ended_at"),
         )
         .join(overlapping, and_(overlapping.c.release_id == Release.id, overlapping.c.rank == 1))
@@ -733,10 +727,10 @@ async def open_reported_period(
     ended_at: datetime | None,
     previous_version: str | None,
     is_return: bool,
-) -> None:
-    """A period whose start a sender reported (FR42). A retry, or a second period at one
-    start, writes nothing twice."""
-    await session.execute(
+) -> uuid.UUID | None:
+    """A period whose start a sender reported (FR42), and its id. A retry, or a second
+    period at one start, writes nothing twice, and answers None."""
+    opened: uuid.UUID | None = await session.scalar(
         insert(ReleasePeriod)
         .values(
             org_id=on.org_id,
@@ -751,7 +745,15 @@ async def open_reported_period(
             is_return=is_return,
         )
         .on_conflict_do_nothing()
+        .returning(ReleasePeriod.id)
     )
+    return opened
+
+
+async def queue_summary(session: AsyncSession, request: JobRequest) -> None:
+    """A period's stored reading and summary, added in the webhook's own transaction
+    (FR55), for the scheduler's `releases` queue."""
+    await session.execute(text(ENQUEUE), request.parameters())
 
 
 # ------------------------------------------------------ recalculating, D37, AC61

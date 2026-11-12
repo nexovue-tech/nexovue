@@ -18,7 +18,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform import releases as method
@@ -59,6 +59,7 @@ from nexovue_api.releases.schemas import (
     SenderDetails,
     ServiceCoverage,
     SideView,
+    StoredFlag,
     TrafficView,
     VersionErrorGroup,
     VersionErrors,
@@ -176,7 +177,29 @@ def _row(row: Any, now: datetime) -> ReleaseRow:
         is_return=row.is_return,
         last_seen_at=row.last_seen_at,
         last_state=row.last_state,
+        flags=stored_flags(row.last_reading),
+        versions_combined=bool((row.last_reading or {}).get("versions_combined")),
     )
+
+
+def stored_flags(reading: Mapping[str, Any] | None) -> list[StoredFlag]:
+    """FR55, AC81: a flag for each measure the stored reading has `higher` by version,
+    with its counts; none for any other reading, or none stored."""
+    if reading is None:
+        return []
+    this, previous = reading.get("this") or {}, reading.get("previous") or {}
+    return [
+        StoredFlag(
+            measure=measure,
+            this_requests=int(this.get("requests") or 0),
+            this_errors=int(this.get("errors") or 0),
+            this_p95_ms=this.get("p95_ms"),
+            previous_requests=int(previous.get("requests") or 0),
+            previous_errors=int(previous.get("errors") or 0),
+            previous_p95_ms=previous.get("p95_ms"),
+        )
+        for measure in method.higher_measures(reading)
+    ]
 
 
 def basis_of(first_seen_at: datetime | None, first_reported_at: datetime | None) -> Basis:
@@ -487,8 +510,12 @@ async def _rows_and_totals(
         "start": start,
         "end": compared.to,
     }
-    rows = [_minute(row) for row in await queries.version_minutes(repository, **keys)]
-    totals = [_total(row) for row in await queries.service_minutes(repository, **keys)]
+    rows = [
+        method.version_minute_of(row) for row in await queries.version_minutes(repository, **keys)
+    ]
+    totals = [
+        method.service_minute_of(row) for row in await queries.service_minutes(repository, **keys)
+    ]
     return rows, totals
 
 
@@ -528,7 +555,7 @@ async def _last_week(
         start=min(start for start, _ in stretches),
         end=max(end for _, end in stretches),
     )
-    return [_total(row) for row in rows]
+    return [method.service_minute_of(row) for row in rows]
 
 
 async def _mixed_environments(
@@ -568,25 +595,6 @@ def _chosen(periods: list[ReleasePeriod], period_id: uuid.UUID | None) -> Releas
         if period.id == period_id:
             return period
     raise NotFoundError(NO_SUCH_PERIOD)
-
-
-def _minute(row: dict[str, Any]) -> method.VersionMinute:
-    return method.VersionMinute(
-        minute=datetime.fromtimestamp(int(row["minute_epoch"]), UTC),
-        version=str(row["version"]),
-        requests=int(row["requests"]),
-        errors=int(row["errors"]),
-        buckets=tuple(int(count) for count in row["buckets"]),
-    )
-
-
-def _total(row: dict[str, Any]) -> method.ServiceMinute:
-    return method.ServiceMinute(
-        minute=datetime.fromtimestamp(int(row["minute_epoch"]), UTC),
-        requests=int(row["requests"]),
-        errors=int(row["errors"]),
-        buckets=tuple(int(count) for count in row["buckets"]),
-    )
 
 
 def _side(side: method.Side) -> SideView:
@@ -1043,16 +1051,25 @@ async def make_room(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OpenedPeriod:
+    """A period a report opened, for its summary job (FR55)."""
+
+    id: uuid.UUID
+    started_at: datetime
+
+
 async def place_periods(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, filed: Sequence[FiledReport]
-) -> None:
+) -> list[OpenedPeriod]:
     """Open or return the periods these reports call for, service by service in name
     order, each service's reports in the order they claim to have happened. A report of
-    a deploy that did not go out calls for none."""
+    a deploy that did not go out calls for none. Answers the periods opened."""
     by_service: dict[str, list[FiledReport]] = defaultdict(list)
     for report in filed:
         if report.state in method.OPENING_STATES:
             by_service[report.service_name].append(report)
+    opened: list[OpenedPeriod] = []
     for service_name in sorted(by_service):
         await queries.lock_service_periods(
             session, org_id=org_id, project_id=project_id, service_name=service_name
@@ -1061,13 +1078,16 @@ async def place_periods(
             session, org_id=org_id, project_id=project_id, service_name=service_name
         )
         for report in sorted(by_service[service_name], key=lambda one: one.deployed_at):
-            await _place_one(
+            period_id = await _place_one(
                 session,
                 org_id=org_id,
                 project_id=project_id,
                 report=report,
                 sends_versions=sends_versions,
             )
+            if period_id is not None:
+                opened.append(OpenedPeriod(period_id, report.deployed_at))
+    return opened
 
 
 async def _place_one(
@@ -1077,23 +1097,23 @@ async def _place_one(
     project_id: uuid.UUID,
     report: FiledReport,
     sends_versions: bool,
-) -> None:
+) -> uuid.UUID | None:
     on = queries.ServiceRelease(org_id, project_id, report.service_name, report.release_id)
     latest = await queries.latest_period(session, org_id=org_id, release_id=report.release_id)
     if latest is None:
         is_return = False
     elif latest.ended_at is None or sends_versions:
-        return
+        return None
     else:
         others_latest = await queries.latest_other_start(session, on)
         if others_latest is None or report.deployed_at <= others_latest:
-            return
+            return None
         is_return = True
     ended_at = None
     if not sends_versions:
         ended_at = await queries.next_other_start(session, on, after=report.deployed_at)
         await queries.end_open_periods_before(session, on, at=report.deployed_at)
-    await queries.open_reported_period(
+    return await queries.open_reported_period(
         session,
         on,
         started_at=report.deployed_at,
@@ -1101,6 +1121,28 @@ async def _place_one(
         previous_version=await queries.version_before(session, on, before=report.deployed_at),
         is_return=is_return,
     )
+
+
+async def queue_summaries(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    opened: Sequence[OpenedPeriod],
+    now: datetime,
+) -> None:
+    """Each opened period's stored reading and summary, due 30 minutes after its start
+    (FR55, design section 6), added in the caller's transaction."""
+    for period in opened:
+        await queries.queue_summary(
+            session,
+            method.summarize_request(
+                org_id,
+                project_id,
+                period.id,
+                countdown=method.summary_countdown(period.started_at, now),
+            ),
+        )
 
 
 async def recalculate(

@@ -49,6 +49,7 @@ from nexovue_api.checks import service as checks
 from nexovue_api.checks.schemas import CheckSummary, DisplayedState
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.deploys import service as deploys
+from nexovue_api.deploys.schemas import DeployEventSummary, DeployState
 from nexovue_api.detection import service as detection
 from nexovue_api.errorgroups import service as error_groups
 from nexovue_api.errors.exceptions import DomainError, InvalidRequestError
@@ -110,12 +111,7 @@ UNTRUSTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
         "incidents[].burn.findings[].title",
     ),
     "list_checks": ("checks[].name", "checks[].url_hosts"),
-    "list_deploys": (
-        "deploys[].version",
-        "deploys[].service_name",
-        "deploys[].source",
-        "deploys[].metadata",
-    ),
+    "list_deploys": ("deploys[].version", "deploys[].service_name"),
     "list_traces": (
         "traces[].root_service",
         "traces[].root_name",
@@ -244,6 +240,36 @@ def check_row(check: CheckSummary) -> dict[str, Any]:
         state_since=check.state_since,
         last_run_at=check.last_run_at,
         last_ping_at=check.last_ping_at,
+    ).model_dump()
+
+
+class DeployRow(BaseModel):
+    """What `list_deploys` sends (F28 AC46, D28): exactly these fields, named here
+    rather than dumped from a model, so a field added to `GET /deploys` never reaches
+    a model by accident. A sender's `metadata`, `url` and `source` are free text and
+    never sent (FR54)."""
+
+    id: uuid.UUID
+    version: str
+    service_name: str
+    # The sender's claim.
+    deployed_at: datetime
+    commit_sha: str | None
+    state: DeployState
+    # When it arrived: ours.
+    received_at: datetime
+
+
+def deploy_row(deploy: DeployEventSummary) -> dict[str, Any]:
+    """One deploy as the assistant may see it (AC46)."""
+    return DeployRow(
+        id=deploy.id,
+        version=deploy.version,
+        service_name=deploy.service_name,
+        deployed_at=deploy.deployed_at,
+        commit_sha=deploy.commit_sha,
+        state=deploy.state,
+        received_at=deploy.received_at,
     ).model_dump()
 
 
@@ -628,9 +654,13 @@ def register(mcp: MCPServer) -> None:
                 project_id=call.project_id,
                 limit=min(limit, MAX_ROWS),
             )
-        rows = [event.model_dump() for event in answer.deploys]
+        rows = [deploy_row(deploy) for deploy in answer.deploys]
+        # The list was cut at `limit` when `truncated` (AC46): said, not reasoned around.
         return bounded(
-            rows, total=len(rows), subject="deploys", untrusted=UNTRUSTED_FIELDS["list_deploys"]
+            rows,
+            subject="deploys",
+            untrusted=UNTRUSTED_FIELDS["list_deploys"],
+            partial=answer.truncated,
         )
 
     @tool

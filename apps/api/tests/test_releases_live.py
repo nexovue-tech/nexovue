@@ -393,6 +393,87 @@ async def test_the_list_pages_filters_and_keeps_a_version_serving_since_yesterda
     assert [row["version"] for row in by_version["releases"]] == ["v2"]
 
 
+async def _store_reading(
+    db: AsyncSession,  # noqa: F811
+    period_id: uuid.UUID,
+    reading: dict[str, Any],
+) -> None:
+    await db.execute(
+        text("UPDATE release_periods SET last_reading = CAST(:r AS jsonb) WHERE id = :id"),
+        {"r": json.dumps(reading), "id": period_id},
+    )
+
+
+_SIDES: Final = {
+    "this": {"requests": 6012, "errors": 180, "p95_ms": 412.0},
+    "previous": {"requests": 5844, "errors": 12, "p95_ms": 290.0},
+}
+
+
+async def test_the_list_flags_a_stored_higher_reading_with_its_counts_and_nothing_else(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC81, FR55: "failure share higher" or "p95 higher" with counts, from the reading a
+    job stored; no flag for another reading, the time method, or none; the versions
+    combined in a compared minute said; and no ClickHouse read (`_NoClickHouse`)."""
+    both = await _release(db, acme, "v2", T0, previous="v1", service="a")
+    await _store_reading(
+        db,
+        both.period_id,
+        {
+            "method": "side_by_side",
+            "failure_share": "higher",
+            "p95": "higher",
+            "versions_combined": True,
+            **_SIDES,
+        },
+    )
+    same = await _release(db, acme, "v3", T0, previous="v2", service="b")
+    await _store_reading(
+        db,
+        same.period_id,
+        {"method": "version_before_after", "failure_share": "about_same", "p95": "lower", **_SIDES},
+    )
+    by_time = await _release(db, acme, "v4", T0, service="c")
+    await _store_reading(
+        db, by_time.period_id, {"method": "time_before_after", "failure_share": "higher", **_SIDES}
+    )
+    await _release(db, acme, "v5", T0, service="d")
+    window = f"from={(T0 - HOUR).isoformat()}&to={(T0 + HOUR).isoformat()}".replace("+", "%2B")
+
+    listed = (await _get(db, acme, f"/releases?project_id={acme.project_id}&{window}")).json()
+
+    rows = {row["service_name"]: row for row in listed["releases"]}
+    assert rows["a"]["flags"] == [
+        {
+            "measure": "failure_share",
+            "this_requests": 6012,
+            "this_errors": 180,
+            "this_p95_ms": 412.0,
+            "previous_requests": 5844,
+            "previous_errors": 12,
+            "previous_p95_ms": 290.0,
+        },
+        {
+            "measure": "p95",
+            "this_requests": 6012,
+            "this_errors": 180,
+            "this_p95_ms": 412.0,
+            "previous_requests": 5844,
+            "previous_errors": 12,
+            "previous_p95_ms": 290.0,
+        },
+    ]
+    assert [rows[name]["flags"] for name in ("b", "c", "d")] == [[], [], []]
+    assert [rows[name]["versions_combined"] for name in ("a", "b", "c", "d")] == [
+        True,
+        False,
+        False,
+        False,
+    ]
+
+
 async def test_the_three_empties_read_differently(
     db: AsyncSession,  # noqa: F811
     acme: Team,
@@ -1434,7 +1515,7 @@ async def test_sender_text_is_a_person_s_and_its_metadata_a_member_s(
     acme: Team,
 ) -> None:
     """AC76, FR54: a token is refused; a viewer reads the link and source, never the
-    metadata; `GET /releases/{id}` carries none of it."""
+    metadata; `GET /releases/{id}` and `GET /deploys` carry none of it (T5.4)."""
     seeded = await _release(db, acme, "v2", T0, previous="v1")
     await _deploy(db, acme, seeded.release_id, T0)
     path = f"/releases/{seeded.release_id}/sender-details"
@@ -1448,6 +1529,7 @@ async def test_sender_text_is_a_person_s_and_its_metadata_a_member_s(
             f"{API_PREFIX}{path}", headers={"Authorization": "Bearer nvt_live_x"}
         )
     release = (await _get(db, acme, f"/releases/{seeded.release_id}")).json()
+    listed = (await _get(db, acme, f"/deploys?project_id={acme.project_id}")).json()
 
     assert (member["url"], member["source"], member["metadata"]) == (
         "https://ci.example/runs/41",
@@ -1460,9 +1542,10 @@ async def test_sender_text_is_a_person_s_and_its_metadata_a_member_s(
         True,
     )
     assert as_token.status_code == 403
-    shown = json.dumps(release)
-    for sender_text in ("ci.example", "github-actions", "build 41"):
-        assert sender_text not in shown
+    assert [deploy["commit_sha"] for deploy in listed["deploys"]] == ["a" * 40]
+    for shown in (json.dumps(release), json.dumps(listed)):
+        for sender_text in ("ci.example", "github-actions", "build 41"):
+            assert sender_text not in shown
 
 
 async def test_sender_details_of_another_tenant_s_release_are_not_found(

@@ -40,6 +40,7 @@ ENV: Final = VERSIONS.parent / "env.py"
 # 0070 holds where an organization's facts were sent (`ai_runs`) and an owner's consent.
 # 0071 holds an organization's sealed provider key.
 # 0073 holds who asked chat how much (`assistant_question_counts`) and what it sent where.
+# 0074 holds a project's choice of release-summary channel, and the summaries sent.
 ROLL_FORWARD_ONLY: Final = (
     "0020",
     "0022",
@@ -58,6 +59,7 @@ ROLL_FORWARD_ONLY: Final = (
     "0070",
     "0071",
     "0073",
+    "0074",
 )
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"

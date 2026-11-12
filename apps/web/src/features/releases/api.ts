@@ -25,6 +25,17 @@ export type Reason =
   | "new_version_not_seen"
   | "no_request_traffic";
 
+/** FR55: a measure the stored reading has higher by version, with its counts. */
+export interface StoredFlag {
+  measure: "failure_share" | "p95";
+  this_requests: number;
+  this_errors: number;
+  this_p95_ms: number | null;
+  previous_requests: number;
+  previous_errors: number;
+  previous_p95_ms: number | null;
+}
+
 export interface ReleaseRow {
   id: string;
   period_id: string;
@@ -39,6 +50,10 @@ export interface ReleaseRow {
   is_return: boolean;
   last_seen_at: string | null;
   last_state: string | null;
+  /** FR55, from what a job stored 30 minutes in; empty for any other reading (AC81). */
+  flags: StoredFlag[];
+  /** FR17, from the same stored reading. */
+  versions_combined: boolean;
 }
 
 /** FR46: a service whose CI and traffic name versions differently, newest of each. */

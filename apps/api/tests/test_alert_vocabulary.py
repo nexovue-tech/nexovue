@@ -83,6 +83,8 @@ def _values(quoted: str) -> tuple[str, ...]:
         ("_ABOUT_SIGNALS", slo.ABOUT_SIGNALS),
         # F19 Step 5: why a notification was withheld, frozen by its migration.
         ("_WITHHELD_REASONS", model.WITHHELD_REASONS),
+        # F28 Step 5: the kind that must name a release period, frozen by its migration.
+        ("_RELEASE_SUMMARY", (model.RELEASE_SUMMARY,)),
     ],
 )
 def test_the_latest_migration_allows_exactly_the_vocabulary(

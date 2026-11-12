@@ -3,7 +3,8 @@
 
 `store` is the sync's way into the telemetry store, through the scheduler's one reader,
 bound to one project. `sync` holds the minute's sweep, the per-project job and the
-per-minute walk that decides periods.
+per-minute walk that decides periods; `facts` the reads F3 and the notices take;
+`summary` each period's stored reading and its opt-in release summary (FR55).
 
 **Its own queue** (D31, foundation section 8). The sweep and the project jobs run on
 `releases`, taken by `scheduler-light` beside detection's and F19's, capped at two of
@@ -16,7 +17,8 @@ from __future__ import annotations
 
 from typing import Final
 
-RELEASES_QUEUE: Final = "releases"
+from nexovue_platform.releases import RELEASES_QUEUE, SUMMARIZE_PERIOD_TASK
+
 # At most this many release jobs at once in one worker (a guess; design 3, step 2).
 RELEASES_CONCURRENCY: Final = 2
 QUEUE_CAPS: Final = {RELEASES_QUEUE: RELEASES_CONCURRENCY}
@@ -33,5 +35,6 @@ __all__ = [
     "QUEUE_CAPS",
     "RELEASES_CONCURRENCY",
     "RELEASES_QUEUE",
+    "SUMMARIZE_PERIOD_TASK",
     "SWEEP_RELEASES_TASK",
 ]
