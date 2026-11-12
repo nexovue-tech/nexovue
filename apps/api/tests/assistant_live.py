@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.ai.service import Availability
-from nexovue_api.data.postgres.models import AIConnection, AssistantSettings
+from nexovue_api.data.postgres.models import AIConnection, AssistantSettings, UsageDaily
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -87,6 +87,12 @@ async def tenant(db: AsyncSession, name: str = "Chat") -> ProvisionedTenant:
         email=f"{name.lower()}-{uuid.uuid4()}@example.test",
         password=PASSWORD,
     )
+
+
+async def reported(db: AsyncSession, made: ProvisionedTenant) -> None:
+    """The project has sent telemetry once, as the ingest meter records it."""
+    db.add(UsageDaily(org_id=made.organization.id, project_id=made.project.id, day=NOW.date()))
+    await db.flush()
 
 
 async def chat_on(

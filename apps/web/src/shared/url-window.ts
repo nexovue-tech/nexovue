@@ -39,6 +39,37 @@ const IDENTIFIER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 /** A window longer than this is not one a finding links to; it is ignored. */
 const LONGEST_WINDOW_MS = 31 * 24 * 60 * 60_000;
 
+/**
+ * The screens that read only a project from the address (F4 T3.3a): a chat step's link
+ * names the project it read, and these screens apply no range, so a colleague's copy opens
+ * on the right project rather than on whichever one they last chose.
+ */
+const PROJECT_ONLY_PATHS: readonly RegExp[] = [
+  /^\/$/,
+  /^\/findings\/[^/]+\/?$/,
+  /^\/services\/?$/,
+  /^\/service-map\/?$/,
+  /^\/metrics\/?$/,
+  /^\/alerts\/?$/,
+  /^\/alerts\/incidents\/[^/]+\/?$/,
+  /^\/synthetics\/?$/,
+  /^\/traces\/[^/]+\/?$/,
+  /^\/releases\/[^/]+\/?$/,
+];
+
+export function urlProjectApplies(pathname: string): boolean {
+  return PROJECT_ONLY_PATHS.some((path) => path.test(pathname));
+}
+
+/**
+ * The address's project alone, checked: what each project-only screen joins into its
+ * `validateSearch`. Selected on arrival, as a window's project is (`WindowControl`).
+ */
+export function keepUrlProject(search: Record<string, unknown>): { project?: string } {
+  const project = identifier(search.project);
+  return project ? { project } : {};
+}
+
 export function urlWindowApplies(pathname: string): boolean {
   return (
     WINDOW_PATHS.some((path) => pathname === path || pathname === `${path}/`) ||
@@ -125,6 +156,31 @@ export function useUrlWindow(): UrlWindow | null {
     const [pathname = "", search = ""] = address.split(SEPARATOR);
     if (!urlWindowApplies(pathname)) return null;
     return parseUrlWindow(parseSearch(search) as Record<string, unknown>);
+  }, [address, parseSearch]);
+}
+
+/**
+ * The project the address names on a screen that reads one: a window's, or a project-only
+ * screen's. Null elsewhere and outside a router.
+ */
+export function useUrlProject(): string | null {
+  const router = useRouter({ warn: false });
+  const subscribe = useCallback(
+    (listener: () => void) => (router ? router.history.subscribe(listener) : noop()),
+    [router],
+  );
+  const address = useSyncExternalStore(subscribe, () =>
+    router
+      ? `${router.history.location.pathname}${SEPARATOR}${router.history.location.search}`
+      : null,
+  );
+  const parseSearch = router?.options.parseSearch;
+  return useMemo(() => {
+    if (address === null || parseSearch === undefined) return null;
+    const [pathname = "", search = ""] = address.split(SEPARATOR);
+    const parsed = parseSearch(search) as Record<string, unknown>;
+    if (urlWindowApplies(pathname)) return parseUrlWindow(parsed)?.project ?? null;
+    return urlProjectApplies(pathname) ? (keepUrlProject(parsed).project ?? null) : null;
   }, [address, parseSearch]);
 }
 

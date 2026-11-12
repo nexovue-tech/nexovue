@@ -127,6 +127,9 @@ WRONG_REASONS: Final[tuple[WrongReason, ...]] = (
 )
 StepState = Literal["running", "read", "failed", "aged_out", "refused"]
 STEP_STATES: Final[tuple[StepState, ...]] = ("running", "read", "failed", "aged_out", "refused")
+# How a step's `failure` records the first day still kept, on an aged-out step or one read
+# narrowed to what is kept; the API writes it as "The data before {date} is no longer kept".
+KEPT_SINCE_PREFIX: Final = "kept_since:"
 # What `assistant_finish_message` does with what a question still holds (design, *Settling*).
 Remainder = Literal["return", "charge", "keep"]
 REMAINDERS: Final[tuple[Remainder, ...]] = ("return", "charge", "keep")

@@ -102,6 +102,10 @@ INSIGHT_GRANTS: Final = (
     "GRANT UPDATE (count) ON assistant_monthly_counts TO nexovue_insight",
     "GRANT SELECT (id, org_id, project_id) ON assistant_conversations TO nexovue_insight",
     "GRANT SELECT ON assistant_settings TO nexovue_insight",
+    # F4 Step 3: each windowed tool's retention, so an aged-out range is decided in code
+    # (design, *The aged-out check*); `org_id` too, since every statement binds it.
+    "GRANT SELECT (project_id, org_id, raw_retention_days, derived_retention_days) "
+    "ON project_retention TO nexovue_insight",
     *(
         f"GRANT EXECUTE ON FUNCTION {signature} TO nexovue_insight"
         for signature in INSIGHT_FUNCTIONS

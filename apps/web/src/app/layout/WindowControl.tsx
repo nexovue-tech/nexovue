@@ -17,7 +17,13 @@ import {
   useLiveWindow,
   useSelection,
 } from "@/shared/selection";
-import { type UrlWindow, urlWindowLine, useUrlWindow, withoutUrlWindow } from "@/shared/url-window";
+import {
+  type UrlWindow,
+  urlWindowLine,
+  useUrlProject,
+  useUrlWindow,
+  withoutUrlWindow,
+} from "@/shared/url-window";
 
 /**
  * Which window every screen is read against — "the last hour", or an incident.
@@ -32,8 +38,22 @@ import { type UrlWindow, urlWindowLine, useUrlWindow, withoutUrlWindow } from "@
  */
 export function WindowControl() {
   const inAddress = useUrlWindow();
+  useProjectFromAddress();
   if (inAddress !== null) return <AddressWindow window={inAddress} />;
   return <ChosenWindow />;
+}
+
+/**
+ * A copied link opens the project it was about, as following it from the page does: a
+ * finding's window names one (F3), and so does a chat step's link to a screen that reads
+ * only a project (F4 T3.3a). Selecting it changes no window.
+ */
+function useProjectFromAddress(): void {
+  const named = useUrlProject();
+  const { projectId } = useSelection();
+  useEffect(() => {
+    if (named && named !== projectId) setSelectedProjectId(named);
+  }, [named, projectId]);
 }
 
 /**
@@ -45,11 +65,6 @@ function AddressWindow({ window }: { window: UrlWindow }) {
   const navigate = useNavigate();
   const router = useRouter();
   const location = useLocation();
-  const { projectId } = useSelection();
-  // A copied link opens the project it was about, as following it from the page does.
-  useEffect(() => {
-    if (window.project && window.project !== projectId) setSelectedProjectId(window.project);
-  }, [window.project, projectId]);
   return (
     <span
       data-testid="address-window"

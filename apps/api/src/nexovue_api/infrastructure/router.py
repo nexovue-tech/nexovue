@@ -4,7 +4,8 @@ Kubernetes pod and node views are Phase 2 and deliberately absent.
 
 `project_id` arrives as a query parameter, which makes it a value the caller
 chose. It is proved to belong to the caller's organization before it reaches a
-telemetry query — `require_project` is that proof, and the repository the query
+telemetry query — `require_project`, or `require_readable_project` on the two routes of the
+read surface (F4 T3.1a, for chat's host tools), is that proof, and the repository the query
 runs through is bound to the session's tenant, never to anything in the URL.
 """
 
@@ -16,7 +17,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.infrastructure import service
 from nexovue_api.infrastructure.schemas import (
@@ -24,7 +25,7 @@ from nexovue_api.infrastructure.schemas import (
     NodeTrendResponse,
     SignalListResponse,
 )
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.window import resolve_window
 
 router = APIRouter(prefix="/infrastructure", tags=["infrastructure"])
@@ -36,7 +37,7 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 
 @router.get("/hosts", summary="Every host, container and reporter in the window")
 async def list_nodes(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -53,7 +54,7 @@ async def list_nodes(
         bool, Query(description="Only nodes that have stopped reporting")
     ] = False,
 ) -> NodeListResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_nodes(
         repository,
@@ -93,14 +94,14 @@ async def list_signals(
 
 @router.get("/trend", summary="Each node's metrics, bucket by bucket")
 async def node_trends(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
 ) -> NodeTrendResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.node_trends(
         repository,

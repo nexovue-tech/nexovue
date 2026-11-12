@@ -4,7 +4,14 @@ import { apiClient, isForbidden } from "@/shared/api-client";
 import { ASSISTANT_QUERY_ROOT } from "@/shared/assistant-context";
 
 /** The API's closed words (`nexovue_platform/assistant_records.py`). */
-export type StandingState = "ready" | "ai_off" | "chat_off" | "no_consent" | "opted_out";
+export type StandingState =
+  | "ready"
+  | "ai_off"
+  | "chat_off"
+  | "no_consent"
+  | "opted_out"
+  // Chat could answer, but the project has sent nothing to read yet.
+  | "no_data";
 export type MessageState =
   | "queued"
   | "running"
@@ -33,6 +40,8 @@ export interface Availability {
 
 export interface StepLink {
   path: string;
+  /** The console route's `$params`, filled by the API from the step's own arguments. */
+  params: Record<string, string>;
   query: Record<string, string>;
   caveat: string | null;
 }
@@ -50,6 +59,8 @@ export interface StepView {
   was_cut: boolean;
   state: string;
   failure: string | null;
+  /** The first day still kept, on an aged-out step or a read narrowed to what is kept. */
+  kept_since: string | null;
   link: StepLink | null;
 }
 
@@ -58,12 +69,43 @@ export interface Sentence {
   label: Label;
   cause_warning: boolean;
   cites: string[];
+  /** Character offsets `[start, end)` of each figure no cited number matched (FR16). */
+  flagged_figures?: [number, number][];
+  /** Quote ids, in the order the sentence named them. */
+  quotes?: string[];
+}
+
+/** What an answer stores of a quote: a reference, never the text (D28). */
+export interface StoredQuote {
+  step: string;
+  tool: string;
+  field: string;
+  folded: boolean;
 }
 
 export interface Answer {
   sentences: Sentence[];
   removed_sentence_count: number;
   not_verified: string[];
+  quotes?: Record<string, StoredQuote>;
+  /** Sentences removed for telling the reader to act on quoted text. */
+  removed_for_acting_count?: number;
+}
+
+/** A quote read again from what is kept (`GET /assistant-quotes/{message_id}`). */
+export interface QuoteView {
+  id: string;
+  tool: string;
+  field: string;
+  folded: boolean;
+  state: "shown" | "gone" | "read_failed";
+  value: string | null;
+  was_cut: boolean;
+}
+
+export interface QuoteList {
+  message_id: string;
+  quotes: QuoteView[];
 }
 
 export interface MessageView {
@@ -185,6 +227,20 @@ export function useMessage(conversationId: string | null, messageId: string | nu
       return data && !inFlight(data.state) ? false : POLL_MS;
     },
     refetchIntervalInBackground: true,
+  });
+}
+
+/**
+ * An answer's quotes, read again as the person when the answer is shown (design, *Quote
+ * display*). Read once: they are records, not live values.
+ */
+export function useQuotes(messageId: string, enabled: boolean) {
+  return useQuery({
+    ...PANEL_QUERY,
+    queryKey: key("quotes", messageId),
+    enabled,
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: ({ signal }) => apiClient.get<QuoteList>(`assistant-quotes/${messageId}`, { signal }),
   });
 }
 

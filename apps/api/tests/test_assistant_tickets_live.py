@@ -178,7 +178,9 @@ async def test_every_catalog_route_reads_as_the_question_s_project(
     [
         "nexovue_api/llm_observability/router.py:list_llm_calls",
         "nexovue_api/findings/router.py:finding_stats",
-        "nexovue_api/findings/router.py:get_finding",
+        # A finding's case timeline waits for Step 7; a target is not chat's at all.
+        "nexovue_api/findings/router.py:read_timeline",
+        "nexovue_api/slos/router.py:list_slos",
     ],
 )
 async def test_a_read_surface_route_outside_the_catalog_is_refused(

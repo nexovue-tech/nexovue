@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Final, Protocol, cast
 
@@ -38,6 +38,7 @@ from nexovue_platform.ai.connection import (
 from nexovue_platform.ai.contract import estimate_tokens
 from nexovue_platform.assistant_records import (
     ANSWER_QUESTION_TASK,
+    KEPT_SINCE_PREFIX,
     MAX_OUTPUT_TOKENS,
     MAX_STEPS,
     QUESTION_RESERVATION_TOKENS,
@@ -66,7 +67,14 @@ from nexovue_scheduler.insight.assistant_prompt import (
     Turn,
     build_request,
 )
-from nexovue_scheduler.insight.assistant_reads import ArgumentsRefused, check_arguments, project
+from nexovue_scheduler.insight.assistant_reads import (
+    ArgumentsRefused,
+    ValidCall,
+    check_arguments,
+    kept_since,
+    project,
+    within_retention,
+)
 from nexovue_scheduler.insight.assistant_store import (
     ChatConnection,
     PostgresQuestionStore,
@@ -83,7 +91,10 @@ logger = get_logger(__name__)
 
 # Two calls beyond the step limit: one retry of a rejected answer, and the final call.
 MAX_CALLS: Final = MAX_STEPS + 2
-_REFUSED_STATUSES: Final = frozenset({401, 403, 404})
+# A ticket refused: every refusal of `tickets.valid_for` is one of these. A 404 is not one:
+# an item tool asked for a trace, finding or group the project does not hold (Step 3).
+_REFUSED_STATUSES: Final = frozenset({401, 403})
+_NOT_FOUND: Final = 404
 PROJECT_QUERY: Final = "project_id"
 
 
@@ -506,21 +517,44 @@ async def _step(
         run.told.append(f"Step {key} ({tool.name}) was refused: {refused}")
         run.results.append(StepResult(key, tool.name, f"{key}: {tool.name} refused", None))
         return
+    now = parts.clock()
+    kept = kept_since(
+        tool,
+        raw_days=run.scope.raw_retention_days,
+        derived_days=run.scope.derived_retention_days,
+        now=now,
+    )
+    kept_note = None if kept is None else f"{KEPT_SINCE_PREFIX}{kept.date().isoformat()}"
+    narrowed = within_retention(call, kept)
+    if narrowed is None:
+        # Decided in code from the tool's own clock: no read, and no model involved (AC24).
+        await _aged_out(run, parts, tool, call, key, kept_note)
+        return
     step_id = await store.add_step(
         question,
         position=run.position,
         tool=tool.name,
-        arguments=call.stored,
-        display=call.display,
-        from_time=call.from_time,
-        to_time=call.to_time,
+        arguments=narrowed.stored,
+        display=narrowed.display,
+        from_time=narrowed.from_time,
+        to_time=narrowed.to_time,
     )
     if step_id is None or not await store.set_phase(question, "reading"):
         raise _Ended(await _end(parts, question, "stopped"))
+    if narrowed is not call:
+        run.told.append(
+            f"Step {key} ({tool.name}) read from {narrowed.from_time} only: the data before "
+            "it is no longer kept."
+        )
     # The question's own project, written by nexovue: the catalog refuses one from the model,
-    # and every route reads only the project its ticket was minted for.
-    query = {**call.query, PROJECT_QUERY: question.project_id}
-    answer = parts.client.get(tool, query, ticket=run.ticket)
+    # and every route reads only the project its ticket was minted for. A route taking no
+    # `project_id` compares the ticket's scope with the row it loads.
+    query = (
+        {**narrowed.query, PROJECT_QUERY: question.project_id}
+        if tool.project_in_query
+        else dict(narrowed.query)
+    )
+    answer = parts.client.get(tool, query, ticket=run.ticket, path=narrowed.path)
     if answer.status in _REFUSED_STATUSES:
         await store.finish_step(
             question, step_id, StepEnd("refused", failure="refused"), at=parts.clock()
@@ -528,12 +562,14 @@ async def _step(
         # The person or the scope changed under the question: no further model call.
         raise _Ended(await _end(parts, question, "refused", failure="ticket_refused"))
     end, projected = _read_end(tool, answer.status, answer.body, answer.failure, run.scope)
+    if narrowed is not call and end.state == "read":
+        end = replace(end, failure=kept_note)
     await store.finish_step(question, step_id, end, at=parts.clock())
     await store.log_read(
         question,
         tool=tool.name,
-        from_time=call.from_time,
-        to_time=call.to_time,
+        from_time=narrowed.from_time,
+        to_time=narrowed.to_time,
         row_count=end.row_count,
         provider=run.connection.provider_label,
     )
@@ -547,11 +583,38 @@ async def _step(
     run.results.append(StepResult(key, tool.name, summary, projected.text))
 
 
+async def _aged_out(
+    run: _Run, parts: LoopParts, tool: ChatTool, call: ValidCall, key: str, note: str | None
+) -> None:
+    store = parts.store
+    question = run.question
+    step_id = await store.add_step(
+        question,
+        position=run.position,
+        tool=tool.name,
+        arguments=call.stored,
+        display=call.display,
+        from_time=call.from_time,
+        to_time=call.to_time,
+    )
+    if step_id is None:
+        raise _Ended(await _end(parts, question, "stopped"))
+    await store.finish_step(question, step_id, StepEnd("aged_out", failure=note), at=parts.clock())
+    kept = (note or "").removeprefix(KEPT_SINCE_PREFIX)
+    run.told.append(
+        f"Step {key} ({tool.name}) read nothing: the data before {kept} is no longer kept. "
+        "Say so; it is not evidence that nothing happened."
+    )
+    run.results.append(StepResult(key, tool.name, f"{key}: {tool.name} aged out", None))
+
+
 def _read_end(
     tool: ChatTool, status: int | None, body: bytes, failure: str | None, scope: Scope
 ) -> tuple[StepEnd, Any]:
     if status != 200:
-        word = failure or ("limited" if status == 429 else "unavailable")
+        word = failure or (
+            "limited" if status == 429 else "not_found" if status == _NOT_FOUND else "unavailable"
+        )
         return StepEnd("failed", failure=word), None
     try:
         projected = project(tool, body, mask_emails=scope.mask_emails)

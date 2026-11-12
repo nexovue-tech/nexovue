@@ -3,7 +3,13 @@
 import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { openAssistant, resetAssistant, useAssistant } from "@/shared/assistant-context";
+import {
+  clearAssistantSubject,
+  openAssistant,
+  resetAssistant,
+  setAssistantSubject,
+  useAssistant,
+} from "@/shared/assistant-context";
 import { AssistantPanel } from "./AssistantPanel";
 import type { MessageState } from "./api";
 import {
@@ -24,6 +30,7 @@ import {
   LABEL_WORDS,
   LOST_CONTACT,
   NOT_VERIFIED,
+  SEND_DATA,
   STANDING_WORDS,
 } from "./states";
 
@@ -68,11 +75,20 @@ describe("before anyone asks", () => {
     ["ai_off", STANDING_WORDS.ai_off(false)],
     ["chat_off", STANDING_WORDS.chat_off(false)],
     ["opted_out", STANDING_WORDS.opted_out(false)],
+    ["no_data", STANDING_WORDS.no_data(false)],
   ] as const)("%s says so in one line, and offers no box", async (state, words) => {
     stubApi({ availability: { ...READY, state } });
     const panel = await openPanel();
     expect(panel.textContent).toContain(words);
     expect(panel.querySelector("textarea")).toBeNull();
+  });
+
+  it("no telemetry yet offers the way to send it, and no starters", async () => {
+    stubApi({ availability: { ...READY, state: "no_data" } });
+    const panel = await openPanel();
+    const setup = [...panel.querySelectorAll("a")].find((a) => a.textContent === SEND_DATA);
+    expect(setup?.getAttribute("href")).toBe("/onboarding");
+    expect(panel.textContent).not.toContain("What is failing right now?");
   });
 
   it("no consent names the owners it waits for", async () => {
@@ -250,5 +266,57 @@ describe("asking", () => {
       "You have asked 50 questions today.",
     );
     expect(box.value).toBe("Why is checkout slow?");
+  });
+});
+
+describe("asking about a finding (AC49)", () => {
+  const FINDING = "01a1c18a-3778-726a-ac51-855da271a38a";
+  const subject = { headline: "checkout is slower than normal", findingId: FINDING };
+
+  it("offers the finding's starters; a click fills the box and sends nothing", async () => {
+    const calls = stubApi();
+    setAssistantSubject(subject);
+    const panel = await openPanel();
+
+    const starter = [...panel.querySelectorAll("button")].find(
+      (b) => b.textContent === "What changed just before this started?",
+    );
+    await act(async () => starter?.click());
+    await settle(2);
+
+    expect(panel.querySelector("textarea")?.value).toBe("What changed just before this started?");
+    expect(calls.filter((call) => call.method === "POST")).toEqual([]);
+  });
+
+  it("sends the finding's id with the question, in a new conversation", async () => {
+    const calls = stubApi();
+    setAssistantSubject(subject);
+    const panel = await openPanel();
+    const box = panel.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(box, "Has this happened before?");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => panel.querySelector("form")?.requestSubmit());
+    await settle(6);
+
+    const [asked] = calls.filter((call) => call.method === "POST");
+    expect(asked?.path).toBe("/assistant/conversations");
+    const sent = asked?.body as { context: { finding_id: string } } | undefined;
+    expect(sent?.context.finding_id).toBe(FINDING);
+  });
+
+  it("forgets the finding when its page is left", async () => {
+    stubApi();
+    setAssistantSubject(subject);
+    const panel = await openPanel();
+    expect(panel.textContent).toContain("About checkout is slower than normal");
+
+    await act(async () => clearAssistantSubject(subject));
+    await settle(2);
+
+    expect(panel.textContent).not.toContain("About checkout is slower than normal");
+    expect(panel.textContent).toContain("What is failing right now?");
   });
 });

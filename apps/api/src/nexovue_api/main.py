@@ -23,6 +23,7 @@ from nexovue_api.apitokens import router as apitokens_router
 from nexovue_api.assistant import router as assistant_router
 from nexovue_api.assistant import server as assistant_server
 from nexovue_api.assistant.tickets import ticket_check
+from nexovue_api.assistantquotes import router as assistant_quotes_router
 from nexovue_api.audit import router as audit_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.billing import router as billing_router
@@ -186,6 +187,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(ai_router.router)
     versioned.include_router(ai_preview_router.router)
     versioned.include_router(assistant_router.router)
+    versioned.include_router(assistant_quotes_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(releases_router.router)

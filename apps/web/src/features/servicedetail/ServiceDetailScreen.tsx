@@ -2,9 +2,14 @@ import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertsStrip } from "@/shared/alerts/AlertsStrip";
 import { useServiceCoverage } from "@/shared/alerts/api";
+import {
+  type AssistantSubject,
+  clearAssistantSubject,
+  setAssistantSubject,
+} from "@/shared/assistant-context";
 import type { ReleaseRead } from "@/shared/components/ChartReleases";
 import { ChartReleases } from "@/shared/components/ChartReleases";
 import { DashboardsShowingThisService } from "@/shared/components/DashboardsShowingThisService";
@@ -96,7 +101,17 @@ const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
  * The route component owns the selections and the queries; everything visible is in
  * `ServiceDetailView`, which is a function of its props and nothing else.
  */
+/** F4: chat's panel names this service while the page is open, and its starters follow. */
+function useServiceAsSubject(serviceName: string): void {
+  useEffect(() => {
+    const subject: AssistantSubject = { headline: serviceName, serviceName };
+    setAssistantSubject(subject);
+    return () => clearAssistantSubject(subject);
+  }, [serviceName]);
+}
+
 export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
+  useServiceAsSubject(serviceName);
   const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
   const windowPhrase = useWindowPhrase();

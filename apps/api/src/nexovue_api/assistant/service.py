@@ -34,6 +34,7 @@ from nexovue_platform.assistant_records import (
     answer_question_request,
     clocks,
 )
+from nexovue_platform.assistant_records import KEPT_SINCE_PREFIX as KEPT_SINCE
 from nexovue_platform.assistant_tools import SEVERITY_FILTER_IDS, TOOLS_BY_NAME
 from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.jobs import ENQUEUE, WAKE
@@ -82,6 +83,7 @@ from nexovue_api.errors.exceptions import (
     NotFoundError,
     PermissionDeniedError,
 )
+from nexovue_api.projects import queries as project_queries
 from nexovue_api.projects.service import require_readable_project
 
 # The exact sentences of the spec's *Error cases*, each with its own code.
@@ -98,7 +100,8 @@ NOT_FOUND: Final = "No such conversation."
 SUPPORT_VIEW: Final = "Support view cannot read conversations."
 CONSENT_MOVED: Final = "What chat would send changed after you read it. Read it again, then agree."
 NO_CONNECTION: Final = "Save an AI connection first."
-STILL_RUNNING: Final = "A question in this conversation is still running. Stop it first."
+# The spec's *Error cases* sentence for deleting a conversation whose question still runs.
+STILL_RUNNING: Final = "Stop this question first."
 NOT_FINISHED: Final = "Only a finished answer can be marked wrong."
 TITLE_CHARACTERS: Final = 80
 PAGE_MESSAGES: Final = 50
@@ -166,6 +169,10 @@ async def availability(
         waiting = sorted(owners)
     if not standing.ready or standing.connection is None or standing.settings is None:
         return Availability(state=standing.state, waiting_for=waiting, may_manage=may_manage)
+    # Nothing to read yet: say so before anyone spends tokens. The ingest meter answers,
+    # so a project whose telemetry has since expired still reads as one that reported.
+    if project_id not in await project_queries.first_reported_days(session, identity.org_id):
+        return Availability(state="no_data", may_manage=may_manage)
     asked = await _asked_today(session, identity.org_id, identity.user.id, now)
     tomorrow = datetime.combine(_today(now) + timedelta(days=1), datetime.min.time(), UTC)
     return Availability(
@@ -538,6 +545,7 @@ def _view(
 
 def _step_view(step: AssistantStep, *, project_id: uuid.UUID) -> StepView:
     tool = TOOLS_BY_NAME.get(step.tool)
+    kept_since, failure = _kept_since(step.failure)
     return StepView(
         key=f"s{step.position}",
         position=step.position,
@@ -551,26 +559,47 @@ def _step_view(step: AssistantStep, *, project_id: uuid.UUID) -> StepView:
         row_count=step.row_count,
         was_cut=step.was_cut,
         state=step.state,
-        failure=step.failure,
+        failure=failure,
+        kept_since=kept_since,
         link=None if tool is None or step.state == "refused" else _link(step, project_id),
     )
 
 
-def _link(step: AssistantStep, project_id: uuid.UUID) -> StepLink:
-    """Where a step leads (design, *Where each step leads*); built by nexovue only."""
+def _kept_since(failure: str | None) -> tuple[date | None, str | None]:
+    """The worker's kept-since note (`kept_since:YYYY-MM-DD`) as a date; any other failure
+    as it is. A note that is not a date is shown as no date, never as text."""
+    if failure is None or not failure.startswith(KEPT_SINCE):
+        return None, failure
+    try:
+        return date.fromisoformat(failure.removeprefix(KEPT_SINCE)), None
+    except ValueError:
+        return None, None
+
+
+def _link(step: AssistantStep, project_id: uuid.UUID) -> StepLink | None:
+    """Where a step leads (design, *Where each step leads*); built by nexovue only, from the
+    catalog and the step's own validated arguments. None when a route parameter is missing,
+    since a link without it would open a different screen."""
     tool = TOOLS_BY_NAME[step.tool]
+    params: dict[str, str] = {}
+    for param, argument in tool.link.params.items():
+        value = step.arguments.get(argument)
+        if not isinstance(value, str) or not value:
+            return None
+        params[param] = value
     query: dict[str, str] = {"project": str(project_id)}
     if tool.link.carries_range and step.from_time is not None and step.to_time is not None:
         query["from"] = step.from_time.isoformat()
         query["to"] = step.to_time.isoformat()
     for argument, name in tool.link.carries.items():
         value = step.arguments.get(argument)
-        if isinstance(value, str):
+        # A phrase that failed its checks is stored as null, so it is never carried (AC62).
+        if isinstance(value, str) and value:
             query[name] = value
     severity = step.arguments.get("min_severity")
     if tool.link.carries_severity and isinstance(severity, int) and severity in SEVERITY_FILTER_IDS:
         query["severity"] = SEVERITY_FILTER_IDS[severity]
-    return StepLink(path=tool.link.path, query=query, caveat=tool.link.caveat)
+    return StepLink(path=tool.link.path, params=params, query=query, caveat=tool.link.caveat)
 
 
 # ------------------------------------------------------------------ acting on a question

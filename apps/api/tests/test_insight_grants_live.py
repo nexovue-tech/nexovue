@@ -101,6 +101,12 @@ EXPECTED_COLUMN_RIGHTS: Final = {
     # F4: the name and zone a question's context states.
     ("projects", "SELECT"): {"id", "org_id", "name", "timezone", "deleted_at"},
     ("organizations", "SELECT"): {"id", "deleted_at"},
+    ("project_retention", "SELECT"): {
+        "project_id",
+        "org_id",
+        "raw_retention_days",
+        "derived_retention_days",
+    },
     ("assistant_messages", "SELECT"): {
         "id",
         "org_id",

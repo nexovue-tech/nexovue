@@ -162,3 +162,14 @@ def test_the_batch_reads_deadline_and_margin_are_the_consoles_timeout() -> None:
     assert PANEL_READ_DEADLINE_SECONDS + PANEL_READ_MARGIN_SECONDS == (
         PANEL_READ_CLIENT_TIMEOUT_SECONDS
     )
+
+
+def test_chat_s_quotes_read_on_the_telemetry_tier_and_its_poll_on_the_default() -> None:
+    """F4 AC107: the quote route reads ClickHouse; the panel's 1.5 s poll reads one Postgres
+    row, and on the telemetry tier it would share a cap of 8 with the screen beside it."""
+    from nexovue_api.ratelimit.policy import DEFAULT_TIER
+
+    message = "0195f000-0000-7000-8000-000000000002"
+    assert tier_for_path(f"{API_PREFIX}/assistant-quotes/{message}") is TELEMETRY_TIER
+    poll = f"{API_PREFIX}/assistant/conversations/{message}/messages/{message}"
+    assert tier_for_path(poll) is DEFAULT_TIER

@@ -13,17 +13,23 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform.assistant_masks import masked_value
 from nexovue_platform.assistant_tools import (
+    DERIVED_CAP_DAYS,
     MAX_SEARCH_TEXT,
     MAX_WINDOW,
+    PATH_SHAPES,
+    ArgumentKind,
     ChatTool,
     DataLevel,
     bounded,
+    is_missing,
+    read_field,
+    rows_of,
 )
 
 from nexovue_scheduler.insight.api_client import PathRefused, check_path_slot
@@ -32,6 +38,8 @@ from nexovue_scheduler.insight.assistant_answer import display_argument
 MIN_SEVERITY: Final = 1
 MAX_SEVERITY: Final = 24
 MAX_SERVICE_NAME: Final = 200
+# A metric name, as the route's own path parameter allows (`metrics/router.py`).
+MAX_METRIC_NAME: Final = 255
 # A window may end a little ahead of the worker's clock, as clocks differ (a guess).
 CLOCK_SLACK: Final = timedelta(minutes=5)
 
@@ -46,6 +54,8 @@ class ValidCall:
     to_time: datetime | None
     stored: dict[str, Any]
     display: str | None
+    # Route slots, each value checked as a path segment and against its kind's shape.
+    path: dict[str, str] = field(default_factory=dict)
 
 
 class ArgumentsRefused(ValueError):  # noqa: N818 — a refusal, named for the reader
@@ -79,11 +89,17 @@ def check_arguments(
     if missing:
         raise ArgumentsRefused(f"{tool.name} needs {', '.join(missing)}.")
     query: dict[str, str] = {}
+    path: dict[str, str] = {}
     stored: dict[str, Any] = {}
     display: str | None = None
     for name, value in arguments.items():
         rule = tool.arguments[name]
         if rule.kind == "time":
+            continue
+        if rule.kind in PATH_SHAPES or rule.kind == "metric_name":
+            text = _path_value(name, rule.kind, value)
+            path[rule.query] = text
+            stored[name] = text
             continue
         if rule.kind == "closed":
             if value not in rule.choices:
@@ -98,10 +114,7 @@ def check_arguments(
         elif rule.kind == "service_name":
             if not isinstance(value, str) or len(value) > MAX_SERVICE_NAME:
                 raise ArgumentsRefused(f"`{name}` must be one service name.")
-            try:
-                check_path_slot(value)
-            except PathRefused as refused:
-                raise ArgumentsRefused(f"`{name}`: {refused}.") from refused
+            _slot(name, value)
             text = value
         else:  # search text
             if not isinstance(value, str) or not value.strip() or len(value) > MAX_SEARCH_TEXT:
@@ -113,7 +126,10 @@ def check_arguments(
             # Null marks a phrase read but never stored or shown ("search phrase hidden").
             stored[name] = value if display is not None else None
             continue
-        query[rule.query] = text
+        if rule.in_path:
+            path[rule.query] = text
+        else:
+            query[rule.query] = text
         stored[name] = value
     from_time = to_time = None
     if tool.takes_window:
@@ -127,7 +143,57 @@ def check_arguments(
             raise ArgumentsRefused("A window may not end in the future.")
         query["from"] = from_time.isoformat()
         query["to"] = to_time.isoformat()
-    return ValidCall(query, from_time, to_time, stored, display)
+    return ValidCall(query, from_time, to_time, stored, display, path)
+
+
+def _slot(name: str, value: str) -> None:
+    try:
+        check_path_slot(value)
+    except PathRefused as refused:
+        raise ArgumentsRefused(f"`{name}`: {refused}.") from refused
+
+
+def _path_value(name: str, kind: ArgumentKind, value: object) -> str:
+    """An id or a metric name bound for a route's path: refused before any URL exists unless
+    it has its kind's exact shape (FR8, AC10)."""
+    if not isinstance(value, str):
+        raise ArgumentsRefused(f"`{name}` must be text, as a tool returned it.")
+    if kind == "metric_name":
+        if len(value) > MAX_METRIC_NAME:
+            raise ArgumentsRefused(f"`{name}` must be one metric name.")
+        _slot(name, value)
+        return value
+    shape = PATH_SHAPES[kind]
+    lowered = value.lower()
+    if shape.fullmatch(lowered) is None:
+        raise ArgumentsRefused(f"`{name}` must be an id exactly as a tool returned it.")
+    _slot(name, lowered)
+    return lowered
+
+
+def kept_since(
+    tool: ChatTool, *, raw_days: int, derived_days: int, now: datetime
+) -> datetime | None:
+    """The oldest moment this tool's route still holds data for, on its own clock (design,
+    *The aged-out check*); None for a tool reading records with their own purge."""
+    days = {
+        "raw": raw_days,
+        "derived": derived_days,
+        "derived_capped": min(derived_days, DERIVED_CAP_DAYS),
+    }.get(tool.retention)
+    return None if days is None else now - timedelta(days=days)
+
+
+def within_retention(call: ValidCall, kept: datetime | None) -> ValidCall | None:
+    """The call narrowed to what is still kept: unchanged when all of it is, from `kept` when
+    only its start has aged out, or None when none of it is (AC24)."""
+    if kept is None or call.from_time is None or call.to_time is None:
+        return call
+    if call.to_time <= kept:
+        return None
+    if call.from_time >= kept:
+        return call
+    return replace(call, from_time=kept, query={**call.query, "from": kept.isoformat()})
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,18 +208,16 @@ class Projected:
 def project(tool: ChatTool, body: bytes, *, mask_emails: bool) -> Projected:
     """Only catalog fields, masked, labelled and cut (design, *The loop*). A body that is not
     the route's shape raises `ValueError`."""
-    document = json.loads(body)
-    rows = document.get(tool.rows_at) if isinstance(document, dict) else None
-    if not isinstance(rows, list):
+    rows = rows_of(tool, json.loads(body))
+    if rows is None:
         raise ValueError("the result was not the route's shape")
     kept = [
         {
-            name: masked_value(row.get(name), mask_emails=mask_emails)
+            name: masked_value(value, mask_emails=mask_emails)
             for name in tool.fields
-            if name in row
+            if not is_missing(value := read_field(row, name))
         }
         for row in rows
-        if isinstance(row, dict)
     ]
     text = bounded(
         kept,

@@ -1,5 +1,6 @@
 """F4 plan T2.8: chat's internal client (AC10's offline half). The live half, through real
-uvicorn, is `apps/api/tests/test_assistant_path_tricks_live.py`."""
+uvicorn, is `test_path_tricks_are_refused_before_any_read_and_would_move_the_route` in
+`apps/api/tests/test_assistant_tools_live.py`, with every catalog tool (T3.1)."""
 
 from __future__ import annotations
 
@@ -9,7 +10,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import ClassVar
 
 import pytest
-from nexovue_platform.assistant_tools import LIST_SERVICES, SEARCH_LOGS
+from nexovue_platform.assistant_tools import (
+    GET_METRIC_HISTOGRAM,
+    GET_SERVICE_DETECTION,
+    LIST_SERVICES,
+    SEARCH_LOGS,
+)
 
 from nexovue_scheduler.insight.api_client import (
     CurlApiClient,
@@ -32,6 +38,35 @@ def test_a_plain_name_fits_a_path_slot() -> None:
 def test_each_value_is_encoded_whole_under_the_catalog_s_own_path() -> None:
     url = build_url("http://api:8000", SEARCH_LOGS, {"q": "a&b=c /x?", "service": "check out"})
     assert url == "http://api:8000/api/v1/logs/search?q=a%26b%3Dc%20%2Fx%3F&service=check%20out"
+
+
+def test_a_route_slot_is_filled_with_its_value_encoded_whole() -> None:
+    url = build_url(
+        "http://api:8000",
+        GET_SERVICE_DETECTION,
+        {"project_id": "p"},
+        {"service_name": "check out"},
+    )
+    assert url == "http://api:8000/api/v1/services/check%20out/detection?project_id=p"
+    dotted = build_url("http://api:8000", GET_METRIC_HISTOGRAM, {}, {"metric_name": "http.dur"})
+    assert dotted == "http://api:8000/api/v1/metrics/http.dur/histogram"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        None,
+        {},
+        {"service": "checkout"},
+        {"service_name": "a", "other": "b"},
+        {"service_name": ".."},
+    ],
+)
+def test_a_route_s_slots_must_be_exactly_the_values_given_and_each_safe(
+    path: dict[str, str] | None,
+) -> None:
+    with pytest.raises(PathRefused):
+        build_url("http://api:8000", GET_SERVICE_DETECTION, {}, path)
 
 
 @pytest.mark.parametrize("base", ["ftp://api:8000", "http://", "http://api:8000/?x=1"])

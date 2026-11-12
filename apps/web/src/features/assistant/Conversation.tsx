@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Button } from "@/shared/components/Button";
+import { CopyButton } from "@/shared/components/CopyButton";
 
 import { AnswerSentences } from "./AnswerSentences";
 import { inFlight, type MessageView, useMarkWrong, useStop, type WrongReason } from "./api";
@@ -9,6 +10,7 @@ import { StepRow } from "./StepRow";
 import {
   ASK_AGAIN,
   CHECK_IT_YOURSELF,
+  COPY_STEPS,
   offersCheckItYourself,
   outcomeSentence,
   phaseLine,
@@ -16,6 +18,7 @@ import {
   SLOW_WAIT_SECONDS,
   WRONG_MARKED,
 } from "./states";
+import { stepsAsText } from "./step-links";
 
 const WRONG_REASONS: { value: WrongReason; label: string }[] = [
   { value: "wrong_numbers", label: "Wrong numbers" },
@@ -81,7 +84,7 @@ export function MessageBlock({
       ) : (
         <>
           {message.answer && message.answer.sentences.length > 0 ? (
-            <AnswerSentences answer={message.answer} onCite={cite} />
+            <AnswerSentences answer={message.answer} messageId={message.id} onCite={cite} />
           ) : null}
           {outcome ? <p className="max-w-prose text-ink text-sm">{outcome}</p> : null}
           {offersCheckItYourself(message.state) ? (
@@ -116,7 +119,19 @@ export function MessageBlock({
               </ol>
             </details>
           ) : null}
-          {message.answer ? <WrongControl message={message} /> : null}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {message.steps.length > 0 ? (
+              <CopyButton
+                label={COPY_STEPS}
+                value={stepsAsText(message.steps, {
+                  zone,
+                  now,
+                  origin: typeof window === "undefined" ? "" : window.location.origin,
+                })}
+              />
+            ) : null}
+            {message.answer ? <WrongControl message={message} /> : null}
+          </div>
         </>
       )}
     </article>

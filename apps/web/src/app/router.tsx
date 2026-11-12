@@ -20,7 +20,7 @@ import { parseFeedSearch } from "@/features/findings/feed-filter";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { llmCallFilters } from "@/features/llm-observability/filters";
-import { scopedService } from "@/features/logs/search";
+import { scopedService, searchPhrase } from "@/features/logs/search";
 import { severityFilterById } from "@/features/logs/severity";
 import { metricFilters } from "@/features/metrics/filters";
 import { parseProfilesSearch } from "@/features/profiles/search";
@@ -35,7 +35,7 @@ import { ErrorScreen } from "@/shared/components/ErrorScreen";
 import type { FilterValues } from "@/shared/components/FilterBar";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
-import { keepUrlWindow } from "@/shared/url-window";
+import { keepUrlProject, keepUrlWindow } from "@/shared/url-window";
 
 import { HostedOnly } from "./HostedOnly";
 import { AppShell } from "./layout/AppShell";
@@ -307,8 +307,12 @@ const findingsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/",
   component: FindingsScreen,
-  // F22 FR22: the case filter lives in the address, so back returns to it (AC28).
-  validateSearch: parseFeedSearch,
+  // F22 FR22: the case filter lives in the address, so back returns to it (AC28). F4 T3.3a:
+  // a chat step's link names its project too.
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFeedSearch(search),
+    ...keepUrlProject(search),
+  }),
 });
 
 const overviewRoute = createRoute({
@@ -324,7 +328,10 @@ const findingRoute = createRoute({
   path: "/findings/$findingId",
   component: FindingScreen,
   // The feed filter it was opened from, which its back link returns to (AC128).
-  validateSearch: parseFeedSearch,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFeedSearch(search),
+    ...keepUrlProject(search),
+  }),
 });
 
 // F3 FR46: a labelled sample from fixed data, before any real finding exists. Static,
@@ -342,6 +349,7 @@ const servicesRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...parseFilterValues(SERVICE_FILTERS, search),
     ...(parseServiceOrder(search.order) === "worst" ? {} : { order: "slowest" as const }),
+    ...keepUrlProject(search),
   }),
 });
 
@@ -363,8 +371,10 @@ const serviceMapRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/service-map",
   component: ServiceMapScreen,
-  validateSearch: (search: Record<string, unknown>) =>
-    parseFilterValues(SERVICE_MAP_FILTERS, search),
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFilterValues(SERVICE_MAP_FILTERS, search),
+    ...keepUrlProject(search),
+  }),
 });
 
 /**
@@ -387,6 +397,7 @@ const traceRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces/$traceId",
   component: TraceWaterfallScreen,
+  validateSearch: keepUrlProject,
 });
 
 /** The route owns the parameter; the screen owns everything after it. */
@@ -416,6 +427,8 @@ const logsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...keepUrlWindow(search),
     ...(scopedService(search.service) ? { service: scopedService(search.service) as string } : {}),
+    // F4 T3.3: a chat step's search phrase, shown in the box on arrival.
+    ...(searchPhrase(search.q) ? { q: searchPhrase(search.q) as string } : {}),
     ...(severityFilterById(String(search.severity ?? "")).id === "all"
       ? {}
       : { severity: severityFilterById(String(search.severity ?? "")).id }),
@@ -445,6 +458,7 @@ const metricsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...metricFilters(search),
     ...(typeof search.metric === "string" && search.metric ? { metric: search.metric } : {}),
+    ...keepUrlProject(search),
   }),
 });
 
@@ -459,7 +473,10 @@ const syntheticsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/synthetics",
   component: SyntheticsScreen,
-  validateSearch: (search: Record<string, unknown>) => parseFilterValues(SYNTHETIC_FILTERS, search),
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFilterValues(SYNTHETIC_FILTERS, search),
+    ...keepUrlProject(search),
+  }),
 });
 
 // Declared before `$checkId` reads nothing into order: TanStack ranks a static
@@ -488,6 +505,7 @@ const alertsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/alerts",
   component: AlertsScreen,
+  validateSearch: keepUrlProject,
 });
 
 // A static segment outranks the parameter, so `new` is never read as a rule id.
@@ -509,6 +527,7 @@ const incidentRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/alerts/incidents/$incidentId",
   component: IncidentScreen,
+  validateSearch: keepUrlProject,
 });
 
 // F28: releases, after Errors in Signals. A release's page reads one period, the
@@ -525,7 +544,10 @@ const releaseRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/releases/$releaseId",
   component: ReleaseScreen,
-  validateSearch: parseReleaseSearch,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseReleaseSearch(search),
+    ...keepUrlProject(search),
+  }),
 });
 
 // F19: reliability targets. `new` is static, so it is never read as a target id.

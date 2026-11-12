@@ -45,8 +45,10 @@ _START: Final = text(
 )
 _SCOPE: Final = text(
     """
-    SELECT p.name, p.timezone, s.mask_emails
-    FROM projects AS p JOIN assistant_settings AS s ON s.org_id = p.org_id
+    SELECT p.name, p.timezone, s.mask_emails, r.raw_retention_days, r.derived_retention_days
+    FROM projects AS p
+    JOIN assistant_settings AS s ON s.org_id = p.org_id
+    JOIN project_retention AS r ON r.org_id = p.org_id AND r.project_id = p.id
     WHERE p.org_id = :org_id AND p.id = :project_id AND p.deleted_at IS NULL
     """
 )
@@ -177,6 +179,10 @@ class Scope:
     project_name: str
     project_zone: str
     mask_emails: bool
+    # How long the project keeps raw telemetry and its rollups, so an aged-out range is
+    # decided in code, on each tool's own clock (design, *The aged-out check*).
+    raw_retention_days: int
+    derived_retention_days: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,7 +253,13 @@ class PostgresQuestionStore:
             ).one_or_none()
         if row is None:
             return None
-        return Scope(project_name=row.name, project_zone=row.timezone, mask_emails=row.mask_emails)
+        return Scope(
+            project_name=row.name,
+            project_zone=row.timezone,
+            mask_emails=row.mask_emails,
+            raw_retention_days=row.raw_retention_days,
+            derived_retention_days=row.derived_retention_days,
+        )
 
     async def connection(self, question: Question) -> ChatConnection | None:
         """The connection, when AI is still on with an owner's consent to it (F3's rule)."""

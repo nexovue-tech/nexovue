@@ -90,12 +90,21 @@ class FakeStore:
     runs: list[dict[str, Any]] = field(default_factory=list)
     phases: list[Phase] = field(default_factory=list)
     ended: bool = False
+    # The project's retention, as `project_retention` gives it (the Free plan's by default).
+    raw_retention_days: int = 7
+    derived_retention_days: int = 30
 
     async def start(self, *, org_id: str, message_id: str) -> Question | None:
         return self.the_question
 
     async def scope(self, question: Question) -> Scope | None:
-        return Scope(project_name="production", project_zone="UTC", mask_emails=True)
+        return Scope(
+            project_name="production",
+            project_zone="UTC",
+            mask_emails=True,
+            raw_retention_days=self.raw_retention_days,
+            derived_retention_days=self.derived_retention_days,
+        )
 
     async def connection(self, question: Question) -> ChatConnection | None:
         return self.connection_row
@@ -251,10 +260,20 @@ class RecordingClient:
 
     status: int = 200
     asked: list[tuple[ChatTool, dict[str, str], str]] = field(default_factory=list)
+    # Each read's route slots, beside `asked`, in the same order.
+    paths: list[dict[str, str]] = field(default_factory=list)
     answer_for: Callable[[ChatTool], ApiAnswer] | None = None
 
-    def get(self, tool: ChatTool, query: Mapping[str, str], *, ticket: str) -> ApiAnswer:
+    def get(
+        self,
+        tool: ChatTool,
+        query: Mapping[str, str],
+        *,
+        ticket: str,
+        path: Mapping[str, str] | None = None,
+    ) -> ApiAnswer:
         self.asked.append((tool, dict(query), ticket))
+        self.paths.append(dict(path or {}))
         if self.answer_for is not None:
             return self.answer_for(tool)
         return ApiAnswer(self.status, json.dumps(BODIES[tool.name]).encode())

@@ -282,6 +282,9 @@ TELEMETRY_PATHS: Final = (
     # F4 T2.12: chat's consent preview reads the project's newest log line. Only the
     # preview: the rest of `/ai` reads Postgres and must answer while ClickHouse is down.
     f"{API_PREFIX}/ai/preview",
+    # F4 T3.2: an answer's quotes are read again from ClickHouse. `/assistant`, whose poll
+    # reads Postgres only, stays on the default tier (AC107).
+    f"{API_PREFIX}/assistant-quotes",
 )
 
 # F20. One dashboard is one request and many scans, each charged (`ratelimit/charge.py`),

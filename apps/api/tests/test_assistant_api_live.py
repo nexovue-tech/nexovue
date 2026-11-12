@@ -13,7 +13,16 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from assistant_live import AVAILABLE, KEYS, NOW, chat_on, db, require_postgres, tenant
+from assistant_live import (
+    AVAILABLE,
+    KEYS,
+    NOW,
+    chat_on,
+    db,
+    reported,
+    require_postgres,
+    tenant,
+)
 from nexovue_platform.assistant_records import (
     ANSWER_QUESTION_TASK,
     ASSISTANT_QUEUE,
@@ -228,10 +237,12 @@ async def test_stop_ends_the_question_and_its_ticket_but_moves_no_money(db: Asyn
     assert stopped.state == "stopped"
     row = await db.get(AssistantMessage, asked.id, populate_existing=True)
     assert row is not None and (row.ticket_hash, row.reserved_tokens) == (None, 60_000)
-    with pytest.raises(ConflictError):
+    with pytest.raises(ConflictError) as refused:
         await service.delete_conversation(
             db, identity=_identity(made), conversation_id=asked.conversation_id
         )
+    # Spec *Error cases*, "Deleted conversation", word for word.
+    assert refused.value.detail == "Stop this question first."
 
 
 async def test_another_person_s_conversation_is_not_found(db: AsyncSession) -> None:
@@ -289,6 +300,7 @@ async def test_availability_names_the_label_and_questions_left_never_the_address
 ) -> None:
     """AC74."""
     made = await _ready(db, daily_limit=3)
+    await reported(db, made)
     await _ask(db, made)
 
     ready = await service.availability(
@@ -301,6 +313,24 @@ async def test_availability_names_the_label_and_questions_left_never_the_address
         2,
     )
     assert "provider.example" not in ready.model_dump_json()
+
+
+async def test_a_project_that_never_reported_says_so_before_anyone_asks(
+    db: AsyncSession,
+) -> None:
+    """Spec *Error cases*, "No telemetry in this project yet": before anyone spends tokens."""
+    made = await _ready(db)
+
+    before = await service.availability(
+        db, identity=_identity(made), project_id=made.project.id, ai=AVAILABLE, now=NOW
+    )
+    await reported(db, made)
+    after = await service.availability(
+        db, identity=_identity(made), project_id=made.project.id, ai=AVAILABLE, now=NOW
+    )
+
+    assert (before.state, before.provider_label) == ("no_data", None)
+    assert after.state == "ready"
 
 
 async def test_availability_without_consent_names_the_owners_it_waits_for(db: AsyncSession) -> None:

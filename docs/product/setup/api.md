@@ -52,11 +52,15 @@ and reach only the documented read API.**
 | `GET /projects` | The projects this token may read, with the ids the rest take |
 | `GET /services` | Every service in a window, worst first |
 | `GET /services/{name}` | One service's health in a window |
+| `GET /services/{name}/endpoints` | One service's endpoints in a window, worst first, each with its requests, errors, error rate and latency percentiles |
+| `GET /services/trend` | Each service's requests per minute, error rate and latency percentiles bucket by bucket across a window (`service_name` narrows it to one) |
 | `GET /service-map` | Service dependencies in a window, busiest edges first: who calls whom, how often, and how often it fails |
 | `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200). The state says when a service is not judged and why: still learning, data delayed, detection not running, muted, `too_many_services` (the project is past the cap and the service is not among its busiest) or `no_incoming_requests` |
 | `GET /traces` | Traces matching filters, newest first (paged) |
 | `GET /traces/{trace_id}` | One trace and its spans |
 | `GET /logs/search` | Log records matching a phrase (paged) |
+| `GET /infrastructure/hosts` | Every host, container and reporter in a window, with CPU, memory, filesystem, disk and network use, and whether it stopped reporting |
+| `GET /infrastructure/trend` | Each host's and container's infrastructure metrics bucket by bucket across a window |
 | `GET /metrics` | The metric catalogue |
 | `GET /metrics/{name}/histogram` | One metric's histogram over a window |
 | `GET /error-groups` | Distinct errors in a window, most frequent first |

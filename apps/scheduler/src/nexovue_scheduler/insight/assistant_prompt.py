@@ -22,7 +22,7 @@ from nexovue_platform.ai.untrusted import Untrusted
 from nexovue_platform.assistant_records import ABSTAIN_REASONS, MAX_OUTPUT_TOKENS
 from nexovue_platform.assistant_tools import CHAT_MAX_CHARACTERS, ChatTool
 
-PROMPT_VERSION: Final = "chat-1"
+PROMPT_VERSION: Final = "chat-2"
 RESULTS_IN_FULL: Final = 2
 # `bounded` has already cut a result to whole rows under CHAT_MAX_CHARACTERS, plus its
 # one-line cut note; F3's fence cap stays a net here and must never cut that JSON.
@@ -38,9 +38,13 @@ INSTRUCTIONS: Final = (
     "Call a tool when you need evidence. When you have enough, or none is left to read, "
     "answer with one JSON object and nothing else:\n"
     '{"sentences": [{"text": "...", "cites": [{"step": "s1", "rows": [0], '
-    '"fields": ["error_count"]}]}], "not_verified": ["..."], "abstained": null}\n'
+    '"fields": ["error_count"]}], "quotes": ["q1"]}], '
+    '"quotes": {"q1": {"step": "s2", "row": 0, "field": "body"}}, '
+    '"not_verified": ["..."], "abstained": null}\n'
     "Every sentence cites the steps (s1, s2, …), rows and fields it rests on; a sentence "
-    "citing nothing is removed. Say plainly when evidence is thin, and list what you could "
+    "citing nothing is removed. To show a log line or an error message, quote it by "
+    "reference (at most 5); nexovue shows its text. Numbers are checked against the rows "
+    "cited. Say plainly when evidence is thin, and list what you could "
     'not check under "not_verified". If you cannot answer, set "abstained" to one of: '
     f"{', '.join(ABSTAIN_REASONS)}, with no sentences.\n"
     "Write no links, addresses, email addresses, Markdown, HTML or commands, and tell no "

@@ -30,6 +30,7 @@ from nexovue_platform.ai.chat import ChatProvider, ChatRequest, ChatResponse
 from nexovue_platform.ai.testing import ScriptedProvider, answers, calls
 from nexovue_platform.assistant_records import MAX_STEPS, QUESTION_RESERVATION_TOKENS
 
+from nexovue_scheduler.insight.api_client import ApiAnswer
 from nexovue_scheduler.insight.assistant import LoopParts, ProviderFailed, answer
 from nexovue_scheduler.insight.assistant_prompt import StepResult, build_request
 from nexovue_scheduler.insight.assistant_store import ChatConnection
@@ -304,3 +305,105 @@ def test_a_whole_tool_result_reaches_the_model_past_f3_s_default_cap() -> None:
         final=True,
     )
     assert json.dumps(body)[1:-1] in request.user_text()
+
+
+# ------------------------------------------------------------------ AC24: the aged-out range
+# A Free-plan project keeps raw telemetry 7 days and rollups 30 (`0005_plans_table.py`).
+TEN_DAYS_AGO = {
+    "from": (NOW - timedelta(days=10, hours=1)).isoformat(),
+    "to": (NOW - timedelta(days=10)).isoformat(),
+}
+ABSTAIN = answers({"sentences": [], "abstained": "no_data"})
+
+
+async def test_a_range_past_raw_retention_ends_aged_out_in_code_with_no_read() -> None:
+    """AC24: `search_logs` reads raw logs; a range 10 days old on a 7-day project is decided
+    in code, before any read, and the model is told the data is no longer kept."""
+    store, client = FakeStore(), RecordingClient()
+
+    state, provider = await _ask(store, [calls("search_logs", TEN_DAYS_AGO), ABSTAIN], client)
+
+    assert state == "abstained"
+    assert client.asked == []
+    step = store.steps["step1"]
+    assert step["state"] == "aged_out"
+    assert step["failure"] == f"kept_since:{(NOW - timedelta(days=7)).date().isoformat()}"
+    assert store.reads == [], "no read happened, so none is recorded"
+    told = provider.requests[1].user_text()
+    assert "no longer kept" in told and "not evidence that nothing happened" in told
+
+
+async def test_the_same_range_on_a_rollup_tool_inside_derived_retention_is_read() -> None:
+    """AC24: `list_services` reads a rollup kept 30 days, so 10 days ago is read, not aged out."""
+    store, client = FakeStore(), RecordingClient()
+
+    await _ask(store, [calls("list_services", TEN_DAYS_AGO), ABSTAIN], client)
+
+    [(tool, query, _)] = client.asked
+    assert tool.name == "list_services"
+    assert query["from"] == TEN_DAYS_AGO["from"]
+    assert store.steps["step1"]["state"] == "read"
+    assert store.steps["step1"]["failure"] is None
+
+
+async def test_a_short_retention_project_ages_out_a_rollup_range_too() -> None:
+    """AC24 on a short-retention project: rollups kept 7 days age the same range out."""
+    store, client = FakeStore(derived_retention_days=7), RecordingClient()
+
+    await _ask(store, [calls("list_services", TEN_DAYS_AGO), ABSTAIN], client)
+
+    assert client.asked == []
+    assert store.steps["step1"]["state"] == "aged_out"
+
+
+async def test_a_range_half_past_retention_reads_only_what_is_kept_and_says_so() -> None:
+    store, client = FakeStore(), RecordingClient()
+    straddling = {
+        "from": (NOW - timedelta(days=8)).isoformat(),
+        "to": (NOW - timedelta(days=6)).isoformat(),
+    }
+
+    _, provider = await _ask(store, [calls("search_logs", straddling), ABSTAIN], client)
+
+    [(_, query, _)] = client.asked
+    kept = NOW - timedelta(days=7)
+    assert query["from"] == kept.isoformat()
+    step = store.steps["step1"]
+    assert (step["from_time"], step["state"]) == (kept, "read")
+    assert step["failure"] == f"kept_since:{kept.date().isoformat()}"
+    assert [read["from_time"] for read in store.reads] == [kept]
+    assert "read from" in provider.requests[1].user_text()
+
+
+async def test_a_path_tool_reads_its_slot_and_a_scope_routed_tool_sends_no_project() -> None:
+    """T3.1: `get_finding` takes its id in the path and the project from the ticket."""
+    store = FakeStore()
+    finding = "0195f000-0000-7000-8000-0000000000aa"
+    body = {"id": finding, "service_name": "checkout", "signals": [{"signal": "slower"}]}
+    client = RecordingClient(answer_for=lambda tool: ApiAnswer(200, json.dumps(body).encode()))
+
+    await _ask(store, [calls("get_finding", {"finding_id": finding.upper()}), ABSTAIN], client)
+
+    [(tool, query, _)] = client.asked
+    assert tool.name == "get_finding" and query == {}
+    assert client.paths == [{"finding_id": finding}]
+    assert store.steps["step1"]["row_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "failure"),
+    # The rate limiter refused the read; the telemetry store was down behind the API.
+    # And an item the project does not hold: told, never read as the ticket refused.
+    [(429, "limited"), (503, "unavailable"), (404, "not_found")],
+)
+async def test_a_read_the_api_refused_for_now_or_could_not_serve_says_which(
+    status: int, failure: str
+) -> None:
+    """Spec *Error cases*: "Tool refused by rate limit" and "Telemetry store down" end the
+    step with their own word, and the question goes on with what it has."""
+    store = FakeStore()
+
+    state, _ = await _ask(store, [SERVICES_CALL, ABSTAIN], RecordingClient(status=status))
+
+    assert (store.steps["step1"]["state"], store.steps["step1"]["failure"]) == ("failed", failure)
+    assert state == "abstained", "the question went on to answer with what it had"

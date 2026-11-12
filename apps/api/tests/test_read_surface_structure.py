@@ -42,6 +42,11 @@ THE_SURFACE: Final = {
     "nexovue_api/projects/router.py:list_projects": "GET /projects",
     "nexovue_api/services/router.py:list_services": "GET /services",
     "nexovue_api/services/router.py:get_service": "GET /services/{service}",
+    # F4 T3.1a: each serves a chat tool of its own, so tokens gain them too (design, section 7).
+    "nexovue_api/services/router.py:service_trend": "GET /services/trend",
+    "nexovue_api/services/router.py:list_service_endpoints": "GET /services/{service}/endpoints",
+    "nexovue_api/infrastructure/router.py:list_nodes": "GET /infrastructure/hosts",
+    "nexovue_api/infrastructure/router.py:node_trends": "GET /infrastructure/trend",
     "nexovue_api/detection/router.py:service_detection": "GET /services/{service}/detection",
     "nexovue_api/servicemap/router.py:get_service_map": "GET /service-map",
     "nexovue_api/traces/router.py:list_traces": "GET /traces",

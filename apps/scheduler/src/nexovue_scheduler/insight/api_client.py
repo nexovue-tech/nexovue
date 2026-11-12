@@ -6,9 +6,10 @@ calls, so this is its own small pycurl GET:
 - the base URL comes only from `INTERNAL_API_URL` (default `http://api:8000`); a model never
   names an address, and the path is the catalog's own;
 - redirects are never followed, and only `http` and `https` are spoken;
-- every argument is checked by `check_arguments` before a URL exists: a path slot (none in
-  Step 2's tools) refuses `/`, `\\`, `%`, control characters, `.` and `..`, since uvicorn
-  decodes the path before routing, so percent-encoding alone does not close path tricks;
+- every argument is checked by `check_arguments` before a URL exists, and `build_url` checks
+  each path value again: a path slot refuses `/`, `\\`, `%`, `?`, `#`, control characters,
+  `.` and `..`, since uvicorn decodes the path before routing, so percent-encoding alone does
+  not close path tricks (AC10); the catalog's route must name exactly the slots given;
 - each value is then encoded with `quote(value, safe="")`;
 - the ticket goes in the `Authorization` header, never the URL, so no log line holds it.
 
@@ -17,6 +18,7 @@ The answer is capped, and a failure is a closed word, never curl's text.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
@@ -44,7 +46,14 @@ class ApiAnswer:
 class ApiClient(Protocol):
     """What the loop reads through: one catalog GET, as the asking person."""
 
-    def get(self, tool: ChatTool, query: Mapping[str, str], *, ticket: str) -> ApiAnswer: ...
+    def get(
+        self,
+        tool: ChatTool,
+        query: Mapping[str, str],
+        *,
+        ticket: str,
+        path: Mapping[str, str] | None = None,
+    ) -> ApiAnswer: ...
 
 
 class PathRefused(ValueError):  # noqa: N818 — a refusal, named for the reader
@@ -65,15 +74,30 @@ def check_path_slot(value: str) -> None:
         raise PathRefused("a path value may not hold / \\ % ? # . .. or control characters")
 
 
-def build_url(base_url: str, tool: ChatTool, query: Mapping[str, str]) -> str:
-    """The catalog's path under the configured base, each query value encoded whole."""
+_SLOT: Final = re.compile(r"\{([a-z_]+)\}")
+
+
+def build_url(
+    base_url: str,
+    tool: ChatTool,
+    query: Mapping[str, str],
+    path: Mapping[str, str] | None = None,
+) -> str:
+    """The catalog's path under the configured base, each slot filled with a checked value
+    and each query value encoded whole."""
     parts = urlsplit(base_url)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.query:
         raise PathRefused("INTERNAL_API_URL must be a plain http or https base")
+    given = dict(path or {})
+    if set(_SLOT.findall(tool.route)) != set(given):
+        raise PathRefused("the route's slots and the values given differ")
+    for value in given.values():
+        check_path_slot(value)
+    route = _SLOT.sub(lambda slot: quote(given[slot.group(1)], safe=""), tool.route)
     pairs = "&".join(
         f"{quote(name, safe='')}={quote(value, safe='')}" for name, value in query.items()
     )
-    url = f"{base_url.rstrip('/')}{tool.route}"
+    url = f"{base_url.rstrip('/')}{route}"
     return f"{url}?{pairs}" if pairs else url
 
 
@@ -82,9 +106,16 @@ class CurlApiClient:
     base_url: str
     timeout_seconds: int = READ_TIMEOUT_SECONDS
 
-    def get(self, tool: ChatTool, query: Mapping[str, str], *, ticket: str) -> ApiAnswer:
+    def get(
+        self,
+        tool: ChatTool,
+        query: Mapping[str, str],
+        *,
+        ticket: str,
+        path: Mapping[str, str] | None = None,
+    ) -> ApiAnswer:
         try:
-            url = build_url(self.base_url, tool, query)
+            url = build_url(self.base_url, tool, query, path)
         except PathRefused:
             return ApiAnswer(None, b"", "not_allowed")
         if any(ord(character) < 0x21 for character in ticket):

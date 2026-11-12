@@ -5,6 +5,9 @@
  * (OpenAI-compatible, http://172.30.250.10:8080/v1), AI and chat on and consented. **Written
  * for the hardening pass, not run** (F4 status.md): Playwright needs the stack, and no CI
  * workflow runs it. The phone arm is AC48's at 375 px.
+ *
+ * F4 Step 3 adds: a step's link opened in a fresh session shows the same project and range
+ * (AC22, T3.3a), and the panel by keyboard alone (AC50). Written, not run, as above.
  */
 
 import { expect, test } from "@playwright/test";
@@ -61,4 +64,55 @@ test("on a phone, the Ask button fits, a link closes the panel and offers Back t
   await panel.getByRole("link", { name: "Open what it read" }).first().click();
   await expect(panel).toBeHidden();
   await expect(page.getByRole("button", { name: "Back to answer" })).toBeVisible();
+});
+
+test("a step's link opened in a fresh session shows the same project and range", async ({
+  page,
+  browser,
+}) => {
+  await signIn(page, EMAIL, PASSWORD);
+  await page.goto("/services");
+  await page.getByRole("button", { name: "Ask" }).click();
+  const panel = page.getByRole("complementary", { name: "Ask about your telemetry" });
+  await panel.getByRole("button", { name: "What is failing right now?" }).click();
+  await panel.getByRole("button", { name: "Send" }).click();
+  await expect(panel.getByText(/Read \d+ things?/)).toBeVisible({ timeout: 60_000 });
+  await panel.getByText(/Read \d+ things?/).click();
+  const href = await panel
+    .getByRole("link", { name: "Open what it read" })
+    .first()
+    .getAttribute("href");
+  expect(href).toContain("project=");
+
+  // A colleague's browser: no stored window, no chosen project.
+  const fresh = await browser.newContext();
+  const colleague = await fresh.newPage();
+  await signIn(colleague, EMAIL, PASSWORD);
+  await colleague.goto(href ?? "/");
+  const project = new URL(href ?? "/", "http://x").searchParams.get("project");
+  await expect(colleague.getByRole("combobox", { name: /project/i })).toHaveValue(project ?? "");
+  if ((href ?? "").includes("from=")) {
+    await expect(colleague.getByTestId("address-window")).toBeVisible();
+  }
+  await fresh.close();
+});
+
+test("by keyboard alone: open, ask, close with Escape keeping the draft, focus returns", async ({
+  page,
+}) => {
+  await signIn(page, EMAIL, PASSWORD);
+  await page.goto("/services");
+  const ask = page.getByRole("button", { name: "Ask" });
+  await ask.focus();
+  await page.keyboard.press("Enter");
+  const panel = page.getByRole("complementary", { name: "Ask about your telemetry" });
+  const box = panel.getByRole("textbox");
+  await expect(box).toBeFocused();
+  await page.keyboard.type("What deployed today?");
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(ask).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(box).toHaveValue("What deployed today?");
+  await expect(panel.getByRole("status")).toHaveCount(1);
 });

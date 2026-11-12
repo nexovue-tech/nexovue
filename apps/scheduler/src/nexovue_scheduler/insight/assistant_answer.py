@@ -4,16 +4,19 @@
 In order: **shape**; **citations** (a sentence citing nothing that ran is removed, and
 counted); **characters and ways out** in the model's own words, `not_verified` included;
 **commands**; **copying** (a long exact run of a tool result must be quoted by reference);
-then each sentence's **label**, which the model has no field to claim. A failure of shape,
-ways out, commands or copying is sent back once naming the reason, then withheld.
+**quotes** by reference, each folded under a warning when its value reads as a link or a
+command, and a sentence telling the reader to run what it quotes removed; **figures**, each
+number matched against the cited rows' numbers, its offset flagged when unmatched; then each
+sentence's **label**, which the model has no field to claim. A failure of shape, ways out,
+commands or copying is sent back once naming the reason, then withheld.
 
 Tool arguments are model output too: `display_argument` decides whether a free-text phrase
 may be shown on a step.
 
 The word lists, `URL` and `EMAIL` are F3's (`nexovue_platform.ai.validate`), extended here
 with chat's own words only. **These are heuristics** (way-out and command words above all),
-and the injection bed measures them; they are not a guarantee. Quotes and figure flags
-come in plan Step 3.
+and the injection bed measures them; they are not a guarantee. So is figure matching: a
+flag is shown, never a refusal, because its false-flag rate is unknown (D10).
 """
 
 from __future__ import annotations
@@ -37,7 +40,13 @@ from nexovue_platform.ai.validate import (
     opens_with_command,
 )
 from nexovue_platform.assistant_records import ABSTAIN_REASONS, AbstainReason, RejectionReason
-from nexovue_platform.assistant_tools import MAX_DISPLAYED_ARGUMENT, STRICT_NAME, ChatTool
+from nexovue_platform.assistant_tools import (
+    MAX_DISPLAYED_ARGUMENT,
+    STRICT_NAME,
+    Basis,
+    ChatTool,
+    Unit,
+)
 
 MAX_SENTENCES: Final = 12
 MAX_SENTENCE_CHARACTERS: Final = 600
@@ -45,6 +54,8 @@ MAX_NOT_VERIFIED: Final = 5
 MAX_NOT_VERIFIED_CHARACTERS: Final = 200
 # A run this long shared with a tool result is copying (a guess, design section 4).
 COPY_RUN_CHARACTERS: Final = 40
+# Quotes an answer may show (FR15, a guess); a further one is dropped and counted (AC87).
+MAX_QUOTES: Final = 5
 
 # `counted`: Counted from telemetry. `checked`: nexovue's own check. `text`: your telemetry
 # says this. `unchecked`: the model's wording. The panel holds the words (design, *Words*).
@@ -86,6 +97,18 @@ _BACKTICK_SHELL: Final = re.compile(rf"`[^`]*\b(?:{_SHELL_WORDS})\b[^`]*`", re.I
 _CHAT_CAUSE_WORDS: Final = ("cause", "stems from", "stem from", "thanks to", "originated")
 _CAUSE_PHRASES: Final = (*CAUSAL_PHRASES, *_CHAT_CAUSE_WORDS)
 _NUMBER: Final = re.compile(r"(?<![\w.])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.])-?\d+(?:\.\d+)?")
+# A date or a time of day is a moment, not a figure: the step's range shows what it read.
+_MOMENT: Final = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+)
+
+# ---------------------------------------------------------------- quotes (check 5)
+# A sentence pointing a reader at quoted text to act on it (design, check 5; AC63).
+_ACT_ON_QUOTE: Final = re.compile(
+    r"\b(?:run|execute|paste|apply|type in|enter)\b|\b(?:the|this) (?:command|line|snippet)"
+    r"(?: below| above)?\b",
+    re.IGNORECASE,
+)
 
 
 class AnswerRejected(Exception):  # noqa: N818 — a rejection, named for the reader
@@ -113,12 +136,21 @@ class CheckedAnswer:
     sentences: list[dict[str, Any]]
     removed_sentence_count: int
     not_verified: list[str] = field(default_factory=list)
+    # Quote id to its stored reference (`_Quote.stored`); never the quoted text (D28).
+    quotes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Sentences removed for telling the reader to act on quoted text (check 5).
+    removed_for_acting: int = 0
+    # Quotes past `MAX_QUOTES`, dropped (AC87).
+    dropped_quote_count: int = 0
 
     def stored(self) -> dict[str, Any]:
         return {
             "sentences": self.sentences,
             "removed_sentence_count": self.removed_sentence_count,
+            "removed_for_acting_count": self.removed_for_acting,
             "not_verified": self.not_verified,
+            "quotes": self.quotes,
+            "dropped_quote_count": self.dropped_quote_count,
         }
 
 
@@ -250,44 +282,104 @@ def _values(cited: list[_Cited], kinds: frozenset[str]) -> list[Any]:
     ]
 
 
-def _number_matches(shown: str, values: list[Any]) -> bool:
-    """Rounded to the digits shown, as a value or as a percentage of a fraction."""
+def _candidates(value: float, unit: Unit | None) -> tuple[float, ...]:
+    """The ways a value may be written: a fraction as a percentage, milliseconds as seconds."""
+    if unit == "fraction":
+        return (value, value * 100)
+    if unit == "ms":
+        return (value, value / 1000)
+    return (value,)
+
+
+def _number_matches(shown: str, measured: Sequence[tuple[Any, Unit | None]]) -> bool:
+    """Rounded to the digits shown, in any way the field's unit may be written (check 6)."""
     number = float(shown.replace(",", ""))
     decimals = len(shown.split(".")[1]) if "." in shown else 0
     tolerance = 0.5 * 10**-decimals + 1e-9
-    for value in values:
+    for value, unit in measured:
         if isinstance(value, bool) or not isinstance(value, int | float) or math.isnan(value):
             continue
-        for candidate in (float(value), float(value) * 100):
+        for candidate in _candidates(float(value), unit):
             if abs(round(candidate, decimals) - number) <= tolerance:
                 return True
     return False
 
 
-def _label(text: str, cited: list[_Cited]) -> Label:
+def _figures(text: str, names: Sequence[str]) -> list[tuple[int, int, str]]:
+    """Each number in a sentence with its offsets, leaving out dates, times of day and the
+    digits inside a cited name (`checkout-v2`)."""
+    skipped = [match.span() for match in _MOMENT.finditer(text)]
+    for name in names:
+        start = text.find(name)
+        while name and start != -1:
+            skipped.append((start, start + len(name)))
+            start = text.find(name, start + 1)
+    return [
+        (match.start(), match.end(), match.group())
+        for match in _NUMBER.finditer(text)
+        if not any(low <= match.start() < high for low, high in skipped)
+    ]
+
+
+def _cited_fields(cited: list[_Cited]) -> list[tuple[_Cited, int, str]]:
+    return [(cite, row, name) for cite in cited for row in cite.rows for name in cite.fields]
+
+
+def _measured(cited: list[_Cited]) -> list[tuple[Any, Unit | None]]:
+    """The cited numbers a figure may match. A sentence citing only sampled lists may match
+    only measured values with a unit: a row count or a code is not a count (BR11)."""
+    only_sampled = all(cite.step.tool.sampled for cite in cited)
+    found: list[tuple[Any, Unit | None]] = []
+    for cite, row, name in _cited_fields(cited):
+        rule = cite.step.tool.fields[name]
+        if rule.kind != "number" or (only_sampled and rule.unit is None):
+            continue
+        found.append((cite.step.rows[row].get(name), rule.unit))
+    return found
+
+
+def flagged_figures(text: str, cited: list[_Cited]) -> list[list[int]]:
+    """The offsets of every figure no cited number matches (FR16): shown, never refused."""
+    measured = _measured(cited)
+    return [
+        [start, end]
+        for start, end, shown in _figures(text, _names(cited))
+        if not _number_matches(shown, measured)
+    ]
+
+
+def _names(cited: list[_Cited]) -> list[str]:
+    found: list[str] = []
+    for value in _values(cited, frozenset({"name"})):
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, str) and item:
+                found.append(item)
+    return found
+
+
+def _bases(cited: list[_Cited]) -> set[Basis]:
+    return {
+        cite.step.tool.basis_of(name, cite.step.rows[row])
+        for cite, row, name in _cited_fields(cited)
+    }
+
+
+def _label(text: str, cited: list[_Cited], flagged: list[list[int]]) -> Label:
     """Check 7: a citation alone earns nothing (design, section 4)."""
     kinds = {cite.step.tool.fields[name].kind for cite in cited for name in cite.fields}
-    if kinds & {"text", "team_text"}:
+    bases = _bases(cited)
+    if kinds & {"text", "team_text"} or "telemetry_text" in bases:
         return "text"
-    numbers = _NUMBER.findall(text)
-    names = {value for value in _values(cited, frozenset({"name"})) if isinstance(value, str)}
-    named = [name for name in names if name and name in text]
+    figures = _figures(text, _names(cited))
+    named = [name for name in _names(cited) if name in text]
     if (
-        not (numbers or named)
+        not (figures or named)
+        or flagged
         or has_any(text, _CAUSE_PHRASES)
         or has_any(text, ORIGIN_WORDS)
         or command(text)
     ):
         return "unchecked"
-    measured = _values(cited, frozenset({"number"}))
-    if not all(_number_matches(shown, measured) for shown in numbers):
-        return "unchecked"
-    bases = {
-        cite.step.tool.fields[name].basis
-        for cite in cited
-        for name in cite.fields
-        if cite.step.tool.fields[name].kind in ("number", "name", "closed", "time", "id")
-    }
     # Telemetry anywhere among the cited facts makes it "counted"; nexovue's own alone, "checked".
     return "counted" if "telemetry" in bases else "checked"
 
@@ -297,6 +389,67 @@ def _copied(text: str, results: Sequence[str]) -> bool:
         return False
     runs = {text[i : i + COPY_RUN_CHARACTERS] for i in range(len(text) - COPY_RUN_CHARACTERS + 1)}
     return any(run in result for result in results for run in runs)
+
+
+@dataclass(frozen=True, slots=True)
+class _Quote:
+    """A quote the worker checked: what is stored to re-read it, and whether its value reads
+    as a link or a command, so it is shown folded under the warning (FR15, AC63)."""
+
+    step: str
+    tool: str
+    field: str
+    reference: dict[str, Any]
+    folded: bool
+
+    def stored(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "tool": self.tool,
+            "field": self.field,
+            "reference": self.reference,
+            "folded": self.folded,
+        }
+
+
+def _as_text(value: object) -> str:
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
+def _quotes(raw: object, steps: Mapping[str, StepRead]) -> dict[str, _Quote]:
+    """Each reference naming a step that ran, a row it returned and a field that can be
+    quoted (check 5). The worker holds the value, so it runs checks 3 and 4 on it here."""
+    found: dict[str, _Quote] = {}
+    if not isinstance(raw, dict):
+        return found
+    for quote_id, reference in raw.items():
+        if not isinstance(quote_id, str) or not isinstance(reference, dict):
+            continue
+        step_key = reference.get("step")
+        step = steps.get(step_key) if isinstance(step_key, str) else None
+        row = reference.get("row")
+        name = reference.get("field")
+        if (
+            step is None
+            or not isinstance(row, int)
+            or isinstance(row, bool)
+            or not 0 <= row < len(step.rows)
+            or not isinstance(name, str)
+            or not step.tool.quotable(name)
+        ):
+            continue
+        values = step.rows[row]
+        if name not in values or any(key not in values for key in step.tool.quote_keys):
+            continue
+        text = _as_text(values[name])
+        found[quote_id] = _Quote(
+            step=step.key,
+            tool=step.tool.name,
+            field=name,
+            reference={key: values[key] for key in step.tool.quote_keys},
+            folded=way_out(text) is not None or command(text) is not None,
+        )
+    return found
 
 
 def check_answer(
@@ -314,19 +467,24 @@ def check_answer(
             raise AnswerRejected("way_out", f"A 'not verified' line held {why}.")
         if why := command(item):
             raise AnswerRejected("command", f"A 'not verified' line held {why}.")
+    quotes = _quotes(document.get("quotes"), steps)
+    shown: dict[str, _Quote] = {}
+    dropped_quotes: set[str] = set()
     kept: list[dict[str, Any]] = []
     removed = 0
+    removed_for_acting = 0
     for sentence in document.get("sentences", []):
         cited = _citations(sentence.get("cites"), steps)
         if not cited:
             removed += 1
             continue
         words: str = sentence["text"].strip()
-        allowed = frozenset(
-            value
-            for value in _values(cited, frozenset({"name"}))
-            if isinstance(value, str) and STRICT_NAME.fullmatch(value)
-        )
+        named = _named_quotes(sentence.get("quotes"), quotes)
+        if named and _ACT_ON_QUOTE.search(words):
+            # Only a runbook's quote may be acted on (Step 5); a log or note's never.
+            removed_for_acting += 1
+            continue
+        allowed = frozenset(name for name in _names(cited) if STRICT_NAME.fullmatch(name))
         if why := way_out(words, allowed_names=allowed):
             raise AnswerRejected("way_out", f"A sentence held {why}. Write none.")
         if why := command(words):
@@ -335,14 +493,42 @@ def check_answer(
             raise AnswerRejected(
                 "copying", "A sentence copied a tool result. Describe it; do not copy it."
             )
+        sentence_quotes: list[str] = []
+        for quote_id in named:
+            if quote_id not in shown and len(shown) >= MAX_QUOTES:
+                dropped_quotes.add(quote_id)
+                continue
+            shown[quote_id] = quotes[quote_id]
+            sentence_quotes.append(quote_id)
+        flagged = flagged_figures(words, cited)
         kept.append(
             {
                 "text": words,
-                "label": _label(words, cited),
+                "label": _label(words, cited, flagged),
                 "cause_warning": has_any(words, _CAUSE_PHRASES),
+                "flagged_figures": flagged,
                 "cites": sorted({cite.step.key for cite in cited}),
+                "quotes": sentence_quotes,
             }
         )
     if not kept:
         raise AnswerRejected("citations", "No sentence cited a step that ran and returned.")
-    return CheckedAnswer(kept, removed, list(document.get("not_verified", [])))
+    return CheckedAnswer(
+        kept,
+        removed,
+        list(document.get("not_verified", [])),
+        quotes={quote_id: quote.stored() for quote_id, quote in shown.items()},
+        removed_for_acting=removed_for_acting,
+        dropped_quote_count=len(dropped_quotes),
+    )
+
+
+def _named_quotes(raw: object, quotes: Mapping[str, _Quote]) -> list[str]:
+    """The sentence's quote ids that name a checked quote, in order, once each."""
+    if not isinstance(raw, list):
+        return []
+    named: list[str] = []
+    for quote_id in raw:
+        if isinstance(quote_id, str) and quote_id in quotes and quote_id not in named:
+            named.append(quote_id)
+    return named

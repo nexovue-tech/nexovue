@@ -4,7 +4,7 @@ in `tools.py`; these are the panel's and the Chat settings section's."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from nexovue_platform.assistant_records import MAX_QUESTION_CHARACTERS
@@ -19,10 +19,14 @@ MAX_CONTEXT_TEXT = 200
 MAX_TIME_ZONE = 64
 
 
+# `no_data`: chat could answer, but the project has sent nothing to read (spec, *Error cases*).
+AvailabilityState = StandingState | Literal["no_data"]
+
+
 class Availability(BaseModel):
     """What a member learns before typing (design, *States*). Never the provider's address."""
 
-    state: StandingState
+    state: AvailabilityState
     provider_label: str | None = None
     # Whether the saved connection passed a dated real call of its format (F3 AC77).
     tested: bool = False
@@ -67,6 +71,8 @@ class StepLink(BaseModel):
     """Built by nexovue from the catalog's table, never by the model."""
 
     path: str
+    # The console route's `$params`, filled from the step's own arguments.
+    params: dict[str, str] = Field(default_factory=dict)
     query: dict[str, str]
     caveat: str | None = None
 
@@ -84,6 +90,9 @@ class StepView(BaseModel):
     was_cut: bool
     state: str
     failure: str | None
+    # The first day still kept, on an aged-out step or one read narrowed to what is kept:
+    # "The data before {date} is no longer kept" (spec, *Error cases*).
+    kept_since: date | None = None
     link: StepLink | None
 
 

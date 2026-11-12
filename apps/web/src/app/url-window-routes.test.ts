@@ -8,7 +8,12 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { identityFor } from "@/shared/identity.test-util";
-import { SELECTION_STORAGE_KEY, setSelectedRangeId } from "@/shared/selection";
+import {
+  readSelection,
+  SELECTION_STORAGE_KEY,
+  setSelectedProjectId,
+  setSelectedRangeId,
+} from "@/shared/selection";
 
 import { type AppRouter, createAppRouter } from "./router";
 
@@ -175,5 +180,52 @@ describe("a finding's window in the address (AC21)", () => {
     await settle();
 
     expect(addressWindow(container)).toBeNull();
+  });
+});
+
+describe("a chat step's link names its project (F4 T3.3a, AC22)", () => {
+  // The project chosen before the link is followed: the selection is a module store.
+  const ELSEWHERE = "0b0b0b0b-0e3b-4a2f-8b5d-1f3f7d6a0099";
+  const RELEASE = "01a1c18a-3778-726a-ac51-855da271a3ff";
+  it.each([
+    "/",
+    `/findings/${FINDING}`,
+    "/services",
+    "/service-map",
+    "/metrics",
+    "/alerts",
+    `/alerts/incidents/${FINDING}`,
+    "/synthetics",
+    `/traces/${"a1".repeat(16)}`,
+    `/releases/${RELEASE}`,
+  ])("%s keeps the project and selects it on arrival, writing no window", async (path) => {
+    setSelectedProjectId(ELSEWHERE);
+    setSelectedRangeId("6h");
+    const storedWindow = () =>
+      JSON.parse(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "{}").window;
+    const before = storedWindow();
+
+    const { router } = await mountAt(`${path}?project=${PROJECT}`);
+    await waitFor(() => readSelection().projectId === PROJECT, "the project selected");
+
+    expect(searchOf(router)).toMatchObject({ project: PROJECT });
+    expect(storedWindow()).toEqual(before);
+  });
+
+  it("selects no project that is not an id", async () => {
+    await mountAt("/service-map?project=../../admin");
+    await settle();
+    expect(readSelection().projectId).not.toBe("../../admin");
+  });
+
+  it("carries a search phrase to the Logs screen's box (F4 T3.3)", async () => {
+    const { container, router } = await mountAt(`/logs?project=${PROJECT}&q=timed%20out`);
+    const box = await waitFor(
+      () => container.querySelector<HTMLInputElement>('main input[type="search"]'),
+      "the logs search box",
+    );
+
+    expect(searchOf(router)).toMatchObject({ q: "timed out" });
+    expect(box.value).toBe("timed out");
   });
 });

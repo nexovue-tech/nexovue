@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { identityFor, type TestRole } from "@/shared/identity.test-util";
 import { PROJECT_ID } from "@/shared/router-harness.test-util";
 
-import type { Availability, MessageView, StepView } from "./api";
+import type { Availability, MessageView, QuoteList, StepView } from "./api";
 
 /**
  * Chat's panel mounted in a router with only the network replaced (F4 T2.11's tests). Each
@@ -38,8 +38,10 @@ export function step(overrides: Partial<StepView> = {}): StepView {
     was_cut: false,
     state: "read",
     failure: null,
+    kept_since: null,
     link: {
       path: "/services",
+      params: {},
       query: { project: PROJECT_ID },
       caveat: "The range is not applied here.",
     },
@@ -82,6 +84,8 @@ export interface Answers {
   /** Successive answers to the message poll; the last repeats. A number is a status. */
   polls?: (MessageView | number)[];
   ask?: MessageView | { status: number; code: string; detail: string };
+  /** The answer's quotes read again, or a status. */
+  quotes?: QuoteList | number;
 }
 
 export interface Call {
@@ -159,6 +163,10 @@ export function stubApi(answers: Answers = {}): Call[] {
       if (path === `/assistant/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}`) {
         const next = polls.length > 1 ? polls.shift() : polls[0];
         return typeof next === "number" ? problem(next) : reply(next);
+      }
+      if (path === `/assistant-quotes/${MESSAGE_ID}`) {
+        const quotes = answers.quotes ?? { message_id: MESSAGE_ID, quotes: [] };
+        return typeof quotes === "number" ? problem(quotes) : reply(quotes);
       }
       if (path.endsWith("/stop")) return reply(message({ state: "stopped" }));
       if (path === "/assistant/conversations" && method === "POST") {

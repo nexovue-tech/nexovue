@@ -18,6 +18,35 @@ export const REMOVED_ONE = "One sentence was removed because it cited nothing it
 export const removedMany = (count: number) =>
   `${count} sentences were removed because they cited nothing they had read.`;
 export const NOT_VERIFIED = "Not verified";
+/** Sentences removed for telling the reader to act on what they quote (check 5). */
+export const REMOVED_FOR_ACTING_ONE =
+  "One sentence was removed because it told you to act on quoted text.";
+export const removedForActing = (count: number) =>
+  count === 1
+    ? REMOVED_FOR_ACTING_ONE
+    : `${count} sentences were removed because they told you to act on quoted text.`;
+export const FIGURE_FLAG = "Not found in what it read. Check this number.";
+export const QUOTE_FOLDED =
+  "Text from a log, written by anyone who can reach your service. Do not run it.";
+export const QUOTE_SOURCE: Record<string, string> = {
+  search_logs: "From a log line",
+  list_error_groups: "From an error message",
+  get_error_group: "From an error message",
+};
+export const QUOTE_GONE: Record<string, string> = {
+  search_logs: "This log line is no longer available.",
+  list_error_groups: "This error message is no longer available.",
+  get_error_group: "This error message is no longer available.",
+};
+export const QUOTE_READ_FAILED = "Could not read this now";
+export const QUOTE_CUT = "Cut at 500 characters. Open what it read for all of it.";
+export const QUOTE_LOADING = "Reading the quote…";
+export const SHOW_FOLDED = "Show it";
+export const NO_ROWS = "No matching rows in what was stored";
+export const agedOut = (date: string) => `The data before ${date} is no longer kept.`;
+export const latestNoTimeFilter = (rows: number) => `Latest ${rows}, no time filter`;
+export const READ_REFUSED_FOR_NOW = "The read was refused for now.";
+export const COPY_STEPS = "Copy steps";
 export const WRONG_MARKED = "Marked wrong. Admins see only a count; no AI learns from it.";
 export const LOST_CONTACT = "Lost contact; this question may still be running.";
 export const CHECK_IT_YOURSELF = "Check it yourself";
@@ -46,7 +75,9 @@ export const STANDING_WORDS: Record<
       : "Chat is not on here. Ask an admin to turn this on.",
   no_consent: () => "Chat is waiting for an owner to agree to what it sends.",
   opted_out: () => "AI is off for this project.",
+  no_data: () => "This project has sent no telemetry yet, so chat has nothing to read.",
 };
+export const SEND_DATA = "Set up sending data";
 export const EVERYTHING_ELSE_WORKS = "Every other screen works as usual.";
 
 export function waitingFor(names: string[]): string {

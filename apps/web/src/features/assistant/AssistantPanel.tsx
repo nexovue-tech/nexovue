@@ -33,12 +33,14 @@ import {
   useMessage,
 } from "./api";
 import { MessageBlock } from "./Conversation";
+import { startersFor, usePathname } from "./starters";
 import {
   ANSWER_READY,
   DELETED,
   deleteWarning,
   EVERYTHING_ELSE_WORKS,
   LOST_CONTACT,
+  SEND_DATA,
   STANDING_WORDS,
   waitingFor,
 } from "./states";
@@ -50,28 +52,9 @@ const CLOCK_MS = 1000;
 const WIDE_WINDOW = "(min-width: 1024px)";
 const COARSE_POINTER = "(pointer: coarse)";
 
-const STARTERS = {
-  finding: [
-    "What changed just before this started?",
-    "What do the logs say in this window?",
-    "Has this happened before?",
-  ],
-  service: [
-    "What is this service's error rate this hour?",
-    "Which endpoint moved most?",
-    "What does it depend on?",
-  ],
-  elsewhere: [
-    "What is failing right now?",
-    "What deployed today?",
-    "How did we fix this last time?",
-  ],
-} as const;
-
-export function startersFor(subject: AssistantSubject | null): readonly string[] {
-  if (subject?.findingId) return STARTERS.finding;
-  if (subject?.serviceName) return STARTERS.service;
-  return STARTERS.elsewhere;
+/** The person's zone the question was sent with (FR3); the browser's when it named none. */
+function zoneOf(context: Record<string, unknown>): string | undefined {
+  return typeof context.time_zone === "string" ? context.time_zone : undefined;
 }
 
 function matches(query: string): boolean {
@@ -356,7 +339,14 @@ function PanelBody({
     return (
       <div className="flex flex-col gap-2 py-4 text-sm" data-standing={availability.state}>
         <p className="max-w-prose text-ink">{sentence}</p>
-        {availability.may_manage && availability.state !== "opted_out" ? (
+        {availability.state === "no_data" ? (
+          <Link
+            to="/onboarding"
+            className="font-medium text-brand-text text-sm underline-offset-2 hover:underline"
+          >
+            {SEND_DATA}
+          </Link>
+        ) : availability.may_manage && availability.state !== "opted_out" ? (
           <Link
             to="/settings/ai"
             className="font-medium text-brand-text text-sm underline-offset-2 hover:underline"
@@ -390,7 +380,7 @@ function PanelBody({
           <MessageBlock
             key={message.id}
             message={message}
-            zone={undefined}
+            zone={zoneOf(message.context)}
             now={now}
             onAskAgain={onAskAgain}
             onLeave={onLeave}
@@ -419,13 +409,15 @@ function Ready({
   onStarter: (question: string) => void;
   now: number;
 }) {
+  const pathname = usePathname();
   return (
     <div className="flex max-w-prose flex-col gap-2 py-2 text-sm">
       <p className="text-ink">
-        Chat reads this project's findings, services and logs, and cannot change anything.
+        Chat reads this project's findings, services, releases, alerts, checks, errors, logs,
+        traces, metrics and hosts, and cannot change anything.
       </p>
       <ul className="flex flex-col gap-1">
-        {startersFor(subject).map((starter) => (
+        {startersFor(subject, pathname).map((starter) => (
           <li key={starter}>
             <button
               type="button"

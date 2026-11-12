@@ -21,8 +21,6 @@ organization made here is deleted after.
 
 from __future__ import annotations
 
-import os
-import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
@@ -30,40 +28,33 @@ from typing import Any, Final
 
 import environment  # noqa: F401 — sets what importing the app reads
 import pytest
-import uvicorn
-from assistant_live import (
-    ASYNC_DSN,
-    AVAILABLE,
-    KEYS,
-    chat_on,
-    held_from_the_stack,
-    require_postgres,
+from assistant_live import ASYNC_DSN, AVAILABLE, KEYS, held_from_the_stack, require_postgres
+from assistant_served import (
+    CLICKHOUSE_READER_DSN,
+    committed_tenant,
+    provisioned_install,
+    serve,
+    tenants_for,
 )
 from clickhouse_connect import get_client
-from insight_login import DEV_INSIGHT_PASSWORD, insight_dsn
+from insight_login import insight_dsn
 from nexovue_platform.ai.chat import ChatRequest, ChatResponse
 from nexovue_platform.ai.testing import EVIL_HOST, HostileProvider, calls
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-from nexovue_api import insight_account
 from nexovue_api.assistant import service
 from nexovue_api.assistant.schemas import AskContext
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.data.postgres.models import Finding
-from nexovue_api.main import create_app
-from nexovue_api.settings import Settings
-from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
+from nexovue_api.signup.service import ProvisionedTenant
 from nexovue_scheduler.insight.api_client import CurlApiClient
 from nexovue_scheduler.insight.assistant import LoopParts, answer
 from nexovue_scheduler.insight.assistant_store import PostgresQuestionStore
 
 require_postgres("chat's hostile suite")
 
-CLICKHOUSE_DSN: Final = os.environ.get(
-    "NEXOVUE_CLICKHOUSE_READER_DSN",
-    "clickhouse://nexovue_reader:nexovue_reader_dev@localhost:18123/nexovue",
-)
+CLICKHOUSE_DSN: Final = CLICKHOUSE_READER_DSN
 INSIGHT_ASYNC_DSN: Final = insight_dsn(ASYNC_DSN)
 OTHER_SERVICE: Final = "tenant-b-only-service"
 OWN_SERVICE: Final = "tenant-a-checkout"
@@ -103,76 +94,27 @@ MESSAGE_COLUMNS_WRITTEN: Final = frozenset(
 )
 
 
-def _free_port() -> int:
-    import socket
-
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 @pytest.fixture
 def api_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The real application, on its own thread and loop, against this suite's stores: its
-    settings read from the environment, validated, as a deployment's are."""
-    for name, value in {
-        "POSTGRES_DSN": ASYNC_DSN,
-        "CLICKHOUSE_DSN": CLICKHOUSE_DSN,
-        "AI_SECRET_KEY": KEYS.current,
-        "NEXOVUE_DEPLOYMENT": "self-hosted",
-        "SCHEDULER_INSIGHT_REPLICAS": "1",
-    }.items():
-        monkeypatch.setenv(name, value)
-    settings = Settings()
-    port = _free_port()
-    server = uvicorn.Server(
-        uvicorn.Config(create_app(settings), host="127.0.0.1", port=port, log_level="warning")
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    while not server.started:
-        threading.Event().wait(0.05)
-    yield f"http://127.0.0.1:{port}"
-    server.should_exit = True
-    thread.join(timeout=10)
+    with serve(monkeypatch) as url:
+        yield url
 
 
 @pytest.fixture
 async def install() -> AsyncIterator[AsyncEngine]:
-    os.environ.setdefault(insight_account.PASSWORD_VARIABLE, DEV_INSIGHT_PASSWORD)
-    said: list[str] = []
-    assert await insight_account.provision(ASYNC_DSN, say=said.append), said
-    engine = create_async_engine(ASYNC_DSN)
+    engine = await provisioned_install()
     yield engine
     await engine.dispose()
 
 
 @pytest.fixture
 async def tenants(install: AsyncEngine) -> AsyncIterator[list[ProvisionedTenant]]:
-    made: list[ProvisionedTenant] = []
-    yield made
-    async with install.begin() as db:
-        for tenant in made:
-            await db.execute(
-                text("DELETE FROM jobs WHERE kwargs->>'org_id' = :o"),
-                {"o": str(tenant.organization.id)},
-            )
-            await db.execute(
-                text("DELETE FROM organizations WHERE id = :id"), {"id": tenant.organization.id}
-            )
+    async for made in tenants_for(install):
+        yield made
 
 
 async def _tenant(install: AsyncEngine, made: list[ProvisionedTenant], name: str) -> Any:
-    async with AsyncSession(install, expire_on_commit=False) as db, db.begin():
-        tenant = await provision_tenant(
-            db,
-            organization_name=name,
-            email=f"{name.lower()}-{uuid.uuid4().hex[:8]}@example.test",
-            password="correct horse battery staple",
-        )
-        made.append(tenant)
-        await chat_on(db, tenant)
-    return tenant
+    return await committed_tenant(install, made, name)
 
 
 async def _finding(install: AsyncEngine, tenant: Any, service_name: str) -> None:
