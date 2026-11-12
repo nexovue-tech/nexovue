@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any, Final, cast
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.sessions import Impersonation
@@ -95,9 +96,13 @@ class _Repository:
 class _Session:
     def __init__(self) -> None:
         self.commits = 0
+        self.rollbacks = 0
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
 
 class _Charge:
@@ -190,6 +195,14 @@ class _Batch:
             known = checks or {}
             return {name: known[name] for name in names if name in known}
 
+        self.not_reading: list[int] = []
+
+        async def record_panels_not_reading(*_: Any, count: int, **__: Any) -> None:
+            self.not_reading.append(count)
+
+        monkeypatch.setattr(
+            dashboard_queries, "record_panels_not_reading", record_panels_not_reading
+        )
         monkeypatch.setattr(dashboards, "readable_dashboard", readable_dashboard)
         monkeypatch.setattr(dashboards, "readable_project", readable_project)
         monkeypatch.setattr(dashboard_queries, "last_seen_of", last_seen_of)
@@ -635,6 +648,96 @@ async def test_a_read_stamps_last_opened_at_most_hourly(monkeypatch: pytest.Monk
 
     await batch.read(_Repository(), now=NOW + timedelta(minutes=31))
     assert batch.dashboard.last_viewed_at == NOW + timedelta(minutes=31)
+
+
+_NOT_READING: Final = (
+    _panel("p_ok", "project_trend", signal="rate"),
+    _panel("p_ghost", service="ghost", signal="rate"),
+    _panel("p_other_ghost", service="phantom", signal="errors"),
+)
+
+
+class _NoServiceRows(_Repository):
+    """The project has no rows for any one service, as when none has ever reported."""
+
+    async def query(self, sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = await super().query(sql, parameters)
+        return [] if sql == SERVICE_STATEMENT else rows
+
+
+async def test_t7_1_the_stamping_read_records_how_many_panels_will_not_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A service the project has no record of reads `not_in_project` until someone changes
+    the dashboard, so the list says so (AC115, AC45)."""
+    batch = _Batch(monkeypatch, _definition(*_NOT_READING))
+
+    answer = await batch.read(_NoServiceRows())
+
+    assert answer["panels"]["p_ghost"]["state"] == "not_in_project"
+    assert batch.not_reading == [2]
+    # One write after the answer, and the answer's own commit before any scan (step 4).
+    assert batch.session.commits == 2
+
+
+async def test_t7_1_a_read_that_does_not_stamp_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(
+        monkeypatch, _definition(*_NOT_READING), last_viewed_at=NOW - timedelta(minutes=30)
+    )
+
+    await batch.read(_NoServiceRows())
+
+    assert batch.not_reading == []
+    assert batch.session.commits == 1
+
+
+async def test_t7_1_a_read_of_some_panels_cannot_count_the_rest_so_it_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(*_NOT_READING))
+
+    await batch.read(_NoServiceRows(), panel_ids=frozenset({"p_ghost"}))
+
+    assert batch.not_reading == []
+
+
+async def test_t7_1_a_support_view_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    batch = _Batch(monkeypatch, _definition(*_NOT_READING))
+
+    await batch.read(_NoServiceRows(), identity=_identity(support_view=True))
+
+    assert batch.not_reading == []
+
+
+async def test_t7_1_a_count_that_cannot_be_written_never_takes_the_page_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = _Batch(monkeypatch, _definition(*_NOT_READING))
+
+    async def refuses(*_: Any, **__: Any) -> None:
+        raise OperationalError("UPDATE dashboards", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(dashboard_queries, "record_panels_not_reading", refuses)
+
+    answer = await batch.read(_NoServiceRows())
+
+    assert answer["panels"]["p_ok"]["state"] == "ok"
+    assert batch.session.rollbacks == 1
+
+
+def test_t7_1_only_what_stays_broken_counts_never_what_passes_by_itself() -> None:
+    """Design, *The list*: transient states do not count."""
+
+    def results(*states: str) -> Any:
+        return {f"p_{index}": SimpleNamespace(state=state) for index, state in enumerate(states)}
+
+    counted = ("not_in_project", "ambiguous", "over_limit", "unknown_kind")
+    passing = ("refused", "timed_out", "failed", "needs_service", "paused_by_operator", "ok")
+
+    assert service.count_not_reading(results(*counted)) == 4
+    assert service.count_not_reading(results(*passing, "window_too_wide", "empty")) == 0
 
 
 async def test_nfr10_a_support_view_reads_and_moves_no_last_opened(

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 
@@ -30,7 +30,15 @@ import {
  * what each role may do (AC38 to AC40).
  */
 
-afterEach(unmountAll);
+// Pinned: the window a dashboard opens on is counted from this clock.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2026-11-12T10:00:00Z"));
+});
+afterEach(() => {
+  unmountAll();
+  vi.useRealTimers();
+});
 
 /** The sentence, and then the session: actions follow the role, read alongside. */
 async function heading(container: HTMLElement) {
@@ -1459,5 +1467,58 @@ describe("in plainer words (F3 T5.8; AC17, AC18, AC19, AC83, AC89)", () => {
       /Reached the limit of 3 in 24 hours, including automatic ones\. Try after/,
     );
     expect(member.textContent).not.toContain("At the cap");
+  });
+});
+
+describe("dashboards showing this service (F20, FR57, AC102)", () => {
+  const dashboards = json({
+    dashboards: [{ id: "dash-1", title: "Checkout on-call", uses_picker: false }],
+    more: false,
+  });
+  const link = (container: HTMLElement) => {
+    const anchor = container.querySelector('a[href^="/dashboards/dash-1"]');
+    return new URLSearchParams(anchor?.getAttribute("href")?.split("?")[1]);
+  };
+
+  it("opens from an open finding on a live window that starts before it began", async () => {
+    // Open for 30 minutes: with the lead, the shortest range covering it is the hour.
+    stubApi(finding(), { extra: { "GET /dashboards": dashboards } });
+    const { container } = await mountFinding();
+    await waitFor(() => container.querySelector('a[href^="/dashboards/dash-1"]'), "the link");
+
+    const search = link(container);
+    expect(search.get("service")).toBe("checkout");
+    expect(search.get("project")).toBe(PROJECT_ID);
+    expect(search.get("range")).toBe("1h");
+    expect(search.get("from")).toBeNull();
+  });
+
+  it("opens from a closed finding on fixed times with a margin on each side", async () => {
+    stubApi(
+      finding({
+        state: "closed",
+        closed_reason: "recovered",
+        started_at: minutesAgo(120),
+        closed_at: minutesAgo(60),
+      }),
+      { extra: { "GET /dashboards": dashboards } },
+    );
+    const { container } = await mountFinding();
+    await waitFor(() => container.querySelector('a[href^="/dashboards/dash-1"]'), "the link");
+
+    const search = link(container);
+    expect(search.get("range")).toBeNull();
+    expect(search.get("from")).toBe("2026-11-12T07:45:00.000Z");
+    expect(search.get("to")).toBe("2026-11-12T09:15:00.000Z");
+  });
+
+  it("is not offered on a project-wide finding, which names no service", async () => {
+    stubApi(finding({ scope: "project", service_name: null }), {
+      extra: { "GET /dashboards": dashboards },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    expect(container.querySelector("#dashboards-for-service")).toBeNull();
   });
 });

@@ -59,6 +59,8 @@ export interface DashboardAddress {
   /** Browser Back, to the window before the drag. */
   backFromZoom: () => void;
   setDisplay: (on: boolean) => void;
+  /** The picked service: it replaces the entry, is never remembered, and reads once (AC44). */
+  setService: (service: string | undefined) => void;
 }
 
 interface Held {
@@ -204,6 +206,14 @@ export function useDashboardAddress(options: {
     [search, write],
   );
 
+  const setService = useCallback(
+    (service: string | undefined) => {
+      const { service: _service, ...rest } = search;
+      write({ ...rest, ...(service === undefined ? {} : { service }) }, true);
+    },
+    [search, write],
+  );
+
   const ownProjectId = readRememberedSelection().projectId;
   return {
     search,
@@ -221,5 +231,6 @@ export function useDashboardAddress(options: {
     backToOwnProject,
     backFromZoom,
     setDisplay,
+    setService,
   };
 }

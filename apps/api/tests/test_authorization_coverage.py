@@ -204,11 +204,13 @@ POLICY_OF: Final = {
     "nexovue_api/slos/router.py:change_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:delete_slo": "MayConfigureSlos",
     "nexovue_api/slos/router.py:restore_slo": "MayConfigureSlos",
-    # F20: dashboards, every working role's (BR7, foundation section 5). Purge, an
-    # owner's or an admin's, joins with its route (plan T7.7).
+    # F20: dashboards, every working role's (BR7, foundation section 5), but for the purge,
+    # which is an owner's or an admin's (D47).
     "nexovue_api/dashboards/router.py:create_dashboard": "MayEditDashboards",
     "nexovue_api/dashboards/router.py:replace_dashboard": "MayEditDashboards",
     "nexovue_api/dashboards/router.py:delete_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:restore_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:purge_dashboard": "MayPurgeDashboards",
     "nexovue_api/slos/router.py:create_slo_exclusion": "MayConfigureSlos",
     "nexovue_api/slos/router.py:remove_slo_exclusion": "MayConfigureSlos",
     # A draft's read: gated as a write, because only an editor has a draft (FR10).

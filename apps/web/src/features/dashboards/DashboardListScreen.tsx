@@ -1,6 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
+import type { Column } from "@/shared/components/DataTable";
+import { DataTable } from "@/shared/components/DataTable";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
@@ -9,21 +11,44 @@ import { visibleEscapes } from "@/shared/format/visible-escapes";
 import { useCan } from "@/shared/identity";
 
 import type { DashboardSummary } from "./api";
-import { useDashboards, useDashboardTemplates } from "./api";
+import { useDashboards, useDashboardTemplates, useDeletedDashboards } from "./api";
+import type { ListColumn, ListOrder } from "./dashboard-list";
+import {
+  DEFAULT_ORDER,
+  FORMER_MEMBER,
+  filterByTitle,
+  isStale,
+  nextOrder,
+  notReadingWords,
+  STALE_AFTER_DAYS,
+  sortRows,
+} from "./dashboard-list";
+import { RecentlyDeleted } from "./RecentlyDeleted";
 
 /**
- * The organization's dashboards (F20): each starting point, then a blank dashboard, open
- * the builder as an unsaved draft (FR39, AC38). Sorting, the filter, "not opened for 30
- * days" and Recently deleted arrive with plan Step 7, and the other templates with Step 9.
- * A viewer is offered nothing that would fail (AC7).
+ * The organization's dashboards (F20, FR36, FR58): which one do I want, and which can go.
+ * It shows no panels, numbers or previews, only what the stored columns say.
+ *
+ * Sorted by any column through real header buttons, filtered by title in the browser (the
+ * list holds at most 1,000), a dashboard not opened for 30 days marked, and "3 panels not
+ * reading" where the last stamped read found some. Each state is designed: loading, failed,
+ * empty for an editor (each starting point, then a blank dashboard, FR39), empty for a
+ * viewer, and no results with a way to clear the filter. Recently deleted lists what a
+ * delete hid. A viewer is offered nothing that would fail (AC7).
+ *
+ * `now` is the clock "2 hours ago" and "not opened for 30 days" count from.
  */
 const ACTION_CLASS =
   "inline-flex min-h-11 items-center rounded-sm border border-line px-3 py-1.5 text-ink text-sm hover:bg-hover md:min-h-0";
 
-export function DashboardListScreen() {
+export function DashboardListScreen({ now = Date.now() }: { now?: number }) {
   const dashboards = useDashboards();
+  const deleted = useDeletedDashboards();
   const templates = useDashboardTemplates();
   const canEdit = useCan("edit_dashboards");
+  const [order, setOrder] = useState<ListOrder>(DEFAULT_ORDER);
+  const [typed, setTyped] = useState("");
+  const [showDeleted, setShowDeleted] = useState(false);
 
   const startAction = canEdit ? (
     <div className="flex flex-wrap gap-2">
@@ -42,21 +67,50 @@ export function DashboardListScreen() {
       </Link>
     </div>
   ) : undefined;
+  const hasRows = dashboards.data !== undefined && dashboards.data.length > 0;
 
   return (
     <div className="flex flex-col gap-4 p-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-semibold text-ink text-lg">Dashboards</h1>
-        {dashboards.data && dashboards.data.length > 0 ? startAction : null}
+        {hasRows ? startAction : null}
       </header>
+      {hasRows ? (
+        <input
+          type="search"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          placeholder="Filter by title"
+          aria-label="Filter by title"
+          className="w-full rounded-sm sm:w-80 border border-line bg-surface px-2.5 py-1.5 text-ink text-sm outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        />
+      ) : null}
       <Body
         pending={dashboards.isPending}
         error={dashboards.isError ? dashboards.error : undefined}
         rows={dashboards.data}
         canEdit={canEdit}
         startAction={startAction}
+        order={order}
+        onOrder={(column) => setOrder((current) => nextOrder(current, column))}
+        typed={typed}
+        onClearFilter={() => setTyped("")}
+        now={now}
         onRetry={() => void dashboards.refetch()}
       />
+      <div className="flex flex-col gap-3">
+        <div>
+          <button
+            type="button"
+            aria-expanded={showDeleted}
+            onClick={() => setShowDeleted((open) => !open)}
+            className="min-h-11 rounded-sm border border-line px-3 py-1.5 text-ink-dim text-sm hover:border-line-strong hover:text-ink md:min-h-0"
+          >
+            Recently deleted{deleted.data ? ` (${deleted.data.length})` : ""}
+          </button>
+        </div>
+        {showDeleted ? <RecentlyDeleted now={now} /> : null}
+      </div>
     </div>
   );
 }
@@ -67,6 +121,11 @@ function Body({
   rows,
   canEdit,
   startAction,
+  order,
+  onOrder,
+  typed,
+  onClearFilter,
+  now,
   onRetry,
 }: {
   pending: boolean;
@@ -74,6 +133,11 @@ function Body({
   rows: DashboardSummary[] | undefined;
   canEdit: boolean;
   startAction: ReactNode;
+  order: ListOrder;
+  onOrder: (column: ListColumn) => void;
+  typed: string;
+  onClearFilter: () => void;
+  now: number;
   onRetry: () => void;
 }) {
   if (pending) return <SkeletonRows rows={4} label="Loading dashboards" />;
@@ -91,38 +155,126 @@ function Body({
       <EmptyState title="No dashboards yet" detail="Ask a member to create one." />
     );
   }
+  const shown = sortRows(filterByTitle(rows, typed), order);
+  if (shown.length === 0) {
+    // A filter that excludes everything names itself and is never read as "no dashboards".
+    return (
+      <div className="flex flex-col items-start gap-2 py-3">
+        <p className="text-ink text-sm">
+          No dashboard has “{visibleEscapes(typed.trim())}” in its title.
+        </p>
+        <button
+          type="button"
+          onClick={onClearFilter}
+          className="min-h-11 rounded-sm border border-line px-3 py-1.5 text-ink text-sm hover:bg-hover md:min-h-0"
+        >
+          Clear filter
+        </button>
+      </div>
+    );
+  }
   return (
-    <table className="w-full text-left text-sm">
-      <thead>
-        <tr className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-          <th className="py-2 font-normal">Title</th>
-          <th className="py-2 font-normal">Owner</th>
-          <th className="py-2 font-normal">Panels</th>
-          <th className="py-2 font-normal">Last opened</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.id} className="border-line-subtle border-t">
-            <td className="py-2">
-              <Link
-                to="/dashboards/$dashboardId"
-                params={{ dashboardId: row.id }}
-                className="text-ink hover:underline"
-              >
-                {visibleEscapes(row.title)}
-              </Link>
-            </td>
-            <td className="py-2 text-ink-dim">
-              {row.owner ? visibleEscapes(row.owner) : "Former member"}
-            </td>
-            <td className="py-2 text-ink-dim">{row.panel_count}</td>
-            <td className="py-2 text-ink-dim">
-              {row.last_viewed_at ? formatRelativeTime(row.last_viewed_at) : "Never"}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      caption="Dashboards"
+      rows={shown}
+      rowKey={(row) => row.id}
+      empty=""
+      sort={{
+        key: order.column,
+        direction: order.direction,
+        onSort: (key) => onOrder(key as ListColumn),
+      }}
+      columns={columnsFor(now)}
+    />
+  );
+}
+
+function columnsFor(now: number): Column<DashboardSummary>[] {
+  return [
+    {
+      key: "title",
+      header: "Title",
+      sortable: true,
+      cell: (row) => <TitleCell row={row} now={now} />,
+    },
+    {
+      key: "owner",
+      header: "Owner",
+      sortable: true,
+      wideOnly: true,
+      cell: (row) => (
+        <span className="text-ink-dim">
+          {row.owner ? visibleEscapes(row.owner) : FORMER_MEMBER}
+        </span>
+      ),
+    },
+    {
+      key: "panels",
+      header: "Panels",
+      numeric: true,
+      sortable: true,
+      wideOnly: true,
+      cell: (row) => <span className="text-ink-dim">{row.panel_count}</span>,
+    },
+    {
+      key: "opened",
+      header: "Last opened",
+      sortable: true,
+      cell: (row) => <OpenedCell row={row} now={now} />,
+    },
+    {
+      key: "changed",
+      header: "Last changed",
+      sortable: true,
+      wideOnly: true,
+      cell: (row) => (
+        <span className="text-ink-dim">{formatRelativeTime(row.updated_at, now)}</span>
+      ),
+    },
+    {
+      key: "not_reading",
+      header: "Not reading",
+      sortable: true,
+      wideOnly: true,
+      cell: (row) => (
+        <span className="text-warning-text">{notReadingWords(row.panels_not_reading)}</span>
+      ),
+    },
+  ];
+}
+
+/** On a phone the row is its title and last opened, and the rest sits under the title. */
+function TitleCell({ row, now }: { row: DashboardSummary; now: number }) {
+  const notReading = notReadingWords(row.panels_not_reading);
+  return (
+    <div className="flex flex-col gap-0.5">
+      <Link
+        to="/dashboards/$dashboardId"
+        params={{ dashboardId: row.id }}
+        className="text-ink hover:underline"
+      >
+        {visibleEscapes(row.title)}
+      </Link>
+      {row.description ? (
+        <span className="text-ink-dim text-xs">{visibleEscapes(row.description)}</span>
+      ) : null}
+      <span className="text-ink-dim text-xs md:hidden">
+        {row.owner ? visibleEscapes(row.owner) : FORMER_MEMBER} · {row.panel_count}{" "}
+        {row.panel_count === 1 ? "panel" : "panels"} · changed{" "}
+        {formatRelativeTime(row.updated_at, now)}
+        {notReading ? <span className="text-warning-text"> · {notReading}</span> : null}
+      </span>
+    </div>
+  );
+}
+
+function OpenedCell({ row, now }: { row: DashboardSummary; now: number }) {
+  return (
+    <span className="text-ink-dim">
+      {row.last_viewed_at ? formatRelativeTime(row.last_viewed_at, now) : "Never"}
+      {isStale(row, now) ? (
+        <span className="text-warning-text"> · not opened for {STALE_AFTER_DAYS} days</span>
+      ) : null}
+    </span>
   );
 }

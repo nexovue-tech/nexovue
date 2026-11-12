@@ -701,6 +701,7 @@ describe("the dashboard list", () => {
     last_viewed_at: null,
     created_at: at(60),
     updated_at: at(60),
+    deleted_at: null,
   };
   const templates = {
     templates: [
@@ -723,7 +724,10 @@ describe("the dashboard list", () => {
       "the viewer's empty state",
     );
 
-    expect(container.querySelectorAll("button")).toHaveLength(0);
+    // Recently deleted is a read; there is nothing to create, copy or restore (AC7).
+    expect([...container.querySelectorAll("button")].map((each) => text(each))).toEqual([
+      "Recently deleted (0)",
+    ]);
   });
 
   it("offers an editor the starting point and a blank one, each opening the builder as a draft (FR39)", async () => {
@@ -1027,5 +1031,78 @@ describe("the dashboard at an address (F20, Step 6)", () => {
       "the line",
     );
     expect(text(container)).not.toContain("Set up");
+  });
+});
+
+describe("the service picker (F20, Step 7, T7.3)", () => {
+  const picked = panel("p_pick", "service_trend", { service: { picker: true }, signal: "rate" });
+  const withPicker = () => ({
+    ...dashboard([picked]),
+    definition: { ...dashboard([picked]).definition, service_picker: true },
+  });
+  const services = json({ services: [{ service_name: "checkout" }, { service_name: "payment" }] });
+  const view = (answer: Handler | Handler[]) => ({
+    ...viewOf(answer),
+    [`GET /dashboards/${DASHBOARD_ID}`]: json(withPicker()),
+    "GET /services": services,
+  });
+  const unset: PanelResult = { state: "needs_service", kind: "service_trend" };
+
+  it("holds the picker in the line that asks for it while no service is chosen, and reads no scan (AC140)", async () => {
+    stubApi(view(json(batch({ p_pick: unset }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}`);
+    await waitFor(
+      () => text(container).includes("Choose a service to fill this dashboard"),
+      "the line",
+    );
+
+    const selects = container.querySelectorAll("select");
+    expect(selects).toHaveLength(1);
+    expect(selects[0].closest("[data-sticky-line]")).toBeNull();
+    expect(text(selects[0].parentElement?.parentElement ?? null)).toContain(
+      "Choose a service to fill this dashboard",
+    );
+    expect(text(section(container, "p_pick"))).not.toContain("requests");
+  });
+
+  it("keeps it in the sticky line once a service is in the address, still one picker", async () => {
+    stubApi(view(json(batch({ p_pick: ok("requests_per_minute", "service_trend") }))));
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?service=checkout`);
+    await waitFor(() => container.querySelector("[data-sticky-line] select"), "the sticky picker");
+
+    expect(container.querySelectorAll("select")).toHaveLength(1);
+    await waitFor(
+      () => container.querySelector<HTMLSelectElement>("select")?.value === "checkout",
+      "the address's service chosen",
+    );
+  });
+
+  it("puts the chosen service in the address and reads once with it, after the pause (AC44)", async () => {
+    const calls = stubApi(
+      view(json(batch({ p_pick: ok("requests_per_minute", "service_trend") }))),
+    );
+    const { container } = await mountAt(`/dashboards/${DASHBOARD_ID}?service=checkout`);
+    await waitFor(
+      () => container.querySelector("[data-sticky-line] select option[value=payment]"),
+      "the options",
+    );
+    const reads = () => calls.filter((call) => call.path === "/dashboard-panels/read");
+    const before = reads().length;
+
+    const select = container.querySelector("select") as HTMLSelectElement;
+    for (const value of ["payment", "checkout", "payment"]) {
+      act(() => {
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+    // Stepping through three options sent nothing yet.
+    expect(reads()).toHaveLength(before);
+    await waitFor(() => reads().length > before, "the read with the new service");
+
+    expect(reads().length).toBe(before + 1);
+    expect(searchOf(reads().at(-1) ?? { search: "" }).get("service")).toBe("payment");
+    // A choice makes no row: the dashboard is read, never saved.
+    expect(calls.some((call) => call.method !== "GET")).toBe(false);
   });
 });

@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Final
 
+from nexovue_platform.dashboards import RESTORE_FOR
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,13 +48,21 @@ from nexovue_api.dashboards.schemas import (
     OpenFindings,
     PlanRetention,
     ReplaceDashboard,
+    VersionResponse,
+    VersionsResponse,
+    VersionSummary,
 )
 from nexovue_api.dashboards.templates import TEMPLATES
 from nexovue_api.data.postgres.models import Dashboard, DashboardVersion, Project
 from nexovue_api.detection import queries as detection_queries
 from nexovue_api.detection import service as detection
 from nexovue_api.errors import problems
-from nexovue_api.errors.exceptions import ConflictError, InternalError, NotFoundError
+from nexovue_api.errors.exceptions import (
+    ConflictError,
+    InternalError,
+    InvalidRequestError,
+    NotFoundError,
+)
 from nexovue_api.projects import queries as project_queries
 from nexovue_api.releases import service as releases
 from nexovue_api.usage import queries as usage_queries
@@ -65,13 +74,16 @@ ALL_DASHBOARDS_CAP: Final = 2_000
 # FR51.
 VERSIONS_KEPT_NEWEST: Final = 20
 VERSIONS_KEPT_FOR: Final = timedelta(days=30)
-VERSIONS_CEILING: Final = 200
+VERSIONS_CEILING: Final = queries.VERSIONS_CEILING
 # FR37: "last opened" is true to within an hour, and costs at most one write an hour.
 LAST_OPENED_EVERY: Final = timedelta(hours=1)
+# FR57: dashboards a service's screen lists before "See all".
+SERVICE_DASHBOARDS_SHOWN: Final = 5
 # FR67: alert incidents the strip lists, at most (*guess*), with the cap stated.
 INCIDENTS_CAP: Final = 50
 
 NO_SUCH_DASHBOARD: Final = "This dashboard does not exist or is no longer available."
+NO_SUCH_VERSION: Final = "This version does not exist or is no longer kept."
 NO_SUCH_PROJECT: Final = "This link is for a project you cannot open."
 
 
@@ -90,8 +102,30 @@ class ProjectNotFoundError(NotFoundError):
 # ------------------------------------------------------------------ reading
 
 
-async def list_dashboards(db: AsyncSession, *, org_id: uuid.UUID) -> DashboardListResponse:
-    """The live list, from stored columns, never a definition (AC96)."""
+async def list_dashboards(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    service: str | None = None,
+    deleted: bool = False,
+    now: datetime,
+) -> DashboardListResponse:
+    """The live list, from stored columns, never a definition (AC96). `service` limits it
+    to the dashboards that can show that service, naming ones first (FR57); `deleted`
+    lists those still restorable instead (FR51)."""
+    if service is not None and deleted:
+        raise InvalidRequestError("Ask for one service's dashboards or the deleted ones, not both.")
+    more = False
+    if deleted:
+        rows = await queries.list_deleted(db, org_id=org_id, deleted_since=now - RESTORE_FOR)
+    elif service is not None:
+        rows = await queries.list_for_service(
+            db, org_id=org_id, service=service, limit=SERVICE_DASHBOARDS_SHOWN + 1
+        )
+        more = len(rows) > SERVICE_DASHBOARDS_SHOWN
+        rows = rows[:SERVICE_DASHBOARDS_SHOWN]
+    else:
+        rows = await queries.list_live(db, org_id=org_id)
     return DashboardListResponse(
         dashboards=[
             DashboardSummary(
@@ -105,9 +139,11 @@ async def list_dashboards(db: AsyncSession, *, org_id: uuid.UUID) -> DashboardLi
                 last_viewed_at=row.dashboard.last_viewed_at,
                 created_at=row.dashboard.created_at,
                 updated_at=row.dashboard.updated_at,
+                deleted_at=row.dashboard.deleted_at,
             )
-            for row in await queries.list_live(db, org_id=org_id)
-        ]
+            for row in rows
+        ],
+        more=more,
     )
 
 
@@ -138,6 +174,64 @@ async def get_dashboard(
 ) -> DashboardResponse:
     return await _response(
         db, await readable_dashboard(db, org_id=org_id, dashboard_id=dashboard_id)
+    )
+
+
+async def list_versions(
+    db: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID
+) -> VersionsResponse:
+    """The history, newest first: the version in use, then each version a save replaced."""
+    dashboard = await readable_dashboard(db, org_id=org_id, dashboard_id=dashboard_id)
+    kept = await queries.list_versions(db, org_id=org_id, dashboard_id=dashboard_id)
+    return VersionsResponse(
+        versions=[
+            VersionSummary(
+                version=dashboard.version,
+                title=dashboard.title,
+                saved_by=await queries.person_name(db, org_id=org_id, user_id=dashboard.updated_by),
+                saved_at=dashboard.updated_at,
+                current=True,
+            ),
+            *(
+                VersionSummary(
+                    version=row.version.version,
+                    title=row.version.title,
+                    saved_by=row.saved_by,
+                    saved_at=row.version.saved_at,
+                    current=False,
+                )
+                for row in kept
+            ),
+        ]
+    )
+
+
+async def get_version(
+    db: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, version: int
+) -> VersionResponse:
+    """One version in full. The one in use is served from the dashboard itself."""
+    dashboard = await readable_dashboard(db, org_id=org_id, dashboard_id=dashboard_id)
+    if version == dashboard.version:
+        return VersionResponse(
+            version=dashboard.version,
+            title=dashboard.title,
+            description=dashboard.description,
+            definition=dashboard.definition,
+            saved_by=await queries.person_name(db, org_id=org_id, user_id=dashboard.updated_by),
+            saved_at=dashboard.updated_at,
+            current=True,
+        )
+    kept = await queries.find_version(db, org_id=org_id, dashboard_id=dashboard_id, version=version)
+    if kept is None:
+        raise NotFoundError(NO_SUCH_VERSION)
+    return VersionResponse(
+        version=kept.version.version,
+        title=kept.version.title,
+        description=kept.version.description,
+        definition=kept.version.definition,
+        saved_by=kept.saved_by,
+        saved_at=kept.version.saved_at,
+        current=False,
     )
 
 
@@ -241,18 +335,7 @@ async def replace_dashboard(
 
     before = _facts(dashboard)
     if title_or_definition_changed:
-        db.add(
-            DashboardVersion(
-                dashboard_id=dashboard.id,
-                org_id=dashboard.org_id,
-                version=dashboard.version,
-                title=dashboard.title,
-                description=dashboard.description,
-                definition=dashboard.definition,
-                saved_by=dashboard.updated_by,
-                saved_at=dashboard.updated_at,
-            )
-        )
+        _keep_version(db, dashboard)
     dashboard.title = body.title
     dashboard.description = body.description
     dashboard.definition = definition
@@ -296,6 +379,102 @@ async def delete_dashboard(
         org_id=dashboard.org_id,
         actor_user_id=identity.user.id,
         facts=_facts(dashboard),
+    )
+
+
+async def restore_dashboard(
+    db: AsyncSession,
+    *,
+    identity: Identity,
+    dashboard_id: uuid.UUID,
+    new_title: str | None,
+    now: datetime,
+) -> DashboardResponse:
+    """Undo a delete within 30 days (FR51). A title now in use is refused, naming the
+    holder, and the person restores again under another title (AC11); a restore at the
+    live cap is refused with words, since it would add a live dashboard (AC78)."""
+    await queries.hold_the_organizations_dashboards(db, org_id=identity.org_id)
+    dashboard = await queries.find_any(
+        db, org_id=identity.org_id, dashboard_id=dashboard_id, for_update=True
+    )
+    if (
+        dashboard is None
+        or dashboard.deleted_at is None
+        or dashboard.deleted_at < now - RESTORE_FOR
+    ):
+        # Live, unknown, another organization's, or past its 30 days: one answer.
+        raise DashboardNotFoundError(NO_SUCH_DASHBOARD)
+    counted = await queries.counts(db, org_id=identity.org_id)
+    if counted.live >= LIVE_DASHBOARDS_CAP:
+        raise ConflictError(
+            f"This organization holds {LIVE_DASHBOARDS_CAP:,} dashboards. Delete one first."
+        )
+    before = _facts(dashboard)
+    title = new_title if new_title is not None else dashboard.title
+    await _refuse_a_taken_title(db, org_id=identity.org_id, title=title, other_than=dashboard.id)
+    if title != dashboard.title:
+        # A rename is a change of title, so the version it replaces is kept (FR51).
+        _keep_version(db, dashboard)
+        dashboard.title = title
+        dashboard.version += 1
+        dashboard.updated_by = identity.user.id
+        dashboard.updated_at = now
+    dashboard.deleted_at = None
+    await _flush_refusing_a_taken_title(db, title=title)
+    audit.record_dashboard_restored(
+        db,
+        dashboard_id=dashboard.id,
+        org_id=dashboard.org_id,
+        actor_user_id=identity.user.id,
+        facts=_facts(dashboard),
+        before=before,
+    )
+    return await _response(db, dashboard)
+
+
+async def purge_dashboard(
+    db: AsyncSession,
+    *,
+    identity: Identity,
+    dashboard_id: uuid.UUID,
+    version: int | None,
+) -> None:
+    """Remove text at once, the dashboard or one kept version of it (FR68). It is gone
+    from every route in this transaction, its titles in the audit log read `[removed]`,
+    and one entry records the purge by id and number, holding no removed text. Backups
+    are outside this path."""
+    dashboard = await queries.find_any(
+        db, org_id=identity.org_id, dashboard_id=dashboard_id, for_update=True
+    )
+    if dashboard is None:
+        raise DashboardNotFoundError(NO_SUCH_DASHBOARD)
+    if version is None:
+        await audit.redact_dashboard_titles(
+            db, org_id=dashboard.org_id, dashboard_id=dashboard.id, only=None
+        )
+        await queries.delete_dashboard_row(db, org_id=dashboard.org_id, dashboard_id=dashboard.id)
+    else:
+        if version == dashboard.version:
+            raise ConflictError(
+                "This is the version in use. Remove the whole dashboard, or save over it first."
+            )
+        kept = await queries.find_version(
+            db, org_id=dashboard.org_id, dashboard_id=dashboard.id, version=version
+        )
+        if kept is None:
+            raise NotFoundError(NO_SUCH_VERSION)
+        await queries.delete_version(
+            db, org_id=dashboard.org_id, dashboard_id=dashboard.id, version=version
+        )
+        await audit.redact_dashboard_titles(
+            db, org_id=dashboard.org_id, dashboard_id=dashboard.id, only=kept.version.title
+        )
+    audit.record_dashboard_purged(
+        db,
+        dashboard_id=dashboard_id,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        version=version,
     )
 
 
@@ -426,6 +605,22 @@ async def plan_retention(db: AsyncSession, *, identity: Identity, now: datetime)
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _keep_version(db: AsyncSession, dashboard: Dashboard) -> None:
+    """Keep the title, description and definition a save is about to replace (FR51)."""
+    db.add(
+        DashboardVersion(
+            dashboard_id=dashboard.id,
+            org_id=dashboard.org_id,
+            version=dashboard.version,
+            title=dashboard.title,
+            description=dashboard.description,
+            definition=dashboard.definition,
+            saved_by=dashboard.updated_by,
+            saved_at=dashboard.updated_at,
+        )
+    )
 
 
 def _facts(dashboard: Dashboard) -> audit.DashboardFacts:

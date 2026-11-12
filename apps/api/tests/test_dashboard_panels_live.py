@@ -49,7 +49,7 @@ import pytest
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_findings_cases_live import Team, _client, _reachable, _team, db  # noqa: F401
 
@@ -398,6 +398,116 @@ async def test_ac8_a_support_view_reads_the_panels_and_moves_no_last_opened(
         ).status_code == 200
     await db.refresh(dashboard)
     assert dashboard.last_viewed_at is not None
+
+
+# ------------------------------------------------- T7.1 (AC45, AC115), T7.3 (AC44), T7.7
+
+
+async def test_ac45_ac115_the_first_read_records_last_opened_and_the_panels_not_reading(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """Through the real route and real Postgres: the list shows what the stamping read
+    found, and a second read, within the hour, writes neither again."""
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_rate", "project_trend", signal="rate"),
+        _panel("p_ghost", "service_trend", service="never-reported", signal="rate"),
+    )
+    params = {"dashboard_id": str(dashboard.id), "project_id": str(acme.project_id), "range": "1h"}
+    assert dashboard.last_viewed_at is None and dashboard.panels_not_reading == 0
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        first = (await client.get(f"{API_PREFIX}/dashboard-panels/read", params=params)).json()
+        listed = (await client.get(f"{API_PREFIX}/dashboards")).json()["dashboards"]
+    await db.refresh(dashboard)
+    stamped_at = dashboard.last_viewed_at
+
+    assert first["panels"]["p_ghost"]["state"] == "not_in_project"
+    [row] = [each for each in listed if each["id"] == str(dashboard.id)]
+    assert row["panels_not_reading"] == 1 and row["last_viewed_at"] is not None
+
+    # The broken panel is fixed by someone: a read in the same hour changes nothing, so the
+    # list keeps its last stamped count until the next hour's read (FR36).
+    dashboard.definition = _definition(_panel("p_rate", "project_trend", signal="rate"))
+    await db.flush()
+    async with _app_client(db, acme, acme.member, reader) as client:
+        await client.get(f"{API_PREFIX}/dashboard-panels/read", params=params)
+    await db.refresh(dashboard)
+    assert (dashboard.last_viewed_at, dashboard.panels_not_reading) == (stamped_at, 1)
+
+
+async def test_ac44_one_dashboard_shows_two_services_by_changing_only_the_address(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    start = _hour_ago()
+    await _seed(acme, "alpha", start, minutes=30, per_minute=10)
+    await _seed(acme, "beta", start, minutes=30, per_minute=40)
+    for name in ("alpha", "beta"):
+        db.add(
+            ServiceLastSeen(
+                org_id=acme.org_id,
+                project_id=acme.project_id,
+                service_name=name,
+                last_seen_at=start,
+            )
+        )
+    dashboard = await _dashboard(
+        db,
+        acme,
+        _panel("p_picked", "service_trend", service={"picker": True}, signal="rate"),
+    )
+    dashboard.definition = {**dashboard.definition, "service_picker": True}
+    await db.flush()
+    rows_before = await db.scalar(select(func.count()).select_from(Dashboard))
+    window = {
+        "dashboard_id": str(dashboard.id),
+        "project_id": str(acme.project_id),
+        "from": start.isoformat(),
+        "to": (start + timedelta(minutes=30)).isoformat(),
+    }
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        unset = (await client.get(f"{API_PREFIX}/dashboard-panels/read", params=window)).json()
+        alpha = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read", params=window | {"service": "alpha"}
+            )
+        ).json()
+        beta = (
+            await client.get(
+                f"{API_PREFIX}/dashboard-panels/read", params=window | {"service": "beta"}
+            )
+        ).json()
+
+    assert unset["panels"]["p_picked"] == {"state": "needs_service", "kind": "service_trend"}
+    # Four times the traffic reads as four times the rate: the service came from the address.
+    rate_alpha = _line(alpha["panels"]["p_picked"], "requests_per_minute")
+    rate_beta = _line(beta["panels"]["p_picked"], "requests_per_minute")
+    assert {round(value) for value in rate_alpha} == {10}
+    assert {round(value) for value in rate_beta} == {40}
+    assert await db.scalar(select(func.count()).select_from(Dashboard)) == rows_before
+
+
+async def test_ac120_after_a_purge_the_batch_read_cannot_find_the_dashboard(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    dashboard = await _dashboard(db, acme, _panel("p_rate", "project_trend", signal="rate"))
+    params = {"dashboard_id": str(dashboard.id), "project_id": str(acme.project_id), "range": "1h"}
+
+    async with _app_client(db, acme, acme.owner, reader) as client:
+        purged = await client.post(f"{API_PREFIX}/dashboards/{dashboard.id}/purge")
+        read = await client.get(f"{API_PREFIX}/dashboard-panels/read", params=params)
+
+    assert purged.status_code == 204
+    assert read.status_code == 404
+    assert read.json()["type"].endswith("dashboard-not-found")
 
 
 # --------------------------------------------------------- T3.1, AC135

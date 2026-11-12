@@ -7,6 +7,7 @@ import { AlertsStrip } from "@/shared/alerts/AlertsStrip";
 import { useServiceCoverage } from "@/shared/alerts/api";
 import type { ReleaseRead } from "@/shared/components/ChartReleases";
 import { ChartReleases } from "@/shared/components/ChartReleases";
+import { DashboardsShowingThisService } from "@/shared/components/DashboardsShowingThisService";
 import { DurationHeatmap } from "@/shared/components/DurationHeatmap";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -155,6 +156,11 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
               zone={settings.data?.timezone}
             />
             <TargetsLine projectId={projectId} serviceName={serviceName} />
+            <DashboardsShowingThisService
+              service={serviceName}
+              projectId={projectId}
+              window={undefined}
+            />
           </>
         )
       }

@@ -10,11 +10,12 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from nexovue_platform.alerts.model import service_subject
-from sqlalchemy import ColumnElement, delete, func, or_, select, text
+from sqlalchemy import ColumnElement, case, delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from nexovue_api.data.postgres.models import (
     Check,
@@ -27,6 +28,10 @@ from nexovue_api.data.postgres.models import (
 
 # The live list, at most: the cap on live dashboards (FR9).
 LIST_LIMIT: Final = 1_000
+# Deleted ones count towards the 2,000 (FR9), so a list of them stops there.
+ALL_LIST_LIMIT: Final = 2_000
+# The most versions a dashboard keeps whatever their age (FR51), so a history lists them all.
+VERSIONS_CEILING: Final = 200
 # What an incident about a service is keyed by: a threshold rule's subject, or a burn's
 # `about_key` (`nexovue_platform.alerts.model`). `service_subject("")` is the bare prefix.
 SERVICE_SUBJECT_PREFIX: Final = service_subject("")
@@ -49,17 +54,65 @@ def _name_of(user: User | None) -> str | None:
     return user.name or user.email
 
 
+def _without_definition() -> Any:
+    """A list reads columns alone (AC96): the definition is never loaded, so a draw of a
+    row's `definition` here fails loudly instead of quietly reading what a list must not."""
+    return defer(Dashboard.definition)
+
+
 async def list_live(session: AsyncSession, *, org_id: uuid.UUID) -> list[ListedDashboard]:
     """The organization's live dashboards, owners joined, from columns alone."""
     statement = (
         select(Dashboard, User)
+        .options(_without_definition())
         .outerjoin(User, (User.id == Dashboard.created_by) & (User.org_id == Dashboard.org_id))
         .where(Dashboard.org_id == org_id, _live())
         .order_by(func.lower(Dashboard.title), Dashboard.id)
         .limit(LIST_LIMIT)
     )
-    rows = (await session.execute(statement)).all()
-    return [ListedDashboard(dashboard=row[0], owner=_name_of(row[1])) for row in rows]
+    return _listed(await session.execute(statement))
+
+
+async def list_deleted(
+    session: AsyncSession, *, org_id: uuid.UUID, deleted_since: datetime
+) -> list[ListedDashboard]:
+    """Dashboards deleted since `deleted_since`, newest deletion first: the ones that can
+    still be restored (FR51). Past it, the expiry sweep removes them."""
+    statement = (
+        select(Dashboard, User)
+        .options(_without_definition())
+        .outerjoin(User, (User.id == Dashboard.created_by) & (User.org_id == Dashboard.org_id))
+        .where(Dashboard.org_id == org_id, Dashboard.deleted_at >= deleted_since)
+        .order_by(Dashboard.deleted_at.desc(), Dashboard.id)
+        .limit(ALL_LIST_LIMIT)
+    )
+    return _listed(await session.execute(statement))
+
+
+async def list_for_service(
+    session: AsyncSession, *, org_id: uuid.UUID, service: str, limit: int
+) -> list[ListedDashboard]:
+    """Live dashboards naming a service, or using the picker that can show it (FR57):
+    those naming it first, then by last opened, never opened last. Columns alone."""
+    names_it = Dashboard.service_names.contains([service])
+    statement = (
+        select(Dashboard, User)
+        .options(_without_definition())
+        .outerjoin(User, (User.id == Dashboard.created_by) & (User.org_id == Dashboard.org_id))
+        .where(Dashboard.org_id == org_id, _live(), or_(names_it, Dashboard.uses_picker))
+        .order_by(
+            case((names_it, 0), else_=1),
+            Dashboard.last_viewed_at.desc().nulls_last(),
+            func.lower(Dashboard.title),
+            Dashboard.id,
+        )
+        .limit(limit)
+    )
+    return _listed(await session.execute(statement))
+
+
+def _listed(result: Any) -> list[ListedDashboard]:
+    return [ListedDashboard(dashboard=row[0], owner=_name_of(row[1])) for row in result.all()]
 
 
 async def find_live(
@@ -73,6 +126,90 @@ async def find_live(
         statement = statement.with_for_update()
     found: Dashboard | None = await session.scalar(statement)
     return found
+
+
+async def find_any(
+    session: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, for_update: bool = False
+) -> Dashboard | None:
+    """One dashboard, live or deleted, for restore and purge. Another organization's is None."""
+    statement = select(Dashboard).where(Dashboard.org_id == org_id, Dashboard.id == dashboard_id)
+    if for_update:
+        statement = statement.with_for_update()
+    found: Dashboard | None = await session.scalar(statement)
+    return found
+
+
+@dataclass(frozen=True, slots=True)
+class KeptVersion:
+    version: DashboardVersion
+    saved_by: str | None
+
+
+async def list_versions(
+    session: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID
+) -> list[KeptVersion]:
+    """The kept versions, newest first, with who saved each. The definition is not read."""
+    statement = (
+        select(DashboardVersion, User)
+        .options(defer(DashboardVersion.definition))
+        .outerjoin(User, (User.id == DashboardVersion.saved_by) & (User.org_id == org_id))
+        .where(DashboardVersion.org_id == org_id, DashboardVersion.dashboard_id == dashboard_id)
+        .order_by(DashboardVersion.version.desc())
+        .limit(VERSIONS_CEILING)
+    )
+    return [
+        KeptVersion(version=row[0], saved_by=_name_of(row[1]))
+        for row in (await session.execute(statement)).all()
+    ]
+
+
+async def find_version(
+    session: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, version: int
+) -> KeptVersion | None:
+    statement = (
+        select(DashboardVersion, User)
+        .outerjoin(User, (User.id == DashboardVersion.saved_by) & (User.org_id == org_id))
+        .where(
+            DashboardVersion.org_id == org_id,
+            DashboardVersion.dashboard_id == dashboard_id,
+            DashboardVersion.version == version,
+        )
+    )
+    row = (await session.execute(statement)).one_or_none()
+    return None if row is None else KeptVersion(version=row[0], saved_by=_name_of(row[1]))
+
+
+async def delete_version(
+    session: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, version: int
+) -> None:
+    await session.execute(
+        delete(DashboardVersion).where(
+            DashboardVersion.org_id == org_id,
+            DashboardVersion.dashboard_id == dashboard_id,
+            DashboardVersion.version == version,
+        )
+    )
+
+
+async def delete_dashboard_row(
+    session: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID
+) -> None:
+    """The row, and its versions with it (the foreign key cascades)."""
+    await session.execute(
+        delete(Dashboard).where(Dashboard.org_id == org_id, Dashboard.id == dashboard_id)
+    )
+
+
+async def record_panels_not_reading(
+    session: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, count: int
+) -> None:
+    """The count the list shows beside a dashboard: panels the last stamped read found
+    unable to read (design, *The list*). One short write, never a version, never a save."""
+    await session.execute(
+        update(Dashboard)
+        .where(Dashboard.org_id == org_id, Dashboard.id == dashboard_id)
+        .values(panels_not_reading=count)
+    )
 
 
 async def person_name(

@@ -280,6 +280,14 @@ function Builder({
     change(action, "id" in action ? { panelId: action.id, action: key } : null);
   };
 
+  // An earlier version becomes the draft, as an ordinary edit: nothing is saved until Save,
+  // and the version in use is kept when it is (FR51, AC56).
+  const restoreVersion = (document: DashboardDocument) => {
+    change({ type: "reset", document }, null);
+    setReadings({});
+    setMessage("Restored as a draft. Save to keep it.");
+  };
+
   const openSheet = (panel?: StoredPanel) => {
     const width = panel?.width ?? 4;
     setSheet({
@@ -500,6 +508,9 @@ function Builder({
         <DashboardActions
           dashboard={saved}
           onDeleted={() => void leaveTo(() => navigate({ to: "/dashboards" }))}
+          onPurged={() => void leaveTo(() => navigate({ to: "/dashboards" }))}
+          onDuplicated={(copy) => void toSaved(copy.id)}
+          onRestoreVersion={restoreVersion}
         />
       ) : null}
 

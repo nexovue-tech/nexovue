@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 
@@ -22,7 +22,15 @@ import {
  * check, so a message about a check deleted since led to "No such check".
  */
 
-afterEach(unmountAll);
+// Pinned: the incident's window is counted from this clock, never the day the test runs.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2026-11-12T10:00:00Z"));
+});
+afterEach(() => {
+  unmountAll();
+  vi.useRealTimers();
+});
 
 const heading = (container: HTMLElement) =>
   waitFor(() => container.querySelector("h1"), "the incident's heading");
@@ -349,5 +357,70 @@ describe("a case is not an alert (F22 FR53, AC121)", () => {
     await heading(container);
 
     expect(readable(container)).toContain(CASE_IS_NOT_AN_ALERT);
+  });
+});
+
+describe("dashboards showing this service (F20, FR57, AC117)", () => {
+  const forService = json({
+    dashboards: [{ id: "dash-1", title: "Checkout on-call", uses_picker: false }],
+    more: true,
+  });
+  const serviceIncident = (changes = {}) =>
+    incident({
+      condition_kind: "service_errors" as never,
+      subject_key: "service:checkout",
+      subject_label: "checkout",
+      detail: {},
+      ...changes,
+    });
+
+  it("offers them for a rule that names a service, opened on a live window covering an open incident", async () => {
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(serviceIncident()),
+      "GET /dashboards": forService,
+    });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await waitFor(() => container.querySelector("#dashboards-for-service"), "the section");
+    await waitFor(() => container.querySelector('a[href^="/dashboards/dash-1"]'), "the link");
+
+    const link = container.querySelector('a[href^="/dashboards/dash-1"]');
+    const search = new URLSearchParams(link?.getAttribute("href")?.split("?")[1]);
+    expect(search.get("service")).toBe("checkout");
+    expect(search.get("project")).toBe(incident().project_id);
+    // Opened 7 minutes ago: the shortest range that starts before it, 15 minutes, is too short
+    // once the lead is added, so the hour.
+    expect(search.get("range")).toBe("1h");
+    expect(search.get("from")).toBeNull();
+    expect(readable(container)).toContain("See all");
+  });
+
+  it("opens a closed incident on fixed times with a margin on each side", async () => {
+    const over = serviceIncident({
+      opened_at: minutesAgo(120),
+      resolved_at: minutesAgo(60),
+    });
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(over),
+      "GET /dashboards": forService,
+    });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await waitFor(() => container.querySelector('a[href^="/dashboards/dash-1"]'), "the link");
+
+    const href = container.querySelector('a[href^="/dashboards/dash-1"]')?.getAttribute("href");
+    const search = new URLSearchParams(href?.split("?")[1]);
+    expect(search.get("range")).toBeNull();
+    // 60 minutes long: 15 minutes of margin each side.
+    expect(search.get("from")).toBe("2026-11-12T07:45:00.000Z");
+    expect(search.get("to")).toBe("2026-11-12T09:15:00.000Z");
+  });
+
+  it("is not offered for an incident about a check, which names no service", async () => {
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+
+    await heading(container);
+    expect(container.querySelector("#dashboards-for-service")).toBeNull();
   });
 });

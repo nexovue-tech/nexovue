@@ -74,6 +74,30 @@ export interface DashboardSummary {
   last_viewed_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Set on Recently deleted only: what the 30 days for restoring count from. */
+  deleted_at: string | null;
+}
+
+export interface DashboardList {
+  dashboards: DashboardSummary[];
+  /** Only `?service=` limits a list, and then more may exist than were listed (FR57). */
+  more: boolean;
+}
+
+/** One entry of a dashboard's history (FR51); `current` is the version in use. */
+export interface VersionSummary {
+  version: number;
+  title: string;
+  saved_by: string | null;
+  saved_at: string;
+  current: boolean;
+}
+
+export interface DashboardVersion extends DashboardDocument {
+  version: number;
+  saved_by: string | null;
+  saved_at: string;
+  current: boolean;
 }
 
 export interface Dashboard {
@@ -219,14 +243,35 @@ export interface PanelReadResponse {
 }
 
 const dashboardsKey = ["dashboards"] as const;
+const deletedKey = [...dashboardsKey, "deleted"] as const;
+// Read by the screens that offer "Dashboards showing this service" (`shared/dashboards-for-service.ts`).
+const forServiceKey = [...dashboardsKey, "for-service"] as const;
 
 export function useDashboards() {
   return useQuery({
     queryKey: dashboardsKey,
-    queryFn: ({ signal }) =>
-      apiClient.get<{ dashboards: DashboardSummary[] }>("dashboards", { signal }),
+    queryFn: ({ signal }) => apiClient.get<DashboardList>("dashboards", { signal }),
     select: (response) => response.dashboards,
   });
+}
+
+/** The deleted dashboards that can still be restored: Recently deleted (FR51). */
+export function useDeletedDashboards() {
+  return useQuery({
+    queryKey: deletedKey,
+    queryFn: ({ signal }) =>
+      apiClient.get<DashboardList>("dashboards", { searchParams: { deleted: true }, signal }),
+    select: (response) => response.dashboards,
+  });
+}
+
+/** After any change to what exists: every list that could now be wrong is read again. */
+function refreshLists(client: ReturnType<typeof useQueryClient>): Promise<unknown> {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: dashboardsKey, exact: true }),
+    client.invalidateQueries({ queryKey: deletedKey }),
+    client.invalidateQueries({ queryKey: forServiceKey }),
+  ]);
 }
 
 export function useDashboardTemplates() {
@@ -252,7 +297,7 @@ export function useCreateDashboard() {
   return useMutation({
     mutationKey: ["dashboards", "create"],
     mutationFn: (document: DashboardDocument) => apiClient.post<Dashboard>("dashboards", document),
-    onSuccess: () => client.invalidateQueries({ queryKey: dashboardsKey }),
+    onSuccess: () => refreshLists(client),
   });
 }
 
@@ -265,7 +310,8 @@ export function useReplaceDashboard(dashboardId: string) {
       apiClient.put<Dashboard>(`dashboards/${dashboardId}`, body),
     onSuccess: (saved) => {
       client.setQueryData([...dashboardsKey, dashboardId], saved);
-      return client.invalidateQueries({ queryKey: dashboardsKey, exact: true });
+      client.removeQueries({ queryKey: [...dashboardsKey, dashboardId, "versions"] });
+      return refreshLists(client);
     },
   });
 }
@@ -278,8 +324,71 @@ export function useDeleteDashboard(dashboardId: string) {
     mutationFn: () => apiClient.delete<void>(`dashboards/${dashboardId}`),
     onSuccess: () => {
       client.removeQueries({ queryKey: [...dashboardsKey, dashboardId] });
-      return client.invalidateQueries({ queryKey: dashboardsKey, exact: true });
+      return refreshLists(client);
     },
+  });
+}
+
+/**
+ * Undo a delete (FR51). A title now in use is a 409 naming the holder; the caller asks for
+ * another title and sends it as `title` (AC11).
+ */
+export function useRestoreDashboard(dashboardId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ["dashboards", "restore"],
+    mutationFn: (title?: string) =>
+      apiClient.post<Dashboard>(`dashboards/${dashboardId}/restore`, title ? { title } : {}),
+    onSuccess: () => refreshLists(client),
+  });
+}
+
+/**
+ * Remove a dashboard, or one kept version of it, at once (FR68): an owner's or an admin's.
+ * The dashboard's cached text goes too, so nothing on this page outlives it.
+ */
+export function usePurgeDashboard(dashboardId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ["dashboards", "purge"],
+    mutationFn: (version?: number) =>
+      apiClient.post<void>(`dashboards/${dashboardId}/purge`, version ? { version } : {}),
+    onSuccess: (_nothing, version) => {
+      if (version === undefined)
+        client.removeQueries({ queryKey: [...dashboardsKey, dashboardId] });
+      // A version's text may sit in a cached read of it; the history is read again.
+      else client.removeQueries({ queryKey: [...versionsKey(dashboardId), version] });
+      return Promise.all([
+        refreshLists(client),
+        version === undefined
+          ? undefined
+          : client.invalidateQueries({ queryKey: versionsKey(dashboardId), exact: true }),
+      ]);
+    },
+  });
+}
+
+const versionsKey = (dashboardId: string) => [...dashboardsKey, dashboardId, "versions"] as const;
+
+/** The history a dashboard keeps, newest first, with the one in use marked (FR51). */
+export function useDashboardVersions(dashboardId: string) {
+  return useQuery({
+    queryKey: versionsKey(dashboardId),
+    queryFn: ({ signal }) =>
+      apiClient.get<{ versions: VersionSummary[] }>(`dashboards/${dashboardId}/versions`, {
+        signal,
+      }),
+    select: (response) => response.versions,
+  });
+}
+
+/** One kept version in full, for "Restore this version" to open as a draft. */
+export function useDashboardVersion(dashboardId: string, version: number | undefined) {
+  return useQuery({
+    queryKey: [...versionsKey(dashboardId), version] as const,
+    enabled: version !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<DashboardVersion>(`dashboards/${dashboardId}/versions/${version}`, { signal }),
   });
 }
 

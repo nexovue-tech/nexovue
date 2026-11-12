@@ -71,6 +71,7 @@ import {
   transient,
   unread,
 } from "./panel-words";
+import { ServicePicker } from "./ServicePicker";
 import { chartHeight, syncKeyOf } from "./time-lines";
 import { useDashboardAddress } from "./use-dashboard-address";
 import { useVisiblePanels } from "./visible-panels";
@@ -147,6 +148,10 @@ export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
   const dragged = drag?.windowKey === windowCacheKey(choice) ? drag : undefined;
   const panelIds = useMemo(() => (dragged ? [...dragged.read].sort() : undefined), [dragged]);
   const streak = useRef(newRefusalStreak());
+  // The picker moves between two lines once a service is chosen; the focus moves with it.
+  const pickerHadFocus = useRef(false);
+  // A service the person picked here is not "from the link".
+  const serviceChosenHere = useRef(false);
   // A panel is drawn once it has scrolled into view, and stays drawn: thirty canvases is a
   // lot for a phone (FR50). Without an observer every panel counts as seen.
   const seenPanels = useRef(new Set<string>());
@@ -459,6 +464,21 @@ export function DashboardScreen({ dashboardId }: { dashboardId: string }) {
       failing={panels.isError || unreadIds.length > 0}
       address={address}
       projectName={context.data?.project.name}
+      picker={
+        dashboard.data.definition.service_picker ? (
+          <ServicePicker
+            projectId={projectId}
+            choice={choice}
+            value={address.service}
+            fromLink={address.service !== undefined && !serviceChosenHere.current}
+            onPick={(service) => {
+              serviceChosenHere.current = true;
+              address.setService(service);
+            }}
+            focusKeeper={pickerHadFocus}
+          />
+        ) : undefined
+      }
     />
   );
 }
@@ -557,6 +577,8 @@ interface ViewProps {
   failing: boolean;
   address: ReturnType<typeof useDashboardAddress>;
   projectName: string | undefined;
+  /** The service picker, when the dashboard has one (FR48). */
+  picker: ReactNode;
 }
 
 function DashboardView(props: ViewProps) {
@@ -592,7 +614,7 @@ function DashboardView(props: ViewProps) {
         lines={props.lines}
         onAction={props.onAction}
         canSetUp={props.canSetUp}
-        picker={undefined}
+        picker={props.picker}
       />
       {context ? (
         <WindowStrip
@@ -609,6 +631,9 @@ function DashboardView(props: ViewProps) {
         unreadCount={props.unreadCount}
         totalCount={dashboard.definition.panels.length}
         onFocusFirst={props.onFocusFirstUnread}
+        // One picker on screen: in the line that asks for it while no service is chosen, then
+        // here, where it stays in reach as a phone scrolls (FR50).
+        picker={props.lines.state?.kind === "picker" ? undefined : props.picker}
       />
       {/* The page's one live region, said on change only, never per refresh (AC143). */}
       <p data-live-region role="status" aria-live="polite" className="sr-only">

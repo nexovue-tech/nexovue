@@ -14,11 +14,13 @@ import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
 import { ChartReleases } from "@/shared/components/ChartReleases";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
+import { DashboardsShowingThisService } from "@/shared/components/DashboardsShowingThisService";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import type { SeriesToken } from "@/shared/components/TrendChart";
 import { TrendChart } from "@/shared/components/TrendChart";
+import { windowForClosed, windowForOpen } from "@/shared/dashboards-for-service";
 import type { DeployMarker } from "@/shared/deploy-markers";
 import { releaseMarkers } from "@/shared/deploy-markers";
 import type { Quieting } from "@/shared/detection/api";
@@ -243,6 +245,17 @@ function FindingPage({
           <Readings finding={finding} zone={zone} />
           {finding.scope === "project" ? <Services finding={finding} /> : null}
           <Incidents finding={finding} zone={zone} />
+          {finding.service_name ? (
+            <DashboardsShowingThisService
+              service={finding.service_name}
+              projectId={finding.project_id}
+              window={
+                finding.closed_at === null
+                  ? windowForOpen(finding.started_at, Date.now())
+                  : windowForClosed(finding.started_at, finding.closed_at, Date.now())
+              }
+            />
+          ) : null}
           <Feedback finding={finding} />
         </div>
       </div>

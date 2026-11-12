@@ -10,9 +10,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from nexovue_api.dashboards.definition import DashboardDocument
+from nexovue_api.dashboards.definition import DashboardDocument, Title
 from nexovue_api.detection.schemas import ProjectDetectionStatus
 from nexovue_api.releases.schemas import Marker
 
@@ -31,10 +31,14 @@ class DashboardSummary(BaseModel):
     last_viewed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # Set only on Recently deleted, where it is what the restore window counts from.
+    deleted_at: datetime | None = None
 
 
 class DashboardListResponse(BaseModel):
     dashboards: list[DashboardSummary]
+    # Only `?service=` limits the list, and then more may exist than were listed (FR57).
+    more: bool = False
 
 
 class DashboardResponse(BaseModel):
@@ -59,6 +63,49 @@ class ReplaceDashboard(DashboardDocument):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: int
+
+
+class VersionSummary(BaseModel):
+    """One entry of a dashboard's history (FR51): which version, who saved it, and when.
+    `current` is the one now in use, which no restore is needed for."""
+
+    version: int
+    title: str
+    saved_by: str | None
+    saved_at: datetime
+    current: bool
+
+
+class VersionsResponse(BaseModel):
+    versions: list[VersionSummary]
+
+
+class VersionResponse(BaseModel):
+    """One kept version in full, so "Restore this version" can open it as a draft."""
+
+    version: int
+    title: str
+    description: str
+    definition: dict[str, Any]
+    saved_by: str | None
+    saved_at: datetime
+    current: bool
+
+
+class RestoreDashboard(BaseModel):
+    """Restoring a deleted dashboard, under a new title when its own is now in use (AC11)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    title: Title | None = None
+
+
+class PurgeDashboard(BaseModel):
+    """What a purge removes: the dashboard whole, or one named version of it (FR68)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: int | None = Field(default=None, ge=1)
 
 
 class DashboardTemplate(BaseModel):

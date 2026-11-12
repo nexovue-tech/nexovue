@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from nexovue_platform.telemetry.logging import get_logger
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.auth.dependencies import Identity
@@ -263,7 +264,7 @@ async def read_panels(
         now=now,
     )
     # 2 and 3: stamp, then let go of the connection before ClickHouse is asked anything.
-    dashboards.stamp_opened(dashboard, identity=identity, now=now)
+    stamped = dashboards.stamp_opened(dashboard, identity=identity, now=now)
     await db.commit()
 
     panels, outcomes = await _scan_and_assemble(
@@ -283,10 +284,41 @@ async def read_panels(
         plan,
         last_seen,
     )
+    if stamped and asked.panel_ids is None:
+        await _record_not_reading(
+            db, org_id=identity.org_id, dashboard_id=dashboard.id, panels=panels
+        )
     _log(dashboard.id, plan, outcomes, panels, started, correlation_id)
     return PanelReadResponse(
         correlation_id=correlation_id, window_start=window[0], window_end=window[1], panels=panels
     )
+
+
+# What the list calls "not reading" (design, *The list*): panels that will not read until a
+# person changes the dashboard or the project. A transient state (refused, timed out, failed,
+# a service not yet picked) is never counted, since it passes by itself. Step 8's
+# `series_changed` joins this when the kind exists (T8.2).
+NOT_READING_STATES: Final = frozenset({"not_in_project", "ambiguous", "over_limit", "unknown_kind"})
+
+
+def count_not_reading(panels: dict[str, PanelResult]) -> int:
+    return sum(1 for result in panels.values() if result.state in NOT_READING_STATES)
+
+
+async def _record_not_reading(
+    db: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, panels: dict[str, PanelResult]
+) -> None:
+    """The second of the at most two writes an hour (FR37): the count the stamping read
+    found. The answer is already assembled, so a failure here is logged and the page is
+    not taken down with it (FR14)."""
+    try:
+        await dashboard_queries.record_panels_not_reading(
+            db, org_id=org_id, dashboard_id=dashboard_id, count=count_not_reading(panels)
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        logger.warning("dashboard's not-reading count not recorded", dashboard_id=str(dashboard_id))
 
 
 async def preview_panels(

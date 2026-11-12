@@ -24,6 +24,7 @@ from typing import Any, Final
 from nexovue_platform import cases, detection, erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.audit import queries
 from nexovue_api.data.postgres.models import (
     AlertRule,
     ApiKey,
@@ -843,6 +844,76 @@ def record_dashboard_deleted(
         actor_user_id=actor_user_id,
         facts=facts,
         before=facts,
+    )
+
+
+def record_dashboard_restored(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    facts: DashboardFacts,
+    before: DashboardFacts,
+) -> None:
+    """`before` is the deleted dashboard, so a rename on restore records the old title."""
+    _record_dashboard(
+        db,
+        DASHBOARD_RESTORED,
+        dashboard_id=dashboard_id,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        facts=facts,
+        before=before,
+    )
+
+
+# What a purge rewrites a title to, in that dashboard's earlier entries (FR68).
+REMOVED_TEXT: Final = "[removed]"
+_TITLE_KEYS: Final = ("title", "previous_title")
+
+
+async def redact_dashboard_titles(
+    db: AsyncSession, *, org_id: uuid.UUID, dashboard_id: uuid.UUID, only: str | None
+) -> int:
+    """Rewrite `title` and `previous_title` to `[removed]` in one dashboard's entries
+    (FR68). `only` limits it to entries holding exactly that title, which is what purging
+    one version needs: the other titles are still on a readable dashboard. Returns the
+    entries changed."""
+    changed = 0
+    for entry in await queries.entries_with_detail(
+        db, org_id=org_id, target=_target(DASHBOARD_TARGET, dashboard_id)
+    ):
+        detail = entry.detail or {}
+        hit = [
+            key for key in _TITLE_KEYS if key in detail and (only is None or detail[key] == only)
+        ]
+        if hit:
+            # A new dict, so the JSONB column sees a change.
+            entry.detail = {**detail, **dict.fromkeys(hit, REMOVED_TEXT)}
+            changed += 1
+    return changed
+
+
+def record_dashboard_purged(
+    db: AsyncSession,
+    *,
+    dashboard_id: uuid.UUID,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    version: int | None,
+) -> None:
+    """One entry, naming what was removed by id and number and never by its text (FR68)."""
+    detail: dict[str, Any] = {"removed": "dashboard" if version is None else "version"}
+    if version is not None:
+        detail["version"] = version
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=DASHBOARD_PURGED,
+        target=_target(DASHBOARD_TARGET, dashboard_id),
+        detail=detail,
     )
 
 

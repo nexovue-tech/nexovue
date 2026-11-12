@@ -1,8 +1,10 @@
 import { Link, useParams } from "@tanstack/react-router";
 import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
+import { DashboardsShowingThisService } from "@/shared/components/DashboardsShowingThisService";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { LookNextLinks } from "@/shared/components/LookNextLinks";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { windowForClosed, windowForOpen } from "@/shared/dashboards-for-service";
 import { lookNext } from "@/shared/evidence-links";
 import { formatRelativeTime } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
@@ -117,10 +119,14 @@ const SERVICE_SUBJECT = "service:";
  * at its window: its service's data when it has one, the project's otherwise. It holds
  * no likely cause and no evidence row (AC101).
  */
-function IncidentLookNext({ incident }: { incident: Incident }) {
-  const service = incident.subject_key.startsWith(SERVICE_SUBJECT)
+function incidentService(incident: Incident): string | null {
+  return incident.subject_key.startsWith(SERVICE_SUBJECT)
     ? incident.subject_key.slice(SERVICE_SUBJECT.length)
     : (incident.detail.service ?? null);
+}
+
+function IncidentLookNext({ incident }: { incident: Incident }) {
+  const service = incidentService(incident);
   const entries = lookNext({
     project_id: incident.project_id,
     started_at: incident.opened_at,
@@ -132,6 +138,28 @@ function IncidentLookNext({ incident }: { incident: Incident }) {
       entries={entries}
       projectId={incident.project_id}
       headingId="incident-look-next"
+    />
+  );
+}
+
+/**
+ * FR57, AC117: an incident whose rule names a service offers the dashboards showing it, opened
+ * on the incident's own span: live while it is open, fixed times with a margin once it is over.
+ */
+function IncidentDashboards({ incident }: { incident: Incident }) {
+  const service = incidentService(incident);
+  if (!service) return null;
+  const open = incident.resolved_at === null && !incident.is_event;
+  const now = Date.now();
+  return (
+    <DashboardsShowingThisService
+      service={service}
+      projectId={incident.project_id}
+      window={
+        open
+          ? windowForOpen(incident.opened_at, now)
+          : windowForClosed(incident.opened_at, incident.resolved_at ?? incident.opened_at, now)
+      }
     />
   );
 }
@@ -203,6 +231,8 @@ function IncidentDetail({ incident }: { incident: Incident }) {
       </section>
 
       <IncidentLookNext incident={incident} />
+
+      <IncidentDashboards incident={incident} />
 
       <section aria-labelledby="incident-told" className="flex flex-col gap-1">
         <h2 id="incident-told" className="font-medium font-serif text-base text-ink">

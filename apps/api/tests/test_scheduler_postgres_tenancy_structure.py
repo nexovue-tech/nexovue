@@ -193,6 +193,13 @@ CROSS_TENANT_STATEMENTS: Final = (
         f"{_SWEEP}: deleted targets past restoring, purged one by one, each in its own "
         "transaction binding its own `org_id` (F19 FR31)",
     ),
+    _across(
+        "jobs.expiry",
+        "purge_deleted_dashboards",
+        f"{_SWEEP}: dashboards deleted more than 30 days ago, of every organization, removed "
+        "with their versions by `deleted_at` alone; nothing of one tenant reaches another "
+        "(F20 FR51)",
+    ),
     # Releases seen in traffic (F28 T1.13, D48): the sweep finds whose services have moved;
     # each project's job then binds the `org_id` read from the project's own row.
     _across(
