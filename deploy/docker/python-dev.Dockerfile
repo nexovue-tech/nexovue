@@ -1,7 +1,7 @@
 # Development image for the Python services (api, scheduler). The source tree
 # and the uv-managed virtualenv are bind-mounted; this image carries only the
 # interpreter and the tooling.
-FROM python:3.13-slim-trixie
+FROM python:3.15-slim-trixie
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /uvx /usr/local/bin/
 

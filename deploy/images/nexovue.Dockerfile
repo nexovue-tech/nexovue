@@ -5,7 +5,7 @@
 # Built from the repository root: docker build -f deploy/images/nexovue.Dockerfile .
 
 # ---- the console ------------------------------------------------------------------------------
-FROM node:26.12.0-trixie-slim AS console
+FROM node:26.13.1-trixie-slim AS console
 RUN npm install --global corepack@latest && corepack enable
 WORKDIR /app
 
@@ -23,7 +23,7 @@ COPY docs/product/setup docs/product/setup
 RUN pnpm --filter @nexovue/web build
 
 # ---- the Python environment -------------------------------------------------------------------
-FROM python:3.13-slim-trixie AS python
+FROM python:3.15-slim-trixie AS python
 COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
@@ -44,7 +44,7 @@ COPY packages/contracts/gen/python packages/contracts/gen/python
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --all-packages
 
 # ---- the image --------------------------------------------------------------------------------
-FROM python:3.13-slim-trixie
+FROM python:3.15-slim-trixie
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
