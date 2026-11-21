@@ -12,6 +12,7 @@ from typing import Final
 
 from nexovue_platform.fixes.records import (
     COUNTED_STATES,
+    IN_FLIGHT_STATES,
     KIND_GENERAL,
     PROPOSING,
     GeneralLanguage,
@@ -27,11 +28,17 @@ FIXES_LISTED: Final = 20
 
 
 async def recent_fixes(
-    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID
+    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, kind: str
 ) -> list[FindingFix]:
+    """One rung's suggestions for the finding: rung 2b's read lists `general`, rung 3's
+    `source`, so neither reads the other's states as its own."""
     rows = await session.scalars(
         select(FindingFix)
-        .where(FindingFix.org_id == org_id, FindingFix.finding_id == finding_id)
+        .where(
+            FindingFix.org_id == org_id,
+            FindingFix.finding_id == finding_id,
+            FindingFix.kind == kind,
+        )
         .order_by(FindingFix.requested_at.desc(), FindingFix.id.desc())
         .limit(FIXES_LISTED)
     )
@@ -55,27 +62,29 @@ async def counted_since(
     session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, since: datetime
 ) -> list[datetime]:
     """When each of the finding's tries in the window was asked: rows the model answered
-    (D32), so a provider outage never uses one."""
+    (D32), so a provider outage never uses one. A source row counts once its files were
+    sent (FR15c), so reading files, listing them or a refusal before Send uses none."""
     rows = await session.scalars(
         select(FindingFix.requested_at).where(
             FindingFix.org_id == org_id,
             FindingFix.finding_id == finding_id,
             FindingFix.state.in_(COUNTED_STATES),
             FindingFix.requested_at > since,
+            (FindingFix.kind == KIND_GENERAL) | FindingFix.sent_at.is_not(None),
         )
     )
     return list(rows)
 
 
 async def in_flight(session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID) -> bool:
-    """BR8: a suggestion for this finding is being worked on."""
+    """BR8: a suggestion for this finding is being worked on, of either kind."""
     found = await session.scalar(
         select(func.count())
         .select_from(FindingFix)
         .where(
             FindingFix.org_id == org_id,
             FindingFix.finding_id == finding_id,
-            FindingFix.state == PROPOSING,
+            FindingFix.state.in_(IN_FLIGHT_STATES),
         )
     )
     return bool(found)

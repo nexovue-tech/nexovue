@@ -2,9 +2,10 @@
 design, *Rung 2b*, step 4; plan T2b.9).
 
 Beat adds it to `light` every minute. It touches no source, no GitHub and no key, so it
-runs where `light` runs and stays apart from Step 3's `sweep_fixes`, so rung 2b never needs
-`scheduler-connections`. Two passes, across every organization, each row written by its
-own `org_id`:
+runs where `light` runs and stays apart from Step 3's `sweep_fixes`
+(`connections/fix_sweep.py`), so rung 2b never needs `scheduler-connections`; each pass reads
+general rows only. Two passes, across every organization, each row written by its own
+`org_id`:
 
 - **Stuck.** A row still `proposing` past its job's life, the longest attempt and the
   lease's grace: no attempt can still write, so `failed`, `timed_out`.
@@ -66,7 +67,8 @@ _STUCK: Final = text(
     SET state = 'failed', reason = 'timed_out', state_changed_at = :at, finished_at = :at
     WHERE fix.id IN (
         SELECT stuck.id FROM finding_fixes AS stuck
-        WHERE stuck.state = 'proposing' AND stuck.state_changed_at < :before
+        WHERE stuck.kind = 'general' AND stuck.state = 'proposing'
+          AND stuck.state_changed_at < :before
         ORDER BY stuck.state_changed_at
         LIMIT :batch
         FOR UPDATE SKIP LOCKED
@@ -80,7 +82,8 @@ _UNRECORDED: Final = text(
     SELECT id, org_id, finding_id, kind, state, reason,
            jsonb_array_length(COALESCE(general_suggestion -> 'steps', '[]'::jsonb)) AS steps
     FROM finding_fixes
-    WHERE result_recorded_at IS NULL AND state IN ('proposed', 'refused', 'failed')
+    WHERE kind = 'general' AND result_recorded_at IS NULL
+      AND state IN ('proposed', 'refused', 'failed')
     ORDER BY state_changed_at
     LIMIT :batch
     FOR UPDATE SKIP LOCKED

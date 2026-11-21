@@ -45,7 +45,8 @@ def _quoted(values: tuple[str, ...]) -> str:
         ("0078", "_EMBED_CHECK_REASONS", EMBED_CHECK_REASONS),
         # 0071 widened it (F3 Step 4): the latest copy is the one the database holds.
         ("0071", "_RUN_OUTCOMES", ai.RUN_OUTCOMES),
-        ("0070", "_JOB_RESULT_KINDS", JOB_RESULT_KINDS),
+        # 0079 widened it (F5 Step 3): the brief's file paths.
+        ("0079", "_JOB_RESULT_KINDS", JOB_RESULT_KINDS),
     ],
 )
 def test_each_frozen_list_is_the_code_s(

@@ -41,6 +41,9 @@ class Action(StrEnum):
     # Asking for a suggested fix (F5, foundation section 5): it spends the customer's tokens,
     # so not a viewer's. Rung 2b's general suggestion first (plan T2b.2).
     REQUEST_FIX = "request_fix"
+    # Opening a suggestion as a draft pull request, and running its CI (F5, foundation
+    # section 5; plan T3.2). GitHub's own write access is checked per person at the click (D6).
+    OPEN_FIX_PULL_REQUEST = "open_fix_pull_request"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
     # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
@@ -94,6 +97,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.ASK_ASSISTANT: _EVERYONE_WHO_WORKS,
     Action.MANAGE_KNOWLEDGE: _EVERYONE_WHO_WORKS,
     Action.REQUEST_FIX: _EVERYONE_WHO_WORKS,
+    Action.OPEN_FIX_PULL_REQUEST: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
     Action.MANAGE_AI: _ADMINISTRATORS,

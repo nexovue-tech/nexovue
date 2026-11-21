@@ -276,8 +276,7 @@ def error_groups_sql(*, one_group: bool, one_service: bool, new_only: bool = Fal
 #
 # Deliberately never narrowed to a service: arriving from a service's own screen, the
 # other services a group also happens in are the useful part of opening it.
-GROUP_OCCURRENCES_SQL: Final = _narrowed_to_service(
-    f"""
+_GROUP_OCCURRENCES_TEMPLATE: Final = f"""
 SELECT
     source,
     service_name,
@@ -292,8 +291,12 @@ FROM ({_GROUPED_WITH_DETAIL})
 WHERE group_id = {{group_id:String}}
 ORDER BY occurred_nanos DESC
 LIMIT {{limit:UInt32}}
-""",
-    one_service=False,
+"""
+GROUP_OCCURRENCES_SQL: Final = _narrowed_to_service(_GROUP_OCCURRENCES_TEMPLATE, one_service=False)
+# F5 (FR11, AC12d): the same instances, of one service only, so another service's
+# occurrences can never fill the sample a suggestion's candidate paths are read from.
+GROUP_SERVICE_OCCURRENCES_SQL: Final = _narrowed_to_service(
+    _GROUP_OCCURRENCES_TEMPLATE, one_service=True
 )
 
 

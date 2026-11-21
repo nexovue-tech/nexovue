@@ -65,7 +65,7 @@ OFFERED: Final = EligibilityFacts(
 @pytest.mark.parametrize(
     ("label", "change", "expected"),
     [
-        ("FR31 holds", {}, Eligibility(None, offered=True)),
+        ("FR31 holds", {}, Eligibility("no_code_location", offered=True)),
         ("hosted", {"hosted": True}, Eligibility("hosted_ai_not_offered", offered=False)),
         ("AI off", {"ai_on": False}, Eligibility("ai_off", offered=False)),
         ("project opted out", {"opted_out": True}, Eligibility("project_opted_out", offered=False)),
@@ -89,11 +89,15 @@ OFFERED: Final = EligibilityFacts(
             {"released_cause_rule": "dependency_finding"},
             Eligibility("cause_is_elsewhere", offered=False),
         ),
-        ("no model_input", {"sendable_facts": False}, Eligibility(None, offered=False)),
+        (
+            "no model_input",
+            {"sendable_facts": False},
+            Eligibility("no_code_location", offered=False),
+        ),
         (
             "neither a likely cause nor an error alias",
             {"cause_or_error_alias": False},
-            Eligibility(None, offered=False),
+            Eligibility("no_code_location", offered=False),
         ),
         ("F5's share spent", {"tokens_left": False}, Eligibility("limit_reached", offered=False)),
         ("three tries today", {"tries_used": 3}, Eligibility("limit_reached", offered=False)),

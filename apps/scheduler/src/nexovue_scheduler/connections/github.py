@@ -265,6 +265,10 @@ class GitHubApp:
             # A stored key that is not an RSA key a person must replace (FR43).
             raise TrackerFailure("key_unreadable") from unusable
 
+    def signed_jwt(self) -> str:
+        """The App's own sign-in, for F5's Fix App routes (`fix_github.py`)."""
+        return self._jwt()
+
     def describe(self) -> None:
         """`GET /app`: whether GitHub accepts this App's key."""
         _call(self._endpoint, "GET", "/app", bearer=self._jwt())

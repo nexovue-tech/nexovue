@@ -204,6 +204,20 @@ AI_PROJECT_OPTED_IN: Final = "ai.project_opted_in"
 AI_EXPLANATION_REQUESTED: Final = "ai.explanation_requested"
 # F5: a person asked for a general fix suggestion (FR38), naming the provider host.
 FIX_GENERAL_REQUESTED: Final = fix_records.FIX_GENERAL_REQUESTED
+# F5 Step 3 (design, *Observability*). Details hold ids, fixed codes and, for reads, paths;
+# never a GitHub login or id (AC31). `paths` and `files` are removed during a support view.
+FIX_REQUESTED: Final = fix_records.FIX_REQUESTED
+FIX_CANCELLED: Final = fix_records.FIX_CANCELLED
+REPOSITORY_READ: Final = fix_records.REPOSITORY_READ
+FIX_CODE_LOCATION_CHANGED: Final = "fix.code_location_changed"
+AI_SOURCE_DISCLOSURE_AGREED: Final = "ai.source_disclosure_agreed"
+AI_SOURCE_DISCLOSURE_WITHDRAWN: Final = "ai.source_disclosure_withdrawn"
+GITHUB_ACCOUNT_LINKED: Final = fix_records.GITHUB_ACCOUNT_LINKED
+GITHUB_ACCOUNT_UNLINKED: Final = fix_records.GITHUB_ACCOUNT_UNLINKED
+# The detail keys that name repository paths, kept from a support view (AC11).
+PATH_DETAIL_KEYS: Final = ("paths", "files")
+CODE_LOCATION_TARGET: Final = "service_code_location"
+REPOSITORY_TARGET: Final = "connection_repository"
 AI_CONNECTION_TARGET: Final = "ai_connection"
 # F3. A person's judgement of an explanation, and a rule an organization stopped from
 # naming causes, or started again (FR20, FR54). The reason is a closed-list word.
@@ -1303,6 +1317,28 @@ def record_ai_event(
 ) -> None:
     """An act on the organization's AI connection, switch or opt-outs (F3). `detail` holds
     field names, hosts and closed words only, never a key or a URL's path."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(target_kind, target_id),
+        detail=detail,
+    )
+
+
+def record_fix_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    action: str,
+    target_kind: str,
+    target_id: uuid.UUID,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """An act on F5's suggested fixes: a click, a consent, a code location, a GitHub link.
+    `detail` holds ids, closed words and paths, never a login, code or token."""
     _add(
         db,
         org_id=org_id,

@@ -4,6 +4,7 @@ import { formatRelativeTime } from "@/shared/format/time";
 import type {
   DeployLineAddition,
   FindingGeneralFix,
+  FindingSourceFix,
   GeneralLanguage,
   GeneralState,
   ReleaseContext,
@@ -78,6 +79,16 @@ export function showsSection(general: FindingGeneralFix | undefined): boolean {
   );
 }
 
+/** Rung 3 shows when it has an offer, a suggestion, earlier ones, or a line of its own. */
+export function showsSource(source: FindingSourceFix): boolean {
+  return (
+    source.offer !== null ||
+    source.latest !== null ||
+    source.line !== null ||
+    source.earlier.length > 0
+  );
+}
+
 /* ------------------------------------------------ rung 2b: the page's own words */
 
 export const GENERAL_WORDS = {
@@ -141,4 +152,41 @@ export function askedAgo(askedAt: string, now: number): string {
 /** FR37's tokens and age. */
 export function tokensAndAge(tokens: number, askedAt: string, now: number): string {
   return `${tokens.toLocaleString("en")} ${plural(tokens, "token")} · ${askedAgo(askedAt, now)}`;
+}
+
+/* ------------------------------------------- rung 3: the page's own words (Step 3) */
+
+export const SOURCE_WORDS = {
+  notLoaded: "The suggested fix could not be loaded",
+  pathLabel: (index: number) => `File path ${index + 1}`,
+  addPath: "Name another file",
+  email: "Email me when this needs me",
+  triesLeft: (count: number) => `Tries left today: ${count}`,
+  link: "Connect your GitHub account",
+  remove: "Remove",
+  read: "Read the list again",
+  cancel: "Cancel",
+  leftOut: "Left out",
+  unmatched: (count: number) =>
+    `${count} ${plural(count, "name", "names")} from the error matched no file.`,
+  bytes: (count: number) => `${count.toLocaleString("en-GB")} bytes`,
+  linesSent: (lines: readonly number[]) => `lines ${lines[0]} to ${lines[1]} sent`,
+  moved: "This file has changed on the default branch since the running version.",
+  hint: "What should it look at? (optional)",
+  confirmTop: "Send without the file at the top of the stack",
+  lapses: (minutes: number) =>
+    minutes <= 0
+      ? "This list lapses now."
+      : `This list waits ${minutes} more ${plural(minutes, "minute", "minutes")}.`,
+  askAgain: "Ask again",
+} as const;
+
+/** Whole minutes left before a gathered list lapses (FR13a), never below zero. */
+export function minutesLeft(lapsesAt: string, now: number): number {
+  return Math.max(0, Math.ceil((Date.parse(lapsesAt) - now) / 60_000));
+}
+
+/** `document.title`'s word while a person waits on a background tab (design, *UX*). */
+export function sourceTitle(state: string | undefined): string | null {
+  return state === "gathered" ? "Files ready: confirm" : null;
 }

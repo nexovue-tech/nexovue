@@ -69,3 +69,60 @@ def test_nfr4_f5_s_job_runs_only_on_its_own_capped_queue_in_the_ai_role() -> Non
     assert FIX_QUEUE not in light
     assert FIX_QUEUE not in {DETECTION_QUEUE, EVIDENCE_QUEUE, DELIVERIES_QUEUE, INSIGHT_QUEUE}
     assert insight[insight.index("--queues") + 1].split(",") == ["assistant", "insight", FIX_QUEUE]
+
+
+async def test_t3_14_rung_3_rows_leave_rungs_1_and_2_as_they_were_with_ai_off(
+    db: AsyncSession, now: datetime
+) -> None:
+    """AC33's arms for what Step 3 adds: a source row waiting on its list, then AI off,
+    and the deploy line and brief read exactly as before."""
+    import source_fix_rows as source
+    from sqlalchemy import text
+
+    tenant, finding, repository = await source.ready(db, now)
+    async with rows.client(db, rows.person(tenant)) as http:
+        before = (await http.get(f"{API_PREFIX}/findings/{finding.id}/fixes")).json()
+    await db.execute(
+        text(
+            "INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state, "
+            "connection_repository_id, folder, files_read) VALUES (:org, :project, :finding, "
+            "'source', 'gathered', :repository, 'services/shop', CAST(:listing AS jsonb))"
+        ),
+        {
+            "org": tenant.organization.id,
+            "project": tenant.project.id,
+            "finding": finding.id,
+            "repository": repository.id,
+            "listing": '{"files": []}',
+        },
+    )
+    async with rows.client(db, rows.person(tenant)) as http:
+        gathered = (await http.get(f"{API_PREFIX}/findings/{finding.id}/fixes")).json()
+    await db.execute(
+        text(
+            "UPDATE ai_connections SET enabled = false, off_reason = 'person' WHERE org_id = :org"
+        ),
+        {"org": tenant.organization.id},
+    )
+
+    async with rows.client(db, rows.person(tenant)) as http:
+        after = await http.get(f"{API_PREFIX}/findings/{finding.id}/fixes")
+
+    assert gathered == before
+    assert after.status_code == 200 and after.json() == before
+
+
+def test_t3_14_rung_3_s_jobs_run_only_on_scheduler_connections_queues() -> None:
+    """NFR4, structurally: the pack job and the brief's paths take the interactive queue, the
+    sweep `connections`; neither is a queue detection, evidence, alerts or AI consume."""
+    from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE
+    from nexovue_platform.fixes.records import build_source_pack_request
+
+    from nexovue_scheduler.__main__ import worker_queues
+
+    job = build_source_pack_request(fix_id="f", org_id="o")
+    light = worker_queues("", region="local")
+
+    assert job.queue == CONNECTIONS_INTERACTIVE_QUEUE
+    assert job.queue not in light and "connections" not in light
+    assert job.queue not in {DETECTION_QUEUE, EVIDENCE_QUEUE, DELIVERIES_QUEUE, INSIGHT_QUEUE}

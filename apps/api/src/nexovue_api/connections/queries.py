@@ -16,6 +16,7 @@ from nexovue_platform.connections import (
     SETTING_UP,
     STOPPED,
     SYNCED,
+    TRACKER_KINDS,
 )
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,9 +31,14 @@ from nexovue_api.data.postgres.models import (
 
 
 async def live_connections(session: AsyncSession, *, org_id: uuid.UUID) -> list[Connection]:
+    """The live tracker connections; F5's Fix App (`github_fix`) has its own panel."""
     rows = await session.scalars(
         select(Connection)
-        .where(Connection.org_id == org_id, Connection.state != DISCONNECTED)
+        .where(
+            Connection.org_id == org_id,
+            Connection.state != DISCONNECTED,
+            Connection.kind.in_(TRACKER_KINDS),
+        )
         .order_by(Connection.kind)
     )
     return list(rows)
@@ -71,11 +77,14 @@ async def lock_live_connection(
     return found
 
 
-async def live_github_connection(session: AsyncSession, *, org_id: uuid.UUID) -> Connection | None:
+async def live_github_connection(
+    session: AsyncSession, *, org_id: uuid.UUID, kind: str = GITHUB
+) -> Connection | None:
+    """The live GitHub App of `kind`: F22's tracker App, or F5's Fix App (`github_fix`)."""
     found: Connection | None = await session.scalar(
         select(Connection).where(
             Connection.org_id == org_id,
-            Connection.kind == GITHUB,
+            Connection.kind == kind,
             Connection.state != DISCONNECTED,
         )
     )
@@ -83,14 +92,14 @@ async def live_github_connection(session: AsyncSession, *, org_id: uuid.UUID) ->
 
 
 async def lock_setup(
-    session: AsyncSession, *, org_id: uuid.UUID, state_hash: str
+    session: AsyncSession, *, org_id: uuid.UUID, state_hash: str, kind: str = GITHUB
 ) -> Connection | None:
     """The setup this `state` was issued for, in the caller's organization, if unused."""
     found: Connection | None = await session.scalar(
         select(Connection)
         .where(
             Connection.org_id == org_id,
-            Connection.kind == GITHUB,
+            Connection.kind == kind,
             Connection.state == SETTING_UP,
             Connection.setup_state_hash == state_hash,
         )
@@ -100,7 +109,7 @@ async def lock_setup(
 
 
 async def retire_abandoned_setups(
-    session: AsyncSession, *, org_id: uuid.UUID, now: datetime
+    session: AsyncSession, *, org_id: uuid.UUID, now: datetime, kind: str = GITHUB
 ) -> None:
     """A setup that never got an App and is past its hour (AC76). One with an App is kept:
     GitHub holds that App, and *Stop setting up* is the person's to press."""
@@ -108,7 +117,7 @@ async def retire_abandoned_setups(
         update(Connection)
         .where(
             Connection.org_id == org_id,
-            Connection.kind == GITHUB,
+            Connection.kind == kind,
             Connection.state == SETTING_UP,
             Connection.github_app_id.is_(None),
             Connection.setup_expires_at <= now,

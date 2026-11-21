@@ -66,6 +66,7 @@ ROLL_FORWARD_ONLY: Final = (
     "0076",
     "0077",
     "0078",
+    "0079",
 )
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"

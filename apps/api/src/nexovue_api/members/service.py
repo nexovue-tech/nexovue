@@ -23,6 +23,7 @@ from typing import Any, Final
 
 import structlog
 from nexovue_platform.email import EmailError, EmailSender, Message
+from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +32,12 @@ from nexovue_api.audit import service as audit
 from nexovue_api.auth import recovery_codes, set_password
 from nexovue_api.auth.credentials import is_valid_email, normalize_email
 from nexovue_api.auth.permissions import Action, may
-from nexovue_api.data.postgres.models import Organization, User
+from nexovue_api.data.postgres.models import (
+    GitHubLinkAttempt,
+    GitHubUserLink,
+    Organization,
+    User,
+)
 from nexovue_api.errors.exceptions import (
     ConflictError,
     InvalidRequestError,
@@ -220,6 +226,17 @@ async def scrub(db: AsyncSession, *, member: User, now: datetime) -> None:
             replacement=str(member.id),
         )
     await queries.end_sessions_of(db, org_id=member.org_id, user_id=member.id)
+    # F5 (AC31): their GitHub link and any attempt go; no audit entry names the login.
+    await db.execute(
+        delete(GitHubUserLink).where(
+            GitHubUserLink.org_id == member.org_id, GitHubUserLink.user_id == member.id
+        )
+    )
+    await db.execute(
+        delete(GitHubLinkAttempt).where(
+            GitHubLinkAttempt.org_id == member.org_id, GitHubLinkAttempt.user_id == member.id
+        )
+    )
     # F19 AC88: inside reliability targets' free text too, whoever wrote it.
     await slo_personal.scrub_person(
         db, org_id=member.org_id, address=address, name=name, replacement=FORMER_MEMBER_NAME

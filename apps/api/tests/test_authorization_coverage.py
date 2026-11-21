@@ -48,6 +48,13 @@ UNGUARDED_IDENTITY: Final = "CurrentIdentity"
 # Mutating handlers that deliberately take no policy, each with the reason it is
 # safe. A name here is a decision, so adding one should be uncomfortable.
 EXEMPT: Final = {
+    # F5 (design, *Routes*; A18): a person links, or removes, their own GitHub account. Every
+    # role may, since it is their own identity and spends nothing; a token is refused below
+    # it (`CurrentIdentity`), a support view by method, and `complete` takes only a `state`
+    # issued to this person's own session.
+    "start_user_link",
+    "complete_user_link",
+    "remove_user_link",
     # F22, AC25: a person may withdraw their own words, whatever their current
     # role — an author made a viewer still deletes their own note. The service
     # checks authorship, or DELETE_ANY_CASE_NOTE for everyone else, and a
@@ -205,6 +212,20 @@ POLICY_OF: Final = {
     "nexovue_api/findings/fixes/general_router.py:patch_fix": "MayRequestFix",
     "nexovue_api/findings/fixes/general_router.py:draft_pull_request": "MayRequestFix",
     "nexovue_api/findings/fixes/general_router.py:run_ci": "MayRequestFix",
+    # F5 Step 3: rung 3's Ask, list, Send and Cancel, and the brief's paths (FR5c, FR11).
+    "nexovue_api/findings/fixes/source/router.py:ask_source_fix": "MayRequestFix",
+    "nexovue_api/findings/fixes/source/router.py:change_source_files": "MayRequestFix",
+    "nexovue_api/findings/fixes/source/router.py:send_source_files": "MayRequestFix",
+    "nexovue_api/findings/fixes/source/router.py:cancel_source_fix": "MayRequestFix",
+    "nexovue_api/findings/fixes/source/router.py:ask_brief_files": "MayRequestFix",
+    # F5's Fix App and code locations are an admin's; consent an owner's (FR6, AC10a).
+    "nexovue_api/connections/fix/router.py:start_fix_app": "MayManageConnections",
+    "nexovue_api/connections/fix/router.py:complete_fix_app": "MayManageConnections",
+    "nexovue_api/connections/fix/router.py:refresh_fix_app": "MayManageConnections",
+    "nexovue_api/connections/fix/router.py:set_code_locations": "MayManageConnections",
+    "nexovue_api/connections/fix/router.py:remove_code_locations": "MayManageConnections",
+    "nexovue_api/connections/fix/router.py:agree_source_consent": "MayConsentAIDisclosure",
+    "nexovue_api/connections/fix/router.py:withdraw_source_consent": "MayConsentAIDisclosure",
     "nexovue_api/explanations/router.py:stop_rule": "MayConfigureDetection",
     "nexovue_api/explanations/router.py:resume_rule": "MayConfigureDetection",
     # F19: reliability targets, every working role's (D20, foundation section 5).

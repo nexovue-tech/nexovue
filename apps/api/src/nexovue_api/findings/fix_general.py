@@ -22,12 +22,11 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from nexovue_platform.ai.connection import provider_host
-from nexovue_platform.ai.limits import first_of_next_month, fix_ceiling, month_of
-from nexovue_platform.deployment import HOSTED
-from nexovue_platform.evidence import KINDS, cause_released, display_name, facts_may_be_sent
+from nexovue_platform.ai.limits import first_of_next_month, month_of
+from nexovue_platform.evidence import KINDS, display_name
 from nexovue_platform.evidence.aliases import AliasBook, restored_segments
 from nexovue_platform.fixes.general_rules import GeneralRefused, GeneralSuggestion, check_general
 from nexovue_platform.fixes.records import (
@@ -54,7 +53,6 @@ from nexovue_platform.fixes.sentences import (
     GENERAL_PROPOSING_REQUESTER,
     GENERAL_PROPOSING_VIEWER,
     GENERAL_SEND,
-    NO_CODE_LOCATION_YET,
     REASON_SENTENCES,
     SECTION_HEADING_PROPOSING,
     SECTION_HEADING_UNAVAILABLE,
@@ -63,20 +61,12 @@ from nexovue_platform.fixes.sentences import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.ai import queries as ai_queries
-from nexovue_api.ai import service as ai_service
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.permissions import Action, may
 from nexovue_api.data.postgres.models import AIConnection, FindingExplanation, FindingFix
-from nexovue_api.data.postgres.models import Finding as FindingRow
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
-from nexovue_api.findings import explanation_queries, fix_queries
-from nexovue_api.findings.fix_eligibility import (
-    Eligibility,
-    EligibilityFacts,
-    general_eligibility,
-)
+from nexovue_api.findings import explanation_queries, fix_queries, fix_state
 from nexovue_api.findings.fix_schemas import (
     EarlierGeneral,
     FactReference,
@@ -87,6 +77,7 @@ from nexovue_api.findings.fix_schemas import (
     GeneralOffer,
     GeneralState,
 )
+from nexovue_api.findings.fix_state import FixState
 from nexovue_api.findings.queries import find_finding, lock_finding
 from nexovue_api.findings.schemas import ExplanationSegment
 from nexovue_api.settings import Settings
@@ -120,19 +111,6 @@ class Viewer:
         return of.requester if self.may_request else of.viewer
 
 
-@dataclass(frozen=True, slots=True)
-class _State:
-    """Everything one read or click decides from, read once."""
-
-    finding: FindingRow
-    explanation: FindingExplanation | None
-    connection: AIConnection | None
-    eligibility: Eligibility
-    tries_used: list[datetime]
-    tokens_out: bool
-    now: datetime
-
-
 # ------------------------------------------------------------------ the read
 
 
@@ -149,9 +127,11 @@ async def read_general(
     finding = await find_finding(session, org_id=org_id, finding_id=finding_id)
     if finding is None:
         raise NotFoundError(NOT_FOUND)
-    state = await _state(session, finding, settings=settings, now=now)
+    state = await fix_state.gather(session, finding, settings=settings, now=now)
     viewer = Viewer.of(identity)
-    rows = await fix_queries.recent_fixes(session, org_id=org_id, finding_id=finding_id)
+    rows = await fix_queries.recent_fixes(
+        session, org_id=org_id, finding_id=finding_id, kind=KIND_GENERAL
+    )
     latest = rows[0] if rows else None
     latest_version = None if state.explanation is None else state.explanation.version
     return FindingGeneralFix(
@@ -168,95 +148,9 @@ async def read_general(
     )
 
 
-async def _state(
-    session: AsyncSession, finding: FindingRow, *, settings: Settings, now: datetime
-) -> _State:
-    org_id = finding.org_id
-    explanation = await explanation_queries.version(
-        session, org_id=org_id, finding_id=finding.id, number=None
-    )
-    hosted = settings.nexovue_deployment == HOSTED
-    connection = (
-        None
-        if hosted
-        else await ai_service.connection_in_use(
-            session, org_id=org_id, availability=ai_service.availability_of(settings)
-        )
-    )
-    opted_out = await ai_queries.opted_out(session, org_id=org_id, project_id=finding.project_id)
-    tries = await fix_queries.counted_since(
-        session, org_id=org_id, finding_id=finding.id, since=now - TRIES_WINDOW
-    )
-    tokens_out = await _tokens_out(session, connection, now=now)
-    likely_cause = None if explanation is None else explanation.likely_cause
-    released_rule = _released_rule(likely_cause, override=settings.show_held_causes)
-    model_input = None if explanation is None else explanation.model_input
-    facts = EligibilityFacts(
-        hosted=hosted,
-        ai_on=connection is not None,
-        opted_out=opted_out,
-        project_scope=finding.service_name is None,
-        closed_reason=finding.closed_reason,
-        opened_at=finding.started_at,
-        error_group_linked=_has_error_group(explanation),
-        released_cause_rule=released_rule,
-        sendable_facts=model_input is not None
-        and facts_may_be_sent(likely_cause, override=settings.show_held_causes),
-        cause_or_error_alias=released_rule is not None or _names_an_error(model_input),
-        tokens_left=not tokens_out,
-        tries_used=len(tries),
-        in_flight=await fix_queries.in_flight(session, org_id=org_id, finding_id=finding.id),
-    )
-    return _State(
-        finding=finding,
-        explanation=explanation,
-        connection=connection,
-        eligibility=general_eligibility(facts, now=now),
-        tries_used=tries,
-        tokens_out=tokens_out,
-        now=now,
-    )
-
-
-async def _tokens_out(
-    session: AsyncSession, connection: AIConnection | None, *, now: datetime
-) -> bool:
-    """D32: the organization's used and reserved tokens have reached F5's share."""
-    if connection is None or connection.monthly_token_limit is None:
-        return False
-    usage = await ai_queries.usage_month(session, org_id=connection.org_id, month=month_of(now))
-    spent = 0 if usage is None else usage.used_tokens + usage.reserved_tokens
-    return spent >= fix_ceiling(connection.monthly_token_limit)
-
-
-def _released_rule(likely_cause: Mapping[str, Any] | None, *, override: bool) -> str | None:
-    rule = None if likely_cause is None else likely_cause.get("rule")
-    return rule if isinstance(rule, str) and cause_released(rule, override=override) else None
-
-
-def _has_error_group(explanation: FindingExplanation | None) -> bool:
-    items = [] if explanation is None else explanation.evidence.get("items") or []
-    return any(isinstance(item, Mapping) and item.get("kind") == "error_group" for item in items)
-
-
-def _names_an_error(model_input: Mapping[str, Any] | None) -> bool:
-    """D66: an `error_group` fact carrying an `error_N` alias, which exists only when F3's
-    identifier pattern passed."""
-    facts = [] if model_input is None else model_input.get("facts") or []
-    return any(
-        isinstance(fact, Mapping)
-        and fact.get("kind") == "error_group"
-        and isinstance(fact.get("error"), str)
-        for fact in facts
-    )
-
-
-def _line(state: _State, viewer: Viewer, latest: FindingFix | None) -> FixSectionLine | None:
+def _line(state: FixState, viewer: Viewer, latest: FindingFix | None) -> FixSectionLine | None:
     """The section's line: a reason's sentence, or the line the offer stands under."""
-    eligibility = state.eligibility
-    if eligibility.offered:
-        return FixSectionLine(heading=SECTION_HEADING_UNAVAILABLE, sentence=NO_CODE_LOCATION_YET)
-    reason = eligibility.reason
+    reason = state.eligibility.reason
     if reason is None or reason == "hosted_ai_not_offered":
         return None
     if reason == "ai_off" and not viewer.may_set_up_ai:
@@ -269,12 +163,14 @@ def _line(state: _State, viewer: Viewer, latest: FindingFix | None) -> FixSectio
     return FixSectionLine(
         heading=SECTION_HEADING_UNAVAILABLE,
         sentence=sentence.format(
-            date=_limit_lifts(state).date().isoformat(), dependency=_dependency(state)
+            date=_limit_lifts(state).date().isoformat(),
+            dependency=_dependency(state),
+            host="the AI provider" if state.connection is None else _host(state.connection),
         ),
     )
 
 
-def _limit_lifts(state: _State) -> datetime:
+def _limit_lifts(state: FixState) -> datetime:
     """When the next suggestion may be asked: the month's reset when F5's share is spent,
     else when the oldest counted try leaves the day's window."""
     if state.tokens_out or len(state.tries_used) < TRIES_PER_FINDING:
@@ -283,7 +179,7 @@ def _limit_lifts(state: _State) -> datetime:
     return sorted(state.tries_used)[-TRIES_PER_FINDING] + TRIES_WINDOW
 
 
-def _dependency(state: _State) -> str:
+def _dependency(state: FixState) -> str:
     """The dependency whose own earlier finding is the likely cause, by its shown name."""
     explanation = state.explanation
     cause = None if explanation is None else explanation.likely_cause
@@ -296,7 +192,7 @@ def _dependency(state: _State) -> str:
     return "Another service"
 
 
-def _offer(state: _State, viewer: Viewer) -> GeneralOffer | None:
+def _offer(state: FixState, viewer: Viewer) -> GeneralOffer | None:
     if not (state.eligibility.offered and viewer.may_request and state.connection is not None):
         return None
     return GeneralOffer(
@@ -365,6 +261,8 @@ async def _checked(
 ) -> GeneralContent | str:
     """G1 to G9 again, against the version it was written from; the content, or the reason
     it now shows nothing (AC71). Never an alert, never a state change."""
+    if row.explanation_version is None:
+        return "nexovue_error"
     source = await explanation_queries.version(
         session, org_id=row.org_id, finding_id=row.finding_id, number=row.explanation_version
     )
@@ -393,7 +291,9 @@ async def _checked(
         code=verdict.code,
         evidence=_references(source, verdict.evidence_ids, book),
         earlier_reading=GENERAL_EARLIER_READING
-        if latest_version is not None and row.explanation_version < latest_version
+        if latest_version is not None
+        and row.explanation_version is not None
+        and row.explanation_version < latest_version
         else None,
     )
 
@@ -438,7 +338,7 @@ async def ask_general(
     finding = await lock_finding(session, org_id=org_id, finding_id=finding_id)
     if finding is None:
         raise NotFoundError(NOT_FOUND)
-    state = await _state(session, finding, settings=settings, now=now)
+    state = await fix_state.gather(session, finding, settings=settings, now=now)
     if not state.eligibility.offered:
         code = state.eligibility.reason or NOT_OFFERED_CODE
         raise ConflictError(NOT_OFFERED, code=code)

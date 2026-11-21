@@ -13,6 +13,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Final
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -20,7 +21,7 @@ from nexovue_api.auth import second_factor
 from nexovue_api.auth.credentials import CURRENT_PASSWORD_WRONG, verify_password
 from nexovue_api.auth.encryption import CredentialBox
 from nexovue_api.auth.totp import SecondFactorStore
-from nexovue_api.data.postgres.models import Organization, User
+from nexovue_api.data.postgres.models import GitHubUserLink, Organization, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.members import queries as members_queries
 from nexovue_api.members import service as members
@@ -28,6 +29,7 @@ from nexovue_api.profile import queries
 from nexovue_api.profile.schemas import (
     ExportedActivity,
     ExportedApiToken,
+    ExportedGitHubLink,
     ExportedInvitationReceived,
     ExportedInvitationSent,
     ExportedNote,
@@ -212,6 +214,22 @@ async def export(
             for runbook in runbooks[:MAX_RUNBOOKS_EXPORTED]
         ],
         runbooks_truncated=len(runbooks) > MAX_RUNBOOKS_EXPORTED,
+        github_link=await _github_link(db, org_id=organization.id, user_id=user.id),
+    )
+
+
+async def _github_link(
+    db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID
+) -> ExportedGitHubLink | None:
+    link = await db.scalar(
+        select(GitHubUserLink).where(
+            GitHubUserLink.org_id == org_id, GitHubUserLink.user_id == user_id
+        )
+    )
+    if link is None:
+        return None
+    return ExportedGitHubLink(
+        github_user_id=link.github_user_id, github_login=link.github_login, linked_at=link.linked_at
     )
 
 

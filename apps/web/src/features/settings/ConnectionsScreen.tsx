@@ -1,5 +1,4 @@
 import { useState } from "react";
-
 import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -11,7 +10,6 @@ import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useCan, useSession } from "@/shared/identity";
 import { useProjects } from "@/shared/projects";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
-
 import type { ConnectionPlace, ConnectionTestResult, ConnectionView } from "./api";
 import {
   useConnections,
@@ -39,6 +37,7 @@ import {
   TEST_WORKS,
   UNAVAILABLE,
 } from "./connection-words";
+import { FixAppPanel } from "./FixAppPanel";
 
 /** Loaded as a full page, so the browser applies its own form policy (AC73, `Caddyfile`). */
 export const GITHUB_START_PATH = "/settings/connections/github/start";
@@ -93,6 +92,8 @@ export function ConnectionsScreen() {
           <GitHub
             connection={connections.data.connections.find((each) => each.kind === "github")}
           />
+          {/* F5 Step 3: the App that reads code, and where each service's code lives. */}
+          <FixAppPanel />
         </div>
       )}
     </SettingsLayout>

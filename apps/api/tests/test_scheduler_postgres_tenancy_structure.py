@@ -263,6 +263,41 @@ CROSS_TENANT_STATEMENTS: Final = (
         f"{_SWEEP}: ended general suggestions whose result is not yet recorded; the event, "
         "audit entry and mark each bind the row's own `org_id`",
     ),
+    # F5's rung 3 sweep, on `connections` (plan T3.13).
+    _across(
+        "connections.fix_sweep",
+        "_ENDED_WAITING",
+        f"{_SWEEP}: source suggestions left gathering past the pack job's life, or gathered "
+        "past 15 minutes; each row ends by its own id, and its pack goes by its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_ENDED_SHORT",
+        f"{_SWEEP}: source suggestions that ended short, whose code is cleared and marked "
+        "recorded each by its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_CODE_DUE",
+        f"{_SWEEP}: stored code past BR9's limits, joined to its own organization's AI "
+        "connection; each cleared by its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_EXPIRED_PACKS",
+        f"{_SWEEP}: files read for a suggestion past their minutes (AC14)",
+    ),
+    _across("connections.fix_sweep", "_EXPIRED_CHECKS", f"{_SWEEP}: check runs past 15 minutes"),
+    _across(
+        "connections.fix_sweep",
+        "_EXPIRED_ATTEMPTS",
+        f"{_SWEEP}: GitHub link attempts past their ten minutes, each holding at most a code",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_APPS_DUE",
+        f"{_SWEEP}: Fix Apps due their hourly refresh; each job carries its own `org_id`",
+    ),
     _across(
         "metrics",
         "_CONNECTIONS_ACTIVE",

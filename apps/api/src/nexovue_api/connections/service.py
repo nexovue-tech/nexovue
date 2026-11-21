@@ -125,7 +125,7 @@ def register_disconnect_hook(hook: DisconnectHook) -> None:
     DISCONNECT_HOOKS.append(hook)
 
 
-def _box(keys: ConfiguredKeys, purpose: str) -> SealedBox:
+def sealed_box(keys: ConfiguredKeys, purpose: str) -> SealedBox:
     if not keys.current:
         raise DependencyUnavailableError(
             "Tracker connections cannot be saved: CONNECTION_SECRET_KEY is not set."
@@ -133,7 +133,7 @@ def _box(keys: ConfiguredKeys, purpose: str) -> SealedBox:
     return SealedBox(keyring_from(keys.current, keys.previous), purpose=purpose)
 
 
-def _state_hash(state: str) -> str:
+def hash_of_state(state: str) -> str:
     return hashlib.sha256(state.encode()).hexdigest()
 
 
@@ -254,7 +254,7 @@ async def start_github(
         org_id=org_id,
         kind=GITHUB,
         state=SETTING_UP,
-        setup_state_hash=_state_hash(state),
+        setup_state_hash=hash_of_state(state),
         setup_expires_at=now + SETUP_LIFETIME,
         setup_user_id=actor_user_id,
     )
@@ -333,7 +333,7 @@ async def complete_github(
     _refuse_where_unavailable(availability)
     if not is_manifest_code(code):
         raise InvalidRequestError(_INVALID_SETUP, reason="invalid")
-    row = await queries.lock_setup(session, org_id=org_id, state_hash=_state_hash(state))
+    row = await queries.lock_setup(session, org_id=org_id, state_hash=hash_of_state(state))
     if row is None or row.setup_user_id != actor_user_id:
         raise InvalidRequestError(_INVALID_SETUP, reason="invalid")
     expires_at = row.setup_expires_at
@@ -343,7 +343,9 @@ async def complete_github(
         await session.commit()
         raise InvalidRequestError(_EXPIRED_SETUP, reason="expired")
     owner = connection_secret_owner(str(org_id), str(row.id))
-    row.sealed_manifest_code = _box(keys, CONNECTION_MANIFEST_CODE_PURPOSE).seal(code, owner=owner)
+    row.sealed_manifest_code = sealed_box(keys, CONNECTION_MANIFEST_CODE_PURPOSE).seal(
+        code, owner=owner
+    )
     row.setup_state_hash = None
     await jobs.add(
         session,
@@ -475,7 +477,7 @@ async def replace_credential(
     if row is None or row.kind != GITHUB:
         raise NotFoundError(_NO_SUCH_CONNECTION)
     owner = connection_secret_owner(str(org_id), str(row.id))
-    row.sealed_credential = _box(keys, CONNECTION_CREDENTIAL_PURPOSE).seal(key, owner=owner)
+    row.sealed_credential = sealed_box(keys, CONNECTION_CREDENTIAL_PURPOSE).seal(key, owner=owner)
     audit.record_connection_event(
         session,
         org_id=org_id,
@@ -569,7 +571,7 @@ def _webhook_secret(connection: Connection, keys: ConfiguredKeys) -> str | None:
     if connection.sealed_webhook_secret is None:
         return None
     try:
-        return _box(keys, CONNECTION_WEBHOOK_SECRET_PURPOSE).open(
+        return sealed_box(keys, CONNECTION_WEBHOOK_SECRET_PURPOSE).open(
             bytes(connection.sealed_webhook_secret),
             owner=connection_secret_owner(str(connection.org_id), str(connection.id)),
         )

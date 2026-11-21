@@ -39,6 +39,7 @@ from nexovue_api.checksecrets import router as check_secrets_router
 from nexovue_api.clientlogs import router as client_logs_router
 from nexovue_api.connections import router as connections_router
 from nexovue_api.connections import test_router as connection_tests_router
+from nexovue_api.connections.fix import router as fix_setup_router
 from nexovue_api.dashboardpanels import router as dashboard_panels_router
 from nexovue_api.dashboardpanels.service import PanelReads
 from nexovue_api.dashboards import router as dashboards_router
@@ -52,6 +53,7 @@ from nexovue_api.explanations import router as explanations_router
 from nexovue_api.findings import router as findings_router
 from nexovue_api.findings.fixes import general_router as general_fixes_router
 from nexovue_api.findings.fixes import router as fixes_router
+from nexovue_api.findings.fixes.source import router as source_fixes_router
 from nexovue_api.health import router as health_router
 from nexovue_api.heartbeats import router as heartbeats_router
 from nexovue_api.infrastructure import router as infrastructure_router
@@ -175,6 +177,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(findings_router.router)
     versioned.include_router(fixes_router.router)
     versioned.include_router(general_fixes_router.router)
+    versioned.include_router(source_fixes_router.router)
     versioned.include_router(explanations_router.router)
     versioned.include_router(slos_router.router)
     versioned.include_router(slo_readings_router.router)
@@ -187,6 +190,10 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(channel_tests_router.router)
     versioned.include_router(connections_router.router)
     versioned.include_router(connections_router.service_repositories_router)
+    # F5's setup: the Fix App, source consent, code locations, readiness, the GitHub link.
+    versioned.include_router(fix_setup_router.router)
+    versioned.include_router(fix_setup_router.code_locations_router)
+    versioned.include_router(fix_setup_router.readiness_router)
     versioned.include_router(connection_tests_router.router)
     versioned.include_router(ai_router.router)
     versioned.include_router(ai_preview_router.router)

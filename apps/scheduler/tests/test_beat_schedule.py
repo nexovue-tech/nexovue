@@ -18,9 +18,13 @@ import pytest
 from nexovue_platform.ai_records import CALL_SECONDS_MAX
 from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import CheckDefinition
-from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
+from nexovue_platform.connections import (
+    CONNECTIONS_INTERACTIVE_QUEUE,
+    CONNECTIONS_QUEUE,
+    SWEEP_CONNECTIONS_TASK,
+)
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
-from nexovue_platform.fixes.records import SWEEP_GENERAL_FIXES_TASK
+from nexovue_platform.fixes.records import SWEEP_FIXES_TASK, SWEEP_GENERAL_FIXES_TASK
 from nexovue_platform.knowledge import EMBED_CHECK_TASK, EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -38,6 +42,8 @@ from nexovue_scheduler.beat import (
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
+    FIX_SWEEP_ENTRY,
+    FIX_SWEEP_SECONDS,
     GENERAL_FIX_SWEEP_ENTRY,
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
@@ -390,3 +396,17 @@ def test_a_check_first_comes_due_inside_its_interval_not_all_at_once() -> None:
     entry = beat._entries_for([_check(interval=60)])[f"check:{CHECK_ID}:mumbai"]
 
     assert before < entry.due_at <= beat._monotonic() + 60
+
+
+def test_f5s_rung_3_sweep_runs_every_minute_on_connections_only_while_connections_are_on() -> None:
+    """F5 T3.13: `sweep_fixes` on `connections`, consumed by `scheduler-connections` alone,
+    and only while connections are on, so no job waits for a role that is not running."""
+    beat = _scheduler()
+    assert FIX_SWEEP_ENTRY not in beat._sweep_entries()
+
+    beat.connections_on = True
+    entry = beat._sweep_entries()[FIX_SWEEP_ENTRY]
+
+    assert entry.request.task == SWEEP_FIXES_TASK
+    assert entry.request.queue == CONNECTIONS_QUEUE
+    assert entry.interval_seconds == FIX_SWEEP_SECONDS

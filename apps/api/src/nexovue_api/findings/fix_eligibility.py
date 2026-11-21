@@ -1,12 +1,16 @@
-"""FR9's ordered reasons and FR31's gate for rung 2b: the first version (spec FR9, FR31,
-D66, D67; plan T2b.7). Pure: the reader gathers the facts, this decides.
+"""FR9's ordered reasons, rung 3's result, and FR31's gate for rung 2b (spec FR9, FR31,
+D66, D67; plan T2b.7, T3.7). Pure: the reader gathers the facts, this decides.
 
-The first reason that applies, in FR9's order, stops the list. **Before Step 3 no code
-location exists** (`service_code_locations` is Step 3's table), so every service finding
-reaches FR9's `no_code_location`, the one place rung 2b may be offered (D67); T3.7 extends
-this list with reasons 8 to 10 and 13 and the reach table. Rung 2b then needs F3's facts to
-be sendable and to hold a cause or an `error_N` alias (D66): otherwise nothing about it is
-shown, not even a refusal, because nothing could change it now.
+The first reason that applies, in FR9's order, stops the list. With none, rung 3 is
+**ready** (an error group is linked) or **ready without a stack** (a person names files).
+
+**Rung 2b shows only at a code-access reason** (D67): `no_code_location`,
+`no_read_permission` or `no_consent`. Where rung 3 is ready, only rung 3 is offered. Rung 2b
+then needs F3's facts to be sendable and to hold a cause or an `error_N` alias (D66):
+otherwise nothing about it is shown, not even a refusal.
+
+`cause_is_elsewhere` (row 7) stops nobody from naming files (FR9): rung 3 stays open to
+typed paths when no later reason applies. Row 13 (`draft_open`) comes with Step 7.
 
 Imports no AI code, so a later rung 1 or 2 read may ask it too.
 """
@@ -28,11 +32,17 @@ Reason = Literal[
     "closed_as_not_a_problem",
     "evidence_pending",
     "cause_is_elsewhere",
+    "no_code_location",
+    "no_read_permission",
+    "no_consent",
     "limit_reached",
     "already_running",
 ]
+SourceResult = Literal["ready", "ready_without_stack"]
 # FR9, row 5: closed as not a problem, so there is nothing to change.
 NOT_A_PROBLEM: Final = frozenset({"false_alarm", "new_normal", "adopted", "service_gone"})
+# D67: the reasons rung 2b may stand under.
+CODE_ACCESS_REASONS: Final = frozenset({"no_code_location", "no_read_permission", "no_consent"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +65,11 @@ class EligibilityFacts:
     tokens_left: bool
     tries_used: int
     in_flight: bool
+    # FR9 rows 8 to 10 (Step 3): the service's code location, the Fix App's read of its
+    # repository, and a live consent covering its folder.
+    code_location: bool = False
+    read_permission: bool = False
+    consent_live: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,21 +81,50 @@ class Eligibility:
     offered: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SourceEligibility:
+    """Rung 3: FR9's first reason, and what may be asked. `result` is set when **Ask** may
+    show: `ready` from the error's stack, `ready_without_stack` from typed paths."""
+
+    reason: Reason | None
+    result: SourceResult | None
+
+
 NOTHING: Final = Eligibility(reason=None, offered=False)
 
 
+def first_reason(facts: EligibilityFacts, *, now: datetime) -> Reason | None:
+    """FR9's list, in order, to the first that applies (row 13 comes with Step 7)."""
+    return _stopping_reason(facts, now=now) or _access_reason(facts) or _limit_reason(facts)
+
+
 def general_eligibility(facts: EligibilityFacts, *, now: datetime) -> Eligibility:
-    """FR9's order down to the code-access reasons, then FR31's gate."""
-    stopped = _stopping_reason(facts, now=now)
-    if stopped is not None:
-        return Eligibility(reason=stopped, offered=False)
-    if not (facts.sendable_facts and facts.cause_or_error_alias):
-        return NOTHING
-    if not facts.tokens_left or facts.tries_used >= TRIES_PER_FINDING:
-        return Eligibility(reason="limit_reached", offered=False)
-    if facts.in_flight:
-        return Eligibility(reason="already_running", offered=False)
-    return Eligibility(reason=None, offered=True)
+    """FR31: rung 2b only where rung 3 stops for want of code access (D67)."""
+    reason = first_reason(facts, now=now)
+    if reason not in CODE_ACCESS_REASONS or not (
+        facts.sendable_facts and facts.cause_or_error_alias
+    ):
+        return Eligibility(reason=reason, offered=False)
+    limit = _limit_reason(facts)
+    if limit is not None:
+        return Eligibility(reason=limit, offered=False)
+    return Eligibility(reason=reason, offered=True)
+
+
+def source_eligibility(facts: EligibilityFacts, *, now: datetime) -> SourceEligibility:
+    """Rung 3: ready, ready without a stack, or the reason it is not."""
+    reason = first_reason(facts, now=now)
+    if reason == "cause_is_elsewhere":
+        # FR9 row 7: a person may still name files here, unless a later reason applies.
+        blocked = _access_reason(facts) or _limit_reason(facts)
+        return SourceEligibility(
+            reason=blocked or reason, result=None if blocked else "ready_without_stack"
+        )
+    if reason is not None:
+        return SourceEligibility(reason=reason, result=None)
+    return SourceEligibility(
+        reason=None, result="ready" if facts.error_group_linked else "ready_without_stack"
+    )
 
 
 def _stopping_reason(facts: EligibilityFacts, *, now: datetime) -> Reason | None:
@@ -98,4 +142,22 @@ def _stopping_reason(facts: EligibilityFacts, *, now: datetime) -> Reason | None
         return "evidence_pending"
     if facts.released_cause_rule == RULE_DEPENDENCY_FINDING:
         return "cause_is_elsewhere"
+    return None
+
+
+def _access_reason(facts: EligibilityFacts) -> Reason | None:
+    if not facts.code_location:
+        return "no_code_location"
+    if not facts.read_permission:
+        return "no_read_permission"
+    if not facts.consent_live:
+        return "no_consent"
+    return None
+
+
+def _limit_reason(facts: EligibilityFacts) -> Reason | None:
+    if not facts.tokens_left or facts.tries_used >= TRIES_PER_FINDING:
+        return "limit_reached"
+    if facts.in_flight:
+        return "already_running"
     return None

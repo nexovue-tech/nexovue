@@ -36,4 +36,5 @@ async def read_audit_log(
         until=until,
         cursor=cursor,
         limit=limit,
+        support_view=identity.impersonation is not None,
     )

@@ -139,6 +139,40 @@ async def get_error_group(
     )
 
 
+async def recent_for_service(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    group_id: str,
+    service_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> list[ErrorOccurrence] | None:
+    """One group's recent instances from one service only (F5 FR11, AC12d), newest first,
+    or None when the group is no longer in the window at all (FR11a: aged out).
+
+    Bound to the service, so another service's occurrences cannot use up the sample of 20,
+    as the project-wide `get_error_group` would let them."""
+    parameters = _window_parameters(project_id, from_time, to_time)
+    summary_row = await repository.query_one(
+        queries.error_groups_sql(one_group=True, one_service=False),
+        parameters
+        | {
+            "group_id": group_id,
+            "limit": 1,
+            "new_after_nanos": _new_after_nanos(from_time, to_time),
+        },
+    )
+    if summary_row is None:
+        return None
+    rows = await repository.query(
+        queries.GROUP_SERVICE_OCCURRENCES_SQL,
+        parameters
+        | {"group_id": group_id, "service_name": service_name, "limit": OCCURRENCE_SAMPLE_SIZE},
+    )
+    return [_to_occurrence(row) for row in rows]
+
+
 def _new_after_nanos(from_time: datetime, to_time: datetime) -> int:
     """The instant after which a first occurrence counts as starting here.
 

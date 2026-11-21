@@ -14,7 +14,11 @@ from typing import Final
 import pytest
 from nexovue_platform.fixes import sentences
 from nexovue_platform.fixes.records import FIX_REASONS
-from nexovue_platform.fixes.sentences import ELIGIBILITY_SENTENCES, REASON_SENTENCES
+from nexovue_platform.fixes.sentences import (
+    ELIGIBILITY_SENTENCES,
+    NEUTRAL_REASONS,
+    REASON_SENTENCES,
+)
 
 # AC37's scan.
 BANNED: Final = re.compile(
@@ -49,7 +53,9 @@ def test_ac8_every_stored_reason_has_a_requester_s_and_a_viewer_s_sentence(reaso
     sentence = REASON_SENTENCES[reason]
 
     assert sentence.requester.endswith(".")
-    assert reason in {"ai_off"} or sentence.viewer
+    # A viewer sees no line for AI switched off, nor for a person's own cancel or a lapse
+    # (design, *Every sentence*: "No line").
+    assert reason in {"ai_off", *NEUTRAL_REASONS} or sentence.viewer
 
 
 @pytest.mark.parametrize(("where", "text"), _every_sentence())
@@ -67,3 +73,33 @@ def test_ac72_the_label_is_word_for_word() -> None:
         "Example pattern, not your code. Nexovue has not seen your code. Check before using."
     )
     assert sentences.GENERAL_HEADING == "General fix suggestion"
+
+
+# FR9's reasons a page may say (hosted says nothing on the finding page).
+FR9_REASONS: Final = (
+    "ai_off",
+    "project_opted_out",
+    "project_finding",
+    "closed_as_not_a_problem",
+    "evidence_pending",
+    "cause_is_elsewhere",
+    "no_code_location",
+    "no_read_permission",
+    "no_consent",
+    "limit_reached",
+    "already_running",
+)
+
+
+@pytest.mark.parametrize("reason", FR9_REASONS)
+def test_ac8_every_fr9_reason_has_its_sentence(reason: str) -> None:
+    sentence = ELIGIBILITY_SENTENCES[reason]
+
+    assert sentence.requester.endswith(".")
+    assert reason == "ai_off" or sentence.viewer
+
+
+def test_ac8_rung_3_s_requester_sentences_name_who_can_change_it() -> None:
+    assert ELIGIBILITY_SENTENCES["no_code_location"].requester.endswith("An admin can set it.")
+    assert ELIGIBILITY_SENTENCES["no_consent"].requester.endswith("Ask an owner.")
+    assert "name files" in ELIGIBILITY_SENTENCES["cause_is_elsewhere"].requester

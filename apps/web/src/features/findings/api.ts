@@ -1239,3 +1239,158 @@ export function useAskGeneralFix(findingId: string) {
     },
   });
 }
+
+/* ---------------------------------------------- F5 rung 3: the service's own files */
+
+export type SourceState =
+  | "gathering"
+  | "gathered"
+  | "proposing"
+  | "proposed"
+  | "refused"
+  | "failed"
+  | "stale";
+
+export interface ListedFile {
+  ref: string;
+  path: string;
+  role: string;
+  why: string;
+  bytes: number;
+  lines_sent: number[] | null;
+  moved_on_default: boolean;
+  github_url: string | null;
+}
+
+export interface SourceFiles {
+  files: ListedFile[];
+  left_out: { path: string; why: string; bytes: number | null }[];
+  unmatched: number;
+  typed_missing: { path: string; sentence: string }[];
+  commit: string;
+  commit_known: boolean;
+  commit_sentence: string | null;
+  top_left_out: boolean;
+  digest: string;
+  bytes_sent: number;
+  provider_host: string;
+  round: number;
+  lapses_at: string;
+  forgeable: string;
+  send_host: string;
+  send: string;
+}
+
+export interface SourceOffer {
+  action: string;
+  result: "ready" | "ready_without_stack";
+  label: string;
+  name_files_lead: string | null;
+  folder: string | null;
+  tries_left: number;
+  needs_link: boolean;
+  link_sentence: string | null;
+}
+
+export interface SourceFix {
+  id: string;
+  state: SourceState;
+  heading: string;
+  sentence: string | null;
+  reason: string | null;
+  neutral: boolean;
+  files: SourceFiles | null;
+  requested_at: string;
+  state_changed_at: string;
+}
+
+export interface FindingSourceFix {
+  finding_id: string;
+  line: FixSectionLine | null;
+  offer: SourceOffer | null;
+  latest: SourceFix | null;
+  earlier: { id: string; state: SourceState; requested_at: string }[];
+  support_view_note: string | null;
+}
+
+export function sourceFixQueryKey(findingId: string) {
+  return ["findings", "fixes", "source", findingId] as const;
+}
+
+/** Rung 3's own read: polls while files are being read or a suggestion written (5 s). */
+export function useSourceFix(findingId: string) {
+  return useQuery<FindingSourceFix>({
+    queryKey: sourceFixQueryKey(findingId),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) => {
+      const state = query.state.data?.latest?.state;
+      return state === "gathering" || state === "proposing" ? GENERAL_FIX_POLL_MS : false;
+    },
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingSourceFix>(`findings/${encodeURIComponent(findingId)}/fixes/source`, {
+        signal,
+      }),
+  });
+}
+
+function useSourceAction<Body>(findingId: string, name: string, path: (body: Body) => string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", name, findingId],
+    mutationFn: (body: Body) =>
+      apiClient.post<FindingSourceFix>(
+        `findings/${encodeURIComponent(findingId)}${path(body)}`,
+        body,
+      ),
+    onSuccess: (answer) => {
+      queryClient.setQueryData(sourceFixQueryKey(findingId), answer);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+/** Ask (FR11): from the error's stack, or up to 5 typed paths. 409 carries FR9's code. */
+export function useAskSourceFix(findingId: string) {
+  return useSourceAction<{ paths: string[]; notify: boolean }>(findingId, "ask", () => "/fixes");
+}
+
+/** FR13a: remove files or type more; back to reading. */
+export function useChangeSourceFiles(findingId: string, fixId: string) {
+  return useSourceAction<{ remove: string[]; add: string[] }>(
+    findingId,
+    "files",
+    () => `/fixes/${encodeURIComponent(fixId)}/files`,
+  );
+}
+
+/** FR13a: Send, bound to the list on screen by its digest (AC3b). */
+export function useSendSourceFiles(findingId: string, fixId: string) {
+  return useSourceAction<{
+    files_digest: string;
+    confirm_top_left_out: boolean;
+    hint: string | null;
+  }>(findingId, "send", () => `/fixes/${encodeURIComponent(fixId)}/send`);
+}
+
+/** A person's choice, shown neutrally (AC46). */
+export function useCancelSourceFix(findingId: string, fixId: string) {
+  return useSourceAction<Record<string, never>>(
+    findingId,
+    "cancel",
+    () => `/fixes/${encodeURIComponent(fixId)}/cancel`,
+  );
+}
+
+/** Starts linking the person's own GitHub account; the browser goes to GitHub next. */
+export function useStartGitHubLink() {
+  return useMutation({
+    mutationKey: ["github-link", "start"],
+    mutationFn: () =>
+      apiClient.post<{ attempt_id: string; authorize_url: string }>(
+        "connections/github/user-link/start",
+        {},
+      ),
+  });
+}

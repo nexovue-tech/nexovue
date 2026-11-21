@@ -10,8 +10,10 @@ import type {
   ExplanationSegment,
   FindingFixes,
   FindingGeneralFix,
+  FindingSourceFix,
 } from "./api";
 import { Segments } from "./ExplanationSection";
+import { SourceSection } from "./FixFiles";
 import { EarlierSuggestions, GeneralOfferForm, GeneralSuggestion } from "./FixGeneral";
 import {
   BRIEF_WORDS,
@@ -19,6 +21,7 @@ import {
   GENERAL_WORDS,
   SUGGESTED_FIX,
   showsSection,
+  showsSource,
   stateWords,
 } from "./fix-page";
 
@@ -137,6 +140,7 @@ export function FixBrief({
 export function FixSection({
   findingId,
   general,
+  source,
   error,
   onRetry,
   now,
@@ -144,6 +148,8 @@ export function FixSection({
 }: {
   findingId: string;
   general: FindingGeneralFix | undefined;
+  /** Rung 3's own read (Step 3); absent while it loads, or where it failed. */
+  source?: FindingSourceFix | undefined;
   error: unknown;
   onRetry: () => void;
   /** The caller's clock, so ages are pinned in a test. */
@@ -158,7 +164,8 @@ export function FixSection({
       </section>
     );
   }
-  if (!showsSection(general)) return null;
+  const sourceShows = source !== undefined && showsSource(source);
+  if (!showsSection(general) && !sourceShows) return null;
   const { line, latest } = general;
   const heading = line?.heading ?? SUGGESTED_FIX.heading;
   return (
@@ -169,6 +176,9 @@ export function FixSection({
       </p>
       {latest ? <GeneralSuggestion fix={latest} now={now} zone={zone} /> : null}
       {line ? <p className="max-w-prose text-ink-dim text-sm">{line.sentence}</p> : null}
+      {source && sourceShows ? (
+        <SourceSection findingId={findingId} source={source} now={now} />
+      ) : null}
       <GeneralOfferForm findingId={findingId} general={general} />
       <EarlierSuggestions earlier={general.earlier} now={now} />
     </section>

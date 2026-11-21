@@ -77,6 +77,7 @@ MayRequestExplanation = Annotated[Identity, Depends(require(Action.REQUEST_EXPLA
 MayAskAssistant = Annotated[Identity, Depends(require(Action.ASK_ASSISTANT))]
 MayManageKnowledge = Annotated[Identity, Depends(require(Action.MANAGE_KNOWLEDGE))]
 MayRequestFix = Annotated[Identity, Depends(require(Action.REQUEST_FIX))]
+MayOpenFixPullRequest = Annotated[Identity, Depends(require(Action.OPEN_FIX_PULL_REQUEST))]
 MayPurgeDashboards = Annotated[Identity, Depends(require(Action.PURGE_DASHBOARDS))]
 MayManageChannels = Annotated[Identity, Depends(require(Action.MANAGE_CHANNELS))]
 MayManageConnections = Annotated[Identity, Depends(require(Action.MANAGE_CONNECTIONS))]

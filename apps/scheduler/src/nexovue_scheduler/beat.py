@@ -43,10 +43,14 @@ from nexovue_platform.checks.task import (
     probe_queue,
     time_limits_for,
 )
-from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
+from nexovue_platform.connections import (
+    CONNECTIONS_INTERACTIVE_QUEUE,
+    CONNECTIONS_QUEUE,
+    SWEEP_CONNECTIONS_TASK,
+)
 from nexovue_platform.deployment import HOSTED, ai_available
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
-from nexovue_platform.fixes.records import SWEEP_GENERAL_FIXES_TASK
+from nexovue_platform.fixes.records import SWEEP_FIXES_TASK, SWEEP_GENERAL_FIXES_TASK
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.knowledge import EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from nexovue_platform.telemetry.logging import get_logger
@@ -111,6 +115,11 @@ ASSISTANT_SWEEP_ENTRY: Final = "sweep:assistant"
 # before AI was turned off must still end (design, *Jobs*: every minute, a guess).
 GENERAL_FIX_SWEEP_SECONDS: Final = 60
 GENERAL_FIX_SWEEP_ENTRY: Final = "sweep:general-fixes"
+# F5 Step 3: rung 3's stuck and lapsed rows, code past its time, short-lived rows and the
+# Fix App's hourly refresh, on `connections` (design, *The sweep*: every minute, a guess),
+# while connections are on, so no job waits for a `scheduler-connections` not running.
+FIX_SWEEP_SECONDS: Final = 60
+FIX_SWEEP_ENTRY: Final = "sweep:fixes"
 
 # F4 T5.5: chat's fact lines from recovered findings, every 5 minutes (a guess), on the shared
 # queue with default limits; only where AI may be offered, as nothing else reads them.
@@ -234,6 +243,9 @@ class Beat:
         self._refresh_due_at = 0.0
         # Whether a tracker connection is live, read with the schedule (F22 T4.5).
         self.connections_live = False
+        # F5: whether connections are on at all, read with the schedule; rung 3's sweep
+        # runs on `scheduler-connections` then, with or without a tracker connection.
+        self.connections_on = False
         # F3: whether any AI connection is on, read with the schedule; the AI sweep runs then.
         self.ai_on = False
 
@@ -373,6 +385,7 @@ class Beat:
                 self.connections_live = await metrics.connections_live(
                     connection, enabled=self._settings.connections_enabled
                 )
+                self.connections_on = self._settings.connections_enabled
                 self.ai_on = await metrics.ai_connections_on(connection)
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
@@ -496,6 +509,8 @@ class Beat:
         if self.ai_on:
             wanted[INSIGHT_SWEEP_ENTRY] = (SWEEP_INSIGHT_TASK, INSIGHT_SWEEP_SECONDS, INSIGHT_QUEUE)
             wanted[EMBED_SWEEP_ENTRY] = (EMBED_SWEEP_TASK, EMBED_SWEEP_SECONDS, INSIGHT_QUEUE)
+        if self.connections_on:
+            wanted[FIX_SWEEP_ENTRY] = (SWEEP_FIXES_TASK, FIX_SWEEP_SECONDS, CONNECTIONS_QUEUE)
         if self.connections_live:
             wanted[CONNECTIONS_SWEEP_ENTRY] = (
                 SWEEP_CONNECTIONS_TASK,

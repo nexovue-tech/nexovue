@@ -51,6 +51,11 @@ from nexovue_platform.connections import (
     CONNECTION_WEBHOOK_SECRET_PURPOSE,
     connection_secret_owner,
 )
+from nexovue_platform.fixes.records import (
+    FIX_APP_CLIENT_SECRET_PURPOSE,
+    GITHUB_LINK_CODE_PURPOSE,
+    github_link_code_owner,
+)
 from sqlalchemy import TextClause, text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
@@ -184,6 +189,24 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
     _connection_column("sealed_credential", CONNECTION_CREDENTIAL_PURPOSE),
     _connection_column("sealed_webhook_secret", CONNECTION_WEBHOOK_SECRET_PURPOSE),
     _connection_column("sealed_manifest_code", CONNECTION_MANIFEST_CODE_PURPOSE),
+    # F5's Fix App (ADR-082): its OAuth client secret, for the account link's exchange.
+    _connection_column("sealed_client_secret", FIX_APP_CLIENT_SECRET_PURPOSE),
+    # F5 (A18): a person's one-time GitHub code, for the minutes between the redirect back
+    # and its exchange, bound to its attempt.
+    SealedColumn(
+        name="github_link_attempts.sealed_code",
+        purpose=GITHUB_LINK_CODE_PURPOSE,
+        keys=lambda keys: keys.connection,
+        page=text(
+            "SELECT id AS pk, org_id, user_id, sealed_code AS sealed FROM github_link_attempts "
+            "WHERE sealed_code IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE github_link_attempts SET sealed_code = :new "
+            "WHERE id = :pk AND sealed_code = :old"
+        ),
+        owner=lambda row: github_link_code_owner(str(row.org_id), str(row.user_id), str(row.pk)),
+    ),
     # F28 D7: deploy secrets, under the credential key, bound to project and row.
     SealedColumn(
         name="project_webhook_secrets.sealed_secret",

@@ -1,7 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-
 import { isConflict } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
@@ -66,6 +65,7 @@ import {
   type WireFormat,
 } from "./api";
 import { ChatSection } from "./ChatSection";
+import { CONSENT_WORDS, FixConsentPanel } from "./FixConsentPanel";
 
 /**
  * `/settings/ai` (F3 FR23 to FR32; design *AI settings*): connect a provider, test it, set a
@@ -136,6 +136,10 @@ function Managed({ settings }: { settings: AISettings }) {
               <UsageSection />
               <Section id="ai-chat" title="Chat">
                 <ChatSection />
+              </Section>
+              {/* F5 Step 3: an owner's consent per repository and folder (FR6). */}
+              <Section id="ai-source-consent" title={CONSENT_WORDS.heading}>
+                <FixConsentPanel />
               </Section>
             </>
           ) : null}

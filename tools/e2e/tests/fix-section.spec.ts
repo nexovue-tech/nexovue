@@ -291,3 +291,67 @@ for (const width of WIDTHS) {
     await fitsTheWindow(page);
   });
 }
+
+// F5 Step 3 (T3.12, AC37d, AC46): rung 3's list, written and not run (hardening pass).
+const LONG_PATH = `services/${"checkout-".repeat(12)}api/handler.py`;
+const GATHERED_SOURCE = {
+  finding_id: FINDING_ID,
+  line: null,
+  offer: null,
+  earlier: [],
+  support_view_note: null,
+  latest: {
+    id: "s-1",
+    state: "gathered",
+    heading: "Files to send",
+    sentence: null,
+    reason: null,
+    neutral: false,
+    requested_at: STARTED,
+    state_changed_at: STARTED,
+    files: {
+      files: [
+        {
+          ref: "file_1",
+          path: LONG_PATH,
+          role: "stack",
+          why: "named at line 41 of the error's stack",
+          bytes: 120,
+          lines_sent: null,
+          moved_on_default: false,
+          github_url: `https://github.com/acme/shop/blob/${"c".repeat(40)}/${LONG_PATH}`,
+        },
+      ],
+      left_out: [],
+      unmatched: 0,
+      typed_missing: [],
+      commit: "c".repeat(40),
+      commit_known: true,
+      commit_sentence: null,
+      top_left_out: false,
+      digest: "d".repeat(64),
+      bytes_sent: 120,
+      provider_host: LONG_HOST,
+      round: 1,
+      lapses_at: "2099-01-01T00:00:00Z",
+      forgeable: "These files came from the error's stack, which an outsider can forge.",
+      send_host: `To ${LONG_HOST}:`,
+      send: "Send these files",
+    },
+  },
+};
+
+for (const width of WIDTHS) {
+  test(`AC37d: rung 3's file list fits ${width} px with a long path and host`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await signUp(page, newAccount());
+    await stubFinding(page, LINE);
+    await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/source`, (route) =>
+      route.fulfill({ json: GATHERED_SOURCE }),
+    );
+    await page.goto(`/findings/${FINDING_ID}`);
+    await expect(page.getByText("Send these files")).toBeVisible();
+    await fitsTheWindow(page);
+    await expect(page).toHaveTitle("Files ready: confirm");
+  });
+}

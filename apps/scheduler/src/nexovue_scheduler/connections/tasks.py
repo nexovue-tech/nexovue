@@ -259,14 +259,14 @@ async def refresh(
     except TrackerFailure as failure:
         await _failed(engine, loaded, failure, now=now)
         return
-    await _write_reach(engine, org_id, connection_id, reach, now=now)
+    await write_reach(engine, org_id, connection_id, reach, now=now)
     if not reach.places:
         await _failed(engine, loaded, TrackerFailure("no_repository"), now=now)
         return
     await _stand(engine, org_id, connection_id, states.after_success(loaded.standing, now=now))
 
 
-async def _write_reach(
+async def write_reach(
     engine: AsyncEngine, org_id: str, connection_id: str, reach: Reach, *, now: datetime
 ) -> None:
     ids = {"org_id": org_id, "connection_id": connection_id}

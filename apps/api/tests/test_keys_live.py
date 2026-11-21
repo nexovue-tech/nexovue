@@ -48,6 +48,11 @@ from nexovue_platform.connections import (
     CONNECTION_WEBHOOK_SECRET_PURPOSE,
     connection_secret_owner,
 )
+from nexovue_platform.fixes.records import (
+    FIX_APP_CLIENT_SECRET_PURPOSE,
+    GITHUB_LINK_CODE_PURPOSE,
+    github_link_code_owner,
+)
 from sqlalchemy import LargeBinary, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
@@ -78,6 +83,8 @@ CONNECTION_COLUMNS: Final = {
     "sealed_credential": CONNECTION_CREDENTIAL_PURPOSE,
     "sealed_webhook_secret": CONNECTION_WEBHOOK_SECRET_PURPOSE,
     "sealed_manifest_code": CONNECTION_MANIFEST_CODE_PURPOSE,
+    # F5 (ADR-082): the Fix App's client secret, on the same row for this test.
+    "sealed_client_secret": FIX_APP_CLIENT_SECRET_PURPOSE,
 }
 PLAINTEXT: Final = "JBSWY3DPEHPK3PXP"
 
@@ -185,9 +192,9 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
         await connection.execute(
             text(
                 "INSERT INTO connections (id, org_id, kind, state, sealed_credential, "
-                "sealed_webhook_secret, sealed_manifest_code) "
+                "sealed_webhook_secret, sealed_manifest_code, sealed_client_secret) "
                 "VALUES (:id, :org, 'github', 'setting_up', :sealed_credential, "
-                ":sealed_webhook_secret, :sealed_manifest_code)"
+                ":sealed_webhook_secret, :sealed_manifest_code, :sealed_client_secret)"
             ),
             {
                 "id": connection_id,
@@ -196,6 +203,26 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
                     column: _box(OLD_CONNECTION, purpose).seal(PLAINTEXT, owner=owner)
                     for column, purpose in CONNECTION_COLUMNS.items()
                 },
+            },
+        )
+        # F5 (A18): a person's GitHub code, sealed onto its attempt while it runs.
+        attempt = uuid.uuid4()
+        await connection.execute(
+            text(
+                "INSERT INTO github_link_attempts (id, org_id, user_id, session_hash, "
+                "state_hash, sealed_code, status, expires_at) VALUES (:id, :org, :user, "
+                ":session, :state, :sealed, 'running', :expires)"
+            ),
+            {
+                "id": attempt,
+                "org": org,
+                "user": user,
+                "session": "s" * 64,
+                "state": uuid.uuid4().hex * 2,
+                "sealed": _box(OLD_CONNECTION, GITHUB_LINK_CODE_PURPOSE).seal(
+                    PLAINTEXT, owner=github_link_code_owner(str(org), str(user), str(attempt))
+                ),
+                "expires": datetime.now(UTC) + timedelta(minutes=10),
             },
         )
         deploy_secret = (await connection.execute(text("SELECT uuidv7()"))).scalar_one()
@@ -374,7 +401,8 @@ async def test_reseal_carries_each_connection_secret_to_the_new_key(
         row = (
             await connection.execute(
                 text(
-                    "SELECT sealed_credential, sealed_webhook_secret, sealed_manifest_code "
+                    "SELECT sealed_credential, sealed_webhook_secret, sealed_manifest_code, "
+                    "sealed_client_secret "
                     "FROM connections WHERE id = :id"
                 ),
                 {"id": tenant.connection_id},

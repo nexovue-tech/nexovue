@@ -1,8 +1,8 @@
 """Every sentence F5 says about a suggestion, by code (design, *Every sentence*; spec AC8).
 
 One constant, so a code with no sentence fails a test rather than reaching a page as a raw
-code, and AC37's banned words are checked once, here. Rung 2b's rows first (plan T2b.7);
-T3.7 adds rung 3's. `requester` is the line for someone who may ask (owner, admin,
+code, and AC37's banned words are checked once, here. Rung 2b's rows (plan T2b.7), and
+rung 3's as far as Step 3 (T3.7). `requester` is the line for someone who may ask (owner, admin,
 member); `viewer` for a viewer and a support view, or None where they see nothing.
 `{date}` and `{dependency}` are filled by the reader, from Nexovue's own values.
 """
@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from nexovue_platform.fixes.records import GENERAL_REASONS
+from nexovue_platform.fixes.pack import LEFT_OUT_REASONS
+from nexovue_platform.fixes.records import FIX_REASONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +53,22 @@ ELIGIBILITY_SENTENCES: Final[dict[str, FixSentence]] = {
         "Still gathering evidence; this can take a few minutes.",
         "Still gathering evidence; this can take a few minutes.",
     ),
-    # Naming files here comes with rung 3 (Step 3), so the requester reads the first
-    # sentence alone until then.
     "cause_is_elsewhere": FixSentence(
-        "{dependency} has its own earlier finding. See it first.",
+        "{dependency} has its own earlier finding. See it first. You can still name files here.",
         "{dependency} has its own earlier finding.",
+    ),
+    "no_code_location": FixSentence(
+        "Nexovue does not know where this service's code lives. An admin can set it.",
+        "Nexovue does not know where this service's code lives.",
+    ),
+    "no_read_permission": FixSentence(
+        "Nexovue cannot read this repository. An admin sets that up, and GitHub's "
+        "organization owner accepts.",
+        "Nexovue cannot read this repository.",
+    ),
+    "no_consent": FixSentence(
+        "An owner has not agreed to send this repository's code to {host}. Ask an owner.",
+        "An owner has not agreed to send this repository's code to {host}.",
     ),
     "limit_reached": FixSentence(
         "Suggested fixes stop once this organization has used half its monthly tokens, or "
@@ -117,17 +129,66 @@ REASON_SENTENCES: Final[dict[str, FixSentence]] = {
     "nexovue_error": FixSentence(
         "This stopped because of a fault in Nexovue." + _ASK_AGAIN, _NOT_PREPARED
     ),
+    # Rung 3's pack job, sweep and person (Step 3).
+    "no_usable_file": FixSentence(
+        "No file named by the error exists in {folder}. If this is minified or compiled "
+        "browser code, that is why. You can name the files yourself.",
+        "No usable file was found.",
+    ),
+    "stack_aged_out": FixSentence(
+        "The error's stack has aged out of raw data. You can name the files yourself.",
+        "The stack has aged out.",
+    ),
+    "no_stack": FixSentence(
+        "This error arrived with no stack. You can name the files yourself.",
+        "The error has no stack.",
+    ),
+    "repository_too_large": FixSentence(
+        "This folder is too large for Nexovue to list. An admin can set a narrower folder.",
+        "The folder is too large.",
+    ),
+    "cancelled": FixSentence("You cancelled this. Nothing was sent.", None),
+    "lapsed": FixSentence(
+        "Nothing was sent, because nobody confirmed the file list within 15 minutes.", None
+    ),
+    "github_unavailable": FixSentence("GitHub did not answer.", _NOT_PREPARED),
+    "permission_missing": FixSentence(
+        "The Nexovue suggestions App lost its access. An admin can restore it.", _NOT_PREPARED
+    ),
+    "not_linked": FixSentence(
+        "Connect your GitHub account so GitHub can tell us what access you have to this "
+        "repository.",
+        _NOT_PREPARED,
+    ),
+    "no_github_access": FixSentence(
+        "GitHub says you do not have the access to {repository} that this needs.", _NOT_PREPARED
+    ),
+    "access_unknown": FixSentence(
+        "GitHub could not say who has access, so this was refused.", _NOT_PREPARED
+    ),
+    # Out of date (FR21); written from Step 4's check run.
+    "rules_changed": FixSentence(
+        "Out of date: Nexovue's rules changed. Ask again.", "Out of date."
+    ),
+    "mapping_changed": FixSentence(
+        "Out of date: this service's code location changed. Ask again.", "Out of date."
+    ),
+    "cause_changed": FixSentence(
+        "Out of date: the likely cause changed. Ask again.", "Out of date."
+    ),
+    "edit_no_longer_applies": FixSentence(
+        "Out of date: the file changed. Ask again.", "Out of date."
+    ),
 }
+
+# Reasons shown neutrally, with no fix id and no failure tone (design, *State by role*).
+NEUTRAL_REASONS: Final = frozenset({"cancelled", "lapsed"})
 
 # A general row has no code, so the actions on code refuse with this (AC73).
 GENERAL_HAS_NO_CODE: Final = (
     "A general suggestion is an example, not a change to your code, so it cannot become a "
     "patch or a pull request."
 )
-
-# FR9's `no_code_location`, its first sentence alone: before Step 3 nobody can set a code
-# location, so "An admin can set it" would be untrue. The line rung 2b's offer stands under.
-NO_CODE_LOCATION_YET: Final = "Nexovue does not know where this service's code lives."
 
 # Rung 2b's own words (spec FR33, FR37; design, *State by role*).
 GENERAL_HEADING: Final = "General fix suggestion"
@@ -150,6 +211,89 @@ SECTION_HEADING_UNAVAILABLE: Final = "Suggested fix not available"
 SECTION_HEADING_PROPOSING: Final = "Writing a general suggestion"
 SECTION_HEADING: Final = "Suggested fix"
 
-assert set(REASON_SENTENCES) == set(GENERAL_REASONS), (
-    "every reason a general row may store needs its sentence here"
+# Rung 3's words, Step 3 (design, *State by role*, *GitHub account link*).
+SOURCE_ACTION: Final = "Ask for a suggested fix"
+SOURCE_READY_LABELS: Final[dict[str, str]] = {
+    "likely_cause": "Starts from the likely cause above.",
+    "stack_only": "No likely cause was established; this starts from the error's stack.",
+    "named_files": "Starts from the files you name.",
+}
+NAME_FILES_HEADING: Final = "Name the files"
+NAME_FILES_LEAD: Final = (
+    "This finding has no error stack to start from. Name up to 5 files you think are "
+    "involved, as paths inside {folder}."
 )
+EVIDENCE_SLOW: Final = (
+    "This is taking longer than it should. The deploy line and the brief still work. You can "
+    "name the files yourself."
+)
+GATHERING_HEADING: Final = "Reading files"
+GATHERING_REQUESTER: Final = (
+    "Reading files. You will need to confirm the file list here. It waits 15 minutes."
+)
+BEING_PREPARED_VIEWER: Final = "A suggested fix is being prepared."
+GATHERED_HEADING: Final = "Files to send"
+GATHERED_FORGEABLE: Final = (
+    "These files came from the error's stack, which an outsider can forge. If one looks "
+    "unrelated to this error, remove it."
+)
+GATHERED_SEND_HOST: Final = "To {host}:"
+GATHERED_SEND: Final = "Send these files"
+TOP_FILE_LEFT_OUT: Final = (
+    "The file at the top of the stack was left out. A change made without it may be "
+    "confidently wrong. Send anyway?"
+)
+ASKED_FOR_MORE: Final = "The AI asks for {count} more files. Send them?"
+# Step 3 stops at Send (plan T3.11): the provider call is Step 4's.
+SEND_COMES_NEXT: Final = (
+    "Sending files to the AI provider comes in a later version of Nexovue. Nothing was sent."
+)
+NO_SUGGESTION_HEADING: Final = "No suggestion"
+COULD_NOT_FINISH_HEADING: Final = "Could not finish"
+LINK_HEADING: Final = "Connect your GitHub account"
+LINK_SENTENCE: Final = (
+    "Connect your GitHub account so GitHub can tell us what access you have to this "
+    "repository. We keep your GitHub user name and id, and no token. Your GitHub login is "
+    "written into any pull request you open, and stays on GitHub if you leave."
+)
+SUPPORT_VIEW_NO_CODE: Final = "A support view does not show customer code."
+
+# Why each file is on the list (design, *Not-checked, files read*), filled from Nexovue's
+# own values: a path in the tree and a line number, never a stack's words.
+FILE_WHY: Final[dict[str, str]] = {
+    "stack": "named at line {line} of the error's stack",
+    "stack_no_line": "named by the error's stack",
+    "named": "named by you",
+    "imported_by": "imported by {path}",
+    "test_for": "test for {path}",
+    "asked": "asked because of {path}, line {line}",
+    "asked_no_line": "asked for by the AI",
+}
+# Why an existing file was left out (FR12, FR13, AC45): every `pack.LEFT_OUT_REASONS`.
+LEFT_OUT_WHY: Final[dict[str, str]] = {
+    "secret_or_key": "never sent: secrets and keys",
+    "ci": "never sent: CI configuration",
+    "agent_instructions": "never sent: instructions for coding agents",
+    "excluded_by_owner": "kept back by an owner",
+    "not_source": "not a source file Nexovue sends",
+    "configuration": "never sent: configuration, unless an owner allows this path",
+    "not_a_regular_file": "not a regular file",
+    "not_text": "not text",
+    "secret_pattern": "holds something shaped like a secret",
+    "too_large": "too large to send",
+    "no_line_for_window": "too large to send whole, and the error names no line in it",
+    "over_file_cap": "over the limit of 12 files",
+    "over_byte_cap": "over the limit of 64 KiB sent in all",
+}
+TYPED_MISS: Final = "{path} was not found in {folder}."
+TYPED_REFUSED: Final = (
+    "{path} is not a path inside the folder: no leading slash, no `..`, no control character."
+)
+WHOLE_REPOSITORY: Final = "the whole repository"
+COMMIT_UNKNOWN: Final = "The running version is not known, so this read the default branch."
+MOVED_ON_DEFAULT: Final = "This file has changed on the default branch since the running version."
+
+assert set(REASON_SENTENCES) == set(FIX_REASONS), (
+    "every reason a suggestion may store needs its sentence here"
+)
+assert set(LEFT_OUT_WHY) == set(LEFT_OUT_REASONS), "every left-out reason needs its sentence here"

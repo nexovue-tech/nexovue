@@ -510,3 +510,59 @@ def test_f5s_rung_2b_jobs_are_exactly_what_their_workers_run() -> None:
     assert "nexovue_scheduler.insight.suggest_general_fix" not in TASK_MODULES
     assert records.SWEEP_GENERAL_FIXES_TASK in registered(TASK_MODULES)
     assert "nexovue_scheduler.fixes.sweep" not in TASK_SETS["insight"]
+
+
+def test_f5s_rung_3_jobs_are_exactly_what_the_connections_worker_runs() -> None:
+    """F5 T3.10, T3.13, T3.17: the API adds the pack job, the brief's paths and the account
+    link by name with ids only, on `connections-interactive`, which only
+    `scheduler-connections` consumes; their modules and rung 3's sweep are in the
+    connections set and never in `TASK_MODULES`, so no worker holding other secrets loads
+    repository-reading code (AC6b). The migration's `fix_request_more_files` names the same
+    task and queue it hard-codes (D75)."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE
+    from nexovue_platform.fixes import records
+
+    from nexovue_scheduler import beat
+    from nexovue_scheduler.jobs.registry import TASK_MODULES, TASK_SETS, registered
+
+    connections = registered(TASK_SETS["connections"])
+    requests = (
+        records.build_source_pack_request(fix_id="f", org_id="o"),
+        records.match_brief_paths_request(request_id="r", finding_id="f", org_id="o"),
+        records.complete_github_user_link_request(attempt_id="a", org_id="o"),
+    )
+    for request in requests:
+        parameters = inspect.signature(connections[request.task]).parameters.values()
+        accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+        assert request.queue == CONNECTIONS_INTERACTIVE_QUEUE, request.task
+        assert required <= set(request.kwargs) <= accepted, request.task
+    for module in (
+        "nexovue_scheduler.connections.source_pack",
+        "nexovue_scheduler.connections.fix_app",
+        "nexovue_scheduler.connections.fix_link",
+        "nexovue_scheduler.connections.fix_sweep",
+    ):
+        assert module in TASK_SETS["connections"]
+        assert module not in TASK_MODULES
+        assert module not in TASK_SETS["insight"]
+    assert records.INTERACTIVE_QUEUE == CONNECTIONS_INTERACTIVE_QUEUE
+    assert records.SWEEP_FIXES_TASK in connections
+    assert beat.FIX_SWEEP_ENTRY
+    migration = (
+        Path(__file__).parents[1] / "migrations/versions/0079_ai_solution_source.py"
+    ).read_text(encoding="utf-8")
+    assert f"'{records.INTERACTIVE_QUEUE}', '{records.BUILD_SOURCE_PACK_TASK}'" in migration
+    assert "jsonb_build_object('fix_id', for_fix::text, 'org_id', for_org::text)" in migration
+    beat_source = Path(beat.__file__).read_text(encoding="utf-8")
+    assert "(SWEEP_FIXES_TASK, FIX_SWEEP_SECONDS, CONNECTIONS_QUEUE)" in beat_source

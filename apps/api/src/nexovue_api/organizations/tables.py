@@ -127,6 +127,16 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "evidence_error_group_reads": "projects",
     # F5. A finding's suggested fixes go with the finding (FR38): rung 2b's hold no source.
     "finding_fixes": "findings",
+    # F5 Step 3 (migration 0079): a suggestion's files read, check runs and first views go
+    # with it; code locations and consents with their repository; a GitHub link and its
+    # attempts with their person.
+    "finding_fix_source_packs": "finding_fixes",
+    "finding_fix_checks": "finding_fixes",
+    "finding_fix_code_views": "finding_fixes",
+    "service_code_locations": "connection_repositories",
+    "fix_source_consents": "connection_repositories",
+    "github_user_links": "users",
+    "github_link_attempts": "users",
     # F3. A rating goes with the version it rates.
     "finding_explanation_ratings": "finding_explanations",
     # F3. A project's AI opt-out goes with the project.

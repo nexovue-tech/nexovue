@@ -35,7 +35,6 @@ from nexovue_platform.fixes.sentences import (
     GENERAL_NONE_HEADING,
     GENERAL_PROPOSING_REQUESTER,
     GENERAL_PROPOSING_VIEWER,
-    NO_CODE_LOCATION_YET,
     REASON_SENTENCES,
     SECTION_HEADING_UNAVAILABLE,
 )
@@ -68,7 +67,7 @@ async def test_ac67_offered_with_the_send_sentence_tries_left_and_the_line_it_st
 
     assert body["line"] == {
         "heading": SECTION_HEADING_UNAVAILABLE,
-        "sentence": NO_CODE_LOCATION_YET,
+        "sentence": ELIGIBILITY_SENTENCES["no_code_location"].requester,
     }
     offer = body["offer"]
     assert offer["action"] == GENERAL_ACTION
@@ -104,7 +103,10 @@ async def test_ac67_with_nothing_to_send_nothing_about_rung_2b_renders(
 
     body = await rows.read(db, rows.person(acme), finding, **change.get("settings", {}))
 
-    assert (body["line"], body["offer"], body["latest"]) == (None, None, None), label
+    # Nothing about rung 2b; FR9's own reason still stands, now that an admin can set a
+    # code location (Step 3, T3.7).
+    assert (body["offer"], body["latest"]) == (None, None), label
+    assert body["line"]["sentence"] == ELIGIBILITY_SENTENCES["no_code_location"].requester
 
 
 @pytest.mark.parametrize(

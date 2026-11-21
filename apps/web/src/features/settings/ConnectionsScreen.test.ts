@@ -97,6 +97,17 @@ interface Sent {
   body: unknown;
 }
 
+const NO_FIX_APP = {
+  available: false,
+  state: null,
+  setup_step: null,
+  install_url: null,
+  permissions: null,
+  granted_at: null,
+  connection_id: null,
+  repositories: [],
+};
+
 function stubApi(
   role: TestRole,
   answer: ConnectionsOverview,
@@ -117,6 +128,8 @@ function stubApi(
       if (path === "connections") return json(answer);
       if (path === "service-repositories" && method === "GET") return json({ mappings: [] });
       if (path === "projects") return json({ projects: [PROJECT] });
+      // F5's Fix App panel (Step 3): not set up, so it draws nothing beside F22's rows.
+      if (path === "connections/github/fix-app") return json(NO_FIX_APP);
       throw new Error(`no stub for ${method} ${url.pathname}`);
     }),
   );

@@ -32,6 +32,11 @@ guarded libcurl client, and it is stateful where GitHub is:
   cannot write. Every write can be dropped after it is applied, as issues can, which
   is how a crash at each step of the draft job is driven.
 
+- **the Fix App and the account link** (F5 Step 3): an installation's granted
+  permissions (`GET /app/installations/{id}`, held in `granted`), and a person's OAuth
+  exchange (`POST /login/oauth/access_token`, single use, for the App's client id and
+  secret) and `GET /user` with the token it handed out.
+
 A route's answer can be replaced (`fail`) to drive each failure the code must survive.
 F5's routes are compared with recordings in `fixtures/github_fix/` by
 `test_fake_github_matches_recordings.py`; those recordings are shaped from GitHub's
@@ -65,6 +70,7 @@ MAX_JWT_SECONDS: Final = 600
 DRIFT_SECONDS: Final = 60
 
 APP_ID: Final = 1000001
+CLIENT_ID: Final = "Iv1.fakeclientid"
 # Zero-entropy markers a test can search for, and no secret scanner mistakes for a secret.
 CLIENT_SECRET: Final = "z" * 24
 WEBHOOK_SECRET: Final = "w" * 24
@@ -193,6 +199,12 @@ class FakeGitHub:
     # What "now" is for the list's delay: a test's own clock, so a retry it moves forward
     # sees what the tracker would by then.
     clock: Callable[[], float] = time.monotonic
+    # F5: what an installation was granted, and people's one-time codes and tokens.
+    granted: dict[str, str] = field(
+        default_factory=lambda: {"contents": "read", "metadata": "read"}
+    )
+    oauth_codes: dict[str, int] = field(default_factory=dict)
+    person_tokens: dict[str, int] = field(default_factory=dict)
 
     @property
     def base_url(self) -> str:
@@ -213,7 +225,15 @@ class FakeGitHub:
             "access_token",
             self._mint,
         )
+        self._route(f"/app/installations/{installation_id}", "installation", self._installation)
         return installation_id
+
+    def add_oauth_code(self, user_id: int, login: str) -> str:
+        """A person's one-time code, as GitHub's authorize page would hand the browser."""
+        code = secrets.token_hex(10)
+        self.users[user_id] = login
+        self.oauth_codes[code] = user_id
+        return code
 
     def add_repository(self, repository_id: int, full_name: str, *, private: bool = True) -> None:
         self.repositories.append(
@@ -330,12 +350,52 @@ class FakeGitHub:
         # GitHub answers a path it does not know, such as a code never issued, with 404.
         self.site.default = json_reply({"message": "Not Found"}, 404)
         self._route("/app", "app", self._app)
+        self._route("/login/oauth/access_token", "oauth_exchange", self._exchange_code)
+        self._route("/user", "person", self._person)
         self._route("/app/installations", "installations", self._installations)
         self._route("/installation/repositories", "repositories", self._repositories)
         self._route("/installation/token", "revoke", self._revoke)
         self.site.default = self._dispatch
 
     # ------------------------------------------------------------- answers
+
+    def _installation(self, request: RecordedRequest) -> Reply:
+        if not self._signed_in_as_app(request):
+            return json_reply({"message": "Bad credentials"}, 401)
+        installation_id = int(request.path.split("/")[3])
+        if installation_id not in self.installation_ids:
+            return json_reply({"message": "Not Found"}, 404)
+        return json_reply(
+            {
+                **fixture("installation"),
+                "id": installation_id,
+                "app_id": self.app_id,
+                "permissions": dict(self.granted),
+            }
+        )
+
+    def _exchange_code(self, request: RecordedRequest) -> Reply:
+        """GitHub's OAuth exchange answers 200 with an `error` for a bad code (general
+        knowledge, unverified until the founder's run)."""
+        asked = json.loads(request.body or b"{}")
+        if request.method != "POST":
+            return json_reply({"message": "Not Found"}, 404)
+        user_id = self.oauth_codes.pop(str(asked.get("code")), None)
+        right_client = (
+            asked.get("client_id") == CLIENT_ID and asked.get("client_secret") == CLIENT_SECRET
+        )
+        if user_id is None or not right_client:
+            return json_reply({"error": "bad_verification_code"})
+        token = f"gho_fake_{secrets.token_hex(16)}"
+        self.person_tokens[token] = user_id
+        return json_reply({"access_token": token, "token_type": "bearer", "scope": ""})
+
+    def _person(self, request: RecordedRequest) -> Reply:
+        scheme, _, presented = request.headers.get("authorization", "").partition(" ")
+        user_id = self.person_tokens.get(presented) if scheme.lower() == "bearer" else None
+        if user_id is None:
+            return json_reply({"message": "Requires authentication"}, 401)
+        return json_reply({**fixture("user"), "id": user_id, "login": self.users[user_id]})
 
     def _convert(self, request: RecordedRequest) -> Reply:
         code = request.path.split("/")[2]
@@ -347,6 +407,7 @@ class FakeGitHub:
                 **fixture("manifest_conversion"),
                 "id": self.app_id,
                 "pem": self.private_key_pem,
+                "client_id": CLIENT_ID,
                 "client_secret": CLIENT_SECRET,
                 "webhook_secret": WEBHOOK_SECRET,
             },

@@ -35,6 +35,9 @@ FR1 = {
     Action.MANAGE_KNOWLEDGE: EVERYONE_WHO_WORKS,
     # F5 (foundation section 5): asking for a suggested fix spends the customer's tokens.
     Action.REQUEST_FIX: EVERYONE_WHO_WORKS,
+    # F5 (plan T3.2): opening a suggestion as a draft pull request (D6 narrows it per
+    # repository at the check run).
+    Action.OPEN_FIX_PULL_REQUEST: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
     Action.MANAGE_CONNECTIONS: ADMINISTRATORS,

@@ -184,6 +184,15 @@ export function stubApi(
       latest: null,
       earlier: [],
     }),
+    // F5 rung 3 (Step 3): nothing to show; a test that cares stubs its own.
+    "GET /findings/f-1/fixes/source": json({
+      finding_id: "f-1",
+      line: null,
+      offer: null,
+      latest: null,
+      earlier: [],
+      support_view_note: null,
+    }),
     ...extra,
   };
   vi.stubGlobal(

@@ -43,7 +43,15 @@ TASK_MODULES: Final = (
 # never imports ClickHouse, Kafka or object-store code (F22 D80, AC34).
 TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
     "all": TASK_MODULES,
-    "connections": ("nexovue_scheduler.connections.tasks",),
+    # F5 (plan T3.10, T3.13, T3.17): reading files, the Fix App, the account link and
+    # rung 3's sweep run only where the connection key is, never in `TASK_MODULES`.
+    "connections": (
+        "nexovue_scheduler.connections.tasks",
+        "nexovue_scheduler.connections.source_pack",
+        "nexovue_scheduler.connections.fix_app",
+        "nexovue_scheduler.connections.fix_link",
+        "nexovue_scheduler.connections.fix_sweep",
+    ),
     # F3: the AI role, on its own account and network: the connection test (Step 4), the
     # wording job and its sweep (Step 5). `all` never loads these.
     # F4: chat's loop and its sweep (plan T2.9), here and never in `TASK_MODULES`.

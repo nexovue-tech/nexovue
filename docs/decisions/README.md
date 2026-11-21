@@ -52,6 +52,9 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-075 — The AI rungs have their own routes, apart from rungs one and two](ADR-075-the-ai-rungs-have-their-own-routes-apart-from-rungs-one-and-two.md) — the founder's decision of 2026-11-21; filed with F5 Step 2b
 - [ADR-079 — Embedding is metered spending through F3's month, proved by a check, and never stands between chat and keyword search](ADR-079-embedding-is-metered-spending-and-never-blocks-keyword-search.md) — with F4 Step 6, 2026-11-21. Builds ADR-067's point 5
 - [ADR-080 — An organization may add a second connection for embeddings only, with its own key, agreement and check](ADR-080-a-second-connection-for-embeddings-only.md) — with F4 Step 6, 2026-11-21, building F4's D61
+- [ADR-082 — F5 has its own GitHub App, read-only until the founder's go](ADR-082-f5-has-its-own-github-app-read-only-until-the-founders-go.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
+- [ADR-083 — A service's code location is its own row, for the organization with a project's override](ADR-083-a-services-code-location-is-its-own-row-with-a-projects-override.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
+- [ADR-084 — Source consent is per repository and folder, and worked out at each use](ADR-084-source-consent-is-per-repository-and-folder-worked-out-at-each-use.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
 
 ## Earlier decisions, 0001–0112
 

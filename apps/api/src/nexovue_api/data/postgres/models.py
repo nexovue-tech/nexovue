@@ -73,12 +73,24 @@ from nexovue_platform.evidence import (
     WORDING_STATES,
 )
 from nexovue_platform.fixes.records import (
+    BASES,
+    CANDIDATE_SOURCES,
+    CODE_DELETED_REASONS,
+    CONSENT_WITHDRAWN_REASONS,
+    FIX_CHECK_PURPOSES,
+    FIX_CHECK_STATUSES,
     FIX_KINDS,
     FIX_REASONS,
     FIX_STATES,
     GENERAL_LANGUAGES,
     GENERAL_SUGGESTION_MAX_BYTES,
+    GITHUB_LINK_REASONS,
+    GITHUB_LINK_STATUSES,
+    HINT_MAX_CHARACTERS,
+    IN_FLIGHT_STATES,
+    MAX_ROUNDS,
     RETRY_CODES,
+    STATES_WITH_A_REASON,
 )
 from nexovue_platform.knowledge import (
     CHUNK_SPLIT_CHARACTERS,
@@ -2290,11 +2302,13 @@ class FindingEvent(Base):
 
 
 class FindingFix(Base):
-    """One suggested fix for a finding (F5, design *Data and migration impact*). Rung 2b's
-    general suggestion first (plan T2b.1): an example from F3's facts, holding no
-    repository, file or edit, so no source (FR38). The API inserts it in `proposing`;
-    `scheduler-insight` writes the answer that passed G1 to G9 while it is `proposing`
-    (row security, migration 0077), and the API checks it again on every read (D18)."""
+    """One suggested fix for a finding (F5, design *Data and migration impact*).
+
+    `general` (rung 2b, migration 0077): an example from F3's facts, holding no
+    repository, file or edit, so no source (FR38). `source` (rungs 3 to 5, migration
+    0079): files read from the service's repository by `scheduler-connections`, listed
+    for a person, sent only on their Send. `scheduler-insight` writes only while a row is
+    `proposing` (row security), and the API checks what it wrote on every read (D18)."""
 
     __tablename__ = "finding_fixes"
 
@@ -2305,7 +2319,8 @@ class FindingFix(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
     finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
-    explanation_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Required for a general row; a source row may start from typed paths alone.
+    explanation_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[str] = mapped_column(Text, nullable=False, server_default="proposing")
     state_changed_at: Mapped[CreatedAt]
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -2321,6 +2336,44 @@ class FindingFix(Base):
     requested_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     requested_at: Mapped[CreatedAt]
     finished_at: Mapped[OptionalTimestamp]
+    # Source rows (migration 0079). Copied at the click: the repository and folder.
+    connection_repository_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    folder: Mapped[str | None] = mapped_column(Text, nullable=True)
+    basis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Attacker-writable stack paths, cleared on every way out (FR11, AC12g).
+    path_candidates: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    requested_paths: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    round: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1", default=1)
+    candidates_from: Mapped[str | None] = mapped_column(Text, nullable=True)
+    read_commit: Mapped[str | None] = mapped_column(Text, nullable=True)
+    read_commit_known: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    # Written only by `scheduler-connections`.
+    files_read: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    checks_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra_list_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    files_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edits: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    withheld_refs: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    code_deleted_at: Mapped[OptionalTimestamp]
+    code_deleted_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notify_requester: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
+    email_due: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    sent_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    sent_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -2328,6 +2381,18 @@ class FindingFix(Base):
             ["findings.org_id", "findings.id"],
             ondelete="CASCADE",
             name="fk_finding_fixes_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "connection_repository_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="SET NULL (connection_repository_id)",
+            name="fk_finding_fixes_repository",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "sent_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (sent_by)",
+            name="fk_finding_fixes_sent_by",
         ),
         ForeignKeyConstraint(
             ["org_id", "project_id"],
@@ -2348,8 +2413,37 @@ class FindingFix(Base):
             f"reason IS NULL OR reason IN ({_quoted(FIX_REASONS)})", name="reason_is_known"
         ),
         CheckConstraint(
-            "(state IN ('refused', 'failed')) = (reason IS NOT NULL)",
+            f"(state IN ({_quoted(STATES_WITH_A_REASON)})) = (reason IS NOT NULL)",
             name="reason_only_when_it_ended_short",
+        ),
+        CheckConstraint(
+            "kind = 'source' OR (connection_repository_id IS NULL AND folder IS NULL "
+            "AND files_read IS NULL AND edits IS NULL AND path_candidates IS NULL "
+            "AND requested_paths IS NULL)",
+            name="general_holds_no_source",
+        ),
+        CheckConstraint(
+            "kind <> 'general' OR explanation_version IS NOT NULL",
+            name="general_names_its_version",
+        ),
+        CheckConstraint(f"basis IS NULL OR basis IN ({_quoted(BASES)})", name="basis_is_known"),
+        CheckConstraint(
+            f"candidates_from IS NULL OR candidates_from IN ({_quoted(CANDIDATE_SOURCES)})",
+            name="candidates_from_is_known",
+        ),
+        CheckConstraint(f"round BETWEEN 1 AND {MAX_ROUNDS}", name="round_in_range"),
+        CheckConstraint(
+            f"edits IS NULL OR octet_length(edits::text) <= {64 * 1024}", name="edits_are_small"
+        ),
+        CheckConstraint(
+            "(code_deleted_at IS NULL) = (code_deleted_reason IS NULL) AND "
+            "(code_deleted_reason IS NULL OR code_deleted_reason IN "
+            f"({_quoted(CODE_DELETED_REASONS)}))",
+            name="code_deleted_reason_is_known",
+        ),
+        CheckConstraint(
+            "path_candidates IS NULL OR state = 'gathering'",
+            name="candidates_only_while_gathering",
         ),
         CheckConstraint(
             f"retry_code IS NULL OR retry_code IN ({_quoted(RETRY_CODES)})",
@@ -2372,10 +2466,10 @@ class FindingFix(Base):
         CheckConstraint("explanation_version >= 1", name="explanation_version_counts_from_one"),
         CheckConstraint("tokens_used >= 0", name="tokens_used_count_up"),
         Index(
-            "uq_finding_fixes_one_in_flight",
+            "uq_finding_fixes_one_working",
             "finding_id",
             unique=True,
-            postgresql_where=text("state = 'proposing'"),
+            postgresql_where=text(f"state IN ({_quoted(IN_FLIGHT_STATES)})"),
         ),
         Index(
             "ix_finding_fixes_org_id_finding_id_requested_at",
@@ -2388,6 +2482,302 @@ class FindingFix(Base):
             "state_changed_at",
             postgresql_where=text("result_recorded_at IS NULL"),
         ),
+    )
+
+
+class FindingFixSourcePack(Base):
+    """The files read for one source suggestion, whole, minutes long (F5, design
+    `finding_fix_source_packs`). Written by the pack job; the AI account may read and
+    delete it only while its suggestion is `proposing` (row security, migration 0079).
+    `path` is for Nexovue's checks; only `ref` reaches a model. Source: emptied by
+    `clear_stored_code`, and kept out of backups' rows."""
+
+    __tablename__ = "finding_fix_source_packs"
+
+    fix_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    files: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    frames: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[CreatedAt]
+    expires_at: Mapped[datetime] = mapped_column(TimestampTz, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "fix_id"],
+            ["finding_fixes.org_id", "finding_fixes.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fix_source_packs_fix",
+        ),
+        CheckConstraint(
+            f"hint IS NULL OR length(hint) <= {HINT_MAX_CHARACTERS}", name="hint_is_short"
+        ),
+        CheckConstraint("bytes >= 0", name="bytes_count_up"),
+        Index("ix_finding_fix_source_packs_expires_at", "expires_at"),
+    )
+
+
+class FindingFixCheck(Base):
+    """One person's check run of a suggestion against the current code (F5, design
+    `finding_fix_checks`; Step 4 writes it). `patch` is source, on the deletion list."""
+
+    __tablename__ = "finding_fix_checks"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    fix_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    requested_by: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    head_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blob_ids: Mapped[Any | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    moved_refs: Mapped[Any | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    patch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[CreatedAt]
+    finished_at: Mapped[OptionalTimestamp]
+    expires_at: Mapped[datetime] = mapped_column(TimestampTz, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "fix_id"],
+            ["finding_fixes.org_id", "finding_fixes.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fix_checks_fix",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "requested_by"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fix_checks_requested_by",
+        ),
+        UniqueConstraint(
+            "fix_id", "requested_by", "purpose", name="uq_finding_fix_checks_one_per_person"
+        ),
+        CheckConstraint(f"purpose IN ({_quoted(FIX_CHECK_PURPOSES)})", name="purpose_is_known"),
+        CheckConstraint(f"status IN ({_quoted(FIX_CHECK_STATUSES)})", name="status_is_known"),
+        Index("ix_finding_fix_checks_expires_at", "expires_at"),
+    )
+
+
+class FindingFixCodeView(Base):
+    """A person's first read of a suggestion's quoted code, so `fix.code_viewed` is audited
+    once per person and suggestion on a read polled every 5 seconds (F5, FR28a)."""
+
+    __tablename__ = "finding_fix_code_views"
+
+    fix_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    first_viewed_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "fix_id"],
+            ["finding_fixes.org_id", "finding_fixes.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fix_code_views_fix",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fix_code_views_user_id",
+        ),
+    )
+
+
+class ServiceCodeLocation(Base):
+    """Where a service's code lives, for suggested fixes (F5 FR5b, ADR-083): a repository
+    the Fix App reaches and a folder in it, for the whole organization (`project_id`
+    null) or one project's override. Apart from F22's `service_repositories`, whose one
+    place per service may be a Jira project. Each change is audited."""
+
+    __tablename__ = "service_code_locations"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    service_name: Mapped[str] = mapped_column(Text, nullable=False)
+    connection_repository_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    folder: Mapped[str | None] = mapped_column(Text, nullable=True)
+    path_in_production: Mapped[str | None] = mapped_column(Text, nullable=True)
+    set_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    set_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_service_code_locations_project",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "connection_repository_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="CASCADE",
+            name="fk_service_code_locations_repository",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "set_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (set_by)",
+            name="fk_service_code_locations_set_by",
+        ),
+        CheckConstraint("length(service_name) BETWEEN 1 AND 255", name="service_is_named"),
+        Index(
+            "uq_service_code_locations_service",
+            "org_id",
+            "project_id",
+            "service_name",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
+        Index("ix_service_code_locations_repository", "org_id", "connection_repository_id"),
+    )
+
+
+class FixSourceConsent(Base):
+    """An owner's agreement to send one repository folder's code to one provider (F5 FR6,
+    ADR-084). Live while not withdrawn **and** while its provider terms equal the AI
+    connection's now (FR8, `nexovue_platform.fixes.consent`), so ending it needs no write.
+    One live row per repository and folder; a disconnect withdraws every one."""
+
+    __tablename__ = "fix_source_consents"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_repository_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    provider_base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_format: Mapped[str] = mapped_column(Text, nullable=False)
+    key_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    folder_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra_excluded_paths: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'"), default=list
+    )
+    allowed_config_paths: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'"), default=list
+    )
+    require_github_access: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ended_notice_sent_at: Mapped[OptionalTimestamp]
+    consented_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    consented_at: Mapped[datetime] = mapped_column(TimestampTz, nullable=False)
+    withdrawn_at: Mapped[OptionalTimestamp]
+    withdrawn_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    withdrawn_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "connection_repository_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="CASCADE",
+            name="fk_fix_source_consents_repository",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "consented_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (consented_by)",
+            name="fk_fix_source_consents_consented_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "withdrawn_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (withdrawn_by)",
+            name="fk_fix_source_consents_withdrawn_by",
+        ),
+        CheckConstraint(
+            "(withdrawn_at IS NULL) = (withdrawn_reason IS NULL) AND (withdrawn_reason IS NULL "
+            f"OR withdrawn_reason IN ({_quoted(CONSENT_WITHDRAWN_REASONS)}))",
+            name="withdrawn_reason_is_known",
+        ),
+        Index(
+            "uq_fix_source_consents_live",
+            "connection_repository_id",
+            "folder_scope",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("withdrawn_at IS NULL"),
+        ),
+        Index("ix_fix_source_consents_org_id_repository", "org_id", "connection_repository_id"),
+    )
+
+
+class GitHubUserLink(Base):
+    """A person's GitHub identity, so GitHub can say what access they have (F5 D6, D20).
+    **No token is stored.** Personal data: exported with the person, deleted with them.
+    Audit details and timeline events never copy the login or id (AC31)."""
+
+    __tablename__ = "github_user_links"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    github_login: Mapped[str] = mapped_column(Text, nullable=False)
+    linked_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
+            name="fk_github_user_links_user_id",
+        ),
+        CheckConstraint("github_user_id > 0", name="github_user_id_is_positive"),
+    )
+
+
+class GitHubLinkAttempt(Base):
+    """One try at linking a person's GitHub account (F5 A18): the hashes of the session
+    that started it and of its one-time `state`, and GitHub's code, sealed under
+    `CONNECTION_SECRET_KEY` only between the redirect back and its exchange. Ten minutes
+    long; never in a backup's rows."""
+
+    __tablename__ = "github_link_attempts"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    session_hash: Mapped[str] = mapped_column(String(SHA256_HEX_LENGTH), nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(SHA256_HEX_LENGTH), nullable=False)
+    sealed_code: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="waiting")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+    expires_at: Mapped[datetime] = mapped_column(TimestampTz, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
+            name="fk_github_link_attempts_user_id",
+        ),
+        UniqueConstraint("state_hash", name="uq_github_link_attempts_state_hash"),
+        CheckConstraint(f"status IN ({_quoted(GITHUB_LINK_STATUSES)})", name="status_is_known"),
+        CheckConstraint(
+            f"reason IS NULL OR reason IN ({_quoted(GITHUB_LINK_REASONS)})", name="reason_is_known"
+        ),
+        CheckConstraint(
+            "sealed_code IS NULL OR status = 'running'", name="code_only_while_running"
+        ),
+        Index("ix_github_link_attempts_expires_at", "expires_at"),
     )
 
 
@@ -2504,6 +2894,15 @@ class Connection(Base):
     expiry_told_at: Mapped[OptionalTimestamp]
     repositories_read_at: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
+    # F5's Fix App (`kind = 'github_fix'`, migration 0079, ADR-082): kept at creation for
+    # the account link's OAuth exchange; the secret sealed, in `keys.SEALED_COLUMNS`.
+    github_client_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sealed_client_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # What GitHub says the App was granted, refreshed hourly; no call on a page view.
+    granted_permissions: Mapped[dict[str, str] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    granted_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_connections_org_id_id"),
@@ -3116,7 +3515,13 @@ class ApiTokenUsageDaily(Base):
 TOKEN_FINGERPRINT_LENGTH: Final = 64
 ONE_TIME_TOKEN_PURPOSES: Final = ("verify_email", "reset_password", "change_email")
 # `ai_check` is written only by `scheduler-insight`, through `insight_store_check_result` (F3).
-JOB_RESULT_KINDS: Final = ("check_run", "channel_test", "connection_test", "ai_check")
+JOB_RESULT_KINDS: Final = (
+    "check_run",
+    "channel_test",
+    "connection_test",
+    "ai_check",
+    "brief_paths",
+)
 
 
 class SessionRecord(Base):

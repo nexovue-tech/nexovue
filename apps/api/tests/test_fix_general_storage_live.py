@@ -152,7 +152,7 @@ async def test_a_general_row_as_the_click_leaves_it_is_taken(db: AsyncConnection
 @pytest.mark.parametrize(
     ("label", "columns", "constraint"),
     [
-        ("a kind not yet built", {"kind": "source", "general_language": None}, "kind_is_known"),
+        ("a kind off the list", {"kind": "patch", "general_language": None}, "kind_is_known"),
         ("a language off FR33's list", {"general_language": "cobol"}, "general_language"),
         ("a general row with no language", {"general_language": None}, "general_language"),
         (
@@ -177,7 +177,12 @@ async def test_a_general_row_as_the_click_leaves_it_is_taken(db: AsyncConnection
             "reason_only_when_it_ended_short",
         ),
         ("a reason off the list", {"state": "failed", "reason": "oops"}, "reason_is_known"),
-        ("a state off the list", {"state": "stale"}, "state_is_known"),
+        ("a state not yet built (Step 7)", {"state": "approved"}, "state_is_known"),
+        (
+            "a general row with no version",
+            {"explanation_version": None},
+            "general_names_its_version",
+        ),
     ],
 )
 async def test_the_database_refuses_what_rung_2b_never_stores(
@@ -193,7 +198,7 @@ async def test_br8_one_suggestion_in_flight_per_finding(db: AsyncConnection) -> 
     await _row(db, tenant)
     await _row(db, tenant, state="failed", reason="timed_out")
 
-    assert "uq_finding_fixes_one_in_flight" in await _refused(db, tenant)
+    assert "uq_finding_fixes_one_working" in await _refused(db, tenant)
 
 
 async def test_ac75_deleting_the_finding_deletes_its_suggestions(db: AsyncConnection) -> None:

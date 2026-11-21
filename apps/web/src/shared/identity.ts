@@ -21,6 +21,7 @@ export type Action =
   | "ask_assistant"
   | "manage_knowledge"
   | "request_fix"
+  | "open_fix_pull_request"
   | "manage_channels"
   | "manage_connections"
   | "manage_ai"

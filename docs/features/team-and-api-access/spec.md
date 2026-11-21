@@ -309,7 +309,8 @@ and a read API has nobody to serve before that (D12).
   | Finding explanation: read the facts again, ask for plainer wording (F3 A20; FR41) | ✓ | ✓ | ✓ | ✗ |
   | Ask chat a question (F4, `ask_assistant`) | ✓ | ✓ | ✓ | ✗ |
   | Write runbooks chat can find (F4 D48, `manage_knowledge`) | ✓ | ✓ | ✓ | ✗ |
-  | Ask for a suggested fix, first rung 2b's general suggestion (F5 FR32, `request_fix`) | ✓ | ✓ | ✓ | ✗ |
+  | Ask for a suggested fix: rung 2b's general suggestion, and rung 3's files and Send (F5 FR32, FR11, `request_fix`) | ✓ | ✓ | ✓ | ✗ |
+  | Open a suggested fix as a draft pull request, and run its CI (F5 FR22, FR25, `open_fix_pull_request`; GitHub write access checked per person) | ✓ | ✓ | ✓ | ✗ |
   | Dashboards: remove a dashboard or one version at once, past restore (F20 FR68, D47) | ✓ | ✓ | ✗ | ✗ |
   | Delete another person's case note (F22 BR16; an author may always delete their own, even as a viewer) | ✓ | ✓ | ✗ | ✗ |
   | Ingest keys, site keys, deploy webhook secrets, integrations | ✓ | ✓ | ✗ | ✗ |

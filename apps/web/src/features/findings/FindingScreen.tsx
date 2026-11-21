@@ -44,7 +44,14 @@ import type {
   ReleaseFact,
   SignalSeries,
 } from "./api";
-import { useExplanation, useFinding, useFindingAction, useFixes, useGeneralFix } from "./api";
+import {
+  useExplanation,
+  useFinding,
+  useFindingAction,
+  useFixes,
+  useGeneralFix,
+  useSourceFix,
+} from "./api";
 import { CaseSection } from "./CaseSection";
 import { ExplanationHeaderLine, ExplanationSection } from "./ExplanationSection";
 import type { HeaderLine } from "./explanation";
@@ -191,6 +198,8 @@ function FindingPage({
   const fixes = useFixes(finding.id, explanation.data?.latest_version ?? null);
   // F5 rung 2b: its own read, so the deploy line and the brief never wait on AI (AC33).
   const general = useGeneralFix(finding.id);
+  // F5 rung 3 (Step 3): the service's own files, on their own read.
+  const source = useSourceFix(finding.id);
   useAssistantSubject(finding);
   return (
     <div className="flex flex-col gap-8">
@@ -265,6 +274,7 @@ function FindingPage({
       <FixSection
         findingId={finding.id}
         general={general.data}
+        source={source.data}
         error={general.error}
         onRetry={() => void general.refetch()}
         now={Date.now()}

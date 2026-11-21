@@ -1,8 +1,9 @@
-"""Migration 0077 froze F5's shared lists exactly (F5 plan T2b.1).
+"""Migration 0077 froze rung 2b's words exactly (F5 plan T2b.1).
 
-The migration holds frozen copies of `nexovue_platform.fixes.records`' lists, so a later
-change to a list is a migration of its own; this holds the copies equal to the lists today,
-and the model's checks to the same words.
+The migration holds frozen copies of `nexovue_platform.fixes.records`' lists as they stood
+for rung 2b, so a later change to a list is a migration of its own (0079 widened them for
+Step 3, held by `test_fix_source_storage.py`); this holds 0077's copies equal to rung 2b's
+words, and the model's checks to today's.
 """
 
 from __future__ import annotations
@@ -40,10 +41,10 @@ def _words(frozen: str) -> tuple[str, ...]:
 @pytest.mark.parametrize(
     ("frozen", "shared"),
     [
-        ("_FIX_KINDS", records.FIX_KINDS),
-        ("_FIX_STATES", records.FIX_STATES),
+        ("_FIX_KINDS", (records.KIND_GENERAL,)),
+        ("_FIX_STATES", (records.PROPOSING, records.PROPOSED, records.REFUSED, records.FAILED)),
         ("_GENERAL_LANGUAGES", records.GENERAL_LANGUAGES),
-        ("_FIX_REASONS", records.FIX_REASONS),
+        ("_FIX_REASONS", records.GENERAL_REASONS),
         ("_RETRY_CODES", records.RETRY_CODES),
     ],
 )
@@ -65,8 +66,13 @@ def test_the_model_checks_the_same_words() -> None:
     }
 
     def check(name: str) -> str:
-        [text] = [sql for constraint, sql in checks.items() if constraint.endswith(name)]
+        [text] = [
+            sql
+            for constraint, sql in checks.items()
+            if constraint.split("finding_fixes_")[-1] == name
+        ]
         return text
 
     assert _words(check("reason_is_known")) == records.FIX_REASONS
     assert _words(check("state_is_known")) == records.FIX_STATES
+    assert _words(check("kind_is_known")) == records.FIX_KINDS

@@ -2,12 +2,80 @@
 
 ## Lifecycle status
 
-**Step 2b built 2026-11-21, committed.** The founder approved the specification, design and plan on 2026-11-02. Steps 1 (the deploy line and the brief, T1.1 to T1.5) and 2 (the checks, the bed's parts and the fake, T2.1 to T2.11) are on `feature/phase-2`. Step 2b (the general suggestion without code access, T2b.1 to T2b.11) is built in `wt/f5s2b`, on `feature/phase-2` 301f450. T1.6's Playwright spec and its Step 2b states are written and not run (deferred to the hardening pass). Steps 3 onward are not started.
+**Step 3 built 2026-11-21, awaiting commit.** Steps 1, 2 and 2b are on `feature/phase-2`. Step 3 (consent, permission and reading the files, with no model, T3.1 to T3.19) is built in `wt/f5s3`, on `feature/phase-2` 96cbd81, against the simulated GitHub only. T1.6's Playwright spec, with its Step 2b and Step 3 states, is written and not run (deferred to the hardening pass). Steps 4 onward are not started.
 
 
 ## Current task
 
-Step 2b awaits the founder's review of the diff and a commit (`F5 Step 2b: the general suggestion, without code access`). **Migration 0077 names `down_revision = "0076"`,** which F4 Step 5 is taking in parallel; it is re-chained at commit. Then the open decisions below (16 to 27), and each step's *Judgeable*, deferred to F5's hardening pass.
+Step 3 awaits the founder's review of the diff and a commit (`F5 Step 3: consent, permission, and reading the files, with no model`). **Migration 0079 follows F4 Step 6's 0078.** Then open decisions 28 to 42, below.
+
+## Step 3, built 2026-11-21
+
+**What it ships.** An admin creates the *Nexovue suggestions* App (read only) and sets where each service's code lives; an owner agrees, per repository and folder, to send that code to the AI provider as it is now, and answers whether quoted code needs a linked GitHub account. A member clicks **Ask for a suggested fix**: Nexovue reads this service's stacks (or the paths they type), and `scheduler-connections` reads the matching files from GitHub, filters, caps and scans them, adds one hop of imports and test files, and **stops** at a list the person can trim, with each file's reason and a GitHub link. **Send stops at a stated guard: nothing goes to a provider in Step 3,** and no AI job is ever enqueued. All against the simulated GitHub (foundation item 28); no model was called.
+
+- **T3.1, storage.** Migration **0079** (`0079_ai_solution_source.py`, `down_revision "0078"`): on `finding_fixes`, the source columns without pull request columns, `source` in `kind`, the states `gathering`, `gathered`, `stale` and Step 3's reasons, the CHECK that a general row holds no repository, folder, files, edits or candidates (AC75, decision 27), candidates only while gathering, `round` 1 to 3, the code-deleted reason, `explanation_version` nullable for a source row; the one-in-flight index widened to every working state and built `CONCURRENTLY` (`uq_finding_fixes_one_working`); `finding_fix_source_packs` (row security for the AI account while `proposing`), `finding_fix_checks`, `finding_fix_code_views`, `service_code_locations`, `fix_source_consents`, `github_user_links`, `github_link_attempts`; on F22's `connections`, `github_client_id`, `sealed_client_secret`, `granted_permissions`, `granted_at`, and the disconnected check grows; `brief_paths` in `job_results`; `fix_request_more_files` (D75; `EXECUTE` revoked from `PUBLIC`, granted to the AI account at T4.13). Composite keys throughout; inventory entries (`organizations/tables.py`); two sealed columns in `keys.SEALED_COLUMNS`. Roll forward only.
+- **T3.2, permission.** `OPEN_FIX_PULL_REQUEST` for owner, admin, member, `MayOpenFixPullRequest`, and the five copies.
+- **T3.3, the Fix App** (ADR-082). `connections/fix_app.py` and `connections/fix/router.py` (manifest, its return, refresh, the panel's read); `nexovue_scheduler/connections/fix_app.py` (conversion keeping the client id and sealing the secret; the refresh binding the installation, repositories via F22's `write_reach`, and the grant); `fix_github.py`, F5's client: one method per route, fixed hosts, no redirect, no write route (`ROUTES`).
+- **T3.4, code locations** (ADR-083). `findings/fix_locations.py`, `GET`/`PUT`/`DELETE /code-locations`, audited per row, all or none naming the refused row; `features/settings/FixAppPanel.tsx` (`CodeLocationsPanel`).
+- **T3.5, consent** (ADR-084). `findings/fix_consent.py`, `nexovue_platform/fixes/consent.py`, `GET .../source-consent`, `PUT`/`DELETE .../{repo}/source-consents` with exactly one of `folder=` or `scope=whole-repository`; FR7's sentences as one constant; withdrawal ends work in flight and deletes its stored code through `CLEAR_STORED_CODE`, saying how many.
+- **T3.6, panels.** `features/aisettings/FixConsentPanel.tsx` (consent list, the confirm with nothing preselected, and `FixReadinessPanel` over `GET /fix-readiness`), `features/settings/FixAppPanel.tsx`; mounted on `/settings/ai` and `/settings/connections`. Loading, failed, empty and no-permission states; an em dash for unknown.
+- **T3.7, eligibility.** `findings/fix_eligibility.py` (FR9 rows 1 to 12; `source_eligibility`; rung 2b only at a code-access reason, D67), `findings/fix_access.py` (Postgres-only code access), `findings/fix_state.py` (one read for rung 2b's and rung 3's routes); `fixes/sentences.py` gains every Step 3 sentence. Decision 22's interim line is removed: `no_code_location` now reads its whole sentence.
+- **T3.8, candidates.** `findings/fix_paths.py`; `errorgroups.service.recent_for_service` and `GROUP_SERVICE_OCCURRENCES_SQL`, bound to the finding's service.
+- **T3.9, T3.11, T3.16, the routes.** `findings/fix_service.py` on `findings/fixes/source/router.py`: `GET /fixes/source`, `POST /fixes` (the row, `fix.requested` and the pack job in one transaction; an aged-out or empty stack stores `refused`), `/files`, `/send` (digest-bound 409 with the new list; top-file confirmation; then Step 3's guard), `/cancel`, `POST /brief/files` and its result.
+- **T3.10, T3.18, T3.19, the pack job.** `nexovue_scheduler/connections/source_pack.py` with the pure `fixes/matching.py`, `fixes/pack.py`, `fixes/imports.py`: consent, the owner's requirement before any blob, ancestry, the folder's subtree only, filters, caps in order, windows, secret scan, imports one hop, test files, asked-for names checked against the pack as it stands, one transaction with one `repository.read` entry naming the person.
+- **T3.12, the section.** `FixFiles.tsx` (`SourceSection`), `FixSection.tsx`, `fix-page.ts`, `api.ts` (`useSourceFix` polling while reading); `document.title` while a list waits; `fix-section.spec.ts` gains rung 3's width state (written, not run).
+- **T3.13, the sweep.** `nexovue_scheduler/connections/fix_sweep.py` (`fixes.sweep_fixes` on `connections`): stuck and lapsed rows, ended rows' code cleared once, AI off and 30 days, short-lived rows, the Fix App's hourly refresh; beat's `sweep:fixes` while connections are on; rung 2b's sweep reads general rows only.
+- **T3.14.** `test_fix_detection_unaffected_live.py`: rungs 1 and 2 unchanged with a source row present and AI off; rung 3's queues are `scheduler-connections`' alone.
+- **T3.15.** `test_fix_rooms_import.py` (AC5's two walks, AC6b); AC4 stays held by `test_compose_contract.py`.
+- **T3.17, the account link.** `connections/user_link.py` (hashed state bound to the session's person, sealed code, ids-only job), `nexovue_scheduler/connections/fix_link.py` (one exchange, no token kept, the code gone in the same transaction); export in `profile/personal_data.py`, deletion in `members/service.py`; `audit/read.py` drops `paths` and `files` from these entries during a support view (AC11).
+
+**Shared files touched, and why (kept minimal).** F22: `connections/queries.py` (`kind` parameter; the overview lists tracker kinds only), `connections/service.py` (`sealed_box`, `hash_of_state`, made public for the Fix App), `scheduler/connections/github.py` (`GitHubApp.signed_jwt`), `scheduler/connections/tasks.py` (`write_reach` made public), `tests/tracker_fake.py` (the installation's grant, the OAuth exchange and `GET /user`; `client_id` on conversion), `fixtures/github/repository.json` (`default_branch`, marked unverified), `ConnectionsScreen.test.ts` (stubs the new panel). F3: none. F4: none. Shared: `audit/read.py`, `audit/router.py`, `audit/service.py`, `keys.py`, `organizations/tables.py`, `profile/*`, `members/service.py`, `errorgroups/*`, `main.py`, `jobs/registry.py`, `beat.py`, the authorization, tenancy, migration-rules and cross-service tests, `test_keys_live.py`, web `identity.ts` and copies, `team-and-api-access/spec.md`, the finding page's render harness.
+
+**Not built in Step 3, and why** (decisions 34, 39, 42): the console's two GitHub return screens, the separate checklist component, owner emails and `notify_requesters`, and the 72-hour lost-access withdrawal.
+
+### Tests, each seen failing
+
+Each behaviour was broken by a scripted edit, its test run, and the file restored and compared byte for byte (`seefail.py`, in this session's scratchpad); every restore compared equal. Counts are what the run printed. † marks a test that first passed and was strengthened before it failed. Three guards that no test could reach were removed rather than kept untested: an import climbing out of the folder, and `..` or an address in an asked-for name, can match nothing because only a path in the folder's own listing is ever named.
+
+| Test | Behaviour broken | Failed |
+|---|---|---|
+| `test_fix_imports.py` | Relative Python import base · Go `_test.go` skipped | 1 · 2 |
+| `test_fix_matching.py` | Two-segment minimum · an ambiguous suffix dropped · build folder to source | 2 · 1 · 1 |
+| `test_fix_pack.py` | Secret scan · NUL byte · 12-file cap · 64 KiB cap · window around the line · an unmatched name is a count | 1 each |
+| `test_fix_consent.py` | A sibling sharing a prefix · the key id compared | 1 · 1 |
+| `test_fix_eligibility.py` | Row 10 (`no_consent`) · rung 2b only at a code-access reason · naming files at `cause_is_elsewhere` | 3 · 3 · 1 |
+| `test_fix_paths.py` | Third-party frames dropped · the read bound to the service · Java's qualified path | 2 · 1 · 1 |
+| `test_fix_source_pack.py` (26) | Consent compared · the owner's requirement before any blob · ancestry · imports one hop · a removed file kept out · the state guard † · the moved-on-default label | 1 each |
+| `test_fix_sweep_live.py` (6) | The 15-minute lapse · code cleared when AI is switched off | 1 · 1 |
+| `test_fix_app_live.py` (5) | The client secret kept, sealed · the link's code dropped in its transaction | 1 · 1 |
+| `test_fix_github_client.py` (4) | No redirect followed | 1 |
+| `test_fix_source_routes_live.py` (21) | Send bound to the digest · the top-file confirmation · a typed `..` refused · an aged-out stack stored as `refused` · a viewer reads no list · the link step · cancel neutral · a removal marked | 1 each |
+| `test_fix_consent_live.py` (23) | Owner only · exactly one scope · withdrawal ends work in flight · a support view reads no owner paths · a project's override wins · the refused row named · readiness counts project findings | 1 each |
+| `test_fix_source_storage_live.py` (10) | AC75's CHECK dropped in the own database | 3 |
+| `test_fix_source_storage.py` (16) | A reason left out of 0079's frozen list | 1 |
+| `test_github_link_live.py` (4) | Paths kept from a support view's audit · the link left out of the export · the link left at member removal | 1 each |
+| `test_fix_detection_unaffected_live.py` (4) | Rung 2's brief coupled to a source row | 1 |
+| `FixFiles.test.ts` (7), `FixConsentPanel.test.ts` (5), `FixAppPanel.test.ts` (2) | Send without the digest · Agree before the access answer · an unread grant shown as "none" | 1 each |
+
+**Clocks.** Pure tests use fixed datetimes; live scheduler tests take one `now` per test, passed to the job and the sweep, and the sweep is narrowed to the test's own organization (`only_org`), so a test's sweep never reaches another test's rows; API live tests use the suite's `now` fixture; web tests fake `Date` only.
+
+### Validation, 2026-11-21
+
+Against this step's own container only: `f5s3-postgres` (`pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, migrated to 0079 by `nexovue_api.setup`), through a wrapper refusing any other store port. ClickHouse was not needed (the stack read is replaced by a stand-in answering as the service-bound read does) and none was started.
+
+- **F5's suites and every gate touched, one run: 5,222 passed.** All `test_fix_*` (API, scheduler, platform), `test_github_link_live.py`, F22's `test_fake_github_matches_recordings.py`, `test_connections_github_live.py`, `test_connections_sync_live.py`, `test_connections_have_no_ai.py`, `test_connections_live.py`, `test_connections_webhook_live.py`, `test_connection_model.py`, `test_no_tracker_calls_in_api.py`, `test_beat_schedule.py`, `test_cross_service_contracts.py` (every `queries.py` read as ClickHouse SQL), `test_authorization_coverage.py`, `test_read_surface_structure.py`, `test_read_surface_spec.py`, `test_ratelimit_coverage.py`, both tenancy structure tests, `test_migration_rules.py`, `test_deletion_live.py`, `test_keys_live.py`, `test_personal_data_live.py`, `test_members_live.py`, `test_policy.py`, `test_auth_routes.py`, `test_findings.py`, `test_alert_vocabulary.py`, `tools/ai-eval` (without the ClickHouse seeder). Then `test_audit.py`, `test_audit_read_live.py`, `test_compose_contract.py` (with `POSTGRES_INSIGHT_PASSWORD` unset), rung 2b's sweep and `packages/py-platform/tests`: 1,644 passed.
+- `uv run mypy .`: no issues in 1,172 files. `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,566 files formatted. Biome on `src/features/findings`, `settings`, `aisettings`, `members`, `src/shared` and `fix-section.spec.ts`: no errors. `pnpm -r --if-present run typecheck`: passed. `verify-tokens`: passed.
+- **The whole web suite: 211 files, 2,624 tests passed.**
+- **Not run:** `just check`; real GitHub and any model (never, by instruction); `fix-section.spec.ts`; the ClickHouse seeder's live test.
+
+### Deferred to F5's hardening pass
+
+- `fix-section.spec.ts`'s rung 3 state (AC37d), written, not run.
+- Browser and phone checks, performance, customer pages, Design QA, and the founder's *Judgeable* for Step 3 (a scratch repository on real GitHub, after Phase 2: foundation item 28).
+
+### Review (`/review-diff`), 2026-11-21
+
+No HIGH finding left open. Fixed during the build: a stale-digest Send rolled the transaction back before reading the new list, which expired the caller's identity mid-request (MEDIUM; now read in the same transaction, `test_ac3b_…` proves it); rung 2b's sweep would have recorded and ended source rows (its passes now read general rows only); a helper named `test_file_for` was collected by pytest as a test (renamed `conventional_test_file`); the in-flight index replaced on a table with rows is built `CONCURRENTLY`. Recorded, not fixed (LOW): `GET /findings/{id}/brief/files/{request_id}` binds the organization and the request id but not the finding (request ids are random and organization-bound); F4's `members/service.py` `scrub` calls `assistant_privacy.forget_person` twice (found while adding the GitHub link's deletion; harmless, F4's to remove). Unintended changes: none; every shared file is named above.
 
 ## Step 2b, built 2026-11-21
 
@@ -221,12 +289,30 @@ Each was written with its code, then proved by removing the behaviour from the f
 
 ## Next action
 
-The founder reviews and commits Step 2b (0077 re-chained after F4 Step 5's 0076), and answers open decisions 16 to 27. Step 3 is next, and is blocked on F3's evidence holding a group id and window and on F22's GitHub connection.
+The founder reviews and commits Step 3, and answers open decisions 28 to 42 (16 to 27 remain open from Step 2b). Step 4 is next: first the two console return screens (decision 34), then the suggestion itself.
 
 **Earlier text, kept for the record:** start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
 
 
 ## Open decisions
+
+**From Step 3's build, 2026-11-21.** None blocks the commit. Each is built as recommended.
+
+28. **Rung 3 has its own read, `GET /findings/{id}/fixes/source`, on its own router,** beside rung 2b's (ADR-075); rung 2b's read keeps the section's line. The design's routes list `GET /fixes` for everything. **Recommendation:** keep; amend the design's *Routes*.
+29. **F3's `error_group` item holds `first_seen`, not the window it read.** The stack is read from one minute before `first_seen` to the later of the explanation's `read_at` and a minute after. **Recommendation:** F3 stores its read window on the item; until then this derivation stands, and Step 3 was built although its precondition was only half met.
+30. **The brief's candidates wait in the request's own `job_results` row,** since a job row holds ids only (AC15); the answer replaces them once. **Recommendation:** keep; amend the design's FR5c paragraph.
+31. **`fixes.sweep_fixes` lives in `nexovue_scheduler/connections/fix_sweep.py`,** not `fixes/sweep.py` (rung 2b's, on `light`), because F22's test holds the connections set to that package. The task name is unchanged. **Recommendation:** keep.
+32. **No grants for a `nexovue_connections` account:** F22's T8.7 account is not built, so `scheduler-connections` uses the install account. **Recommendation:** add F5's grants when F22 builds it.
+33. **AC9's address, key and format changes surface as `ai_off`,** because F3 ends its own consent first; a model change surfaces as `no_consent`. No consent row is written either way. **Recommendation:** accept; amend AC9's wording.
+34. **The console's two GitHub return routes are not built** (`/settings/connections/fix-app/return`, `/settings/github-link/return`): the API routes they post to are built and tested. **Recommendation:** build both at the start of Step 4, before any real-GitHub run; this is a gap, not a design change.
+35. **The model's reason for an asked-for file is not stored or shown:** Step 4 writes it, under FR16's prose checks. **Recommendation:** Step 4.
+36. **A typed path matching no file is shown back beside its input** (the person's own words, on the deletion list), as the design's "typed path miss" says. **Recommendation:** keep.
+37. **A path-shaped token anywhere in a stack, a message line included, can become a candidate,** though no message text is stored; it must still be a real file in the folder. **Recommendation:** accept (A1 already treats the stack as attacker-written).
+38. **A source row counts toward the 3 tries only once sent** (FR15c), so reading and listing never use one. **Recommendation:** keep.
+39. **Owner and requester emails, `notify_requesters` and the 72-hour lost-access withdrawal are not built** (Steps 5, 7 and 9 carry them). **Recommendation:** as planned.
+40. **Unverified GitHub shapes added:** `default_branch` on the repository, the installation's `permissions`, and an OAuth exchange taking a JSON body. **Recommendation:** the founder's real run after Phase 2 checks them.
+41. **`code_deleted_reason`'s words** (`ended_short`, `pull_request_done`, `aged_out`, `consent_withdrawn`, `disconnected`, `ai_off`, `access_gone`, `restored`) name BR9's triggers. **Recommendation:** accept.
+42. **The readiness panel sits inside the consent section and uses the selected project; the setup checklist is not a component of its own.** **Recommendation:** add `FixChecklist` with Step 4's checklist line on the finding page.
 
 **From Step 2b's build, 2026-11-21.** None blocks the commit. Each is built as recommended.
 
@@ -290,7 +376,7 @@ The founder reviews and commits Step 2b (0077 re-chained after F4 Step 5's 0076)
 - **Everything in the plan is blocked** on F6 merging, then F28, F3, F22 and F4 being built.
 - ~~**Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64).~~ Unblocked by the founder's decision of 2026-11-08 (above); built 2026-11-11.
 - ~~**Step 2b is blocked** on F3's provider (F3 Step 4) and on F3's consent screen naming rung 2b.~~ F3 Steps 1 to 5 are on the branch; built 2026-11-21. F3's consent screen and preview still do not name rung 2b (*Open decisions*, 19), which the design calls "needed before Step 2b ships": F3's to carry before release.
-- **Step 3 is blocked** on F3's evidence holding a group id and window.
+- ~~**Step 3 is blocked** on F3's evidence holding a group id and window.~~ Built 2026-11-21 on the group id and `first_seen` F3 stores (*Open decisions*, 29).
 - **Step 7 is blocked** on T6.5: the safety gates, the founder's go, and the buyers' answer.
 
 ## Reviews

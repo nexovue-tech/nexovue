@@ -340,6 +340,14 @@ class ExportedApiToken(BaseModel):
     last_used_at: datetime | None
 
 
+class ExportedGitHubLink(BaseModel):
+    """A person's linked GitHub identity (F5 D20): the id and login kept, and when."""
+
+    github_user_id: int
+    github_login: str
+    linked_at: datetime
+
+
 class PersonalDataExport(BaseModel):
     """Everything nexovue holds about one person as a person (spec, BR1).
 
@@ -372,3 +380,5 @@ class PersonalDataExport(BaseModel):
     chat_questions_truncated: bool
     runbooks_written: list[ExportedRunbook]
     runbooks_truncated: bool
+    # F5 (AC31): their linked GitHub account, if any; no token is ever held.
+    github_link: ExportedGitHubLink | None = None
