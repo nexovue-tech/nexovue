@@ -9,14 +9,17 @@ the AI account cannot read (A19, AC45).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any, Final, Literal
 
-from nexovue_platform.evidence import MAX_ALIASES
+from nexovue_platform.evidence import MAX_ALIASES, display_name
 from nexovue_platform.evidence.model_facts import Alias, FactId
 
 AliasKind = Literal["service", "version", "error", "check"]
 ALIAS_KINDS: Final = ("service", "version", "error", "check")
+# A stand-in as it appears in a model's words: restored on read, or refused unknown.
+ALIAS_TOKEN: Final = re.compile(rf"\b(?:{'|'.join(ALIAS_KINDS)})_[0-9]+\b")
 
 
 class AliasesFull(Exception):  # noqa: N818 — a state, not an error
@@ -78,3 +81,21 @@ def restore(segments: Iterable[Mapping[str, str]], book: AliasBook) -> list[dict
         else:
             restored.append(dict(segment))
     return restored
+
+
+def restored_segments(text: str, book: AliasBook) -> list[dict[str, str]]:
+    """A model's checked words as segments: its own words as text, each stand-in as the
+    name it stands for, shown as `display_name` shows names. An alias the book does not
+    hold stays text. Restoring can never build a link: a name is only ever a name (F3
+    design, *Validation*). F3's wording and F5's suggestions both read through this."""
+    segments: list[dict[str, str]] = []
+    position = 0
+    for found in ALIAS_TOKEN.finditer(text):
+        if found.start() > position:
+            segments.append({"text": text[position : found.start()]})
+        name = book.name_of(found.group())
+        segments.append({"text": found.group()} if name is None else {"name": display_name(name)})
+        position = found.end()
+    if position < len(text):
+        segments.append({"text": text[position:]})
+    return segments

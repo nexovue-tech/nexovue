@@ -43,7 +43,8 @@ IDLE_IN_TRANSACTION_TIMEOUT: Final = "30s"
 _PROVISION_LOCK_KEY: Final = 7_340_211_068
 
 # The functions of migrations 0070 and 0073, by signature. F4 (0073) gave the claim a queue
-# list, for `assistant` beside `insight`, and added chat's two settling functions.
+# list, for `assistant` beside `insight`, and added chat's two settling functions; F5 (0077)
+# widened the three job functions to `insight-fix`.
 INSIGHT_FUNCTIONS: Final = (
     "insight_claim_jobs(text, text[], integer, integer)",
     "insight_retry_job(uuid, text, double precision, text)",
@@ -106,6 +107,14 @@ INSIGHT_GRANTS: Final = (
     # (design, *The aged-out check*); `org_id` too, since every statement binds it.
     "GRANT SELECT (project_id, org_id, raw_retention_days, derived_retention_days) "
     "ON project_retention TO nexovue_insight",
+    # F5 Step 2b (design, *The Postgres account*): a general suggestion's ids, language,
+    # version and retry code, and its token count, which each attempt adds to; it writes the
+    # end. Row security (migration 0077) shows a row in rung 2b's states and lets one change
+    # only while `proposing`. Never the requester, never the stored answer.
+    "GRANT SELECT (id, org_id, project_id, finding_id, kind, general_language, "
+    "explanation_version, state, retry_code, tokens_used) ON finding_fixes TO nexovue_insight",
+    "GRANT UPDATE (state, state_changed_at, reason, retry_code, general_suggestion, "
+    "evidence_ids, tokens_used, finished_at) ON finding_fixes TO nexovue_insight",
     *(
         f"GRANT EXECUTE ON FUNCTION {signature} TO nexovue_insight"
         for signature in INSIGHT_FUNCTIONS

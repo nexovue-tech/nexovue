@@ -72,6 +72,14 @@ from nexovue_platform.evidence import (
     WORDING_REASONS,
     WORDING_STATES,
 )
+from nexovue_platform.fixes.records import (
+    FIX_KINDS,
+    FIX_REASONS,
+    FIX_STATES,
+    GENERAL_LANGUAGES,
+    GENERAL_SUGGESTION_MAX_BYTES,
+    RETRY_CODES,
+)
 from nexovue_platform.knowledge import (
     CHUNK_SPLIT_CHARACTERS,
     MAX_RUNBOOK_BYTES,
@@ -2277,6 +2285,108 @@ class FindingEvent(Base):
             "finding_id",
             text("at DESC"),
             text("id DESC"),
+        ),
+    )
+
+
+class FindingFix(Base):
+    """One suggested fix for a finding (F5, design *Data and migration impact*). Rung 2b's
+    general suggestion first (plan T2b.1): an example from F3's facts, holding no
+    repository, file or edit, so no source (FR38). The API inserts it in `proposing`;
+    `scheduler-insight` writes the answer that passed G1 to G9 while it is `proposing`
+    (row security, migration 0077), and the API checks it again on every read (D18)."""
+
+    __tablename__ = "finding_fixes"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    finding_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    explanation_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="proposing")
+    state_changed_at: Mapped[CreatedAt]
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    general_language: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # SQL NULL, never JSON `null`, for an absent answer: the database's checks read NULL.
+    general_suggestion: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    evidence_ids: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    result_recorded_at: Mapped[OptionalTimestamp]
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    requested_at: Mapped[CreatedAt]
+    finished_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "finding_id"],
+            ["findings.org_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fixes_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_finding_fixes_project",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "requested_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (requested_by)",
+            name="fk_finding_fixes_requested_by",
+        ),
+        UniqueConstraint("org_id", "id", name="uq_finding_fixes_org_id_id"),
+        CheckConstraint(f"kind IN ({_quoted(FIX_KINDS)})", name="kind_is_known"),
+        CheckConstraint(f"state IN ({_quoted(FIX_STATES)})", name="state_is_known"),
+        CheckConstraint(
+            f"reason IS NULL OR reason IN ({_quoted(FIX_REASONS)})", name="reason_is_known"
+        ),
+        CheckConstraint(
+            "(state IN ('refused', 'failed')) = (reason IS NOT NULL)",
+            name="reason_only_when_it_ended_short",
+        ),
+        CheckConstraint(
+            f"retry_code IS NULL OR retry_code IN ({_quoted(RETRY_CODES)})",
+            name="retry_code_is_known",
+        ),
+        CheckConstraint(
+            "(kind = 'general') = (general_language IS NOT NULL) AND (general_language IS NULL "
+            f"OR general_language IN ({_quoted(GENERAL_LANGUAGES)}))",
+            name="general_language_is_known",
+        ),
+        CheckConstraint(
+            "kind <> 'general' OR (state = 'proposed') = (general_suggestion IS NOT NULL)",
+            name="general_suggestion_only_when_proposed",
+        ),
+        CheckConstraint(
+            "general_suggestion IS NULL OR "
+            f"octet_length(general_suggestion::text) <= {GENERAL_SUGGESTION_MAX_BYTES}",
+            name="general_suggestion_is_small",
+        ),
+        CheckConstraint("explanation_version >= 1", name="explanation_version_counts_from_one"),
+        CheckConstraint("tokens_used >= 0", name="tokens_used_count_up"),
+        Index(
+            "uq_finding_fixes_one_in_flight",
+            "finding_id",
+            unique=True,
+            postgresql_where=text("state = 'proposing'"),
+        ),
+        Index(
+            "ix_finding_fixes_org_id_finding_id_requested_at",
+            "org_id",
+            "finding_id",
+            text("requested_at DESC"),
+        ),
+        Index(
+            "ix_finding_fixes_unrecorded",
+            "state_changed_at",
+            postgresql_where=text("result_recorded_at IS NULL"),
         ),
     )
 

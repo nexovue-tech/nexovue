@@ -5,9 +5,22 @@ import { CopyButton } from "@/shared/components/CopyButton";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 
-import type { DeployLineAddition, ExplanationSegment, FindingFixes } from "./api";
+import type {
+  DeployLineAddition,
+  ExplanationSegment,
+  FindingFixes,
+  FindingGeneralFix,
+} from "./api";
 import { Segments } from "./ExplanationSection";
-import { BRIEF_WORDS, earlierLink, SUGGESTED_FIX, showsSection } from "./fix-page";
+import { EarlierSuggestions, GeneralOfferForm, GeneralSuggestion } from "./FixGeneral";
+import {
+  BRIEF_WORDS,
+  earlierLink,
+  GENERAL_WORDS,
+  SUGGESTED_FIX,
+  showsSection,
+  stateWords,
+} from "./fix-page";
 
 const LINK = "font-medium text-brand-text text-sm underline-offset-2 hover:underline";
 
@@ -113,21 +126,51 @@ export function FixBrief({
 }
 
 /**
- * *Suggested fix* (D54's fifth row): full width below the split, so a diff has the window.
- * **A role with no line renders no section and no heading** (AC37e), and the hosted
- * service never holds one (AC11a). Plan Step 1 gives no role a line yet.
+ * *Suggested fix* (D54's fifth row): full width below the split, so content has the
+ * window. Rung 2b's own read feeds it (`useGeneralFix`), apart from rungs 1 and 2. **A role
+ * with no line, no offer and no suggestion renders no section and no heading** (AC37e,
+ * FR10), and the hosted service never holds one (AC11a). Showing content wins over reasons
+ * (FR10a): the latest suggestion first, then the reason's line and the offer, then older
+ * ones. One always-present status line announces state changes; a poll moves neither focus
+ * nor scroll (NFR6a).
  */
-export function FixSection({ fixes }: { fixes: FindingFixes | undefined }) {
-  if (fixes === undefined || !showsSection(fixes) || fixes.section === null) return null;
-  const { heading, sentence } = fixes.section;
+export function FixSection({
+  findingId,
+  general,
+  error,
+  onRetry,
+  now,
+  zone,
+}: {
+  findingId: string;
+  general: FindingGeneralFix | undefined;
+  error: unknown;
+  onRetry: () => void;
+  /** The caller's clock, so ages are pinned in a test. */
+  now: number;
+  zone?: string;
+}) {
+  if (general === undefined) {
+    // Nothing while loading, so a role with no line never sees a heading flash (AC37e).
+    return error == null ? null : (
+      <section id={SUGGESTED_FIX.anchor} aria-label={SUGGESTED_FIX.heading}>
+        <InlineFailure title={GENERAL_WORDS.notLoaded} error={error} onRetry={onRetry} />
+      </section>
+    );
+  }
+  if (!showsSection(general)) return null;
+  const { line, latest } = general;
+  const heading = line?.heading ?? SUGGESTED_FIX.heading;
   return (
-    <section
-      id={SUGGESTED_FIX.anchor}
-      aria-label={heading ?? SUGGESTED_FIX.heading}
-      className="flex flex-col gap-2"
-    >
-      {heading ? <h2 className="font-medium font-serif text-base text-ink">{heading}</h2> : null}
-      <p className="max-w-prose text-ink-dim text-sm">{sentence}</p>
+    <section id={SUGGESTED_FIX.anchor} aria-label={heading} className="flex min-w-0 flex-col gap-3">
+      <h2 className="font-medium font-serif text-base text-ink">{heading}</h2>
+      <p role="status" data-testid="fix-status" className="sr-only">
+        {latest ? stateWords(latest.state) : ""}
+      </p>
+      {latest ? <GeneralSuggestion fix={latest} now={now} zone={zone} /> : null}
+      {line ? <p className="max-w-prose text-ink-dim text-sm">{line.sentence}</p> : null}
+      <GeneralOfferForm findingId={findingId} general={general} />
+      <EarlierSuggestions earlier={general.earlier} now={now} />
     </section>
   );
 }

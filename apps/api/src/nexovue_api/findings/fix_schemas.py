@@ -1,15 +1,18 @@
-"""F5's shapes on a finding (spec FR1 to FR5; design, *Routes*): `GET /findings/{id}/fixes`.
+"""F5's shapes on a finding (spec FR1 to FR5, FR31 to FR38; design, *Routes*).
 
-A person's read only: tokens are refused below the route, so nothing here is on the
-read surface (AC3). Plan Step 1 carries rungs 1 and 2; later steps add the latest fix
-and older fixes beside them.
+`GET /findings/{id}/fixes` carries rungs 1 and 2; `GET` and `POST
+/findings/{id}/fixes/general` carry rung 2b, on their own path so the first never reaches
+AI code (AC33). A person's reads only: tokens are refused below each route, so nothing here
+is on the read surface (AC3, AC74).
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
+from nexovue_platform.fixes.records import GeneralLanguage
 from pydantic import BaseModel
 
 from nexovue_api.findings.schemas import ExplanationSegment
@@ -44,21 +47,100 @@ class FixBrief(BaseModel):
     text: str
 
 
-class FixSectionLine(BaseModel):
-    """The *Suggested fix* section's line for this person (design, *State by role*).
-    Absent when a role has no line, so neither the section nor its heading renders."""
-
-    heading: str | None
-    sentence: str
-
-
 class FindingFixes(BaseModel):
-    """`GET /findings/{id}/fixes`: rungs 1 and 2 and, from later steps, the section."""
+    """`GET /findings/{id}/fixes`: rungs 1 and 2, with AI off or on."""
 
     finding_id: uuid.UUID
     # None when F28's own sentence says all there is: no release, or one over a day old.
     deploy_line: DeployLineAddition | None
     # None for a finding closed as a false alarm or because its service went (FR5).
     brief: FixBrief | None
-    # None on the hosted service, and while no role has a line (plan Step 1).
-    section: FixSectionLine | None
+
+
+# ------------------------------------------------------------- rung 2b
+
+GeneralState = Literal["proposing", "proposed", "refused", "failed"]
+
+
+class FixSectionLine(BaseModel):
+    """The *Suggested fix* section's line for this person (design, *State by role*): why the
+    action is not offered, or the line the offer stands under. Absent when this role has
+    none, so neither the section nor its heading renders for that alone (FR10)."""
+
+    heading: str
+    sentence: str
+
+
+class GeneralOffer(BaseModel):
+    """FR31 to FR33: **Suggest a general fix** is offered to this person now."""
+
+    action: str
+    lead: str
+    # FR33's send sentence, naming the provider's host.
+    send_sentence: str
+    languages: list[GeneralLanguage]
+    # From the service's reported SDK language once it is read (FR33); none yet.
+    preselected: GeneralLanguage | None
+    tries_left: int
+
+
+class FactReference(BaseModel):
+    """A fact the suggestion rests on: F3's evidence id, and its number on the page."""
+
+    evidence_id: str
+    number: int
+
+
+class GeneralContent(BaseModel):
+    """FR37, in its order: the label first, Nexovue's lead sentence, then the model's
+    checked words with aliases restored as segments, and the example as one text value."""
+
+    heading: str
+    label: str
+    lead: str
+    summary: list[ExplanationSegment]
+    steps: list[list[ExplanationSegment]]
+    language: GeneralLanguage
+    code: str
+    evidence: list[FactReference]
+    # "Written from an earlier reading of this finding": F3 has a newer version.
+    earlier_reading: str | None
+
+
+class GeneralFix(BaseModel):
+    """One general suggestion, in this person's shape. `content` only at `proposed`, and
+    only when G1 to G9 pass again on this read (FR36, AC71)."""
+
+    id: uuid.UUID
+    state: GeneralState
+    heading: str
+    sentence: str | None
+    content: GeneralContent | None
+    tokens_used: int
+    requested_at: datetime
+    finished_at: datetime | None
+
+
+class EarlierGeneral(BaseModel):
+    """An older suggestion, as a quiet list (FR10a): state and time."""
+
+    id: uuid.UUID
+    state: GeneralState
+    requested_at: datetime
+
+
+class FindingGeneralFix(BaseModel):
+    """`GET /findings/{id}/fixes/general`: rung 2b for this person. Every part empty means
+    nothing about it renders (FR31, AC67)."""
+
+    finding_id: uuid.UUID
+    line: FixSectionLine | None
+    offer: GeneralOffer | None
+    latest: GeneralFix | None
+    earlier: list[EarlierGeneral]
+
+
+class GeneralFixRequest(BaseModel):
+    """FR33: the picked language, from the fixed list. Nothing typed."""
+
+    language: GeneralLanguage

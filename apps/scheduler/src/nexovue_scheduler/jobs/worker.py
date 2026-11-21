@@ -53,6 +53,7 @@ import asyncpg
 from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
 from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE, INSIGHT_QUEUE
+from nexovue_platform.fixes.records import FIX_CONCURRENCY, FIX_QUEUE
 from nexovue_platform.jobs import NOTIFY_CHANNEL
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -67,9 +68,10 @@ from nexovue_scheduler.jobs.queue import ClaimedJob
 logger = get_logger(__name__)
 
 POLL_SECONDS: Final = 1.0
-# Guesses (F4 design, *Capacity*): T8.1 measures them.
+# Guesses (F4 design, *Capacity*; F5 D56): T8.1 measures them. With F5's `insight-fix` at 2
+# of the role's 8 slots, any two queues at full load leave the third at least one.
 ASSISTANT_CONCURRENCY: Final = 4
-INSIGHT_CONCURRENCY: Final = 4
+INSIGHT_CONCURRENCY: Final = 3
 # With every slot busy the loop claims nothing, so it asks Postgres this often
 # anyway: readiness is a recent answer, and long jobs must not read as an outage.
 REACH_POSTGRES_SECONDS: Final = 10.0
@@ -84,10 +86,11 @@ DIED: Final = "died"
 REAP_SECONDS: Final = 5.0
 # The most jobs a worker runs at once from each capped queue.
 QUEUE_CAPS: Final[Mapping[str, int]] = {
-    # F4: `scheduler-insight`'s two queues, chat first because a person is waiting; each
-    # keeps at least 2 of the role's 6 slots while the other is full (design, *The loop*).
+    # F4: `scheduler-insight`'s queues, chat first because a person is waiting (design, *The
+    # loop*); F5's suggestions capped apart, so they never hold every explanation slot (D40).
     ASSISTANT_QUEUE: ASSISTANT_CONCURRENCY,
     INSIGHT_QUEUE: INSIGHT_CONCURRENCY,
+    FIX_QUEUE: FIX_CONCURRENCY,
     DETECTION_QUEUE: DETECTION_CONCURRENCY,
     # F3: gathering a finding's facts holds at most 2 slots, under the shared floor (NFR2).
     EVIDENCE_QUEUE: EVIDENCE_CONCURRENCY,
@@ -100,7 +103,7 @@ QUEUE_CAPS: Final[Mapping[str, int]] = {
 # A fresh child holds a few MiB of its own; the worst job measured, a project's hourly
 # baseline, leaves about 30 MiB (T8.2). Eight at this limit fit `scheduler-light`.
 MAX_CHILD_PRIVATE_BYTES: Final = 64 * 2**20
-# `scheduler-insight`'s four children fit its 384 MiB with the parent and forkserver beside
+# `scheduler-insight`'s eight children fit its 768 MiB with the parent and forkserver beside
 # them (F3 design, *Memory*; arithmetic, not a measurement: T3.10 reads a real run).
 INSIGHT_CHILD_PRIVATE_BYTES: Final = 48 * 2**20
 CHILD_PRIVATE_BYTES_OF_TASK_SET: Final[Mapping[str, int]] = {

@@ -6,6 +6,11 @@
  * browser checks; recorded in `docs/features/ai-solution/status.md`. It grows with each
  * step (gathered, proposed, draft confirm, opened, stale, both settings panels).
  *
+ * **Step 2b (T2b.8, AC78):** rung 2b's states, offered, being written, proposed and
+ * refused, at the same widths, with a 120-character code line and a long provider host:
+ * no sideways page scroll, 44 px targets, and a poll-driven change moving neither focus nor
+ * scroll. Written 2026-11-21; not run, with the rest.
+ *
  * The finding's reads are answered from fixed data through `page.route`, so the layout is
  * judged on the longest values the page must hold: a 200-character endpoint and a long
  * version name. Everything else, the sign-in and the console, is the real stack.
@@ -48,8 +53,82 @@ const BRIEF = [
   "Repository not known to Nexovue: no code location for this service.",
 ].join("\n");
 
+// ------------------------------------------------------------ rung 2b (AC78)
+
+const LONG_HOST = `${"provider-gateway.".repeat(5)}example`;
+const LONG_CODE_LINE = `value = call_with_retry(${"a".repeat(120 - 26)})`;
+const NO_GENERAL = { finding_id: FINDING_ID, line: null, offer: null, latest: null, earlier: [] };
+const LINE = {
+  heading: "Suggested fix not available",
+  sentence: "Nexovue does not know where this service's code lives.",
+};
+const OFFERED = {
+  ...NO_GENERAL,
+  line: LINE,
+  offer: {
+    action: "Suggest a general fix",
+    lead: "Without access to the code:",
+    send_sentence: `Sends this finding's facts, and the language you picked, to ${LONG_HOST}. No code is read or sent.`,
+    languages: [
+      "python",
+      "javascript",
+      "typescript",
+      "java",
+      "kotlin",
+      "go",
+      "ruby",
+      "php",
+      "csharp",
+      "rust",
+    ],
+    preselected: null,
+    tries_left: 3,
+  },
+};
+const LATEST = {
+  id: "x-1",
+  state: "proposed",
+  heading: "General fix suggestion",
+  sentence: null,
+  content: {
+    heading: "General fix suggestion",
+    label: "Example pattern, not your code. Nexovue has not seen your code. Check before using.",
+    lead: "Written from this finding's facts only, in python. Not compiled and not run.",
+    summary: [{ text: "Calls began failing after the deploy; retry with a backoff." }],
+    steps: [[{ text: "Wrap the outbound call in a retry." }]],
+    language: "python",
+    code: `import time\n\n${LONG_CODE_LINE}\n`,
+    evidence: [{ evidence_id: "deploy:d-1", number: 1 }],
+    earlier_reading: null,
+  },
+  tokens_used: 1460,
+  requested_at: STARTED,
+  finished_at: STARTED,
+};
+const PROPOSING = {
+  ...LATEST,
+  state: "proposing",
+  heading: "Writing a general suggestion",
+  sentence: "Writing a general suggestion. You may leave this page.",
+  content: null,
+};
+const REFUSED = {
+  ...LATEST,
+  state: "refused",
+  heading: "No general suggestion",
+  sentence:
+    "The general suggestion was withheld because it held a web address or host name. Asking again may help.",
+  content: null,
+};
+const RUNG_2B_STATES = {
+  offered: OFFERED,
+  proposing: { ...NO_GENERAL, latest: PROPOSING },
+  proposed: { ...NO_GENERAL, latest: LATEST },
+  refused: { ...OFFERED, latest: REFUSED },
+} as const;
+
 /** Answers the finding page's own reads; the shell's reads go to the real API. */
-async function stubFinding(page: Page) {
+async function stubFinding(page: Page, general: unknown = NO_GENERAL) {
   const finding = {
     id: FINDING_ID,
     project_id: PROJECT_ID,
@@ -104,11 +183,11 @@ async function stubFinding(page: Page) {
       ],
     },
     brief: { text: BRIEF },
-    section: null,
   };
   const answers: Record<string, unknown> = {
     [`/api/v1/findings/${FINDING_ID}`]: finding,
     [`/api/v1/findings/${FINDING_ID}/fixes`]: fixes,
+    [`/api/v1/findings/${FINDING_ID}/fixes/general`]: general,
     [`/api/v1/findings/${FINDING_ID}/timeline`]: { events: [], next_before: null },
     [`/api/v1/findings/${FINDING_ID}/explanation`]: {
       finding_id: FINDING_ID,
@@ -165,5 +244,50 @@ for (const width of WIDTHS) {
         expect(box?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
       }
     }
+  });
+}
+
+for (const width of WIDTHS) {
+  for (const [name, general] of Object.entries(RUNG_2B_STATES)) {
+    test(`AC78: rung 2b ${name} fits ${width} px with its targets`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await signUp(page, newAccount());
+      await stubFinding(page, general);
+      await page.goto(`/findings/${FINDING_ID}`);
+
+      const section = page.locator("#suggested-fix");
+      await expect(section).toBeVisible();
+      await fitsTheWindow(page);
+      if (width === WIDTHS[0]) {
+        for (const target of await section.locator("button, select").all()) {
+          const box = await target.boundingBox();
+          expect(box?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+        }
+      }
+    });
+  }
+
+  test(`AC78: a poll-driven change at ${width} px moves neither focus nor scroll`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await signUp(page, newAccount());
+    let answer: unknown = RUNG_2B_STATES.proposing;
+    await stubFinding(page, RUNG_2B_STATES.proposing);
+    await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/general`, (route) =>
+      route.fulfill({ json: answer }),
+    );
+    await page.goto(`/findings/${FINDING_ID}`);
+    await expect(page.getByText("You may leave this page.")).toBeVisible();
+    const brief = page.locator('section[aria-labelledby="finding-brief"]');
+    await brief.getByText("Read it").focus();
+    const scrolled = await page.evaluate(() => window.scrollY);
+
+    answer = RUNG_2B_STATES.proposed;
+    await expect(page.getByTestId("general-label")).toBeVisible({ timeout: 15_000 });
+
+    await expect(brief.getByText("Read it")).toBeFocused();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+    await fitsTheWindow(page);
   });
 }

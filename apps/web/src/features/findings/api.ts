@@ -1104,19 +1104,12 @@ export interface DeployLineAddition {
   sentences: ExplanationSegment[][];
 }
 
-/** The *Suggested fix* section's line for this person; absent when a role has none. */
-export interface FixSectionLine {
-  heading: string | null;
-  sentence: string;
-}
-
 /** `GET /findings/{id}/fixes`: a person's read; a token is refused (F5 AC3). */
 export interface FindingFixes {
   finding_id: string;
   deploy_line: DeployLineAddition | null;
   /** Absent for a finding closed as a false alarm or because its service went (FR5). */
   brief: { text: string } | null;
-  section: FixSectionLine | null;
 }
 
 export function fixesQueryKey(findingId: string, explanationVersion: number | null) {
@@ -1135,5 +1128,114 @@ export function useFixes(findingId: string, explanationVersion: number | null) {
     placeholderData: keepPreviousData,
     queryFn: ({ signal }) =>
       apiClient.get<FindingFixes>(`findings/${encodeURIComponent(findingId)}/fixes`, { signal }),
+  });
+}
+
+// ------------------------------------------- F5: rung 2b, the general suggestion (T2b.8)
+
+/** FR33's languages, in the list's order. */
+export type GeneralLanguage =
+  | "python"
+  | "javascript"
+  | "typescript"
+  | "java"
+  | "kotlin"
+  | "go"
+  | "ruby"
+  | "php"
+  | "csharp"
+  | "rust";
+
+export type GeneralState = "proposing" | "proposed" | "refused" | "failed";
+
+/** The *Suggested fix* section's line for this person; absent when a role has none (FR10). */
+export interface FixSectionLine {
+  heading: string;
+  sentence: string;
+}
+
+/** FR31 to FR33: **Suggest a general fix**, offered to this person now. */
+export interface GeneralOffer {
+  action: string;
+  lead: string;
+  /** Names the provider's host (FR33). */
+  send_sentence: string;
+  languages: GeneralLanguage[];
+  preselected: GeneralLanguage | null;
+  tries_left: number;
+}
+
+/** FR37, in its order; the API restored names as segments and checked it again. */
+export interface GeneralContent {
+  heading: string;
+  label: string;
+  lead: string;
+  summary: ExplanationSegment[];
+  steps: ExplanationSegment[][];
+  language: GeneralLanguage;
+  code: string;
+  evidence: { evidence_id: string; number: number }[];
+  earlier_reading: string | null;
+}
+
+export interface GeneralFix {
+  id: string;
+  state: GeneralState;
+  heading: string;
+  sentence: string | null;
+  content: GeneralContent | null;
+  tokens_used: number;
+  requested_at: string;
+  finished_at: string | null;
+}
+
+/** `GET /findings/{id}/fixes/general`: rung 2b for this person; a token is refused (AC74). */
+export interface FindingGeneralFix {
+  finding_id: string;
+  line: FixSectionLine | null;
+  offer: GeneralOffer | null;
+  latest: GeneralFix | null;
+  earlier: { id: string; state: GeneralState; requested_at: string }[];
+}
+
+/** While a suggestion is being written, the page reads again this often (design: 5 s). */
+export const GENERAL_FIX_POLL_MS = 5_000;
+
+export function generalFixQueryKey(findingId: string) {
+  return ["findings", "fixes", "general", findingId] as const;
+}
+
+/**
+ * Rung 2b, on its own read so rungs 1 and 2 never wait on AI (AC33). It polls only while
+ * its latest suggestion is being written; a poll never moves focus (NFR6a).
+ */
+export function useGeneralFix(findingId: string) {
+  return useQuery<FindingGeneralFix>({
+    queryKey: generalFixQueryKey(findingId),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      query.state.data?.latest?.state === "proposing" ? GENERAL_FIX_POLL_MS : false,
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingGeneralFix>(`findings/${encodeURIComponent(findingId)}/fixes/general`, {
+        signal,
+      }),
+  });
+}
+
+/** FR33's click: the language alone. A 409 carries the reason's code (FR31). */
+export function useAskGeneralFix(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "general", "ask", findingId],
+    mutationFn: (language: GeneralLanguage) =>
+      apiClient.post<FindingGeneralFix>(`findings/${encodeURIComponent(findingId)}/fixes/general`, {
+        language,
+      }),
+    onSuccess: (answer) => {
+      queryClient.setQueryData(generalFixQueryKey(findingId), answer);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: generalFixQueryKey(findingId) });
+    },
   });
 }

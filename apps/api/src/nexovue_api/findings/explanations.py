@@ -19,7 +19,6 @@ project, stored words are kept and not served, and the state reads `off` (AC106)
 
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import datetime
 from typing import Any, Final, Literal
@@ -31,7 +30,6 @@ from nexovue_platform.ai.validate import recheck
 from nexovue_platform.deployment import Deployment
 from nexovue_platform.evidence import (
     BAD_WORDING,
-    CAUSE_BAR_RECORDED,
     CAUSE_RULES,
     NOT_USEFUL,
     PERSON,
@@ -41,10 +39,10 @@ from nexovue_platform.evidence import (
     WORDING_STALLED_AFTER,
     WRONG_CAUSE,
     cause_released,
-    name_segment,
+    facts_may_be_sent,
     word_explanation_request,
 )
-from nexovue_platform.evidence.aliases import AliasBook
+from nexovue_platform.evidence.aliases import AliasBook, restored_segments
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.ai import service as ai_service
@@ -112,7 +110,6 @@ CAUSES_HELD: Final = "Plainer wording waits until causes may be shown."
 NO_FACTS_YET: Final = "The facts have not been read yet."
 WORDING_UNDER_WAY: Final = "Plainer wording is already being written."
 RUN_CAP_REACHED: Final = "Reached the limit of 3 in 24 hours, including automatic ones."
-_STAND_IN: Final = re.compile(r"\b(?:service|version|error|check)_[0-9]+\b")
 # A model's pick, by the next check's kind, to the "Look next" link it moves first.
 _LOOK_NEXT_OF: Final = {
     "open_traces": "traces",
@@ -672,22 +669,8 @@ async def _checked_words(
 
 
 def _restored(text: str, book: AliasBook) -> list[ExplanationSegment]:
-    """A claim as segments: its own words as text, each stand-in as the name it stands for.
-    Restoring can never build a link: a name is only ever a name (design, *Validation*)."""
-    segments: list[ExplanationSegment] = []
-    at = 0
-    for found in _STAND_IN.finditer(text):
-        if found.start() > at:
-            segments.append(ExplanationSegment(text=text[at : found.start()]))
-        name = book.name_of(found.group())
-        if name is None:
-            segments.append(ExplanationSegment(text=found.group()))
-        else:
-            segments.append(ExplanationSegment(name=name_segment(name)["name"]))
-        at = found.end()
-    if at < len(text):
-        segments.append(ExplanationSegment(text=text[at:]))
-    return segments
+    """A claim as segments, through the one restorer F5 reads with too (`restored_segments`)."""
+    return [ExplanationSegment(**segment) for segment in restored_segments(text, book)]
 
 
 async def refresh(
@@ -715,7 +698,7 @@ async def refresh(
     )
     if connection is None:
         raise ConflictError(AI_WORDING_OFF)
-    if not _causes_allow_wording(latest.likely_cause, show_held_causes=show_held_causes):
+    if not facts_may_be_sent(latest.likely_cause, override=show_held_causes):
         raise ConflictError(CAUSES_HELD)
     if (
         latest.wording_state == "pending"
@@ -751,10 +734,3 @@ async def refresh(
     )
     await session.commit()
     return RefreshAccepted(queued=True, runs_left=runs_left_of(len(started)))
-
-
-def _causes_allow_wording(stored: dict[str, Any] | None, *, show_held_causes: bool) -> bool:
-    """FR50, A85: no run while causes are held, nor for a cause whose rule is not released."""
-    if not (CAUSE_BAR_RECORDED or show_held_causes):
-        return False
-    return stored is None or cause_released(stored.get("rule"), override=show_held_causes)

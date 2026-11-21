@@ -125,6 +125,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # read with its project (it also expires on its own after an hour).
     "finding_explanations": "findings",
     "evidence_error_group_reads": "projects",
+    # F5. A finding's suggested fixes go with the finding (FR38): rung 2b's hold no source.
+    "finding_fixes": "findings",
     # F3. A rating goes with the version it rates.
     "finding_explanation_ratings": "finding_explanations",
     # F3. A project's AI opt-out goes with the project.

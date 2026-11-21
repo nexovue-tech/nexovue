@@ -284,6 +284,19 @@ def cause_released(rule: str | None, *, override: bool) -> bool:
     return override or (CAUSE_BAR_RECORDED and rule in RELEASED_RULES)
 
 
+def facts_may_be_sent(stored_cause: Any, *, override: bool) -> bool:
+    """FR50, A85: whether a version's `model_input` may go to a model at all. It carries the
+    likely cause, so nothing is sent while causes are held, nor for a cause whose rule is
+    not released. F3's wording and F5's general suggestion both ask this one rule."""
+    if not (CAUSE_BAR_RECORDED or override):
+        return False
+    if stored_cause is None:
+        return True
+    return isinstance(stored_cause, dict) and cause_released(
+        stored_cause.get("rule"), override=override
+    )
+
+
 # ------------------------------------------------------------ the wording slot
 
 WORDING_STATES: Final = ("off", "pending", "done", "failed", "over_limit", "abstained", "held")

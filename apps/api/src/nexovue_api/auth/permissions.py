@@ -38,6 +38,9 @@ class Action(StrEnum):
     ASK_ASSISTANT = "ask_assistant"
     # Writing runbooks chat can find (F4 D48): a member's, as notes are.
     MANAGE_KNOWLEDGE = "manage_knowledge"
+    # Asking for a suggested fix (F5, foundation section 5): it spends the customer's tokens,
+    # so not a viewer's. Rung 2b's general suggestion first (plan T2b.2).
+    REQUEST_FIX = "request_fix"
     # Channels hold destinations and secrets, so they are not day-to-day work.
     MANAGE_CHANNELS = "manage_channels"
     # Tracker connections (F22, FR34; foundation FD8): connect, test, replace a key and
@@ -90,6 +93,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.REQUEST_EXPLANATION: _EVERYONE_WHO_WORKS,
     Action.ASK_ASSISTANT: _EVERYONE_WHO_WORKS,
     Action.MANAGE_KNOWLEDGE: _EVERYONE_WHO_WORKS,
+    Action.REQUEST_FIX: _EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CONNECTIONS: _ADMINISTRATORS,
     Action.MANAGE_AI: _ADMINISTRATORS,

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TestRole } from "@/shared/identity.test-util";
 
-import type { FindingFixes, ReleaseFact } from "./api";
+import type { FindingFixes, FindingGeneralFix, ReleaseFact } from "./api";
 import { BRIEF_WORDS, SUGGESTED_FIX } from "./fix-page";
 import {
   finding,
@@ -31,7 +31,6 @@ const fixes = (overrides: Partial<FindingFixes> = {}): FindingFixes => ({
   finding_id: "f-1",
   deploy_line: null,
   brief: { text: BRIEF_TEXT },
-  section: null,
   ...overrides,
 });
 
@@ -74,11 +73,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const general = (overrides: Partial<FindingGeneralFix> = {}): FindingGeneralFix => ({
+  finding_id: "f-1",
+  line: null,
+  offer: null,
+  latest: null,
+  earlier: [],
+  ...overrides,
+});
+
 async function page(
   found: FindingFixes,
-  { role = "owner" as TestRole, release = withRelease() } = {},
+  {
+    role = "owner" as TestRole,
+    release = withRelease(),
+    rung2b = general(),
+  }: { role?: TestRole; release?: ReturnType<typeof withRelease>; rung2b?: FindingGeneralFix } = {},
 ) {
-  stubApi(release, { role, extra: { "GET /findings/f-1/fixes": json(found) } });
+  stubApi(release, {
+    role,
+    extra: {
+      "GET /findings/f-1/fixes": json(found),
+      "GET /findings/f-1/fixes/general": json(rung2b),
+    },
+  });
   const { container } = await mountFinding();
   await waitFor(() => container.querySelector("h1"), "the finding's sentence");
   for (let round = 0; round < 5; round += 1) await settle();
@@ -203,9 +221,9 @@ describe("the Suggested fix section (D54, AC37e, AC11a)", () => {
   );
 
   it("D54: a line renders full width below the split, with a jump link beside Evidence", async () => {
-    const container = await page(
-      fixes({ section: { heading: "Suggested fix not available", sentence: "A reason." } }),
-    );
+    const container = await page(fixes(), {
+      rung2b: general({ line: { heading: "Suggested fix not available", sentence: "A reason." } }),
+    });
 
     const section = container.querySelector<HTMLElement>(`#${SUGGESTED_FIX.anchor}`);
     expect(section).not.toBeNull();
@@ -223,11 +241,20 @@ describe("the Suggested fix section (D54, AC37e, AC11a)", () => {
     expect(jump?.getAttribute("href")).toBe(`#${SUGGESTED_FIX.anchor}`);
   });
 
-  it("a line with no heading of its own renders its sentence without a heading", async () => {
-    const container = await page(fixes({ section: { heading: null, sentence: "One line." } }));
+  it("rungs 1 and 2 still render when rung 2b's read fails, and it says so in place", async () => {
+    stubApi(withRelease(), {
+      extra: {
+        "GET /findings/f-1/fixes": json(fixes()),
+        "GET /findings/f-1/fixes/general": problem(500, "Broken"),
+      },
+    });
+    const { container } = await mountFinding();
+    await waitFor(() => container.querySelector("h1"), "the finding's sentence");
+    for (let round = 0; round < 8; round += 1) await settle();
 
-    const section = container.querySelector(`#${SUGGESTED_FIX.anchor}`);
-    expect(readable(section as Element)).toBe("One line.");
-    expect(section?.querySelector("h2")).toBeNull();
+    expect(container.querySelector('[data-testid="brief-text"]')).not.toBeNull();
+    expect(readable(container.querySelector(`#${SUGGESTED_FIX.anchor}`) as Element)).toContain(
+      "The suggested fix could not be loaded",
+    );
   });
 });

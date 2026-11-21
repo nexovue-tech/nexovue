@@ -649,7 +649,7 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      python -m nexovue_scheduler worker --queues assistant,insight --concurrency 6 --tasks insight
+      python -m nexovue_scheduler worker --queues assistant,insight,insight-fix --concurrency 8 --tasks insight
     healthcheck:
       test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
       interval: 15s

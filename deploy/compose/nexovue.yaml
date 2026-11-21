@@ -507,9 +507,9 @@ services:
       replicas: ${SCHEDULER_INSIGHT_REPLICAS:-1}
       resources:
         limits:
-          # A guess (F4 design, *Worker memory*): six children at 48 MiB each with the parent
-          # and forkserver. F3's T3.10 record replaces it; F4's T8.1 measures.
-          memory: 576M
+          # A guess (F4 design, *Worker memory*; F5 D56): eight children at 48 MiB each with
+          # the parent and forkserver. F3's T3.10 record replaces it; F4's T8.1 measures.
+          memory: 768M
 
   # ---------- the monitor, ready to connect (design.md §10) ----------
   # Opt-in: `--profile monitoring`. Scrapes every service's /metrics and evaluates the alerts in

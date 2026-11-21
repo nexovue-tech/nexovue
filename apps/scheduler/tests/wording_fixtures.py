@@ -18,9 +18,11 @@ organization's rows, never reaches another test's run in flight.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -41,9 +43,10 @@ from nexovue_platform.evidence.model_facts import SCHEMA_VERSION
 from recording_site import RecordingSite, Reply, json_reply, serve_recording_site
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from nexovue_api import insight_account
-from nexovue_scheduler.insight import transport, word
+from nexovue_scheduler.insight import sweep, transport, word
 from nexovue_scheduler.probes.addresses import PrivateEndpoints
 
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -59,6 +62,38 @@ ALIASES: Final = {
     "names": {"service_1": "checkout", "service_2": "orders-db", "version_1": "v2.1"},
     "facts": {"e1": "deploy:d-1", "e2": "dependency:orders-db", "e3": "absence:no_host_names"},
 }
+# A run a suite sweeps starts this far back: well inside `DIED_AFTER`, so the stack's own
+# sweep cannot take it first, and far enough that a sweep just past it reaches no other test's
+# run in flight.
+SWEPT_RUN_AGE: Final = timedelta(minutes=3)
+
+
+class Killed(BaseException):
+    """What the hard limit does to a child: nothing after it runs."""
+
+
+def killed(*_: Any, **__: Any) -> transport.Answer:
+    raise Killed
+
+
+def just_past(started: datetime) -> datetime:
+    """The first sweep that calls a run started at `started` dead."""
+    return started + sweep.DIED_AFTER + timedelta(seconds=1)
+
+
+def sweep_apart(at: datetime) -> None:
+    """F3's sweep as beat runs it, in a process of its own: here a thread with its own event
+    loop and connection, while the run it ends waits on its provider."""
+
+    async def run() -> None:
+        engine = create_async_engine(INSIGHT_ASYNC_DSN, poolclass=NullPool)
+        try:
+            await sweep.sweep(engine, clock=lambda: at)
+        finally:
+            await engine.dispose()
+
+    with ThreadPoolExecutor(max_workers=1) as apart:
+        apart.submit(lambda: asyncio.run(run())).result()
 
 
 def answer(

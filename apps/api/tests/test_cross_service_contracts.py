@@ -475,3 +475,38 @@ def test_the_api_s_connection_jobs_are_exactly_what_the_connections_worker_runs(
         accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
         required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
         assert required <= set(kwargs) <= accepted, task_name
+
+
+def test_f5s_rung_2b_jobs_are_exactly_what_their_workers_run() -> None:
+    """F5 T2b.9: the API adds `suggest_general_fix` by name with ids only, on `insight-fix`,
+    which only the insight set registers; beat adds `sweep_general_fixes` on `light`, which
+    every full worker registers (`TASK_MODULES`), and the insight set never loads it. A task
+    in the wrong set is claimed and fails, every interval, for ever."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.fixes import records
+
+    from nexovue_scheduler.jobs.registry import TASK_MODULES, TASK_SETS, registered
+
+    request = records.suggest_general_fix_request(
+        fix_id="f", org_id="o", requested_by="u", call_seconds=60
+    )
+    insight = registered(TASK_SETS["insight"])
+    suggest = insight[records.SUGGEST_GENERAL_FIX_TASK]
+    parameters = inspect.signature(suggest).parameters.values()
+    accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+    required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+
+    assert request.queue == records.FIX_QUEUE
+    assert required <= set(request.kwargs) <= accepted
+    assert "nexovue_scheduler.insight.suggest_general_fix" not in TASK_MODULES
+    assert records.SWEEP_GENERAL_FIXES_TASK in registered(TASK_MODULES)
+    assert "nexovue_scheduler.fixes.sweep" not in TASK_SETS["insight"]

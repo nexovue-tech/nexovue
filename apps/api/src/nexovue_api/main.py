@@ -50,6 +50,7 @@ from nexovue_api.errorgroups import router as error_groups_router
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.explanations import router as explanations_router
 from nexovue_api.findings import router as findings_router
+from nexovue_api.findings.fixes import general_router as general_fixes_router
 from nexovue_api.findings.fixes import router as fixes_router
 from nexovue_api.health import router as health_router
 from nexovue_api.heartbeats import router as heartbeats_router
@@ -173,6 +174,7 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(alerts_router.router)
     versioned.include_router(findings_router.router)
     versioned.include_router(fixes_router.router)
+    versioned.include_router(general_fixes_router.router)
     versioned.include_router(explanations_router.router)
     versioned.include_router(slos_router.router)
     versioned.include_router(slo_readings_router.router)

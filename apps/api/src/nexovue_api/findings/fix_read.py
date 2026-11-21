@@ -52,7 +52,8 @@ async def read_fixes(
     now: datetime,
 ) -> FindingFixes:
     """Rung 1's additions and the brief. Another organization's finding is a 404 like a
-    missing one. The section is absent: no role has a line before plan Step 2b."""
+    missing one. The *Suggested fix* section's line comes from rung 2b's own read
+    (`fix_general.py`), which may reach AI code."""
     row = await find_finding(session, org_id=org_id, finding_id=finding_id)
     if row is None:
         raise NotFoundError(NOT_FOUND)
@@ -65,7 +66,6 @@ async def read_fixes(
         brief=None
         if row.closed_reason in NO_BRIEF_WHEN_CLOSED_AS
         else FixBrief(text=build_brief(_brief_inputs(row, explanation, settings, now))),
-        section=None,
     )
 
 

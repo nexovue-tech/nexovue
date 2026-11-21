@@ -283,6 +283,7 @@ async def test_me_says_what_the_person_may_do(user: User, organization: Organiza
         "request_explanation",
         "ask_assistant",
         "manage_knowledge",
+        "request_fix",
     ]
 
 

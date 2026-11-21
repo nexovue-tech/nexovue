@@ -82,6 +82,8 @@ FINDING_EVENT_KINDS: Final = (
     "issue_moved",
     "tracker_write_failed",
     "explained",
+    # F5 (design, Step 2b): a general suggestion passed its rules, by ids and counts.
+    "fix_proposed",
 )
 
 # Losing traffic, failing more and slower (FR1 to FR3), as the simulation names them.

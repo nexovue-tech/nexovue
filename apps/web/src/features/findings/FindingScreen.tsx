@@ -44,7 +44,7 @@ import type {
   ReleaseFact,
   SignalSeries,
 } from "./api";
-import { useExplanation, useFinding, useFindingAction, useFixes } from "./api";
+import { useExplanation, useFinding, useFindingAction, useFixes, useGeneralFix } from "./api";
 import { CaseSection } from "./CaseSection";
 import { ExplanationHeaderLine, ExplanationSection } from "./ExplanationSection";
 import type { HeaderLine } from "./explanation";
@@ -189,6 +189,8 @@ function FindingPage({
   const explanation = useExplanation(finding);
   // F5: rungs 1 and 2, read again when a new explanation version arrives.
   const fixes = useFixes(finding.id, explanation.data?.latest_version ?? null);
+  // F5 rung 2b: its own read, so the deploy line and the brief never wait on AI (AC33).
+  const general = useGeneralFix(finding.id);
   useAssistantSubject(finding);
   return (
     <div className="flex flex-col gap-8">
@@ -197,7 +199,7 @@ function FindingPage({
         finding={finding}
         zone={zone}
         line={headerLine(explanation.data, { failed: explanation.isError, finding })}
-        suggestedFix={showsSection(fixes.data)}
+        suggestedFix={showsSection(general.data)}
       />
       {/* FR45, AC105: one always-present status region, at page level because the
           case controls return nothing for a viewer. It announces only changes of
@@ -260,7 +262,14 @@ function FindingPage({
         </div>
       </div>
       {/* D54's fifth row: full width below the split, so a diff has the window. */}
-      <FixSection fixes={fixes.data} />
+      <FixSection
+        findingId={finding.id}
+        general={general.data}
+        error={general.error}
+        onRetry={() => void general.refetch()}
+        now={Date.now()}
+        zone={zone}
+      />
     </div>
   );
 }

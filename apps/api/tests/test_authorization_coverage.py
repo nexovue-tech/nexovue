@@ -197,6 +197,14 @@ POLICY_OF: Final = {
     # F3 Step 2: rating an explanation is every working role's, as operating alerts is
     # (FR20); stopping a rule changes what detection's explanations say (FR54, A64).
     "nexovue_api/findings/router.py:rate_explanation": "MayOperateAlerts",
+    # F5 (FR32, T2b.2): asking for a general fix suggestion spends the customer's tokens, so
+    # every working role's and no viewer's. The four actions on code refuse a general row
+    # (AC73) and carry the same gate, which their source rows will need (Steps 4 to 7).
+    "nexovue_api/findings/fixes/general_router.py:ask_general_fix": "MayRequestFix",
+    "nexovue_api/findings/fixes/general_router.py:check_fix": "MayRequestFix",
+    "nexovue_api/findings/fixes/general_router.py:patch_fix": "MayRequestFix",
+    "nexovue_api/findings/fixes/general_router.py:draft_pull_request": "MayRequestFix",
+    "nexovue_api/findings/fixes/general_router.py:run_ci": "MayRequestFix",
     "nexovue_api/explanations/router.py:stop_rule": "MayConfigureDetection",
     "nexovue_api/explanations/router.py:resume_rule": "MayConfigureDetection",
     # F19: reliability targets, every working role's (D20, foundation section 5).

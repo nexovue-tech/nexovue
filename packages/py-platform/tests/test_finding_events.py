@@ -77,6 +77,13 @@ WRITABLE: Final[dict[str, dict[str, Any]]] = {
     "issue_moved": {"actor_kind": "tracker", "link_id": uuid.uuid4()},
     "tracker_write_failed": {"actor_kind": "system", "link_id": uuid.uuid4(), "failure": "timeout"},
     "explained": {"actor_kind": "system", "explanation_version": 1},
+    # F5 Step 2b: a general suggestion passed its rules; ids and counts only.
+    "fix_proposed": {
+        "actor_kind": "system",
+        "fix_id": uuid.uuid4(),
+        "fix_kind": "general",
+        "step_count": 2,
+    },
 }
 
 

@@ -4,7 +4,7 @@ AC34, AC35a, AC11a's hosted half).
 Rung 1 reads F28's release before the finding and the version before that, on that
 service only. The brief is built from F3's stored facts with AI off, names a cause only
 once its rule is released, is absent for a finding closed as a false alarm, and carries
-no repository line on the hosted service, where no section shows either. Every row is
+no repository line on the hosted service. Every row is
 this test's own, inside a transaction rolled back at the end; the clock is fixed.
 
 This suite fails rather than skips when Postgres is down; see tests/helpers/live.
@@ -348,7 +348,8 @@ async def test_the_brief_is_built_with_ai_off_from_f3s_stored_facts(db: AsyncSes
         f"&to=2026-11-11T14%3A37%3A00Z&project={acme.project.id}&finding={finding.id}"
     ) in lines
     assert NO_CODE_LOCATION in lines and NOTHING_READ not in lines
-    assert body["section"] is None
+    # Rung 2b's line is its own read's (`/fixes/general`), so this one carries none.
+    assert "section" not in body
 
 
 async def test_ac35a_with_no_explanation_row_the_brief_says_none_was_read(
@@ -397,16 +398,14 @@ async def test_fr5_no_brief_for_a_finding_closed_as_not_a_problem(
     assert (await _get(db, _person(acme), finding))["brief"] is None
 
 
-async def test_the_hosted_service_shows_no_section_and_no_repository_line(
-    db: AsyncSession,
-) -> None:
-    """AC11a's hosted half, and *What each buyer gets*: rung 2 without a repository line."""
+async def test_the_hosted_service_shows_no_repository_line(db: AsyncSession) -> None:
+    """*What each buyer gets*: rung 2 without a repository line. The section's hosted half
+    (AC11a) is rung 2b's read's, `test_fix_general_routes.py`."""
     acme = await _tenant(db)
     finding = await _finding(db, acme)
 
     body = await _get(db, _person(acme), finding, deployment="hosted")
 
-    assert body["section"] is None
     assert NO_CODE_LOCATION not in _lines(body)
 
 

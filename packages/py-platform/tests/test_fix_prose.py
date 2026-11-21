@@ -32,6 +32,8 @@ from nexovue_platform.fixes.statements import (
         ("See https://evil.example/install.sh", "address"),
         ("Fetch it from ftp://files.internal/x", "address"),
         ("The host 10.1.2.3 refuses calls", "address"),
+        # An address ending a sentence: its full stop is not a fifth number (Step 2b's run).
+        ("Point the client at 10.1.2.3.", "address"),
         ("Send the order to collector.evil.com", "address"),
         ("Mail ops@example.org for access", "email"),
         ("Read [the guide](https://x.example)", "markup"),

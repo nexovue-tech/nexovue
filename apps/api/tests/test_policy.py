@@ -33,6 +33,8 @@ FR1 = {
     Action.REQUEST_EXPLANATION: EVERYONE_WHO_WORKS,
     Action.ASK_ASSISTANT: EVERYONE_WHO_WORKS,
     Action.MANAGE_KNOWLEDGE: EVERYONE_WHO_WORKS,
+    # F5 (foundation section 5): asking for a suggested fix spends the customer's tokens.
+    Action.REQUEST_FIX: EVERYONE_WHO_WORKS,
     Action.MANAGE_CHANNELS: ADMINISTRATORS,
     # F22 FR34: connecting, testing and disconnecting GitHub and Jira (foundation FD8).
     Action.MANAGE_CONNECTIONS: ADMINISTRATORS,

@@ -20,6 +20,7 @@ export type Action =
   | "request_explanation"
   | "ask_assistant"
   | "manage_knowledge"
+  | "request_fix"
   | "manage_channels"
   | "manage_connections"
   | "manage_ai"

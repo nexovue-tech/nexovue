@@ -19,6 +19,7 @@ import pytest
 from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.connections import CONNECTIONS_QUEUE, CONNECTIONS_QUEUE_CAP
 from nexovue_platform.evidence import EVIDENCE_CONCURRENCY, EVIDENCE_QUEUE, INSIGHT_QUEUE
+from nexovue_platform.fixes.records import FIX_CONCURRENCY, FIX_QUEUE
 
 from nexovue_scheduler import releases, slos
 from nexovue_scheduler.__main__ import worker_queues
@@ -125,10 +126,12 @@ def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> N
         **slos.QUEUE_CAPS,
         **releases.QUEUE_CAPS,
         CONNECTIONS_QUEUE: CONNECTIONS_QUEUE_CAP,
-        # F4: `scheduler-insight`'s two queues, in its own worker.
+        # F4 and F5: `scheduler-insight`'s three queues, in its own worker (F5 D56).
         ASSISTANT_QUEUE: ASSISTANT_CONCURRENCY,
         INSIGHT_QUEUE: INSIGHT_CONCURRENCY,
+        FIX_QUEUE: FIX_CONCURRENCY,
     }
+    assert (ASSISTANT_CONCURRENCY, INSIGHT_CONCURRENCY, FIX_CONCURRENCY) == (4, 3, 2)
     assert EVIDENCE_CONCURRENCY == 2
     assert DETECTION_CONCURRENCY == 2
 

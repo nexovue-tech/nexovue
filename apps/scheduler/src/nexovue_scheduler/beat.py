@@ -45,6 +45,7 @@ from nexovue_platform.checks.task import (
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.deployment import HOSTED, ai_available
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
+from nexovue_platform.fixes.records import SWEEP_GENERAL_FIXES_TASK
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.knowledge import KNOWLEDGE_SWEEP_TASK
 from nexovue_platform.telemetry.logging import get_logger
@@ -105,6 +106,10 @@ EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
 # chat's own sweep on `insight` (design, *Settling*). Every minute is a guess.
 ASSISTANT_SWEEP_SECONDS: Final = 60
 ASSISTANT_SWEEP_ENTRY: Final = "sweep:assistant"
+# F5: rung 2b's stuck rows and unrecorded results, on `light`, always, since a row clicked
+# before AI was turned off must still end (design, *Jobs*: every minute, a guess).
+GENERAL_FIX_SWEEP_SECONDS: Final = 60
+GENERAL_FIX_SWEEP_ENTRY: Final = "sweep:general-fixes"
 
 # F4 T5.5: chat's fact lines from recovered findings, every 5 minutes (a guess), on the shared
 # queue with default limits; only where AI may be offered, as nothing else reads them.
@@ -466,6 +471,11 @@ class Beat:
             CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
             RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
             ASSISTANT_SWEEP_ENTRY: (ASSISTANT_SWEEP_TASK, ASSISTANT_SWEEP_SECONDS, INSIGHT_QUEUE),
+            GENERAL_FIX_SWEEP_ENTRY: (
+                SWEEP_GENERAL_FIXES_TASK,
+                GENERAL_FIX_SWEEP_SECONDS,
+                SHARED_QUEUE,
+            ),
         }
         if ai_available(self._settings.nexovue_deployment):
             wanted[KNOWLEDGE_SWEEP_ENTRY] = (

@@ -26,6 +26,7 @@ from typing import Any, Final
 
 from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.evidence import INSIGHT_QUEUE
+from nexovue_platform.fixes.records import FIX_QUEUE
 from nexovue_platform.jobs import ENQUEUE, WAKE, JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import TextClause, bindparam, text
@@ -85,8 +86,8 @@ _RETRY: Final = text(
 )
 
 # The same three for the AI role's account, through migration 0070's functions, which F4's
-# migration 0073 widened to the `assistant` queue; the claim takes the lane's queues and
-# matches no other name.
+# migration 0073 widened to the `assistant` queue and F5's 0077 to `insight-fix`; the claim
+# takes the lane's queues and matches no other name.
 _INSIGHT_CLAIM: Final = text(
     "SELECT * FROM insight_claim_jobs(:worker, :queues, :limit, :grace)"
 ).bindparams(bindparam("queues", type_=ARRAY(Text)))
@@ -115,7 +116,7 @@ INSIGHT_STATEMENTS: Final = QueueStatements(
     _INSIGHT_CLAIM,
     _INSIGHT_RETRY,
     _INSIGHT_FINISH,
-    queues=frozenset({INSIGHT_QUEUE, ASSISTANT_QUEUE}),
+    queues=frozenset({INSIGHT_QUEUE, ASSISTANT_QUEUE, FIX_QUEUE}),
 )
 # By `Settings.scheduler_role`: only the AI role's account lacks rights on `jobs`.
 STATEMENTS_OF_ROLE: Final[dict[str, QueueStatements]] = {

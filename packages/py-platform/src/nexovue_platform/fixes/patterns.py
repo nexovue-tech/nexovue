@@ -16,8 +16,9 @@ URL_SCHEME: Final = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 # A URL as a token, for the "not already in that file" comparison.
 URL_TOKEN: Final = re.compile(r"[a-z][a-z0-9+.-]*://[^\s'\"`<>()\[\]{}]*", re.IGNORECASE)
 _OCTET: Final = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
-# Four dot-separated numbers, each up to 255; a version `1.2.3` has three.
-IPV4: Final = re.compile(rf"(?<![0-9.]){_OCTET}(?:\.{_OCTET}){{3}}(?![0-9.])")
+# Four dot-separated numbers, each up to 255; a version `1.2.3` has three. A dot is part of
+# the address only before another number, so one ending a sentence is still an address.
+IPV4: Final = re.compile(rf"(?<![0-9])(?<![0-9]\.){_OCTET}(?:\.{_OCTET}){{3}}(?![0-9])(?!\.[0-9])")
 # The checked-in list of last labels a host name is recognised by (design, K6).
 HOST_LAST_LABELS: Final = (
     "com",

@@ -1,4 +1,13 @@
-import type { DeployLineAddition, FindingFixes, ReleaseContext } from "./api";
+import { plural } from "@/shared/format/plural";
+import { formatRelativeTime } from "@/shared/format/time";
+
+import type {
+  DeployLineAddition,
+  FindingGeneralFix,
+  GeneralLanguage,
+  GeneralState,
+  ReleaseContext,
+} from "./api";
 import type { ReleaseLine } from "./finding-page";
 
 /**
@@ -54,9 +63,82 @@ export function earlierLink(
 }
 
 /**
- * Whether the *Suggested fix* section renders at all. A role with no line gets no
- * section and no heading (AC37e), and the hosted service never holds one (AC11a).
+ * Whether the *Suggested fix* section renders at all: a line, the offer, or a suggestion
+ * of this finding's. A role with none of those gets no section and no heading (AC37e,
+ * FR10), and the hosted service never holds one (AC11a). Rung 2b's read is its own, so
+ * rungs 1 and 2 never wait on it (AC33).
  */
-export function showsSection(fixes: FindingFixes | undefined): boolean {
-  return fixes?.section != null;
+export function showsSection(general: FindingGeneralFix | undefined): boolean {
+  if (general === undefined) return false;
+  return (
+    general.line !== null ||
+    general.offer !== null ||
+    general.latest !== null ||
+    general.earlier.length > 0
+  );
+}
+
+/* ------------------------------------------------ rung 2b: the page's own words */
+
+export const GENERAL_WORDS = {
+  loading: "Loading the suggested fix",
+  notLoaded: "The suggested fix could not be loaded",
+  language: "Example language",
+  chooseLanguage: "Choose a language",
+  pickFirst: "Choose the example's language first.",
+  pending: "Sending",
+  earlier: "Earlier suggestions",
+  summary: "Summary",
+  steps: "Steps",
+  example: "Example code",
+} as const;
+
+/** FR33's languages as people write them. */
+export const LANGUAGE_NAMES: Record<GeneralLanguage, string> = {
+  python: "Python",
+  javascript: "JavaScript",
+  typescript: "TypeScript",
+  java: "Java",
+  kotlin: "Kotlin",
+  go: "Go",
+  ruby: "Ruby",
+  php: "PHP",
+  csharp: "C#",
+  rust: "Rust",
+};
+
+const STATE_WORDS: Record<GeneralState, string> = {
+  proposing: "Being written",
+  proposed: "General suggestion",
+  refused: "No general suggestion",
+  failed: "Could not be prepared",
+};
+
+export function stateWords(state: GeneralState): string {
+  return STATE_WORDS[state];
+}
+
+/** FR10a: "Tries left today: 2", beside the action only. */
+export function triesLeft(count: number): string {
+  return `Tries left today: ${count}`;
+}
+
+/** The facts the example rests on, by their numbers in the explanation above. */
+export function restsOn(numbers: readonly number[]): string | null {
+  if (numbers.length === 0) return null;
+  const listed =
+    numbers.length === 1
+      ? `${numbers[0]}`
+      : `${numbers.slice(0, -1).join(", ")} and ${numbers[numbers.length - 1]}`;
+  return `Rests on ${plural(numbers.length, "fact")} ${listed} above.`;
+}
+
+/** When a suggestion was asked for; `now` is the caller's clock, so a test pins it. */
+export function askedAgo(askedAt: string, now: number): string {
+  return `asked ${formatRelativeTime(askedAt, now)}`;
+}
+
+/** FR37's tokens and age. */
+export function tokensAndAge(tokens: number, askedAt: string, now: number): string {
+  return `${tokens.toLocaleString("en")} ${plural(tokens, "token")} · ${askedAgo(askedAt, now)}`;
 }

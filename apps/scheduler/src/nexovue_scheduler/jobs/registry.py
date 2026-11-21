@@ -34,6 +34,8 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.evidence.gather",
     # F4 T5.5: chat's fact lines, on the shared queue; no AI is called or loaded by it.
     "nexovue_scheduler.knowledge.tasks",
+    # F5: rung 2b's sweep, on `light`; it holds no key and calls nothing (plan T2b.9).
+    "nexovue_scheduler.fixes.sweep",
 )
 
 # The modules each kind of worker loads (`--tasks`), F3's mechanism. A narrow role names
@@ -51,6 +53,8 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
         "nexovue_scheduler.insight.sweep",
         "nexovue_scheduler.insight.assistant",
         "nexovue_scheduler.insight.assistant_sweep",
+        # F5: rung 2b's general suggestion (plan T2b.6), on `insight-fix`.
+        "nexovue_scheduler.insight.suggest_general_fix",
     ),
 }
 # The module a worker's forkserver imports before any child exists, per task set.

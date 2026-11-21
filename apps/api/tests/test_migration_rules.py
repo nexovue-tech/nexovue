@@ -42,6 +42,7 @@ ENV: Final = VERSIONS.parent / "env.py"
 # 0073 holds who asked chat how much (`assistant_question_counts`) and what it sent where.
 # 0074 holds a project's choice of release-summary channel, and the summaries sent.
 # 0076 holds runbooks, what people wrote (F4).
+# 0077 holds F5's general suggestions: what was sent to a provider and what came back.
 ROLL_FORWARD_ONLY: Final = (
     "0020",
     "0022",
@@ -62,6 +63,7 @@ ROLL_FORWARD_ONLY: Final = (
     "0073",
     "0074",
     "0076",
+    "0077",
 )
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"

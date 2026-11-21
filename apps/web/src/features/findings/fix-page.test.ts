@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeployLineAddition, FindingFixes, ReleaseContext } from "./api";
-import { deployAddition, earlierLink, showsSection } from "./fix-page";
+import type { DeployLineAddition, FindingGeneralFix, ReleaseContext } from "./api";
+import {
+  deployAddition,
+  earlierLink,
+  restsOn,
+  showsSection,
+  tokensAndAge,
+  triesLeft,
+} from "./fix-page";
 
 /**
  * F5's rules for rungs 1 and 2 on the page (plan T1.4; spec FR1; D54, AC37e): F5's
@@ -60,17 +67,50 @@ describe("F5's addition to F28's release row (FR1)", () => {
   });
 });
 
-describe("the Suggested fix section (AC37e, AC11a)", () => {
-  const fixes = (section: FindingFixes["section"]): FindingFixes => ({
+describe("the Suggested fix section (AC37e, AC11a, FR10)", () => {
+  const general = (overrides: Partial<FindingGeneralFix> = {}): FindingGeneralFix => ({
     finding_id: "f-1",
-    deploy_line: null,
-    brief: null,
-    section,
+    line: null,
+    offer: null,
+    latest: null,
+    earlier: [],
+    ...overrides,
+  });
+  const LATEST = {
+    id: "x-1",
+    state: "refused" as const,
+    heading: "No general suggestion",
+    sentence: "The model said: the evidence is not enough.",
+    content: null,
+    tokens_used: 0,
+    requested_at: "2026-11-21T11:00:00Z",
+    finished_at: null,
+  };
+
+  it("renders only for a role with a line, the offer, or a suggestion of this finding's", () => {
+    expect(showsSection(undefined)).toBe(false);
+    expect(showsSection(general())).toBe(false);
+    expect(showsSection(general({ line: { heading: "H", sentence: "A line." } }))).toBe(true);
+    expect(showsSection(general({ latest: LATEST }))).toBe(true);
+    expect(
+      showsSection(
+        general({ earlier: [{ id: "x-0", state: "failed", requested_at: LATEST.requested_at }] }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("rung 2b's own words (FR10a, FR37)", () => {
+  it("names the facts an example rests on by their numbers above", () => {
+    expect(restsOn([])).toBeNull();
+    expect(restsOn([2])).toBe("Rests on fact 2 above.");
+    expect(restsOn([1, 3, 4])).toBe("Rests on facts 1, 3 and 4 above.");
   });
 
-  it("renders only for a role with a line", () => {
-    expect(showsSection(fixes(null))).toBe(false);
-    expect(showsSection(undefined)).toBe(false);
-    expect(showsSection(fixes({ heading: null, sentence: "A line." }))).toBe(true);
+  it("says tries left and tokens with an age from the caller's clock", () => {
+    const now = Date.parse("2026-11-21T12:00:00Z");
+
+    expect(triesLeft(2)).toBe("Tries left today: 2");
+    expect(tokensAndAge(1460, "2026-11-21T11:56:00Z", now)).toBe("1,460 tokens · asked 4 min. ago");
   });
 });

@@ -348,9 +348,11 @@ def _run_parameters(run: RunStart) -> dict[str, Any]:
     }
 
 
-async def _insert_run(connection: AsyncConnection, run: RunStart) -> str:
-    """The run's row. A person deleted while the job waited is refused by the foreign key,
-    and the row is then written with no one, in a savepoint so the transaction goes on."""
+async def insert_run(connection: AsyncConnection, run: RunStart) -> str:
+    """The run's row, in the caller's transaction (F5's admission takes it beside its
+    reservation, as `admit` does). A person deleted while the job waited is refused by the
+    foreign key, and the row is then written with no one, in a savepoint so the
+    transaction goes on."""
     parameters = _run_parameters(run)
     try:
         async with connection.begin_nested():
@@ -367,7 +369,7 @@ async def _insert_run(connection: AsyncConnection, run: RunStart) -> str:
 async def start_run(engine: AsyncEngine, run: RunStart) -> str:
     """The run's row, committed before any byte is sent."""
     async with engine.begin() as connection:
-        return await _insert_run(connection, run)
+        return await insert_run(connection, run)
 
 
 async def finish_check(
@@ -528,7 +530,7 @@ async def admit(
                 | {"state": state, "reason": reason, "at": now, "generation": generation},
             )
             return Admission(refused=reason or state)
-        run_id = await _insert_run(connection, run)
+        run_id = await insert_run(connection, run)
     return Admission(run_id=run_id, month=month_of(now))
 
 
@@ -607,6 +609,41 @@ async def set_state(
 Finished = Literal["written", "not_written", "already_ended"]
 
 
+async def settle_run(
+    connection: AsyncConnection,
+    *,
+    org_id: str,
+    run_id: str,
+    month: date,
+    reserved: int,
+    end: RunEnd,
+) -> bool:
+    """A call's end, in the caller's transaction: its run row finished, then what it used
+    moved from reserved to used. F5's general suggestion settles through it too.
+
+    Only while the run is still `started`: the run row's lock, taken first, is the one the
+    sweep holds, so one of the two ends the run and the other finds it ended. False when the
+    sweep had ended it: nothing moved, its charge stands, and the caller writes nothing."""
+    ended = await connection.execute(
+        _FINISH_RUN,
+        {
+            "org_id": org_id,
+            "run_id": run_id,
+            "outcome": end.outcome,
+            "input_tokens": end.input_tokens,
+            "output_tokens": end.output_tokens,
+            "tokens_estimated": end.tokens_estimated,
+            "finished_at": end.finished_at,
+        },
+    )
+    if not ended.rowcount:
+        return False
+    await connection.execute(
+        _SETTLE, {"org_id": org_id, "month": month, "used": end.tokens, "reserved": reserved}
+    )
+    return True
+
+
 async def finish_wording(
     engine: AsyncEngine,
     *,
@@ -623,30 +660,14 @@ async def finish_wording(
 ) -> Finished:
     """A run's ending in one transaction: its row finished, its tokens moved from reserved to
     used, and, unless it will be tried again (`state` None), the explanation's words or state
-    over `pending` of its generation.
-
-    Only while the run is still `started`: the row lock this takes first is the one the sweep
-    holds, so one of the two ends the run and the other finds it ended. A run the sweep has
-    ended keeps the sweep's charge, and its words never land."""
+    over `pending` of its generation. A run the sweep has ended (`settle_run`) keeps the
+    sweep's charge, and its words never land."""
     key = {"org_id": org_id, "explanation_id": explanation_id, "generation": generation}
     async with engine.begin() as connection:
-        ended = await connection.execute(
-            _FINISH_RUN,
-            {
-                "org_id": org_id,
-                "run_id": run_id,
-                "outcome": end.outcome,
-                "input_tokens": end.input_tokens,
-                "output_tokens": end.output_tokens,
-                "tokens_estimated": end.tokens_estimated,
-                "finished_at": end.finished_at,
-            },
-        )
-        if not ended.rowcount:
+        if not await settle_run(
+            connection, org_id=org_id, run_id=run_id, month=month, reserved=reserved, end=end
+        ):
             return "already_ended"
-        await connection.execute(
-            _SETTLE, {"org_id": org_id, "month": month, "used": end.tokens, "reserved": reserved}
-        )
         if state is None:
             return "not_written"
         if words is not None:

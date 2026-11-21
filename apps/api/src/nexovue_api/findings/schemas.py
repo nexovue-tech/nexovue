@@ -70,6 +70,7 @@ FindingEventKind = Literal[
     "issue_moved",
     "tracker_write_failed",
     "explained",
+    "fix_proposed",
 ]
 EventActorKind = Literal["person", "system", "tracker"]
 

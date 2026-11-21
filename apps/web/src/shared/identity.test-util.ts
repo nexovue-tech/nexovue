@@ -20,6 +20,7 @@ const WORK: Action[] = [
   "request_explanation",
   "ask_assistant",
   "manage_knowledge",
+  "request_fix",
 ];
 const ADMINISTER: Action[] = [
   ...WORK,

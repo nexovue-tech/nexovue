@@ -24,6 +24,7 @@ from typing import Any, Final
 from nexovue_platform.alerts.model import SEVERITIES
 from nexovue_platform.connections import COMMENT_KINDS, ISSUE_STATES
 from nexovue_platform.detection import CASE_RESOLUTIONS, CLOSED_REASONS, FINDING_EVENT_KINDS
+from nexovue_platform.fixes.records import FIX_KINDS
 
 # Who did a thing to a case: a person, nexovue itself, or the tracker's side.
 EVENT_ACTOR_KINDS: Final = ("person", "system", "tracker")
@@ -120,6 +121,9 @@ _FIELD_CHECKS: Final[dict[str, Callable[[str, Any], Any]]] = {
     "close_reason": _enum(ISSUE_CLOSE_REASONS),
     "failure": _failure,
     "explanation_version": _count,
+    "fix_id": _uuid,
+    "fix_kind": _enum(FIX_KINDS),
+    "step_count": _count,
 }
 
 # What each kind carries — all of it, required. A kind outside this table does
@@ -152,6 +156,7 @@ _KIND_FIELDS: Final[dict[str, frozenset[str]]] = {
     "issue_moved": frozenset({"link_id"}),
     "tracker_write_failed": frozenset({"link_id", "failure"}),
     "explained": frozenset({"explanation_version"}),
+    "fix_proposed": frozenset({"fix_id", "fix_kind", "step_count"}),
 }
 
 assert sorted(_KIND_FIELDS) == sorted(FINDING_EVENT_KINDS), (
@@ -179,6 +184,9 @@ def finding_event_parameters(
     close_reason: Any = None,
     failure: Any = None,
     explanation_version: Any = None,
+    fix_id: Any = None,
+    fix_kind: Any = None,
+    step_count: Any = None,
 ) -> dict[str, Any]:
     """`RECORD_FINDING_EVENT_SQL`'s bound values, from named, typed fields alone.
 
@@ -210,6 +218,9 @@ def finding_event_parameters(
             "close_reason": close_reason,
             "failure": failure,
             "explanation_version": explanation_version,
+            "fix_id": fix_id,
+            "fix_kind": fix_kind,
+            "step_count": step_count,
         }.items()
         if value is not None
     }

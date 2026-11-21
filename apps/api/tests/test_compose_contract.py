@@ -565,7 +565,8 @@ def test_the_insight_role_holds_exactly_its_own_variables(layout: str, tmp_path:
         "postgresql+asyncpg://nexovue_insight:"
     )
     assert insight["command"] == [INSIGHT_ROLE]
-    assert insight["deploy"]["resources"]["limits"]["memory"] == str(576 * 2**20)
+    # F5 D56: eight children, F4's six and F5's two, at 48 MiB each beside the parent.
+    assert insight["deploy"]["resources"]["limits"]["memory"] == str(768 * 2**20)
 
 
 def test_only_the_api_and_the_insight_role_hold_the_ai_key(layout: str, tmp_path: Path) -> None:
@@ -640,7 +641,8 @@ def test_the_development_stack_runs_the_insight_role_on_its_own_tasks_and_networ
     service = dev["services"][INSIGHT_ROLE]
 
     argv = service["command"].split()
-    assert argv[argv.index("--queues") + 1] == "assistant,insight"
+    assert argv[argv.index("--queues") + 1] == "assistant,insight,insight-fix"
+    assert argv[argv.index("--concurrency") + 1] == "8"
     assert argv[argv.index("--tasks") + 1] == "insight"
     assert service["environment"]["SCHEDULER_ROLE"] == "insight"
     assert "nexovue_insight:" in service["environment"]["POSTGRES_DSN"]

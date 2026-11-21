@@ -42,11 +42,13 @@ ROLES: Final[dict[str, list[str]]] = {
         *("--concurrency", "3", "--tasks", "connections"),
     ],
     # F3: the AI role, idle until an organization turns AI on (FD6). Its own account,
-    # network and tasks; it claims `assistant` (F4's chat) and `insight` alone, through its
-    # account's functions, `assistant` first because a person is waiting.
+    # network and tasks; it claims `assistant` (F4's chat), `insight` and `insight-fix` (F5's
+    # suggestions) alone, through its account's functions, `assistant` first because a person
+    # is waiting.
     "scheduler-insight": [
         *("python", "-m", "nexovue_scheduler", "worker"),
-        *("--queues", "assistant,insight", "--concurrency", "6", "--tasks", "insight"),
+        *("--queues", "assistant,insight,insight-fix", "--concurrency", "8"),
+        *("--tasks", "insight"),
     ],
     "scheduler-health": ["python", "-m", "nexovue_scheduler", "health"],
     "setup": ["python", "-m", "nexovue_api.setup"],

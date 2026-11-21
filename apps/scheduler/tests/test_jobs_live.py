@@ -700,29 +700,37 @@ async def test_with_no_worker_a_queued_question_ends_unavailable_by_its_queue_cl
     assert (await assistant_rows.message(install, again.message_id)).state == "queued"
 
 
-@pytest.mark.parametrize("full", ["insight", "assistant"])
-async def test_a_full_ai_queue_never_keeps_the_other_from_being_claimed_in_time(
-    engine: AsyncEngine, lane: str, tmp_path: Path, full: str
+@pytest.mark.parametrize(
+    "other", ["insight", "assistant", "insight-fix"], ids=lambda name: f"{name} still claimed"
+)
+async def test_two_full_ai_queues_never_keep_the_third_from_being_claimed_in_time(
+    engine: AsyncEngine, lane: str, tmp_path: Path, other: str
 ) -> None:
-    """F4 AC29: `scheduler-insight` at its real slots and caps. A burst fills one AI queue
-    with slow jobs; a job on the other, which expires in a few seconds, must still be
-    claimed and run before it expires."""
-    queues = {name: f"{lane}.{name}" for name in ("assistant", "insight")}
+    """F4 AC29, with F5's D56: `scheduler-insight` at its real slots and caps. A burst fills
+    two of its three queues with slow jobs; a job on the third, which expires in a few
+    seconds, must still be claimed and run before it expires."""
+    names = ("assistant", "insight", "insight-fix")
+    queues = {name: f"{lane}.{name}" for name in names}
     caps = {queues[name]: worker.QUEUE_CAPS[name] for name in queues}
-    other = "assistant" if full == "insight" else "insight"
+    full = [name for name in names if name != other]
     notes = tmp_path / "notes"
     try:
-        # Enough slow jobs to take every slot if the cap did not hold, each outliving the
+        # Enough slow jobs to take every slot if the caps did not hold, each outliving the
         # other queue's job's expiry.
-        for number in range(INSIGHT_SLOTS + 2):
-            await _add(
-                engine,
-                JobRequest(
-                    task=job_fixtures.SPAN,
-                    queue=queues[full],
-                    kwargs={"path": str(notes), "marker": f"burst {number}", "pause": 8.0},
-                ),
-            )
+        for name in full:
+            for number in range(INSIGHT_SLOTS + 2):
+                await _add(
+                    engine,
+                    JobRequest(
+                        task=job_fixtures.SPAN,
+                        queue=queues[name],
+                        kwargs={
+                            "path": str(notes),
+                            "marker": f"burst {name} {number}",
+                            "pause": 8.0,
+                        },
+                    ),
+                )
         await _add(
             engine,
             JobRequest(
@@ -738,11 +746,12 @@ async def test_a_full_ai_queue_never_keeps_the_other_from_being_claimed_in_time(
             lane,
             lambda: "the other ran" in _lines(notes),
             concurrency=INSIGHT_SLOTS,
-            queues=[queues["assistant"], queues["insight"]],
+            queues=[queues[name] for name in names],
             caps=caps,
         )
 
-        assert _most_at_once(_lines(notes), "burst") <= worker.QUEUE_CAPS[full]
+        for name in full:
+            assert _most_at_once(_lines(notes), f"burst {name} ") <= worker.QUEUE_CAPS[name]
     finally:
         async with engine.begin() as connection:
             await connection.execute(

@@ -418,6 +418,19 @@ describe("a timeline row's words come from kinds and typed detail alone", () => 
       }),
     ).toBe("A note was deleted");
   });
+
+  it("F5: a general suggestion's row says what it is, never a bare fix (AC37)", () => {
+    expect(
+      eventSentence({
+        id: "e3",
+        kind: "fix_proposed",
+        at: "2026-11-21T12:00:00Z",
+        actor_kind: "system",
+        actor_name: null,
+        detail: { fix_id: "x-1", fix_kind: "general", step_count: 2 },
+      }),
+    ).toBe("A general fix suggestion was written");
+  });
 });
 
 // ------------------------------------------------ keeping and ending (F22 T2.7)

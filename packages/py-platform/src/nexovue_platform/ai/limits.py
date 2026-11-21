@@ -12,7 +12,8 @@ tenancy structure test reads them.
    anything is reserved.
 3. **The monthly limit:** a run reserves its estimate plus the most it may write, against the
    share its finding's severity may use; a run that dies keeps what it reserved. F4's chat
-   reserves against its own share, `CHAT_SHARE`, through the same statement.
+   reserves against its own share, `CHAT_SHARE`, and F5's suggestions against `FIX_SHARE`,
+   through the same statement.
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ WARNING_SHARE: Final = 0.8
 CRITICAL_SHARE: Final = 1.0
 # F4: chat stops at this part of the limit, leaving the rest to wording (F4 D50, a guess).
 CHAT_SHARE: Final = 0.8
+# F5: suggested fixes stop once the organization's total reaches this part, so a fix can
+# never silence explanations (F5 D32, NFR3; half, a guess).
+FIX_SHARE: Final = 0.5
 
 
 def share_for(severity: object) -> float:
@@ -51,6 +55,11 @@ def chat_ceiling(monthly_limit: int) -> int:
     return int(monthly_limit * CHAT_SHARE)
 
 
+def fix_ceiling(monthly_limit: int) -> int:
+    """F5: what used plus reserved tokens may reach after a suggestion's reservation."""
+    return int(monthly_limit * FIX_SHARE)
+
+
 def input_estimate(body: bytes) -> int:
     """Tokens a request's body may hold, estimated cautiously from its bytes (design)."""
     return estimate_tokens(len(body))
@@ -60,9 +69,10 @@ def too_long(input_tokens: int) -> bool:
     return input_tokens > MAX_INPUT_TOKENS
 
 
-def reservation(input_tokens: int) -> int:
-    """What a run takes from the month before it calls: its input and the most it may write."""
-    return input_tokens + MAX_OUTPUT_TOKENS
+def reservation(input_tokens: int, max_output_tokens: int = MAX_OUTPUT_TOKENS) -> int:
+    """What a run takes from the month before it calls: its input and the most it may write
+    (F3's wording by default; F5's general suggestion passes its own)."""
+    return input_tokens + max_output_tokens
 
 
 def month_of(moment: datetime) -> date:

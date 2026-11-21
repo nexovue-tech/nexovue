@@ -14,10 +14,12 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import pytest
 from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import CheckDefinition
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
+from nexovue_platform.fixes.records import SWEEP_GENERAL_FIXES_TASK
 from nexovue_platform.knowledge import KNOWLEDGE_SWEEP_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -34,6 +36,7 @@ from nexovue_scheduler.beat import (
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
+    GENERAL_FIX_SWEEP_ENTRY,
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
     INSIGHT_SWEEP_ENTRY,
@@ -233,6 +236,26 @@ def test_chat_questions_are_swept_every_minute_on_insight_by_an_insight_task() -
     assert sweep.interval_seconds == 60
     assert ASSISTANT_SWEEP_TASK in registry.registered(registry.TASK_SETS["insight"])
     assert "nexovue_scheduler.insight.assistant_sweep" not in registry.TASK_MODULES
+
+
+@pytest.mark.parametrize("ai_on", [False, True])
+def test_general_fixes_are_swept_every_minute_on_light_whether_ai_is_on_or_not(
+    ai_on: bool,
+) -> None:
+    """F5 T2b.9: rung 2b's sweep ends stuck rows and records results once. It holds no key
+    and calls nothing, so it runs on `light` by a task every full worker loads, and it runs
+    with AI off too, since a row asked for before AI was turned off must still end."""
+    beat = _scheduler("self-hosted")
+    beat.ai_on = ai_on
+    sweep = beat._sweep_entries()[GENERAL_FIX_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_GENERAL_FIXES_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 60
+    assert sweep.request.expires_seconds == 60
+    assert SWEEP_GENERAL_FIXES_TASK in registry.registered()
+    assert "nexovue_scheduler.fixes.sweep" in registry.TASK_MODULES
+    assert "nexovue_scheduler.fixes.sweep" not in registry.TASK_SETS["insight"]
 
 
 def test_with_no_live_connection_beat_adds_no_connection_sweep() -> None:

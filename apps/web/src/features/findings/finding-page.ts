@@ -498,6 +498,8 @@ export function eventSentence(event: TimelineEvent): string {
       return "An open finding left this case and stands on its own";
     case "explained":
       return "The explanation joined this finding";
+    case "fix_proposed":
+      return "A general fix suggestion was written";
     default:
       return issueEventSentence(event) ?? event.kind.replaceAll("_", " ");
   }

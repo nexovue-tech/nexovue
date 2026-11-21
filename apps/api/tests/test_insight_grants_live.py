@@ -147,6 +147,30 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "finished_at",
     },
     ("ai_usage_monthly", "UPDATE"): {"used_tokens", "reserved_tokens"},
+    # F5 Step 2b: a general suggestion's ids, language, version, retry code and token count,
+    # and its end; never the requester or the stored answer (design, *The Postgres account*).
+    ("finding_fixes", "SELECT"): {
+        "id",
+        "org_id",
+        "project_id",
+        "finding_id",
+        "kind",
+        "general_language",
+        "explanation_version",
+        "state",
+        "retry_code",
+        "tokens_used",
+    },
+    ("finding_fixes", "UPDATE"): {
+        "state",
+        "state_changed_at",
+        "reason",
+        "retry_code",
+        "general_suggestion",
+        "evidence_ids",
+        "tokens_used",
+        "finished_at",
+    },
 }
 EXPECTED_FUNCTIONS: Final = {
     "insight_claim_jobs(text,text[],integer,integer)",

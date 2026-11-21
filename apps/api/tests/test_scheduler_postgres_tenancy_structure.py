@@ -250,6 +250,19 @@ CROSS_TENANT_STATEMENTS: Final = (
         f"{_SWEEP}: wording left `pending` past its job's life, each row by its own id and "
         "its runs by its own `org_id` (F3 AC81)",
     ),
+    # F5's rung 2b sweep, on `light` (plan T2b.9).
+    _across(
+        "fixes.sweep",
+        "_STUCK",
+        f"{_SWEEP}: general suggestions left `proposing` past any attempt's life; each row "
+        "ends by its own id and carries its own `org_id`",
+    ),
+    _across(
+        "fixes.sweep",
+        "_UNRECORDED",
+        f"{_SWEEP}: ended general suggestions whose result is not yet recorded; the event, "
+        "audit entry and mark each bind the row's own `org_id`",
+    ),
     _across(
         "metrics",
         "_CONNECTIONS_ACTIVE",

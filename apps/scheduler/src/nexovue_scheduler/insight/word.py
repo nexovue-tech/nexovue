@@ -195,7 +195,7 @@ async def _word(
     assert connection is not None
     if not _has_a_fact(model_input):
         return await leave("abstained")
-    opened, key = _open_key(org_id, connection, keys)
+    opened, key = open_key(org_id, connection, keys)
     if not opened:
         return await leave("failed", "bad_key")
     fmt = wire_format(connection.wire_format)
@@ -308,7 +308,7 @@ async def _may_send(
     """Everything that must still hold when a run is about to spend (design, step 2)."""
     if connection is None or not connection.enabled or not ai_available(deployment):
         return False
-    if connection.monthly_token_limit is None or not _consent_covers(connection):
+    if connection.monthly_token_limit is None or not consent_covers(connection):
         return False
     try:
         check_connection(
@@ -324,8 +324,9 @@ async def _may_send(
     )
 
 
-def _consent_covers(connection: store.StoredConnection) -> bool:
-    """The owner's consent still names these values and this facts schema (FR26, BR12)."""
+def consent_covers(connection: store.StoredConnection) -> bool:
+    """The owner's consent still names these values and this facts schema (FR26, BR12).
+    F5's general suggestion compares consent through this too (design, *Rung 2b*)."""
     return (
         connection.consented_base_url == connection.base_url
         and connection.consented_schema == SCHEMA_VERSION
@@ -352,7 +353,7 @@ def _severity(model_input: Mapping[str, Any]) -> object:
     return finding.get("severity") if isinstance(finding, Mapping) else None
 
 
-def _open_key(
+def open_key(
     org_id: str, connection: store.StoredConnection, keys: ConfiguredKeys
 ) -> tuple[bool, str | None]:
     """Whether the key opened, and the key, opened only for this address: None for a server

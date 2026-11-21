@@ -14,7 +14,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from nexovue_platform.evidence.aliases import ALIAS_KINDS, AliasBook, restore
+from nexovue_platform.evidence.aliases import ALIAS_TOKEN, AliasBook, restored_segments
 from nexovue_platform.fixes.patterns import addresses_in, hidden_characters
 
 # FR16's cap (a guess).
@@ -35,15 +35,13 @@ BANNED_WORDS: Final = (
     "fixes",
     "fixed",
 )
-_BANNED: Final = re.compile(
+BANNED: Final = re.compile(
     r"\b(?:" + "|".join(word.replace(" ", r"\s+") for word in BANNED_WORDS) + r")\b",
     re.IGNORECASE,
 )
-_EMAIL: Final = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+EMAIL: Final = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # A Markdown link or image, an autolink, or an HTML tag: markup a renderer may follow.
-_MARKUP: Final = re.compile(r"\[[^\]]*\]\([^)]*\)|!\[|<[a-z/!][^>]*>", re.IGNORECASE)
-# F3's alias shape (`service_1`, `version_2`): a stand-in the API must restore.
-ALIAS_TOKEN: Final = re.compile(rf"\b(?:{'|'.join(ALIAS_KINDS)})_[0-9]+\b")
+MARKUP: Final = re.compile(r"\[[^\]]*\]\([^)]*\)|!\[|<[a-z/!][^>]*>", re.IGNORECASE)
 _ALLOWED_CONTROLS: Final = frozenset({"\n", "\t"})
 
 ProseRefusal = Literal[
@@ -74,9 +72,9 @@ def prose_refusal(text: str, book: AliasBook | None) -> ProseRefusal | None:
         return "control_character"
     if hidden_characters(text):
         return "hidden_character"
-    if _EMAIL.search(text):
+    if EMAIL.search(text):
         return "email"
-    if _MARKUP.search(text):
+    if MARKUP.search(text):
         return "markup"
     if addresses_in(text, hosts_anywhere=True):
         return "address"
@@ -90,24 +88,15 @@ def check_why(text: str, book: AliasBook | None) -> ProseVerdict:
     refusal = prose_refusal(text, book)
     if refusal is not None:
         return ProseVerdict(refusal=refusal, text="")
-    if _BANNED.search(text):
+    if BANNED.search(text):
         return ProseVerdict(refusal=None, text=WHY_REPLACED)
     return ProseVerdict(refusal=None, text=text)
 
 
 def why_segments(text: str, book: AliasBook) -> list[dict[str, str]]:
-    """The checked words as F3's segments, each alias put back as a name segment by F3's
-    `restore`, so restoring can never build a link (AC56)."""
-    segments: list[dict[str, str]] = []
-    position = 0
-    for match in ALIAS_TOKEN.finditer(text):
-        if match.start() > position:
-            segments.append({"text": text[position : match.start()]})
-        segments.append({"alias": match.group(0)})
-        position = match.end()
-    if position < len(text):
-        segments.append({"text": text[position:]})
-    return restore(segments, book)
+    """The checked words as F3's segments, each alias put back as a name segment, so
+    restoring can never build a link (AC56)."""
+    return restored_segments(text, book)
 
 
 def evidence_ids_known(evidence_ids: Collection[str], allowed: Collection[str]) -> bool:

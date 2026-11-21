@@ -11,9 +11,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from typing import Any, Final
+from typing import Any
 
 import pytest
 import structlog
@@ -29,21 +28,24 @@ from nexovue_platform.evidence import (
 )
 from recording_site import RecordingSite, Reply
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncEngine
 from wording_fixtures import (
     CHAT_PATH,
     GOOD,
-    INSIGHT_ASYNC_DSN,
     MODEL,
     PROVIDER_KEY,
+    SWEPT_RUN_AGE,
+    Killed,
     answer,
     connect,
     every,
     finding,
+    just_past,
+    killed,
     one,
     openai_reply,
     run_word,
+    sweep_apart,
     version,
     wording_of,
 )
@@ -542,40 +544,6 @@ async def test_an_answer_no_retry_can_change_fails_at_once_with_its_reason(
 # ------------------------------------------------- killed, failed, swept
 
 
-class _Killed(BaseException):
-    """What the hard limit does to a child: nothing after it runs."""
-
-
-def _killed(*_: Any, **__: Any) -> transport.Answer:
-    raise _Killed
-
-
-# A run this suite sweeps starts this far back: well inside `DIED_AFTER`, so the stack's own
-# sweep cannot take it first, and far enough that a sweep just past it reaches no other test's
-# run in flight (`wording_fixtures`).
-_SWEPT_RUN_AGE: Final = timedelta(minutes=3)
-
-
-def _just_past(started: datetime) -> datetime:
-    """The first sweep that calls a run started at `started` dead."""
-    return started + sweep.DIED_AFTER + timedelta(seconds=1)
-
-
-def _sweep_apart(at: datetime) -> None:
-    """The sweep as beat runs it, in a process of its own: here a thread with its own event
-    loop and connection, while the run it ends waits on its provider."""
-
-    async def run() -> None:
-        engine = create_async_engine(INSIGHT_ASYNC_DSN, poolclass=NullPool)
-        try:
-            await sweep.sweep(engine, clock=lambda: at)
-        finally:
-            await engine.dispose()
-
-    with ThreadPoolExecutor(max_workers=1) as apart:
-        apart.submit(lambda: asyncio.run(run())).result()
-
-
 async def _month_totals(ai_install: AsyncEngine, ai_tenant: AlertTenant) -> tuple[int, int]:
     """Used and reserved over every month row, so a run near a month's end is still seen."""
     row = await one(
@@ -587,7 +555,7 @@ async def _month_totals(ai_install: AsyncEngine, ai_tenant: AlertTenant) -> tupl
     return (int(row.used), int(row.reserved))
 
 
-async def test_a_killed_run_keeps_its_reservation_and_the_sweep_marks_it_died(
+async def test_akilled_run_keeps_its_reservation_and_the_sweep_marks_it_died(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
@@ -597,17 +565,17 @@ async def test_a_killed_run_keeps_its_reservation_and_the_sweep_marks_it_died(
     """AC54: recorded as started before the call; the sweep, as `nexovue_insight`, marks it
     `died`, moves its reservation to used, flagged estimated, and fails the explanation."""
     connected = await connect(ai_install, ai_tenant, provider_site, now=now)
-    started = now - _SWEPT_RUN_AGE
+    started = now - SWEPT_RUN_AGE
     found = await finding(ai_install, ai_tenant, now=started)
     explanation = await version(ai_install, ai_tenant, found, now=started)
 
-    with pytest.raises(_Killed):
-        await run_word(ai_engine, connected, explanation, at=started, send=_killed)
+    with pytest.raises(Killed):
+        await run_word(ai_engine, connected, explanation, at=started, send=killed)
     [run] = await _runs(ai_install, ai_tenant)
     assert run.outcome == "started" and run.reserved_tokens > 0
     assert await _usage(ai_install, ai_tenant) == (0, run.reserved_tokens)
 
-    await sweep.sweep(ai_engine, clock=lambda: _just_past(started))
+    await sweep.sweep(ai_engine, clock=lambda: just_past(started))
 
     [died] = await _runs(ai_install, ai_tenant)
     assert (died.outcome, died.tokens_estimated, died.input_tokens) == (
@@ -620,7 +588,7 @@ async def test_a_killed_run_keeps_its_reservation_and_the_sweep_marks_it_died(
     assert (stored.wording_state, stored.wording_reason) == ("failed", "died")
 
 
-async def test_a_click_after_a_killed_run_is_not_overwritten_by_the_sweep(
+async def test_a_click_after_akilled_run_is_not_overwritten_by_the_sweep(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
@@ -629,11 +597,11 @@ async def test_a_click_after_a_killed_run_is_not_overwritten_by_the_sweep(
 ) -> None:
     """AC81: the sweep acts only on a matching generation."""
     connected = await connect(ai_install, ai_tenant, provider_site, now=now)
-    started = now - _SWEPT_RUN_AGE
+    started = now - SWEPT_RUN_AGE
     found = await finding(ai_install, ai_tenant, now=started)
     explanation = await version(ai_install, ai_tenant, found, now=started)
-    with pytest.raises(_Killed):
-        await run_word(ai_engine, connected, explanation, at=started, send=_killed)
+    with pytest.raises(Killed):
+        await run_word(ai_engine, connected, explanation, at=started, send=killed)
     async with ai_install.begin() as connection:
         await connection.execute(
             text(
@@ -643,7 +611,7 @@ async def test_a_click_after_a_killed_run_is_not_overwritten_by_the_sweep(
             {"id": explanation, "at": now},
         )
 
-    await sweep.sweep(ai_engine, clock=lambda: _just_past(started))
+    await sweep.sweep(ai_engine, clock=lambda: just_past(started))
 
     stored = await wording_of(ai_install, explanation)
     assert (stored.wording_state, stored.wording_generation) == ("pending", 2)
@@ -664,9 +632,9 @@ async def test_a_run_finishing_after_the_sweep_ended_it_changes_nothing(
     holding = await version(
         ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
     )
-    with pytest.raises(_Killed):
-        await run_word(ai_engine, connected, holding, send=_killed)
-    started = now - _SWEPT_RUN_AGE
+    with pytest.raises(Killed):
+        await run_word(ai_engine, connected, holding, send=killed)
+    started = now - SWEPT_RUN_AGE
     late = await version(
         ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=started), now=started
     )
@@ -675,7 +643,7 @@ async def test_a_run_finishing_after_the_sweep_ended_it_changes_nothing(
     def swept_during_the_call(
         call: HttpCall, *, timeout_seconds: int, private_endpoints: PrivateEndpoints
     ) -> transport.Answer:
-        _sweep_apart(_just_past(started))
+        sweep_apart(just_past(started))
         return transport.send(
             call, timeout_seconds=timeout_seconds, private_endpoints=private_endpoints
         )
