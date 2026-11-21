@@ -13,12 +13,11 @@ import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
 import clickhouse_connect
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import FastAPI
-from mcp.server import MCPServer
 from nexovue_platform.email import EMAIL_VARIABLES, EmailSender, build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
 from nexovue_platform.tenant_statements import MAX_EXECUTION_SECONDS
@@ -39,6 +38,7 @@ from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
+from nexovue_api.ratelimit.ticket_owners import TicketOwners
 from nexovue_api.ratelimit.token_owners import TokenOwners
 from nexovue_api.settings import DEFAULT_CLICKHOUSE_HTTP_PORT, ClickHouseDsn, Settings
 from nexovue_api.signup.first_run import seed_first_organization
@@ -116,6 +116,7 @@ class Resources:
     sessions: SessionStore
     rate_limiter: RateLimiter
     token_owners: TokenOwners
+    ticket_owners: TicketOwners
     token_usage: TokenUsage
     # None when no object store is configured. Source map upload and
     # symbolication refuse by name in that case; nothing else needs one.
@@ -131,10 +132,24 @@ class Resources:
     evaluations: EvaluationReader
 
 
+class _SessionManager(Protocol):
+    def run(self) -> AbstractAsyncContextManager[None]: ...
+
+
+class MountedAssistant(Protocol):
+    """What the lifespan needs of the MCP server mounted at `/api/mcp`: its session
+    manager, entered for the app's life. Typed here rather than imported, so every route,
+    which reaches this module through its authorization, does not import the MCP SDK,
+    and the no-AI walks from an API root need no exception (F19 D55, F20 D38)."""
+
+    @property
+    def session_manager(self) -> _SessionManager: ...
+
+
 def build_lifespan(
     settings: Settings,
     *,
-    assistant: MCPServer | None = None,
+    assistant: MountedAssistant | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """A lifespan that opens the pools, publishes them on the app, and closes them.
 
@@ -150,6 +165,7 @@ def build_lifespan(
         app.state.resources = resources
         app.state.rate_limiter = resources.rate_limiter
         app.state.token_owners = resources.token_owners
+        app.state.ticket_owners = resources.ticket_owners
         app.state.plan_limits = FixedPlanLimits()
         app.state.health = CheckRegistry(dependency_checks(resources))
         await _seed_the_operator(resources, settings)
@@ -257,6 +273,7 @@ async def open_resources(settings: Settings) -> Resources:
         sessions=SessionStore(session_factory, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(session_factory, instances=settings.api_instances),
         token_owners=TokenOwners(session_factory),
+        ticket_owners=TicketOwners(session_factory),
         token_usage=TokenUsage(session_factory),
         probes=JobsProbeBroker(session_factory),
         channel_tests=JobsChannelTester(session_factory),

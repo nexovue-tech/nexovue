@@ -40,6 +40,30 @@ VALUES (
 )
 """
 
+# `ENQUEUE`, unless the same task with the same arguments already waits unclaimed for
+# this organization (F22 AC48): clicks and sweeps one after another add one job, not
+# one each. Two inserts in the same instant can both pass, which D50 accepts, because
+# the job's own lease stops the second before any call out.
+ENQUEUE_UNLESS_WAITING: Final = """
+INSERT INTO jobs (
+    queue, task, kwargs, org_id, run_after, expires_at,
+    max_attempts, soft_limit_seconds, hard_limit_seconds
+)
+SELECT
+    :queue, :task, CAST(:kwargs AS jsonb), CAST(:org_id AS uuid),
+    now() + make_interval(secs => CAST(:countdown_seconds AS double precision)),
+    now() + make_interval(secs => CAST(:expires_seconds AS double precision)),
+    :max_attempts, :soft_limit_seconds, :hard_limit_seconds
+WHERE NOT EXISTS (
+    SELECT 1 FROM jobs AS waiting
+    WHERE waiting.org_id = CAST(:org_id AS uuid) AND waiting.task = :task
+      AND waiting.kwargs = CAST(:kwargs AS jsonb)
+      AND (waiting.lease_until IS NULL OR waiting.lease_until < now())
+      AND (waiting.expires_at IS NULL OR waiting.expires_at > now())
+      AND waiting.attempts < waiting.max_attempts
+)
+"""
+
 WAKE: Final = "SELECT pg_notify(:channel, :queue)"
 
 

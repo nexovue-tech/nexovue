@@ -46,6 +46,7 @@ from zoneinfo import ZoneInfo
 
 from nexovue_platform.detection import compute_baselines_request
 from nexovue_platform.jobs import JobRequest
+from nexovue_platform.slo import BUCKET_COUNT, LOG_EDGES
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -53,8 +54,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from nexovue_scheduler.detection import COMPUTE_BASELINES_TASK, SWEEP_BASELINES_TASK
 from nexovue_scheduler.detection.method import (
     ANSCOMBE_SHIFT,
-    BUCKET_COUNT,
-    LOG_EDGES,
     BurstProfile,
     EndpointCounts,
     EndpointNormal,
@@ -674,7 +673,7 @@ def _buckets_moved(ratio: float) -> int:
 
 def _moved(buckets: Sequence[int], by: int) -> list[int]:
     """Each count `by` buckets along, folding at the ends as a duration outside the
-    range does (`method.LOG_EDGES`)."""
+    range does (`slo.LOG_EDGES`)."""
     if by == 0:
         return list(buckets)
     moved = [0] * BUCKET_COUNT

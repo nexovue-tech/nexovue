@@ -85,6 +85,55 @@ export function describePrecedingDeploy(group: ErrorGroupSummary): string | unde
   return gap === undefined ? `After ${shipped}` : `${gap} after ${shipped}`;
 }
 
+/**
+ * The cell's short words (F28 D23): the deploy before, or why none is named — "none
+ * before" where CI reports deploys, "none reported" where only versions are counted,
+ * "not told" where we hear nothing. The unknown mark only for a value never read.
+ */
+export function deployCell(group: ErrorGroupSummary): string {
+  if (group.preceding_deploy) return `after ${group.preceding_deploy.version}`;
+  switch (group.deploy_coverage) {
+    case "deploys_and_versions":
+    case "deploys_only":
+      return "none before";
+    case "versions_only":
+      return "none reported";
+    case "none":
+      return "not told";
+    default:
+      return UNKNOWN;
+  }
+}
+
+/** Spec, *A service's coverage*: what each value says about what we hear. */
+const COVERAGE_WORDS: Record<NonNullable<ErrorGroupSummary["deploy_coverage"]>, string> = {
+  deploys_and_versions: "Deploys reported by your CI, versions seen in traffic.",
+  deploys_only:
+    "Deploys reported by your CI. No version in traffic, so we cannot split old from new.",
+  versions_only:
+    "Versions seen in traffic. Your CI reports no deploys, so same-version redeploys and config changes do not appear.",
+  none: "We receive no deploy information for these services.",
+};
+
+/**
+ * The panel's deploy line, at every coverage value (D23): the cell's column is hidden
+ * below `xl`, so this is where a reader on a smaller window learns it. A named deploy
+ * travels with `DEPLOY_IS_NOT_A_CAUSE`.
+ */
+export function deployLines(group: ErrorGroupSummary): string[] {
+  const coverage =
+    group.deploy_coverage === null ? undefined : COVERAGE_WORDS[group.deploy_coverage];
+  const afterDeploy = describePrecedingDeploy(group);
+  if (afterDeploy !== undefined) {
+    return [`First seen ${afterDeploy}.`, coverage, DEPLOY_IS_NOT_A_CAUSE].filter(
+      (line): line is string => line !== undefined,
+    );
+  }
+  if (group.deploy_coverage === "none") return [COVERAGE_WORDS.none];
+  const lines = ["No deploy of these services was reported before this appeared."];
+  return coverage === undefined ? lines : [...lines, coverage];
+}
+
 /** The services column: one name, or a count once the list stops being readable. */
 const SERVICES_SHOWN = 2;
 

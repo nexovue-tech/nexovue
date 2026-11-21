@@ -262,3 +262,35 @@ describe("the open-incident badge beside Alerts in the sidebar", () => {
     expect(openIncidentBadge({ open: 240, critical: 0 })?.text).toBe("99+");
   });
 });
+
+describe("a reliability target rule (F19 T4.11)", () => {
+  const burnRule = (slo_ids: string[] | null, minimum: "warning" | "critical" = "warning") =>
+    rule({
+      name: "Reliability targets",
+      condition_kind: "slo_burn",
+      condition: { kind: "slo_burn", slo_ids, minimum_severity: minimum },
+    });
+
+  it("says which targets and how fast, in words", () => {
+    expect(describeCondition(burnRule(null))).toBe(
+      "Allowed failures run out too fast on any reliability target",
+    );
+    expect(describeCondition(burnRule(["a", "b"], "critical"))).toBe(
+      "Allowed failures run out fast enough to act now on 2 chosen targets",
+    );
+  });
+
+  it("round-trips its targets and minimum, and asks for a target when it chooses some", () => {
+    const stored = burnRule(["t-1"], "critical");
+    const draft = ruleDraftOf(stored);
+    expect(ruleRequestOf(draft, "p").condition).toEqual({
+      kind: "slo_burn",
+      slo_ids: ["t-1"],
+      minimum_severity: "critical",
+    });
+    const chosenNone = { ...withKind(emptyRuleDraft(), "slo_burn"), scope: "chosen" as const };
+    expect(ruleProblems({ ...chosenNone, name: "x", channelIds: ["c"] })).toEqual({
+      targets: "Choose at least one target, or cover every target.",
+    });
+  });
+});

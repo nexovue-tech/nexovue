@@ -65,6 +65,10 @@ keeps this entry. `apps/web/src/app/routes/route-manifest.ts` currently says *"a
 become the front door"* — that comment records the superseded stance and must be updated with this
 change, along with `route-manifest.test.ts`, which enforces router/sidebar agreement.
 
+> **Done, 2026-11-02 (F20 Step 1, D58).** The engine shipped as F6, and `/` now serves the Findings
+> feed; Overview moved to `/overview` and keeps its sidebar entry. The wireframe above is kept as
+> drawn — only its address changed.
+
 **States.** *Empty* → no telemetry at all, which is the onboarding moment again. *Partial* → a
 surface with no data shows an em dash in the strip, never a zero.
 

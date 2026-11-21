@@ -137,3 +137,100 @@ async def test_a_read_cannot_lift_its_own_bounds(
 ) -> None:
     with pytest.raises(DatabaseError):
         await reader.query("SELECT 1", settings={setting: value})
+
+
+# --------------------------------------------------- the API's own reader (F20, T5.6b)
+
+API_READER_DSN: Final = os.environ.get(
+    "NEXOVUE_CLICKHOUSE_API_READER_DSN",
+    "clickhouse://nexovue_api_reader:nexovue_api_reader_dev@localhost:18123/nexovue",
+)
+# The account's bounds, as `deploy/clickhouse/users.d/api-reader.xml` sets them.
+API_READER_MEMORY_BYTES: Final = 2_576_980_378
+API_READER_CONCURRENT_QUERIES: Final = 12
+# Each read sleeps this long, so all of them are running at once when the last starts.
+HELD_READ: Final = "SELECT sleepEachRow(0.5) FROM numbers(4)"
+
+
+@pytest_asyncio.fixture
+async def api_reader() -> AsyncIterator[AsyncClient]:
+    client = await _connect(API_READER_DSN)
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+async def test_the_api_reader_reads_with_its_per_user_bounds_in_place(
+    api_reader: AsyncClient,
+) -> None:
+    result = await api_reader.query(
+        "SELECT count() > -1, getSetting('max_memory_usage'), "
+        "getSetting('max_memory_usage_for_user'), getSetting('max_concurrent_queries_for_user') "
+        "FROM spans",
+        settings=READ_SETTINGS,
+    )
+    readable, memory, memory_for_user, concurrent = result.result_rows[0]
+    assert readable
+    assert int(memory) == MAX_MEMORY_BYTES
+    assert int(memory_for_user) == API_READER_MEMORY_BYTES
+    assert int(concurrent) == API_READER_CONCURRENT_QUERIES
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("max_memory_usage_for_user", 0),
+        ("max_memory_usage_for_user", API_READER_MEMORY_BYTES * 4),
+        ("max_concurrent_queries_for_user", 0),
+        ("max_concurrent_queries_for_user", 1_000),
+        ("max_memory_usage", 0),
+        ("max_execution_time", 3600),
+    ],
+)
+async def test_an_api_read_cannot_lift_its_accounts_bounds(
+    api_reader: AsyncClient, setting: str, value: int
+) -> None:
+    with pytest.raises(DatabaseError):
+        await api_reader.query("SELECT 1", settings={setting: value})
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO spans (tenant_id) VALUES ('api-reader-probe')",
+        "ALTER TABLE spans DELETE WHERE tenant_id = 'api-reader-probe'",
+        "SELECT * FROM url('http://example.com', CSV, 'x String')",
+    ],
+)
+async def test_the_api_reader_cannot_write_or_reach_out(
+    api_reader: AsyncClient, statement: str
+) -> None:
+    with pytest.raises(DatabaseError):
+        await api_reader.command(statement)
+
+
+async def test_past_its_concurrent_reads_the_server_refuses_with_a_code_a_panel_reads_refused() -> (
+    None
+):
+    """AC91's refusal half: one read past the account's 12 at once is refused by the
+    server with TOO_MANY_SIMULTANEOUS_QUERIES, and `server_error_code` reads 202 off the
+    driver's error, so a dashboard panel says `refused`, not `failed` (design section 6)."""
+    import asyncio
+
+    from nexovue_api.dashboardpanels.shared_reads import TOO_MANY_SIMULTANEOUS_QUERIES
+    from nexovue_api.data.clickhouse.base import server_error_code
+
+    clients = [await _connect(API_READER_DSN) for _ in range(API_READER_CONCURRENT_QUERIES + 3)]
+    try:
+        outcomes = await asyncio.gather(
+            *(client.query(HELD_READ) for client in clients), return_exceptions=True
+        )
+    finally:
+        for client in clients:
+            await client.close()
+
+    refused = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+    assert refused, "every read ran: the account's concurrency bound did not hold"
+    assert {server_error_code(error) for error in refused} == {TOO_MANY_SIMULTANEOUS_QUERIES}
+    assert len(outcomes) - len(refused) <= API_READER_CONCURRENT_QUERIES

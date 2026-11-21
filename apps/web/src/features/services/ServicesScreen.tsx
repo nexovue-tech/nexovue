@@ -61,7 +61,7 @@ const P95_COLUMN = "w-28 shrink-0 text-right";
 const TREND_COLUMN = "w-29 shrink-0 pl-3";
 /* Reserved on every row, marked or not, so the names below each other line up. */
 const MARK_COLUMN = "flex w-2 shrink-0 justify-center";
-const WIDE_ONLY = "hidden lg:block";
+const WIDE_ONLY = "hidden @3xl:block";
 
 /**
  * The front door: every service sending traces, worst first, with its endpoints

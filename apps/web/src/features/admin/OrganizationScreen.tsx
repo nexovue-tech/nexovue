@@ -72,7 +72,7 @@ export function OrganizationScreen({ orgId }: { orgId: string }) {
             — what this customer may send, and what they pay for it — and stacked
             they were two short panels with the window's right half empty beside
             each. The lists below stay full width: they are the long things. */}
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+        <div className="flex flex-col gap-4 @5xl:flex-row @5xl:items-start">
           <div className="min-w-0 flex-1">
             <Ingest orgId={orgId} suspension={suspension} />
           </div>

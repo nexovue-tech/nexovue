@@ -2,12 +2,142 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement once Preconditions 1 and 2 are met.** The founder approved the specification, design and plan on 2026-11-02, and kept that approval after the same day's later decisions (below). No code exists yet.
+**Step 2 built and committed 2026-11-11.** The founder approved the specification, design and plan on 2026-11-02. Steps 1 (the deploy line and the brief, T1.1 to T1.5) and 2 (the checks, the bed's parts and the fake, T2.1 to T2.11) are on `feature/phase-2`. T1.6's Playwright spec is written and not run (deferred to the hardening pass). Steps 2b onward are not started.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+Step 2 awaits the founder's review of the diff and a commit (`F5 Step 2: the checks, the bed's parts and the fake`), after Step 1's. Then each step's *Judgeable* (plan): for Step 2, reading the rules report, which is deferred to F5's hardening pass with the rest below.
+
+## Step 2, built 2026-11-11
+
+**What it ships.** No model, no GitHub, no migration, no ADR, no screen. The module every later step rests on, proved against hostile fixtures first:
+
+- **The lists** (T2.1, `nexovue_platform/fixes/policy.py`): the source-extension allow-list, the hard never-sent list (secrets and keys, CI, agent instructions), the configuration-shaped list an owner may loosen by named path, and the never-changed list, with `CHECKS_VERSION`. Matching is on the whole path, case-insensitive, at any depth.
+- **The rules** (T2.2, T2.3, `fixes/checks.py`, `fixes/patterns.py`): the schema guards first (outcome, at least one edit, unchanged edits, C0 controls, NUL and lone surrogates, oversized answers, display-fact keys, unknown evidence ids, a `why` failing the prose checks), each an unusable answer with a fixed retry code; then K1 to K10 on the whole file, every refusal named by rule and detail; then FR18's six flags, each naming its file and line, and the paths whose language the flag lists do not cover.
+- **The diff** (T2.3, `fixes/diff.py`): line changes worked out per region an edit touches, numbered hunks with 3 lines of context, a git-format patch with blob ids, mode, quoted paths and the no-final-newline marker; D53's display facts and the hunks derived from them alone; their shape check; and the digest (SHA-256 over each changed file's path, base blob id and new content in path order, each field length-prefixed, no head sha).
+- **The secret patterns** (T2.4, `fixes/secrets.py`): private key headers, 12 token prefixes after gitleaks' default rules (read 2026-11-11), and long random values assigned to secret-named keys. A net, not a boundary.
+- **The prose checks and the deletion statement** (T2.5, `fixes/prose.py`, `fixes/statements.py`): U4 (URL, email, Markdown or HTML, host names and IPs anywhere), hidden and control characters, the 300-character cap, aliases restored through F3's `restore` or refused, BR11's words replaced by the fixed sentence; `CLEAR_STORED_CODE`, one statement over Step 3's source columns and tables, binding `org_id` in each part.
+- **The bed's parts** (T2.6 to T2.8, T2.11, `tools/ai-eval/fix/`): a fixture repository of 12 seeded bugs in three services (Python, TypeScript, Java), with the bug in the stack, one import away, or neither, three where a refusal is right, and two with planted instructions (asking for `.env` and a workflow edit; asking for a call to an outside address); a span seeder writing each case's stack in its language's form; the rules report, `docs/research/f5-rules-report-2026-11.md`, 26 planted changes and what stopped each, generated and checked current by its test; and the traceability check, now in the gate.
+- **The no-AI, no-I/O walk** (T2.9) and **the simulated GitHub's git data and pull requests** (T2.10): F22's fake gains refs, commits, recursive trees that can be cut short, blobs, `compare`, a person's permission, a user by id, pull requests by `?head=`, drafts, the 422 on a second pull request, token permissions held on these routes, and every write droppable after it is applied. Its answers are compared with shaped recordings in `fixtures/github_fix/`; `record_github.py` will replace them with GitHub's own.
+
+**Shared files touched, and why.** Root `pyproject.toml` (named by T2.11): `tools/ai-eval` joins `pythonpath` and `testpaths`, and the fixture repository is excluded from ruff and mypy, because it is made-up customer code with bugs seeded on purpose. F22's `apps/scheduler/tests/tracker_fake.py` (named by T2.10): F5's routes added; F22's routes, names and behaviour unchanged, except that a dropped-write fault now also covers `DELETE` (F22 has none). The git object store lives in a new `github_git_data.py` beside it, to keep the fake readable. Two base fixtures (`fixtures/github/user.json`, `pull.json`) join F22's folder, marked unverified as F22's are. F22's live suites over the fake pass unchanged (80).
+
+**Files.** New: `packages/py-platform/src/nexovue_platform/fixes/policy.py`, `checks.py`, `patterns.py`, `diff.py`, `secrets.py`, `prose.py`, `statements.py`; `packages/py-platform/tests/test_fix_policy.py`, `test_fix_checks.py`, `test_fix_diff.py`, `test_fix_secrets.py`, `test_fix_prose.py`; `apps/api/tests/test_fix_platform_holds_no_ai.py`; `apps/scheduler/tests/github_git_data.py`, `test_fake_github_matches_recordings.py`, `fixtures/github_fix/` (22 files), `fixtures/github/user.json`, `pull.json`; `tools/ai-eval/fix/` (`__init__.py`, `conftest.py`, `fixtures.py`, `cases.json`, `repository/`, `seed_findings.py`, `rules_report.py`, `record_github.py`, `check_traceability.py` and five tests); `docs/research/f5-rules-report-2026-11.md`. Changed: `pyproject.toml`, `apps/scheduler/tests/tracker_fake.py`, this file, `plan.md`, `docs/product/phase-2-tracker.md`.
+
+### Tests, each seen failing
+
+Each behaviour was removed from the file by a scripted change, the named test run, and the file restored and compared byte for byte with its saved copy. 80 removals; every one failed. Counts are what the run printed. Two removals first passed, which showed two missing tests; those tests were added and the removals then failed (marked †). A review finding (K6, below) was written as a test first and seen failing (3 failed) before the fix.
+
+| Test (count) | Behaviour removed | Failed |
+|---|---|---|
+| `test_fix_policy.py` (45) | Matching at any depth · case-insensitive · the owner's named allowance · the extension allow-list · build files never changed | 4 · 4 · 2 · 3 · 11 |
+| `test_fix_checks.py` (97) | K1 folder · K2 · K3 exactly once · K3 overlap · K4 emptying · K4 file-operation key · K5 · K6 · K6 "already in the file" · K7 hidden · K7 mixed script · K8 · K8 joined words · K8 hex threshold · K9 · K10 long line · K10 blank run | 1 · 4 · 1 · 1 · 1 · 1 · 1 · 8 · 1 · 3 · 2 · 2 · 1 · 1 · 1 · 1 · 1 |
+| | Schema: display-fact key · control characters · unchanged edit · evidence ids · `why` · oversized | 3 · 3 · 1 · 2 · 2 · 2 |
+| | Flags: new import · risky call · comment · new letters · removed check · test file | 4 · 3 · 3 · 1 · 1 · 1 |
+| `test_fix_diff.py` (365, 300 of them random layouts and 40 applied by real git) | No-final-newline marker · mode in header · path quoting · base blob in digest · digest length prefix · a region taking in the next line † · context cap · facts shape check · new-letter lines · only `\n` ends a line † | 15 · 1 · 1 · 1 · 1 · 1 · 1 · 9 · 1 · 1 |
+| `test_fix_secrets.py` (29) | Token prefixes · assigned values · their randomness | 15 · 4 · 1 |
+| `test_fix_prose.py` (30) | Banned words · addresses · email · markup · alias not in the book · cap · hidden characters · alias restored · a column left out of `CLEAR_STORED_CODE` (pinned to the design's list) · its tenant binding | 6 · 4 · 1 · 3 · 2 · 1 · 1 · 2 · 1 · 1 |
+| `test_fix_platform_holds_no_ai.py` (4) | A network client imported by `checks.py` | 1 |
+| `test_fixtures.py` (86) | The seeded bug fixed · a frame's line wrong · the planted `.env` ask removed · a reach misnamed | 2 · 1 · 1 · 1 |
+| `test_rules_report.py` (29) | K6 removed from the rules · the report edited by hand | 3 · 1 |
+| `test_check_traceability.py` (10) | The lone-half rule · task ranges † · unknown tasks · unplanned criteria | 2 · 1 · 2 · 1 |
+| `test_record_github.py` (4) | A step left out · names left uncleaned | 1 · 1 |
+| `test_fake_github_matches_recordings.py` (31) | Trees never truncated · a second pull request allowed · token permissions not held · `draft` ignored · blob ids not git's · a dropped write not applied | 1 · 1 · 1 · 2 · 1 · 5 |
+| `test_seed_findings_live.py` (25) | No exception event · Python frames in the wrong order · no spans for the service | 12 · 1 · 24 |
+
+**Clocks.** No test reads the wall clock for a judgement: the rules and diff are pure; the fake's commits carry a fixed author time; the seeder takes `end` as an argument, and its live test fixes it once per run, relative to now, because ClickHouse's own `received_at` window must hold it.
+
+### Validation, 2026-11-11
+
+- **F5's and the nearby suites, one run: 1,146 passed.** All of `test_fix_*` (Step 1's and Step 2's), `test_fake_github_matches_recordings.py`, F22's `test_connections_github_live.py` and `test_connections_sync_live.py` (80, over the extended fake), all of `tools/ai-eval`, `test_cross_service_contracts.py`, `test_scheduler_postgres_tenancy_structure.py`, `test_read_surface_structure.py`, F3's `test_evidence_rules.py`. Against this step's own containers, `f5s2-pg` (`pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, migrated to `0069` with alembic) and `f5s2-ch` (`clickhouse:26.3.20.7-jammy`, port 38123, 40 ClickHouse migrations by the Go setup), both removed afterwards.
+- `uv run mypy .`: no issues in 965 files. `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,339 files formatted. Biome over `tools/ai-eval`, the new fixtures and `docs/research`: no errors (one warning, on the existing 3.1 MiB `detection_parity.json`). The web is not touched, so `pnpm typecheck` was not run.
+- `check_traceability.py` over the real documents: 215 ids, 0 problems.
+- **gitleaks 8.30.1** (the version of the history scan, `docs/changes/ready-to-deploy`) over every new and changed file: no leaks. The fake values are assembled at run time, so **`.gitleaksignore` needs no entry.** For review all the same: `test_fix_secrets.py` (`FAKES`, `fake()`, the body `Qz7Wn2…`), `test_fix_checks.py` (an `AKIA…` key built from parts, a 44-character base64-like string, a SHA-256 hex string), `rules_report.py` (`_FAKE_KEY`, `_ENCODED`), `test_record_github.py` (`"ghs_" + "Q" * 36`), `test_fake_github_matches_recordings.py` (`ghs_fake_read_only_token`, `ghs_fake_write_token`, no secret shape). All made up.
+- **Not run:** `just check`; real GitHub (never, by instruction); any model; the TypeScript and Java fixtures' seeded tests (no Node test runner or JDK for the fixture repository; they are read, and their reference changes pass the rules); `record_github.py` (only its dry run and cleaning, offline).
+
+### Deferred to F5's hardening pass (founder, 2026-11-11)
+
+- **The founder reading the rules report** (Step 2's *Judgeable*): `docs/research/f5-rules-report-2026-11.md`.
+- Browser, phone and Playwright checks, performance, customer documents and Design QA: Step 2 has no screen, so none applies to it yet.
+- **Real GitHub recordings** (T2.10): the founder runs `record_github.py` on a scratch repository after Phase 2 (foundation item 28). Until then the fake is proved against GitHub's documents as read, not against GitHub, and `docs.github.com` could not be fetched from the build session: the fixtures cite searches and are marked unverified.
+
+### Review (`/review-diff`), 2026-11-11
+
+- **Fixed, MEDIUM:** K6's "already in that file" was a substring test, so `evil.com` passed in a file holding `devil.com`, and a shorter URL passed inside a longer one. It now compares whole addresses, case-insensitively, read anywhere in the file. Test first, seen failing (3), then fixed.
+- **Fixed, LOW:** literal hidden and look-alike characters had reached test sources (a bidirectional override, a zero-width space, a line separator, Cyrillic letters); every one is now an escape, so the repository holds no Trojan-source text of its own.
+- Unintended changes: none. Tenancy: the one Postgres statement binds `org_id` in all three parts; the seeder's ClickHouse writes are a dev tool refusing any host but this machine; the reads in the live test go through the API's and F3's tenant-bound readers. No route, migration, Go or web change.
+
+## Step 1, built 2026-11-11
+
+**What it ships.** On the finding page, with AI off and no model, GitHub or consent:
+
+- **Rung 1, inside F28's *Release before this* row** (FR1, T1.2). F28's sentence is unchanged; after it, F5 adds "`<version>` ran before it.", with "CI's last report on it said it failed." (or "rolled back") when CI said so, a link to that release, and past F3's 30-minute look-back, "Longer before this than Nexovue looks for a likely cause." With no earlier version: "No earlier version of this service is known." Nothing is added where F28's own sentence is all there is: no release before, one already running, a release a day or more old, a project finding. Read by a new F28 reader, `releases/queries.py` `period_preceding` (the period of another version before this one, on the same service), from `findings/fix_facts.py`.
+- **Rung 2, the brief, one line directly under it** (FR2 to FR5a, T1.1, T1.4). Built by `nexovue_platform/fixes/brief.py` from F3's stored facts: the opening line first, the start time, each signal's numbers, each endpoint under FR3's route rule, the likely cause in its rule's fixed words **only once F3 releases that rule** (as the explanation's own read), the last deploy's version only from a signed deploy in a short version or hash shape, each linked error group's exception type under FR3's shape with a console link at the finding's window, and the repository line. No exception message, log or stack text is read. Copy, the warning sentence, and a native disclosure with the text `select-all`; **when the clipboard write fails, the disclosure opens and the text takes focus** (`CopyButton`'s new `onUnavailable`). Not shown for `false_alarm` or `service_gone`.
+- **`GET /findings/{id}/fixes`** (T1.3), on `CurrentIdentity`: a token gets 403 below the route, and it is off `THE_SURFACE`. Postgres only. On hosted, the brief has no repository line and there is no section.
+- **The *Suggested fix* section and its jump link** (D54, T1.4): full width below the split, with "Suggested fix ↓" beside *Evidence* in the header, rendered only when this person has a line. **In Step 1 no role has a line**, so no section, heading or jump link renders (AC37e's "no heading" row; see *Open decisions*, 1).
+- **No AI module is reachable** from rungs 1 and 2 (T1.5). `lifespan.py` already types the MCP server as a Protocol (F20 D38 landed first), so no change was needed there.
+
+**A shared point touched, and why.** F3's `DEPLOY_LOOKBACK` (30 minutes) was defined in the scheduler's `evidence/rules.py`, which the API cannot import, and FR1's wording uses the same window. It now lives once in F3's shared contract, `nexovue_platform/evidence/__init__.py`, and `rules.py` and `reads.py` import it from there; F3's rules tests pass unchanged (52). F3 Step 4 (`wt/f3s4`) may need a one-line rebase there.
+
+**Files.** New: `packages/py-platform/src/nexovue_platform/fixes/__init__.py`, `fixes/brief.py`; `apps/api/src/nexovue_api/findings/fix_facts.py`, `fix_read.py`, `fix_schemas.py`; `apps/web/src/features/findings/FixSection.tsx`, `fix-page.ts`; `tools/e2e/tests/fix-section.spec.ts`. Changed: `findings/router.py`, `releases/queries.py`, `nexovue_platform/evidence/__init__.py`, scheduler `evidence/rules.py` and `reads.py`, web `findings/api.ts`, `FindingScreen.tsx`, `render-harness.test-util.ts` (a default stub for the new read), `shared/components/CopyButton.tsx`. No migration, no ADR.
+
+### Tests, each seen failing
+
+Each was written with its code, then proved by removing the behaviour from the file (a saved copy, the change, the run, the copy restored, `diff` showing it restored). Counts are what the run printed.
+
+| Test | Behaviour removed | Result |
+|---|---|---|
+| `packages/py-platform/tests/test_fix_brief.py` (64) | Endpoint rule (route shape) | 18 failed |
+| | Host-shaped word check | 1 failed |
+| | More-than-three joined words check | 2 failed |
+| | Exception type shape | 6 failed |
+| | Last dotted segment | 4 failed |
+| | Version named only when signed | 1 failed |
+| | Opening line | 5 failed |
+| | "No explanation has been read yet" | 1 failed |
+| | Project finding line | 1 failed |
+| | No repository line on hosted | 1 failed |
+| | Error group id shape in the link | 1 failed |
+| | Cap of 3 error groups | 1 failed |
+| | Em dash for a missing reading | 1 failed |
+| | Unknown rule points to the console | 1 failed |
+| `apps/api/tests/test_fix_facts.py` (20, AC34) | CI's failed or rolled-back words | 2 failed |
+| | Look-back sentence | 3 failed |
+| | 24-hour bound | 2 failed |
+| | Already-running rule | 1 failed |
+| | No-earlier-version sentence | 1 failed |
+| | Version as a name segment | 1 failed |
+| `apps/api/tests/test_fix_routes.py` (2, AC3) | Route takes `CurrentReader` | both failed, and `test_read_surface_structure.py` failed too |
+| `apps/api/tests/test_fix_routes_live.py` (11) | Held-cause gate | 1 failed |
+| | No brief for `false_alarm`, `service_gone` | 2 failed |
+| | No repository line on hosted | 1 failed |
+| | Earlier version bound to the service | 1 failed |
+| `apps/api/tests/test_fix_facts_hold_no_ai.py` (3, AC33's import half) | An `import nexovue_platform.ai` added to `brief.py` | 1 failed |
+| `apps/web/src/features/findings/FixSection.test.ts` (16) | Rung 1 extras not drawn | 1 failed |
+| | Brief moved off the deploy line (D54) | 3 failed |
+| | Failed copy does not open the brief | 1 failed |
+| | Load failure not shown | 1 failed |
+| | Jump link always shown | 4 failed |
+| | Heading always rendered | 1 failed |
+| | Section not rendered | 2 failed |
+| `apps/web/src/features/findings/fix-page.test.ts` (5) | Release match | 1 failed (and 1 in `FixSection.test.ts`) |
+| `apps/web/src/shared/components/CopyButton.test.ts` (4) | `onUnavailable` never called | 2 failed (and 1 in `FixSection.test.ts`) |
+
+**Not proven failing, and why:** AC11a's "a viewer's and member's page does not mention AI" holds trivially in Step 1, since no AI words exist on this branch; it becomes a real test with the first line (T2b.7). The clocks of every new test are fixed (Python: fixed datetimes; web: `vi.setSystemTime` on `Date` only).
+
+### Validation, 2026-11-11
+
+- This feature's Python tests, one run: **191 passed** (`test_fix_brief.py`, `test_fix_facts.py`, `test_fix_routes.py`, `test_fix_routes_live.py`, `test_fix_facts_hold_no_ai.py`, `test_read_surface_structure.py`). The live suite ran against its own Postgres container (`f5s1-pg`, `pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, migrated to `0069` with alembic), with every row inside a rolled-back transaction; it reads no scheduler-written table.
+- Gates near the new route: `test_authorization_coverage.py`, `test_ratelimit_coverage.py`, `test_read_surface_spec.py` (**150 passed**), `test_postgres_tenancy_structure.py` (**2,307 passed**), F3's `test_evidence_rules.py` after the constant moved (**52 passed**).
+- `uv run mypy .`: no issues in 938 files. `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,311 files formatted. Biome on `apps/web/src/features/findings`, `apps/web/src/shared/components`, `tools/e2e/tests`: no errors; 4 warnings, all in untouched e2e files. `pnpm -r --if-present run typecheck`: passed.
+- The whole web suite, after the review's fixes: **172 files, 2,107 tests passed**, `app/status-interpretation.test.ts` among them (only `shared/api-client.ts` reads HTTP statuses).
+- **Not run:** `just check`, other features' live suites (the coordinator's full CI covers them), T1.6's Playwright spec, and the founder's *Judgeable*.
+
+### Deferred to F5's hardening pass (founder, 2026-11-11)
+
+- **T1.6, `tools/e2e/tests/fix-section.spec.ts`:** written, not run. It walks the brief closed and open at 375 and 1280 px with a 200-character endpoint and a long version, asserting `scrollWidth <= clientWidth` and a 44 px copy target.
+- Browser and phone checks of the brief's disclosure, focus and copy on a plain-HTTP install; Design QA of the row and the brief against D54; any customer page (none in Step 1).
 
 
 ## Completed
@@ -21,12 +151,42 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+The founder reviews and commits Steps 1 and 2, then reads the rules report and runs Step 1's *Judgeable* on the demo stack (both in the hardening pass). Step 2b is next, and is blocked on F3's provider (F3 Step 4). Before then, the open decisions below.
+
+**Earlier text, kept for the record:** start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
 
 
 ## Open decisions
 
-**None blocking for the founder.** All five were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The write-access go is still given at T6.5, against the approved rule.
+**From Step 2's build, 2026-11-11.** None blocks Step 2b. Each is built as recommended, and each is a guess the bed (Step 6) or the founder should settle.
+
+5. **K8's one threshold cannot catch hex.** The design gives 4.0 bits per character for base64-like and hex runs alike, but hex has 16 symbols, so no hex value reaches 4.0, and a 40-character hex secret would pass. **Built:** hex runs use 3.0 (`OPAQUE_HEX_MIN_BITS_PER_CHARACTER`), so a random 40-character hex string, a git sha among them, is refused. **Recommendation:** keep, and let T6.3's replay over real history measure how often it refuses honest code; correct the design's table.
+6. **K5's 16 KiB is reached only with letters of several bytes.** With K10's 200 characters and K5's 60 changed lines, ASCII additions stop near 12 KiB first. **Built** as specified. **Recommendation:** leave it; it binds for non-Latin text and costs nothing.
+7. **"At any depth" read as every segment, folders included.** So a folder named `secrets/`, `config/` or `prod/` keeps everything in it back, and a name pattern such as `*config*` matches `src/configuration/`. **Recommendation:** keep (it errs toward keeping files back; an owner can allow configuration paths by name).
+8. **The never-changed list includes the configuration-shaped list,** per the design's "all of the above". An owner's allowance lets such a file be read, never changed. **Recommendation:** keep; say so on the consent screen at T3.6.
+9. **Banned words include "fixes" and "fixed",** read as the bare "fix" BR11 bans; "safely" and "unsafe" pass. **Recommendation:** your wording call (foundation decision 2).
+10. **The prose checks refuse host-shaped words anywhere in `why`** (there is no string literal in prose), so "the call to req.app fails" is refused. **Recommendation:** keep; the model is told to name files as `file_N` and nothing host-shaped.
+11. **K4 has no mode to check,** because the schema has no mode field: it refuses an answer carrying a file-operation key (`mode`, `create`, `delete`, `rename` and kin) and a change that empties a file. **Recommendation:** keep; amend K4's wording at T6.2.
+12. **Test file flag adds Python's `test_*.py`,** missing from the design's list. Showing more is the safe side. **Recommendation:** add it to the design's table.
+13. **T2.9 would have repeated T1.5.** T1.5's walk already denies `nexovue_platform.ai` over the whole package, so T2.9 holds what it does not: no network client, process or file access, transitively. **Recommendation:** amend T2.9's wording.
+14. **T2.7 proves the link without a finding row.** It proves F3's new-error read finds each case's group and F3's `groups_for` links it to the service, and the API returns each stack in its form; the full chain through detection to a finding row is the founder's *Judgeable* (seed, then `just detection-fault`). TypeScript's compiled lines equal the source's, a seeded shape. **Recommendation:** accept; T3.8 measures matching on these shapes and says so.
+15. **The fixture package is named `fix`** (`tools/ai-eval/fix`, imported as `fix.*`), as the plan's path implies once `tools/ai-eval` is on `pythonpath`. F3's bed will share that root. **Recommendation:** keep; rename only if F3's bed needs a top-level `fix`.
+
+**From Step 1's build, 2026-11-11.** None blocks Step 2. Each is built as recommended where something had to be built.
+
+1. **AC11a's owner and admin line, "AI is off. An admin sets it up, then an owner agrees."** It needs F3's AI state (`ai_connections`, F3 Step 3, on `wt/f3s3`, not on this branch) and F3's `MANAGE_AI` action (FD8; not yet in `auth/permissions.py`). Without either, any line would be a guess about who may act and whether AI is on. **Built:** no role has a line in Step 1, so no section renders; the API's `section` field and the page's heading-less line are ready and tested with a stubbed line. **Recommendation:** add the line at T2b.7 with FR9's first eligibility, reading `ai_connections.enabled` and `off_reason`, shown to roles with `MANAGE_AI`. AC11a's viewer and member half holds now; its owner and admin half is unproven until then.
+2. **FR1's heading and its over-24-hours sentence disagree with F28's built row.** FR1 says the heading is "Last deploy before this" and, past 24 hours, "No deploy in the 24 hours before this. The last was N days ago." F28's code, approved and on the branch, heads the row "Release before this" and says "The last known release was N earlier.", dimmed. FR1 also says F5 adds no second sentence about the same deploy. **Built:** F28's heading and sentence unchanged; F5 adds nothing past 24 hours. AC34's templates for "deploy", "no coverage", "came back", "failed", "over 24 hours" and "project finding" are therefore F28's, tested in F28's `finding-page.test.ts`; F5's own templates are tested in `test_fix_facts.py`. **Recommendation:** keep F28's words, and amend FR1 and AC34 to say F28 words those rows. Your wording call (foundation decision 2).
+3. **T1.6's 44 px target.** The shared `CopyButton` is about 24 px tall, so the spec's 44 px check (AC37d) is expected to fail when it runs. **Recommendation:** decide in Design QA whether the brief's copy control grows (a size option on `CopyButton`) or AC37d's target excludes small copy controls everywhere.
+4. **The section's own loading and failed rows.** The design puts a skeleton and `InlineFailure` under the "Suggested fix" heading. With no line for any role in Step 1, that skeleton would show and then vanish. **Built:** loading and failure show once, at the brief's line, and the rest of the page works. **Recommendation:** T2b.8 adds the section's own rows when a role first has a line.
+
+**To confirm (guesses, each named in code):**
+
+- **No service name in the brief until Step 3.** FR3 names a service only from the customer's own settings, which are code locations (Step 3). Until then the brief names none, and its repository line says the repository is not known. This makes the Step 1 brief thinner for the founder's judging; loosening it would weaken D19.
+- **The host-shaped word rule** (`brief.py`, `_HOST_SHAPED`) also withholds file-shaped routes such as `/app.js`: the safe side, a guess.
+- **The version shape** (a short version such as `v2.1.0-rc1`, or a 7 to 40 character hex hash) and **three error groups at most** in the brief: guesses.
+- **The console link uses `APP_BASE_URL`**; with it unset, no link is built rather than one to a guessed host.
+
+**Before Step 1's build (2026-11-02):** **none blocking for the founder.** All five were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The write-access go is still given at T6.5, against the approved rule.
 
 **Not decisions, but still to happen:** the shared buyer round (approved, foundation decision 8) and the GitHub trial (approved 2026-11-02). Both were to block design approval; the founder approved the design first, and decided on 2026-11-02 that both block Step 1 instead, and that **a result that changes the design comes back to him** (spec D64).
 
@@ -41,8 +201,9 @@ Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull
 
 ## Blocked
 
+- **Founder decision, 2026-11-08:** Step 1 no longer waits on the buyer round or the GitHub trial (foundation items 27, 28; changes D64). GitHub checks run against a simulated GitHub; the founder runs the real trial after Phase 2.
 - **Everything in the plan is blocked** on F6 merging, then F28, F3, F22 and F4 being built.
-- **Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64). Design approval is no longer blocked: the founder approved it first.
+- ~~**Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64).~~ Unblocked by the founder's decision of 2026-11-08 (above); built 2026-11-11.
 - **Step 2b is blocked** on F3's provider (F3 Step 4) and on F3's consent screen naming rung 2b.
 - **Step 3 is blocked** on F3's evidence holding a group id and window.
 - **Step 7 is blocked** on T6.5: the safety gates, the founder's go, and the buyers' answer.
@@ -399,6 +560,8 @@ Each was checked against the documents and code before anything changed. All 15 
 
 ## Validation
 
+**Step 1, 2026-11-11:** see *Step 1, built 2026-11-11*, *Validation*, above. What follows is the documents' own validation of 2026-11-02.
+
 **Nothing was run:** no model, no GitHub call, no test, no build. Code was read at the paths cited. On 2026-11-02 these were read through a tool that summarizes pages, so check any quote against the live page before publishing it: OneUptime's AI agent page and README; Better Stack's error pull requests page; Datadog's Bits Code page; Grafana's what's-new entry of 2026-10-19; Middleware's OpsAI overview; Sentry's Autofix page; Aurora's README; GitHub's skip-runs, events and pull requests API pages; and PostgreSQL's JSON types page. Two searches of GitHub's docs were made, for draft plans and for custom models. Older competitor claims are carried from `research.md`, where they say so.
 
 **One check did run,** by hand, over these documents, with a throwaway script: every FR, UR, BR, NFR and AC in `spec.md` has a place in *What proves what* (179 of 179), every task named there and in `design.md` exists in `plan.md`, and every acceptance criterion is named by a plan task. **That count treats a criterion as covered if it is named once, so it hid parts with no task** (*Second review*, below). It was re-run after those fixes, and also looks for criteria named only as a half; the result is in that section. T2.11 makes this a real check.
@@ -431,7 +594,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-21 (the fix routes moved to their own router; founder decision below)
 
 ## Founder approval, 2026-11-02
 
@@ -520,3 +683,11 @@ F5 stays approved. The design had asked not to be approved before the GitHub tri
 - **Scope sentence** gained the words on imports and the AI asking (founder's to approve, foundation decision 2).
 
 **Not done:** no persona review; no web research on parsers was run for this change (the choice rests on ADR-019 and the plainness of import lines; the bed measures resolution); nothing run.
+
+## Founder decision 2026-11-21: the fix routes on their own router
+
+**What happened.** F3 Step 5 made `findings/explanations.py` import AI code (`nexovue_platform.ai.limits`, `nexovue_platform.ai.validate.recheck`, `nexovue_api.ai.service`). `findings/router.py` served both F3's explanation routes and F5's `GET /findings/{id}/fixes`, so T1.5's walk (`test_fix_facts_hold_no_ai.py`, the import half of AC33, BR12) fails with 45 import chains into AI code. **Found while applying the decision (2026-11-21):** all 45 run through `fix_read.py`, not the router: `fix_read.py` imports `parse_signals` from `findings/service.py`, which imports `explanations.py`. Moving the routes is still needed (the router imports `explanations.py` directly), but alone it did not make the walk pass, so `parse_signals`, `SIGNAL_UNITS` and `_STORED_SIGNALS` moved from `service.py` to `findings/signals.py`, which imports no AI code; `service.py`, `fix_read.py` and `test_findings.py` import them from there (the same decision's implementation, coordinator, 2026-11-21). The walk then passes at full strength.
+
+**What was decided (option A).** F5's fix routes have their own router, `apps/api/src/nexovue_api/findings/fixes/router.py`, mounted in `main.py` beside the findings router, in the repository's shape for a second router under one package (`ai/preview/router.py`, `slos/readings/router.py`); a file named `router.py` stays visible to every structural gate, including the rate-limit coverage test, which reads only files of that name. AC33's walk starts from that module at full strength, and `test_fix_routes.py` proves the fix routes are on it and none is on `findings/router.py`. The URL, behaviour, `CurrentIdentity` gate (not on the read surface) and responses are unchanged. Plan T1.3 and T1.5 name the new module; the later tasks that add fix routes (T2b.7, T3.9, T3.16, T5.2) name it too.
+
+**To do when T2b.7 is built.** T2b.7 (and T4.7) restore aliases in what F5 reads back. F5's code does not reach F3's alias restoring today: `fix_read.py` imports no part of `explanations.py`, and the platform's `fixes/prose.py` uses `nexovue_platform.evidence.aliases.restore`. F3's text-to-segments restorer, `_restored` in `findings/explanations.py`, sits in a module that imports AI code; if F5 needs it, move it then to a module that imports none, beside `restore` in `nexovue_platform/evidence/aliases.py`, rather than importing `explanations.py` from F5's read. Not moved now.

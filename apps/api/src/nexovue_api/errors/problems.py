@@ -84,6 +84,19 @@ NOT_FOUND: Final = register(
     "No such resource in this organization",
     HTTPStatus.NOT_FOUND,
 )
+# F20 (design, *Telling the two 404s apart*): a dashboard page names a dashboard and a
+# project, and says which one this reader cannot open. Each still answers an unknown
+# id and another organization's alike (NFR1).
+DASHBOARD_NOT_FOUND: Final = register(
+    "dashboard-not-found",
+    "No such dashboard in this organization",
+    HTTPStatus.NOT_FOUND,
+)
+PROJECT_NOT_FOUND: Final = register(
+    "project-not-found",
+    "No such project in this organization",
+    HTTPStatus.NOT_FOUND,
+)
 CONFLICT: Final = register(
     "conflict",
     "The request conflicts with the current state",

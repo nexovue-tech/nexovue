@@ -62,3 +62,30 @@ func TestAPermanentErrorSurvivesWrapping(t *testing.T) {
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+// A call whose failure costs less than the worker gets a budget of its own, and
+// gives up when that budget is spent rather than the loop's two minutes.
+func TestRetryWithinGivesUpWhenItsOwnBudgetIsSpent(t *testing.T) {
+	clock := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
+	// Each look at the clock moves it on by ten seconds, so a 30-second budget is
+	// spent after a few attempts without the test waiting for it.
+	now := func() time.Time {
+		clock = clock.Add(10 * time.Second)
+		return clock
+	}
+	attempts := 0
+	outage := errors.New("connection refused")
+
+	err := RetryWithin(context.Background(), quietLogger(), now, "insert", 30*time.Second,
+		func(context.Context) error {
+			attempts++
+			return outage
+		})
+
+	if !errors.Is(err, outage) {
+		t.Errorf("err = %v, want the outage reported once the budget is spent", err)
+	}
+	if attempts < 2 || attempts > 3 {
+		t.Errorf("attempts = %d, want the 30-second budget spent in two or three", attempts)
+	}
+}

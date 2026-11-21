@@ -49,3 +49,9 @@ services:
 
   scheduler-deliveries:
     environment: *hosted-control-plane
+
+  # F3: hosted keeps the private-address list empty: no operator's network is ours to open.
+  scheduler-insight:
+    environment:
+      <<: *hosted
+      AI_PRIVATE_ENDPOINTS: ""

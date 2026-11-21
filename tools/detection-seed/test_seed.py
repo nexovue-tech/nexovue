@@ -1,7 +1,13 @@
-"""The seeded history's shape, its reproducibility and its buckets, without a store."""
+"""The seeded history's shape, its reproducibility and its buckets, without a store.
+
+F19 plan T2.6: endpoint rows that add up to their service's, with a `/health`-style
+probe every busy minute, and check readings holding every kind of run the uptime rule
+tells apart: confirmed, overruled, in maintenance, and `prober_error`.
+"""
 
 from __future__ import annotations
 
+import itertools
 import math
 import re
 from datetime import UTC, datetime, timedelta
@@ -9,15 +15,27 @@ from pathlib import Path
 
 import pytest
 from seed import (
+    DEPLOYS_ON_BUSIEST,
+    HEALTH_ENDPOINT,
+    LAST_RELEASE_BEFORE_END,
     LATENCY_BOUNDS,
     LATENCY_BUCKET_COUNT,
+    ROLLOUT,
+    PlannedRelease,
     Row,
+    VersionRow,
+    check_runs,
+    endpoint_rows,
     generate,
     latency_bucket,
     live_peaks,
     main,
+    release_plan,
+    release_records,
     require_local,
+    seen_minutes,
     spread,
+    version_rows,
     window,
 )
 
@@ -144,3 +162,137 @@ def test_any_host_but_localhost_is_refused(url: str) -> None:
 def test_localhost_is_allowed() -> None:
     for host in ("localhost", "127.0.0.1", "[::1]"):
         require_local(f"http://{host}:18123/nexovue", "ClickHouse")
+
+
+# ------------------------------------------------------------- F19, plan T2.6
+
+
+def test_endpoint_rows_add_up_to_their_service_and_a_probe_comes_every_busy_minute() -> None:
+    rows = _hour(WEDNESDAY)
+    endpoints = list(endpoint_rows(rows))
+    probed = 0
+    for row in rows:
+        mine = [
+            e for e in endpoints if e.service_name == row.service_name and e.minute == row.minute
+        ]
+        assert sum(e.request_count for e in mine) == row.request_count
+        assert sum(e.error_count for e in mine) == row.error_count
+        assert all(e.request_count > 0 and e.span_kind == "SERVER" for e in mine)
+        probes = [e for e in mine if e.span_name == HEALTH_ENDPOINT]
+        # A probe never fails, so a minute whose every request failed has none.
+        assert len(probes) <= 1 and all(probe.error_count == 0 for probe in probes)
+        probed += len(probes)
+    assert probed >= 0.9 * len(rows)
+    assert len({e.span_name for e in endpoints}) > 2
+
+
+def test_check_readings_hold_every_kind_of_run_the_uptime_rule_tells_apart() -> None:
+    start = WEDNESDAY - timedelta(weeks=1)
+    runs = list(check_runs("check-1", start, WEDNESDAY, interval_seconds=60, seed=6))
+    outcomes = {(run.outcome, run.final, run.maintenance) for run in runs}
+    assert ("up", True, False) in outcomes
+    assert ("down", False, False) in outcomes, "an attempt a retry overruled"
+    assert ("prober_error", True, False) in outcomes
+    assert any(run.maintenance for run in runs)
+    # An overruled attempt is followed, at its own moment, by the confirmed retry.
+    for overruled in (run for run in runs if not run.final):
+        retries = [r for r in runs if r.at == overruled.at and r.attempt == overruled.attempt + 1]
+        assert len(retries) == 1 and retries[0].final
+    confirmed = [run for run in runs if run.final]
+    assert len(confirmed) == 7 * 24 * 60 + 1
+
+
+def test_the_same_seed_writes_the_same_check_readings() -> None:
+    start = WEDNESDAY - timedelta(days=1)
+    first = list(check_runs("check-1", start, WEDNESDAY, interval_seconds=300, seed=3))
+    assert first == list(check_runs("check-1", start, WEDNESDAY, interval_seconds=300, seed=3))
+    assert len([run for run in first if run.final]) == 24 * 12 + 1
+
+
+# ------------------------------------------------------------- F28, plan T3.0
+
+SERVICES = ["checkout", "frontend", "search", "mailer"]
+FOUR_WEEKS_END = datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
+FOUR_WEEKS_START = FOUR_WEEKS_END - timedelta(weeks=4)
+
+
+def _plan() -> list[PlannedRelease]:
+    return release_plan(SERVICES, FOUR_WEEKS_START, FOUR_WEEKS_END, retention_days=30)
+
+
+def test_the_first_service_deploys_60_times_its_last_just_before_the_history_ends() -> None:
+    """AC38's 60 deploys, and one release before a finding `fault.py` then opens."""
+    plan = [r for r in _plan() if r.service_name == "checkout" and r.started_at >= FOUR_WEEKS_START]
+    assert len(plan) == DEPLOYS_ON_BUSIEST
+    assert all(release.reported for release in plan)
+    assert max(r.started_at for r in plan) == FOUR_WEEKS_END - LAST_RELEASE_BEFORE_END
+
+
+def test_one_release_is_older_than_the_project_s_limit_with_no_rows_to_count() -> None:
+    """Its rollup rows are past the TTL: Postgres alone remembers it."""
+    (expired,) = [r for r in _plan() if r.started_at < FOUR_WEEKS_START]
+    assert expired.started_at < FOUR_WEEKS_END - timedelta(days=30)
+    assert expired.reported
+
+
+def test_coverage_takes_each_value_across_the_services() -> None:
+    """A service sending no version and reporting nothing reads coverage none; one sending
+    versions without reports reads versions only."""
+    plan = _plan()
+    assert not [r for r in plan if r.service_name == "mailer"]
+    search = [r for r in plan if r.service_name == "search"]
+    assert search and not any(r.reported for r in search)
+    assert all(r.reported for r in plan if r.service_name == "frontend")
+
+
+def test_each_minute_s_versions_add_up_to_the_service_s_row() -> None:
+    """T3.0: the version rows sum to `service_stats_1m`, minute by minute, in requests,
+    failures and every latency bucket, through each rollout."""
+    plan = _plan()
+    rows = list(generate(SERVICES, FOUR_WEEKS_START, FOUR_WEEKS_END, UTC, 300.0, 6))
+    versions = list(version_rows(rows, plan))
+    by_minute: dict[tuple[str, datetime], list[VersionRow]] = {}
+    for version in versions:
+        by_minute.setdefault((version.service_name, version.minute), []).append(version)
+    assert len(by_minute) == len(rows)
+    for row in rows:
+        mine = by_minute[(row.service_name, row.minute)]
+        assert sum(v.request_count for v in mine) == row.request_count
+        assert sum(v.error_count for v in mine) == row.error_count
+        assert [
+            sum(column) for column in zip(*(v.latency_buckets for v in mine), strict=True)
+        ] == list(row.latency_buckets)
+        assert all(0 <= v.error_count <= v.request_count for v in mine)
+    assert {v.version for v in versions if v.service_name == "mailer"} == {""}
+    # A rollout splits minutes between two versions.
+    assert any(len(group) == 2 for group in by_minute.values())
+
+
+def test_the_records_follow_the_rows_and_the_periods_chain() -> None:
+    """Each release's first and last counted minute, a period that ends where the next
+    one's rollout finishes, the previous version, and the first one already running only
+    where nothing came before."""
+    plan = _plan()
+    rows = list(generate(SERVICES, FOUR_WEEKS_START, FOUR_WEEKS_END, UTC, 300.0, 6))
+    seen = seen_minutes(version_rows(rows, plan))
+    records = release_records(plan, seen)
+    checkout = sorted(
+        (r for r in records if r.service_name == "checkout"), key=lambda r: r.started_at
+    )
+    assert checkout[0].first_seen_at is None and checkout[0].ended_at is not None
+    assert checkout[1].previous_version == checkout[0].version
+    assert not checkout[1].already_running
+    assert checkout[-1].ended_at is None
+    planned = {r.version: r.started_at for r in plan if r.service_name == "checkout"}
+    for earlier, later in itertools.pairwise(checkout):
+        overlap = ROLLOUT if earlier.first_seen_at is not None else timedelta(0)
+        assert earlier.ended_at == planned[later.version] + overlap
+    (first_search, *_) = sorted(
+        (r for r in records if r.service_name == "search"), key=lambda r: r.started_at
+    )
+    assert first_search.already_running and first_search.previous_version is None
+    for record in records:
+        if record.first_seen_at is not None:
+            assert (record.first_seen_at, record.last_seen_at) == seen[
+                (record.service_name, record.version)
+            ]

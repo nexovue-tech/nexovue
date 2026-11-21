@@ -48,10 +48,19 @@ UNGUARDED_IDENTITY: Final = "CurrentIdentity"
 # Mutating handlers that deliberately take no policy, each with the reason it is
 # safe. A name here is a decision, so adding one should be uncomfortable.
 EXEMPT: Final = {
+    # F22, AC25: a person may withdraw their own words, whatever their current
+    # role — an author made a viewer still deletes their own note. The service
+    # checks authorship, or DELETE_ANY_CASE_NOTE for everyone else, and a
+    # support view is already refused by method.
+    "delete_case_note",
     # Unauthenticated by design: there is no identity to judge. The HMAC
     # signature over the raw body is the gate, and door 4a's whole security
     # model rests on it rather than on a session.
-    "receive_deploy",
+    "receive_deploys",
+    # F22 T5.1, unauthenticated for the same reason: a tracker's webhook, gated by the HMAC
+    # over the raw body with the connection's own secret. It changes no record but when an
+    # issue is next read (ADR-035), adds no job, and is bounded by its own rate tier.
+    "receive_connection_webhook",
     # Unauthenticated: it is how an account comes into existence.
     "sign_up",
     # Unauthenticated: the console reporting its own errors, which a sign-in
@@ -141,7 +150,7 @@ EXEMPT: Final = {
     # in a query string.
     "symbolicate",
     # Unauthenticated by design: the processor calls it, and the signature over
-    # the raw body is the gate (`billing/`), as for `receive_deploy`.
+    # the raw body is the gate (`billing/`), as for `receive_deploys`.
     "receive_billing_event",
     # Unauthenticated: the browser returns here from the processor's checkout,
     # and nothing it carries is trusted — payment is confirmed only by the
@@ -152,6 +161,10 @@ EXEMPT: Final = {
     # only as its hash, rotatable — and the only thing it can do is mark that one
     # heartbeat as called. It has its own rate tier.
     "receive_heartbeat",
+    # F4 (design, *Routes*): a person deletes their own conversation, whatever their role,
+    # as an author deletes their own note; it touches only that person's rows, refuses
+    # another's with the same 404, and refuses while a question in it is in flight.
+    "delete_conversation",
 }
 
 
@@ -167,6 +180,43 @@ POLICY_OF: Final = {
     # every working role's, as operating alerts is. A viewer may do none of them.
     "nexovue_api/findings/router.py:acknowledge_finding": "MayOperateAlerts",
     "nexovue_api/findings/router.py:mark_false_alarm": "MayOperateAlerts",
+    # F22 (FR34): working a case is every working role's. The note delete route
+    # is in EXEMPT instead: its gate is authorship, which no role names.
+    "nexovue_api/findings/router.py:change_case": "MayOperateCases",
+    "nexovue_api/findings/router.py:add_case_note": "MayOperateCases",
+    # F22 Step 4: a case's tracker issue, created, retried or removed by a working role.
+    "nexovue_api/findings/router.py:create_issue": "MayOperateCases",
+    "nexovue_api/findings/router.py:retry_issue": "MayOperateCases",
+    "nexovue_api/findings/router.py:promote_issue": "MayOperateCases",
+    "nexovue_api/findings/router.py:remove_issue": "MayOperateCases",
+    # F3 A20, FR41: reading a finding's facts again; members and up, never a token.
+    "nexovue_api/findings/router.py:read_explanation_again": "MayRequestExplanation",
+    # F3 Step 5: asking for plainer words spends tokens, so a person with the same right
+    # as reading again, never a viewer or a token (FR41, AC23).
+    "nexovue_api/findings/router.py:refresh_explanation_wording": "MayRequestExplanation",
+    # F3 Step 2: rating an explanation is every working role's, as operating alerts is
+    # (FR20); stopping a rule changes what detection's explanations say (FR54, A64).
+    "nexovue_api/findings/router.py:rate_explanation": "MayOperateAlerts",
+    "nexovue_api/explanations/router.py:stop_rule": "MayConfigureDetection",
+    "nexovue_api/explanations/router.py:resume_rule": "MayConfigureDetection",
+    # F19: reliability targets, every working role's (D20, foundation section 5).
+    "nexovue_api/slos/router.py:create_slo": "MayConfigureSlos",
+    "nexovue_api/slos/router.py:change_slo": "MayConfigureSlos",
+    "nexovue_api/slos/router.py:delete_slo": "MayConfigureSlos",
+    "nexovue_api/slos/router.py:restore_slo": "MayConfigureSlos",
+    # F20: dashboards, every working role's (BR7, foundation section 5), but for the purge,
+    # which is an owner's or an admin's (D47).
+    "nexovue_api/dashboards/router.py:create_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:replace_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:delete_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:restore_dashboard": "MayEditDashboards",
+    "nexovue_api/dashboards/router.py:purge_dashboard": "MayPurgeDashboards",
+    # Import's check writes nothing, and a viewer gets no import (FR42, AC128).
+    "nexovue_api/dashboards/router.py:validate_dashboard": "MayEditDashboards",
+    "nexovue_api/slos/router.py:create_slo_exclusion": "MayConfigureSlos",
+    "nexovue_api/slos/router.py:remove_slo_exclusion": "MayConfigureSlos",
+    # A draft's read: gated as a write, because only an editor has a draft (FR10).
+    "nexovue_api/dashboardpanels/router.py:preview_panels": "MayEditDashboards",
     "nexovue_api/detection/router.py:snooze_service": "MayOperateAlerts",
     # F6 (FR23, D11): what decides whether detection is heard at all, and what it
     # judges by, is an admin's.
@@ -192,6 +242,26 @@ POLICY_OF: Final = {
     "nexovue_api/channels/router.py:set_quiet_hours": "MayManageChannels",
     "nexovue_api/channels/router.py:delete_channel": "MayManageChannels",
     "nexovue_api/channels/test_router.py:send_test": "MayManageChannels",
+    # F22. Every change to a tracker connection is an owner's or admin's (FR34); a test
+    # makes our infrastructure call the tracker, so it is too.
+    "nexovue_api/connections/router.py:start_github": "MayManageConnections",
+    "nexovue_api/connections/router.py:complete_github": "MayManageConnections",
+    "nexovue_api/connections/router.py:refresh_github": "MayManageConnections",
+    "nexovue_api/connections/router.py:replace_credential": "MayManageConnections",
+    "nexovue_api/connections/router.py:disconnect": "MayManageConnections",
+    "nexovue_api/connections/router.py:change_place": "MayManageConnections",
+    "nexovue_api/connections/router.py:map_service_repository": "MayManageConnections",
+    "nexovue_api/connections/router.py:unmap_service_repository": "MayManageConnections",
+    # F3 (FR23 to FR32; AC32): the AI connection, its test, switch and opt-outs are an owner's
+    # or an admin's; agreeing to send facts is the owner's alone.
+    "nexovue_api/ai/router.py:save_connection": "MayManageAI",
+    "nexovue_api/ai/router.py:delete_connection": "MayManageAI",
+    "nexovue_api/ai/router.py:start_check": "MayManageAI",
+    "nexovue_api/ai/router.py:switch": "MayManageAI",
+    "nexovue_api/ai/router.py:opt_out": "MayManageAI",
+    "nexovue_api/ai/router.py:opt_in": "MayManageAI",
+    "nexovue_api/ai/router.py:consent": "MayConsentAIDisclosure",
+    "nexovue_api/connections/test_router.py:test_connection": "MayManageConnections",
     "nexovue_api/checksecrets/router.py:write_secret": "MayManageCheckSecrets",
     "nexovue_api/checksecrets/router.py:delete_secret": "MayManageCheckSecrets",
     "nexovue_api/checksecrets/router.py:write_variable": "MayManageCheckSecrets",
@@ -201,6 +271,8 @@ POLICY_OF: Final = {
     "nexovue_api/projects/router.py:delete_project": "MayConfigureProjects",
     "nexovue_api/projects/router.py:replace_sampling_config": "MayConfigureProjects",
     "nexovue_api/projects/router.py:replace_masking_config": "MayConfigureProjects",
+    # F28 FR55, D53: where a project's release summaries go (AC83).
+    "nexovue_api/projects/router.py:set_release_summary": "MayConfigureProjects",
     "nexovue_api/apikeys/router.py:create_api_key": "MayManageCredentials",
     "nexovue_api/apikeys/router.py:revoke_api_key": "MayManageCredentials",
     # The platform surface (`docs/changes/super-admin-in-the-console/`): nexovue's
@@ -220,6 +292,8 @@ POLICY_OF: Final = {
     "nexovue_api/apikeys/router.py:revoke_site_key": "MayManageCredentials",
     "nexovue_api/deploys/router.py:create_webhook_secret": "MayManageCredentials",
     "nexovue_api/deploys/router.py:revoke_webhook_secret": "MayManageCredentials",
+    # F28 AC61: removing a deploy is the credential holder's, as withdrawing its secret is.
+    "nexovue_api/deploys/router.py:delete_deploy": "MayManageCredentials",
     "nexovue_api/integrations/router.py:create_integration": "MayManageCredentials",
     "nexovue_api/integrations/router.py:delete_integration": "MayManageCredentials",
     "nexovue_api/billing/router.py:start_checkout": "MayCommitSpend",
@@ -232,12 +306,23 @@ POLICY_OF: Final = {
     "nexovue_api/members/router.py:remove_member": "MayManageMembers",
     "nexovue_api/support/router.py:grant_support_access": "MayGrantSupport",
     "nexovue_api/support/router.py:withdraw_support_access": "MayGrantSupport",
+    # F4: asking spends the organization's tokens and reads as the person; settings are an
+    # admin's; agreeing to what chat sends is the owner's own act, as F3's consent is.
+    "nexovue_api/assistant/router.py:start_conversation": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:ask_question": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:stop_question": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:mark_wrong": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:unmark_wrong": "MayAskAssistant",
+    "nexovue_api/assistant/router.py:save_settings": "MayManageAI",
+    "nexovue_api/assistant/router.py:agree": "MayConsentAIDisclosure",
 }
 
 # Reads that return a secret, and so are an action even though they change
 # nothing: a viewer reading every screen must not read these.
 SECRET_READS: Final = {
     "nexovue_api/deploys/router.py:read_webhook_secrets": "MayManageCredentials",
+    # F22 AC79: what a connection test found is the tester's, as the test is.
+    "nexovue_api/connections/test_router.py:connection_test_result": "MayManageConnections",
     # Not a secret, but the organization's history of who did what: an owner's
     # and an admin's to read (FR36, AC38).
     "nexovue_api/audit/router.py:read_audit_log": "MayReadAudit",
@@ -249,6 +334,9 @@ SECRET_READS: Final = {
     # gate, nothing else would notice (`docs/changes/super-admin-in-the-console/`).
     "nexovue_api/admin/router.py:search_organizations": "MayAdministerThePlatform",
     "nexovue_api/admin/router.py:organization": "MayAdministerThePlatform",
+    # F4: what chat sent where, and each person's question counts: an admin's to read.
+    "nexovue_api/assistant/router.py:read_settings": "MayManageAI",
+    "nexovue_api/assistant/router.py:read_reads": "MayManageAI",
 }
 
 

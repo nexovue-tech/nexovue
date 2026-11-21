@@ -7,7 +7,8 @@ whichever process asks: jobs ready per queue and how long the oldest has
 waited, alerts waiting to be delivered, erasures overdue, and detection's
 progress — how old the newest settled minute is, how many projects it has
 stopped judging, how long the stalest has waited, and the events it recorded
-about nexovue's own intake (F6, C8). Those are read from Postgres, not counted
+about nexovue's own intake (F6, C8), whether a tracker connection is live
+(F22), and F3's explanations and AI runs. Those are read from Postgres, not counted
 where they happen, because the sweep runs in a worker's child process, whose
 metrics no scrape sees.
 
@@ -23,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
 
+from nexovue_platform.connections import TRACKER_KINDS
 from nexovue_platform.detection import NOT_RUNNING_AFTER
 from prometheus_client import Counter, Gauge, disable_created_metrics
 from sqlalchemy import text
@@ -94,6 +96,52 @@ _DETECTION_EVENTS: Final = text(
     """
 )
 
+# F22: whether any tracker connection is live, as an EXISTS. F5's own App is not
+# `scheduler-connections`' sync, so it does not count (design, *Observability*).
+_CONNECTIONS_ACTIVE: Final = text(
+    """
+    SELECT EXISTS (
+        SELECT 1 FROM connections
+        WHERE state <> 'disconnected' AND kind = ANY(CAST(:kinds AS text[]))
+    )
+    """
+)
+
+# F3 (design, *Observability*). Counts across every organization, no tenant label. A
+# finding is unexplained when it has been open this long and no version of its facts exists.
+UNEXPLAINED_AFTER_SECONDS: Final = 15 * 60
+# The window the recent counts below cover; long enough for a rule's `for: 5m`.
+F3_RECENT_SECONDS: Final = 15 * 60
+_F3_READINGS: Final = text(
+    """
+    SELECT
+        (SELECT count(*) FROM findings AS f
+         WHERE f.state = 'open'
+           AND f.started_at < now() - make_interval(secs => :unexplained_after)
+           AND NOT EXISTS (
+               SELECT 1 FROM finding_explanations AS e
+               WHERE e.org_id = f.org_id AND e.finding_id = f.id
+           )) AS unexplained,
+        (SELECT count(*) FROM ai_connections WHERE enabled) AS connections_enabled,
+        (SELECT coalesce(sum(reads_failed), 0) FROM finding_explanations
+         WHERE read_at > now() - make_interval(secs => :recent)) AS reads_failed,
+        (SELECT count(*) FROM finding_explanations
+         WHERE read_at > now() - make_interval(secs => :recent)
+           AND evidence -> 'items' @> '[{"kind": "absence", "values": {"reason": "truncated"}}]')
+            AS truncated,
+        (SELECT coalesce(sum(used_tokens), 0) FROM ai_usage_monthly
+         WHERE month = date_trunc('month', now() AT TIME ZONE 'UTC')::date) AS tokens_month
+    """
+)
+_AI_ON: Final = text("SELECT EXISTS (SELECT 1 FROM ai_connections WHERE enabled)")
+_AI_RUNS_RECENT: Final = text(
+    """
+    SELECT purpose, outcome, count(*) AS runs FROM ai_runs
+    WHERE started_at > now() - make_interval(secs => :recent)
+    GROUP BY purpose, outcome
+    """
+)
+
 LOOP_SILENT: Final = Gauge(
     "nexovue_scheduler_loop_silent_seconds", "Seconds since this process's loop last beat."
 )
@@ -144,6 +192,39 @@ DETECTION_EVENTS_RECENT: Final = Gauge(
     ["kind"],
 )
 
+CONNECTIONS_ACTIVE: Final = Gauge(
+    "nexovue_scheduler_connections_active",
+    "1 while a tracker connection is live and connections are on, else 0 (leader only). "
+    "Beat's, so a missing scheduler-connections can be told from one left out (F22).",
+)
+
+FINDINGS_UNEXPLAINED: Final = Gauge(
+    "nexovue_scheduler_findings_unexplained",
+    "Open findings over 15 minutes old with no explanation version (leader only).",
+)
+EVIDENCE_READS_FAILED: Final = Gauge(
+    "nexovue_scheduler_evidence_reads_failed_recent",
+    "Evidence reads that could not complete in versions read in the last 15 minutes (leader only).",
+)
+EVIDENCE_TRUNCATED: Final = Gauge(
+    "nexovue_scheduler_evidence_truncated_recent",
+    "Versions read in the last 15 minutes that cut facts at a bound (leader only).",
+)
+AI_CONNECTIONS_ENABLED: Final = Gauge(
+    "nexovue_scheduler_ai_connections_enabled",
+    "AI connections switched on, across organizations (leader only). Beat's, so a missing "
+    "scheduler-insight can be told from one left out (F3).",
+)
+AI_RUNS_RECENT: Final = Gauge(
+    "nexovue_scheduler_ai_runs_recent",
+    "AI runs started in the last 15 minutes, by purpose and outcome (leader only).",
+    ["purpose", "outcome"],
+)
+AI_TOKENS_MONTH: Final = Gauge(
+    "nexovue_scheduler_ai_tokens_month",
+    "Tokens AI runs used this month, across organizations (leader only).",
+)
+
 # How a worker's job ended — the label values JOBS_ENDED takes.
 FINISHED: Final = "finished"
 RETRIED: Final = "retried"
@@ -161,9 +242,33 @@ class QueueReadings:
     detection_projects_behind: int = 0
     detection_oldest_lag_seconds: float = 0.0
     detection_events_recent: dict[str, int] = field(default_factory=dict)
+    connections_active: int = 0
+    findings_unexplained: int = 0
+    evidence_reads_failed: int = 0
+    evidence_truncated: int = 0
+    ai_connections_enabled: int = 0
+    ai_runs_recent: dict[tuple[str, str], int] = field(default_factory=dict)
+    ai_tokens_month: int = 0
 
 
-async def read_queues(connection: AsyncConnection, *, now: datetime) -> QueueReadings:
+async def connections_live(connection: AsyncConnection, *, enabled: bool) -> bool:
+    """Whether a tracker connection is live and connections are on. Beat reads it for
+    `connections_active` and to decide whether `sweep_connections` is scheduled; with
+    connections turned off nothing is expected to run, whatever rows remain (AC118)."""
+    return enabled and bool(
+        await connection.scalar(_CONNECTIONS_ACTIVE, {"kinds": list(TRACKER_KINDS)})
+    )
+
+
+async def ai_connections_on(connection: AsyncConnection) -> bool:
+    """Whether any organization has AI wording switched on: beat schedules the AI role's
+    sweep only then, so an install without the AI container queues nothing for it."""
+    return bool(await connection.scalar(_AI_ON))
+
+
+async def read_queues(
+    connection: AsyncConnection, *, now: datetime, connections_enabled: bool = True
+) -> QueueReadings:
     jobs = (await connection.execute(_JOBS_READY)).all()
     alerts = (await connection.execute(_ALERTS_WAITING)).one()
     overdue = await owed.overdue(connection, now=now)
@@ -175,6 +280,14 @@ async def read_queues(connection: AsyncConnection, *, now: datetime) -> QueueRea
         _DETECTION_EVENTS, {"recent_seconds": DETECTION_EVENTS_RECENT_SECONDS}
     )
     recent = dict.fromkeys(DETECTION_EVENT_KINDS, 0) | {row.kind: int(row.recent) for row in events}
+    connected = await connections_live(connection, enabled=connections_enabled)
+    f3 = (
+        await connection.execute(
+            _F3_READINGS,
+            {"unexplained_after": UNEXPLAINED_AFTER_SECONDS, "recent": F3_RECENT_SECONDS},
+        )
+    ).one()
+    runs = await connection.execute(_AI_RUNS_RECENT, {"recent": F3_RECENT_SECONDS})
     return QueueReadings(
         jobs_ready={row.queue: int(row.ready) for row in jobs},
         oldest_ready_seconds={row.queue: float(row.oldest) for row in jobs},
@@ -187,13 +300,20 @@ async def read_queues(connection: AsyncConnection, *, now: datetime) -> QueueRea
         detection_projects_behind=int(projects.behind),
         detection_oldest_lag_seconds=float(projects.oldest),
         detection_events_recent=recent,
+        connections_active=int(connected),
+        findings_unexplained=int(f3.unexplained),
+        evidence_reads_failed=int(f3.reads_failed),
+        evidence_truncated=int(f3.truncated),
+        ai_connections_enabled=int(f3.connections_enabled),
+        ai_runs_recent={(row.purpose, row.outcome): int(row.runs) for row in runs},
+        ai_tokens_month=int(f3.tokens_month),
     )
 
 
 def publish(readings: QueueReadings) -> None:
     # Cleared first: a queue that has emptied stops being reported, rather
     # than repeating its last count.
-    for gauge in (JOBS_READY, OLDEST_READY, DETECTION_EVENTS_RECENT):
+    for gauge in (JOBS_READY, OLDEST_READY, DETECTION_EVENTS_RECENT, AI_RUNS_RECENT):
         gauge.clear()
     for queue, ready in readings.jobs_ready.items():
         JOBS_READY.labels(queue=queue).set(ready)
@@ -206,11 +326,19 @@ def publish(readings: QueueReadings) -> None:
     DETECTION_OLDEST_LAG.set(readings.detection_oldest_lag_seconds)
     for kind, recent in readings.detection_events_recent.items():
         DETECTION_EVENTS_RECENT.labels(kind=kind).set(recent)
+    CONNECTIONS_ACTIVE.set(readings.connections_active)
+    FINDINGS_UNEXPLAINED.set(readings.findings_unexplained)
+    EVIDENCE_READS_FAILED.set(readings.evidence_reads_failed)
+    EVIDENCE_TRUNCATED.set(readings.evidence_truncated)
+    AI_CONNECTIONS_ENABLED.set(readings.ai_connections_enabled)
+    for (purpose, outcome), runs in readings.ai_runs_recent.items():
+        AI_RUNS_RECENT.labels(purpose=purpose, outcome=outcome).set(runs)
+    AI_TOKENS_MONTH.set(readings.ai_tokens_month)
 
 
 def forget_queues() -> None:
     """A beat that stops leading stops speaking for the queues."""
-    for gauge in (JOBS_READY, OLDEST_READY, DETECTION_EVENTS_RECENT):
+    for gauge in (JOBS_READY, OLDEST_READY, DETECTION_EVENTS_RECENT, AI_RUNS_RECENT):
         gauge.clear()
     for single in (
         ALERTS_WAITING,
@@ -219,5 +347,11 @@ def forget_queues() -> None:
         DETECTION_SETTLED_AGE,
         DETECTION_PROJECTS_BEHIND,
         DETECTION_OLDEST_LAG,
+        CONNECTIONS_ACTIVE,
+        FINDINGS_UNEXPLAINED,
+        EVIDENCE_READS_FAILED,
+        EVIDENCE_TRUNCATED,
+        AI_CONNECTIONS_ENABLED,
+        AI_TOKENS_MONTH,
     ):
         single.set(0)

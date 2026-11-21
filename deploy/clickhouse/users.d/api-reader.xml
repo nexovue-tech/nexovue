@@ -1,0 +1,69 @@
+<!--
+  The API's reader: the account every API screen reads ClickHouse with (F20, NFR14,
+  ADR-045). The scheduler keeps `nexovue_reader` (reader.xml), so its alert and
+  detection reads sit outside this account's bounds.
+
+  Why a second reader. The API's own caps (dashboard scans per process, the batch's
+  permits) protect its connections, and nothing else: at two API processes, dashboards
+  and every other screen together could hold several 1 GiB reads at once, and the
+  server's cap (config.d/memory.xml) fails every query when it is reached, the
+  workers' inserts and the alert sweeps included. These two bounds are the server's,
+  so they hold across processes and whatever the code sends:
+
+  - max_memory_usage_for_user: what all of this account's running reads may hold
+    together. 2.4 GiB, a guess (design, *Performance and scale*), below the server's
+    cap so the scheduler and the inserts keep room. Over it, a read fails with
+    MEMORY_LIMIT_EXCEEDED (241), which a dashboard panel reads as `failed`.
+  - max_concurrent_queries_for_user: how many of its reads run at once. 12, a guess,
+    below the 16 connections two API processes hold. Over it, a read is refused with
+    TOO_MANY_SIMULTANEOUS_QUERIES (202), which a dashboard panel reads as `refused`.
+
+  Both names were read on the pinned 26.3 image (system.settings) before use. Both
+  values are guesses until the feature's measurement (plan T5.7) sets them.
+
+  Otherwise exactly the reader's profile: readonly = 2, because every read sends its
+  bounds as query settings, and constraints, because readonly = 2 would let a query
+  raise them. The two per-user bounds are const, so no query can lift them.
+-->
+<clickhouse>
+  <profiles>
+    <api_reader>
+      <readonly>2</readonly>
+      <max_memory_usage>1073741824</max_memory_usage>
+      <max_bytes_before_external_group_by>536870912</max_bytes_before_external_group_by>
+      <max_execution_time>30</max_execution_time>
+      <max_memory_usage_for_user>2576980378</max_memory_usage_for_user>
+      <max_concurrent_queries_for_user>12</max_concurrent_queries_for_user>
+      <constraints>
+        <max_memory_usage>
+          <min>1</min>
+          <max>1073741824</max>
+        </max_memory_usage>
+        <max_execution_time>
+          <min>1</min>
+          <max>30</max>
+        </max_execution_time>
+        <max_memory_usage_for_user>
+          <const/>
+        </max_memory_usage_for_user>
+        <max_concurrent_queries_for_user>
+          <const/>
+        </max_concurrent_queries_for_user>
+      </constraints>
+    </api_reader>
+  </profiles>
+
+  <users>
+    <nexovue_api_reader>
+      <password from_env="CLICKHOUSE_API_READER_PASSWORD"/>
+      <profile>api_reader</profile>
+      <quota>default</quota>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <grants>
+        <query>GRANT SELECT ON nexovue.*</query>
+      </grants>
+    </nexovue_api_reader>
+  </users>
+</clickhouse>

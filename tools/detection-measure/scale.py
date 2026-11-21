@@ -103,7 +103,14 @@ POSTGRES_TABLES: Final = (
     "service_detection_settings",
     "intake_refusals",
 )
-CLICKHOUSE_TABLES: Final = ("service_stats_1m", "detection_readings", "endpoint_stats_1m")
+# `service_versions_1m` is F28's, filled from the same spans as `service_stats_1m`, so its size at
+# this volume is read beside it (F28 plan T1.6).
+CLICKHOUSE_TABLES: Final = (
+    "service_stats_1m",
+    "service_versions_1m",
+    "detection_readings",
+    "endpoint_stats_1m",
+)
 # The accounts detection reads and writes ClickHouse with (ADR-023).
 DETECTION_USERS: Final = ("nexovue_reader", "nexovue_detection_writer")
 
@@ -347,7 +354,7 @@ def _proc_children() -> dict[int, list[int]]:
     return children
 
 
-def _cmdline(pid: int) -> str:
+def cmdline(pid: int) -> str:
     try:
         return (
             Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
@@ -367,7 +374,7 @@ def _tree(roots: Iterable[int], children: Mapping[int, list[int]]) -> set[int]:
     return found
 
 
-def _memory(pid: int) -> tuple[int, int]:
+def process_memory(pid: int) -> tuple[int, int]:
     """RSS and PSS in bytes; PSS shares each page among the processes using it."""
     rss = pss = 0
     try:
@@ -398,12 +405,12 @@ def sample(groups: Sequence[ProcessGroup]) -> None:
     tick = os.sysconf("SC_CLK_TCK")
     me = os.getpid()
     for group in groups:
-        roots = [pid for pid in pids if pid != me and group.pattern.search(_cmdline(pid))]
+        roots = [pid for pid in pids if pid != me and group.pattern.search(cmdline(pid))]
         members = _tree(roots, children)
         rss = pss = 0
         ticks: dict[int, int] = {}
         for pid in members:
-            r, p = _memory(pid)
+            r, p = process_memory(pid)
             rss, pss = rss + r, pss + p
             ticks[pid] = _ticks(pid)
         used = sum(
@@ -851,7 +858,8 @@ def _storage(client: Any, postgres: str, tenants: Sequence[Tenant]) -> dict[str,
 
     parts = client.query(
         """
-        SELECT table, sum(rows), sum(bytes_on_disk), sum(data_uncompressed_bytes), count()
+        SELECT table, sum(rows), sum(bytes_on_disk), sum(data_uncompressed_bytes), count(),
+               sum(primary_key_bytes_in_memory)
         FROM system.parts
         WHERE database = currentDatabase() AND active AND table IN {tables:Array(String)}
         GROUP BY table
@@ -892,9 +900,10 @@ def _storage(client: Any, postgres: str, tenants: Sequence[Tenant]) -> dict[str,
                 "bytes_on_disk": int(disk),
                 "bytes_uncompressed": int(raw),
                 "active_parts": int(active),
+                "primary_key_bytes_in_memory": int(index),
                 "bytes_per_row_on_disk": disk / rows if rows else None,
             }
-            for table, rows, disk, raw, active in parts
+            for table, rows, disk, raw, active, index in parts
         ],
         "postgres": [
             {"table": table, "bytes": size, "rows": rows}

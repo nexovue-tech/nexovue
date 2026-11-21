@@ -11,13 +11,14 @@ import { plural } from "@/shared/format/plural";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { useDeclaredStream } from "@/shared/refresh";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { keepUrlWindow } from "@/shared/url-window";
 import type { LogSearchFilters, ServiceFacet, SeverityFacet } from "./api";
 import { logExportUrl, useLogFacets, useLogSearch } from "./api";
 import { bufferLineCount, downloadBuffer } from "./log-export";
 import type { LiveBuffer, LogLine, LogRow, TailNarration } from "./log-feed";
 
 import { buildLogRows, describeLogs } from "./log-feed";
-import { scopedService } from "./search";
+import { scopedService, searchPhrase } from "./search";
 import {
   emitterSaidSomethingElse,
   SEVERITY_FILTERS,
@@ -94,13 +95,18 @@ export function LogsScreen() {
     void navigate({
       to: "/logs",
       search: () => ({
+        // F3 FR16: a finding's window, carried in the address, survives a filter change.
+        ...keepUrlWindow(routeSearch),
         ...(next.service ? { service: next.service } : {}),
         ...(next.severity && next.severity !== "all" ? { severity: next.severity } : {}),
       }),
       replace: true,
     });
 
-  const [typed, setTyped] = useState("");
+  // A phrase the address carried (a chat step's link), else nothing; typing stays local.
+  const arrivedWith = searchPhrase(routeSearch.q) ?? "";
+  const [typed, setTyped] = useState(arrivedWith);
+  useEffect(() => setTyped(arrivedWith), [arrivedWith]);
   const [expanded, setExpanded] = useState<string | undefined>(undefined);
 
   const query = useDebounced(typed, SEARCH_DEBOUNCE_MS);

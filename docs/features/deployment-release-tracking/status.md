@@ -2,12 +2,645 @@
 
 ## Lifecycle status
 
-**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+**In development. Step 5 built 2026-11-12, committed 2026-11-12.** The founder approved the specification, design and
+plan on 2026-11-02. Steps 1a, 1b, 2 and 3 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder
+tests after Phase 2). Step 4 (the whole release page) and Step 5 (what other features need, and telling people) are
+committed 2026-11-12, locally, not pushed. Step 6 (launch claims) is next.
 
 
 ## Current task
 
-None. Waiting for F6 (pull request #24) to merge.
+**Step 5 built 2026-11-12, committed 2026-11-12** (*Step 5, built 2026-11-12*, below). Postgres migrations `0074`
+and `0075`, on F4's `0073`; no ClickHouse migration; ADR-066.
+
+## Step 5, built 2026-11-12
+
+What other features need, and telling people (plan T5.1 to T5.7), in `wt/f28s5`. What exists now, read from the code:
+
+- **One deploy fact, one history** (T5.1): `nexovue_platform.releases` holds `DeployFact` (ids, the sender's time and
+  ours, state, commit, `basis` always `reported`; no `metadata`, `url`, `source` or `delivery_id`) and `DeployHistory`
+  with `EMPTY_DEPLOY_HISTORY`, moved from `deploys/service.py`. The API's `history_for_window` builds facts; errors,
+  F20's panel scans (one import line) and the scheduler's facts use the one type. The comparison's ClickHouse column
+  lists and environment expression are shared fragments (`VERSION_MINUTE_COLUMNS`, `SERVICE_MINUTE_COLUMNS`,
+  `SPAN_ENVIRONMENT`) with their row converters; the API's statements and the scheduler's are equal word for word.
+- **The comparison for the scheduler** (T5.2): `facts.release_comparison(store, connection, ...)` reads the period, its
+  previous version's start, the settled minute and the plan's derived retention (`project_retention`) from Postgres,
+  and the version minutes, totals and environment labels through `releases/store.py`'s new project-bound reads; then
+  the shared `choose_method`. `ComparisonFact` carries no other version names and no sender text.
+- **No AI** (T5.3): F28's packages in every process are walked by `test_detection_has_no_ai.py`.
+- **MCP and `GET /deploys`** (T5.4): `list_deploys` sends `DeployRow`, exactly `id`, `version`, `service_name`,
+  `deployed_at`, `commit_sha`, `state`, `received_at`, and the envelope says `partial` when the read was capped
+  (`bounded(..., partial=)`). `DeployEventSummary` lost `source` and `metadata` and gained `received_at`, `state` and
+  `commit_sha`.
+- **The hostile fixture** (T5.5): `apps/scheduler/tests/hostile_release_names.py`, versions that pass the name check
+  and free text a sender can write; stored live and never read back into a fact.
+- **The stored reading and the summary** (T5.6): `releases/summary.py`'s job, on the `releases` queue, added by the
+  sync for each period it opens (timed from the newest minute read, not a clock) and by the webhook for each period a
+  report opens; a start that moved later, or a comparison under 5 settled minutes (for at most 30 minutes more), puts
+  it back. It stores `last_reading` (the leading block's method, words and counts, or the reason; never a name) and
+  `mixed_environments`, and with `projects.release_summary_channel_id` set writes one `release_summary` notice on that
+  channel, joined by organization and only if people read it, `sequence` 0, `ON CONFLICT DO NOTHING`. A period
+  `already_running` gets neither. Delivery reads the release, versions and reading after the claim on its own
+  connection and retries the batch if that read fails; the words are `nexovue_platform.releases.summary_lines` with
+  "Order only, not cause", coloured neutral; "3 release summaries" when only summaries are due. `PUT
+  /projects/{id}/release-summary` under `CONFIGURE_PROJECTS` refuses another organization's channel and PagerDuty
+  and webhook channels (422), audits `project.release_summary_set`, and `GET /projects/{id}` returns the value. The
+  list shows *Failure share higher* and *p95 higher* with counts in critical text, and "Versions were combined on X:
+  too many in one minute", from Postgres alone. The Deploys section shows FR45's warning from the stored readings and
+  the opt-in, listing only channels people read.
+- **Documents** (T5.7): `database.md`, the deploy-events spec, IA3's note, the catalogue, the setup pages
+  (`deploys.md`: the summary and who sees sender text; `api.md`), design section 6's *as built* rows, ADR-066.
+
+**Readings made while building** (none blocking; each open to overrule, also under *Open decisions*):
+
+- **The claim reads no release table; delivery does.** Design section 6 joined `release_periods` and `releases` in
+  `_TAKEN`. Detection imports the outbox, and T1.12's isolation test (AC42) refuses any module it reaches that names a
+  release table; it failed on that join. The read moved to `delivery.py`, after the claim, as FR44's is (ADR-066).
+- **The time method's reading is stored and summarized, but never flagged.** FR55 reads the flag from the two version
+  methods; a by-time summary carries the design's "a rolling deploy mixes old and new" sentence.
+- **The job is added by the webhook as well as the sync.** Design section 6 names the sync; a period a report opens is
+  not opened by the sync, so without the webhook's job a reported-only release would never be summarized (AC82: every
+  period).
+- **A failed job is retried twice, then gives up silently**: that period has no reading and no summary.
+
+**Tests, each seen failing first** (the behaviour removed, the test run and seen failing, the code restored and checked
+byte-equal by a script; outputs in this session's scratch space, `seen-failing*.log`):
+
+- `test_deploys.py`, `test_errorgroups.py` (re-pointed): a deploy at the instant no longer preceding it failed two;
+  the `known_from` guard removed failed the overflow test only once it held a deploy older than the cap's reach (it
+  passed before: strengthened).
+- `test_release_facts.py` (new, 8): a `metadata` field on `DeployFact` failed the allow list and the free-text test;
+  `source` selected by `_DEPLOYS_IN_WINDOW` failed the statement test; versions combined forced false, and two labels
+  read as one, each failed; the store handed another project failed.
+- `test_releases.py` (+1): the scheduler's totals statement written without the shared fragment failed.
+- `test_release_facts_live.py` (+3): the window read without its organization and project failed AC77's; seen
+  starts with `already_running` failed; `source` read as the commit failed the hostile test.
+- `test_detection_has_no_ai.py` (+1): `import mcp.server` in `summary.py` failed.
+- `test_mcp_tools.py` (+3): a `source` key added to the row, `partial` ignored by `bounded`, and `partial=False` in the
+  tool each failed. `test_mcp_injection.py` judges `DeployRow`.
+- `test_releases_live.py` (+1 test, AC76 extended): `source` put back on `GET /deploys` failed; flags from the time
+  method failed AC81's list test.
+- `test_platform_releases.py` (+8): a version name in the stored reading, flags by time, and reason words replaced
+  each failed.
+- `test_alert_messages.py` (+6): no "Order only, not cause", no `one_line`, amber in place of neutral, and no
+  summaries-alone shape each failed.
+- `test_release_summary_live.py` (new, 11): the summary written for an `already_running` period, to a PagerDuty
+  channel, twice on a retry (no `ON CONFLICT`), before its 30 minutes; a name stored; the release not named at
+  delivery; an unread release sent anyway; the outbox's order without the period (with the second summary's
+  `created_at` later: an equal one passed, strengthened); the comparison without its tenant binding; each failed. In
+  the database, `release_summary_names_its_period` dropped failed the refusal test (an `opened` row naming a period;
+  the first version, which `names_one_subject` also refused, passed: rewritten), the project key without `release_period_id
+  IS NULL` failed "told once", and the channel's foreign key without `SET NULL` failed the deletion test; each put
+  back and checked with `\d`.
+- `test_release_sync_live.py` (+1), `test_deploys_live.py` (+1): the sync's and the webhook's job left out each failed.
+- `test_projects.py` (+11): the people-read check, the audit row, the policy (`CurrentIdentity`) and the detail's value
+  each failed; `test_authorization_coverage.py` failed with the policy changed; `test_alert_vocabulary.py` failed
+  with the kind left out of `0074`'s copy; `test_cross_service_contracts.py` failed with the task module unregistered.
+- `test_detection_isolation.py` failed on the design's `_TAKEN` join (the reading above); `test_release_words.py`
+  failed on the scheduler's environments read (now named in its allow list); the scheduler Postgres tenancy test
+  failed on a read of `plans` (now `project_retention`).
+- Web: `DeploysSection.test.ts` (+4) failed with FR45's warning hidden, machine channels offered, and "Off" saved as
+  "off"; `ReleasesScreen.test.ts` (+3) failed with no flags, dim flags, and no combined state. Clocks pinned
+  (`vi.useFakeTimers({ toFake: ["Date"] })`); Python decisions take `now` built from the rows.
+
+**Counts.** Offline, every store at a closed port (`apps/api`, `apps/scheduler`, `packages/py-platform`,
+`packages/contracts`, `tools/release-demo`, `tools/detection-seed`, `-n 2`): 11,876 passed, 125 skipped, 0 failed.
+Live, on this session's own Postgres and ClickHouse (containers `f28s5-pg`, `f28s5-ch`, ports 35432 and 38123, each
+port checked before every run): `test_releases_live`, `test_deploys_live`, `test_errorgroups_live`,
+`test_findings_api_live`, `test_deletion_live`, `test_projects_live`, `test_channels_live`, `test_release_facts_live`,
+`test_release_summary_live`, `test_release_sync_live`, `test_alert_delivery_live`, `test_alert_outbox_live`,
+`test_outbox_golden_live`, `test_detection_release_neutrality_live`, `test_detection_prune_live`,
+`test_slo_prune_live`, `-n 2`: 270 passed; the three suites that write the settled minute, twice more in parallel:
+67 passed each. A first parallel run failed one summary test: two suites committed the install-wide settled minute
+at once; both now hold one advisory lock while they own it (`apps/scheduler/tests/settled_minute.py`). Migrations
+`0074` and `0075` (then numbered `0078` and `0079`) applied, `0075` reverted and reapplied, `0074`'s downgrade refused as written. Web, whole suite:
+2,301 passed (183 files). `uv run mypy .` (1,009 files), `ruff check .`, `ruff format --check .`,
+`pnpm -r --if-present run typecheck`, `biome check` on the touched folders and `verify-tokens.js`: clean. Go not
+touched.
+
+**Not run (deferred to hardening):** Playwright, a browser or phone check of the list's flags and the Deploys section,
+Design QA at 375px, the *Judgeable* run with `tools/release-demo` (one notice after a demo rollout), a real send to
+Slack, Teams, Discord or email (only the delivery path's fakes ran), and `just check` (the coordinator's).
+
+**Found in the self-review, left as they are** (none blocking):
+
+- **Low:** the summary job and the sync hold a Postgres connection open while ClickHouse answers (up to 10 seconds a
+  read, three reads), as the sync already did.
+- **Low:** the outbox's PagerDuty and burn statements still match subjects by incident and finding alone; a summary
+  never reaches PagerDuty and is never news, so none of them sees one.
+- **Low:** a project whose chosen channel is muted gets its summaries dropped as any alert is, and recorded so.
+
+## Step 4, built 2026-11-12
+
+The whole release page (plan T4.1 to T4.7), in `wt/f28s4`. What exists now, read from the code:
+
+**The precondition, checked in the code.** The browser-door change (`docs/changes/browser-door`, done 2026-11-07)
+holds: `traceassembly/stages.go` `countsInRollups` keeps a `DOOR_RUM` span out of `counters.Observe`, the one point
+that feeds `service_stats_1m`, `endpoint_stats_1m` and `service_versions_1m` (the version map is fed from
+`observeService` behind it); `traceassembly/browserdoor_test.go` asserts all three tables, and
+`apps/api/tests/test_browser_door_live.py` names `service_versions_1m` among its rollups (`ROLLUPS`). The interim
+`countedVersion` branch in `flatten.go` is gone (`derive.countedVersion` is an unrelated map key).
+
+- **The comparison** (T4.1): `GET /releases/{id}/comparison` gains `incomplete` and `minutes_differing` (FR28, per
+  minute over every compared stretch, a minute only one table holds counting too), `versions_combined` (FR17,
+  `__other__` in a compared minute), `mixed_environments` (FR45, `ENVIRONMENTS_SQL` over stored spans, reading
+  `deployment.environment.name` and falling back to the older `deployment.environment`, as the profile writer does),
+  and `finding` (FR22). Each block names the previous side's stretch (`previous_from`, `previous_to`) and, for the two
+  before-and-after methods, `last_week` (FR25) from `service_stats_1m`, null where expired. The time method now reads
+  `service_stats_1m` (`SERVICE_TOTALS_SQL`), as design 4 step 6 says. Pure parts are in
+  `nexovue_platform.releases`: `ServiceMinute`, `minutes_differing`, `versions_combined`, `last_week_of`,
+  `compared_spans`, `window_for_finding`, `reaches`.
+- **The window from a finding** (T4.1, FR22): `?finding=` (a finding of the release's project, else 404) without a
+  `window` takes the smallest offered window reaching the finding's start, and the answer says whether its window
+  reaches it. The web's own copy of that rule (`windowForFinding`) and the link's `finding_at` are deleted, so one
+  rule decides.
+- **FR46** on `GET /releases`: `naming_differs`, one grouped Postgres statement over the last 24 hours; the list
+  replaces a `not_seen` row's words with "Your CI and your traffic name versions differently: CI sent X, traffic
+  sends Y".
+- **The door on raw rows** (T4.2): ClickHouse `000041_door_on_spans` and `000042_door_on_logs` (a migration here is
+  one statement), `LowCardinality(String)`, outside the sorting keys. The worker writes `consume.StoredDoor`:
+  `browser` for `DOOR_RUM`, `server` otherwise, the words `service_edges_1m.door` already uses; `''` is a row written
+  before. Applied, reverted and reapplied on this session's ClickHouse.
+- **Errors by version** (T4.3, FR29 to FR31, FR51): `GET /releases/{id}/errors` over `ERRORS_BY_VERSION_SQL`, built
+  in `errorgroups/queries.py` from the errors list's own occurrence rows: this version from the period's start, the
+  previous version over the same length before, split at the start; per-table version predicates; a door predicate
+  that leaves browser rows out for a release counted in server traffic (one never seen reads them, labelled "from the
+  browser"); up to 100 groups. A timeout (ClickHouse code 159) answers `timed_out`; raw rows older than the project's
+  raw retention answer `aged_out_on`; `keep_errors: false` answers `may_be_incomplete`.
+- **Rollout share** (T4.3, FR26): `GET /releases/{id}/rollout`, the four busiest series by name then "other
+  versions", with no version and `__other__` as labels.
+- **Sender details** (T4.3, FR54): `GET /releases/{id}/sender-details` takes `CurrentIdentity`, so a token or a ticket
+  is refused (403 for a token); `metadata` only for owners, admins and members (`READS_SENDER_METADATA`, D46), a
+  viewer reading `metadata_withheld`.
+- **The release** (T4.4): `GET /releases/{id}` gains `deploys` (id, the sender's time, our arrival time, state,
+  commit) and, per period, `later_findings` on its service from the start's own minute to its end, up to 50 (AC41).
+- **The page** (T4.5): the sentence, warnings, the window's sentence, blocks with a last-week column (a line of its
+  own on a phone) and FR49's caution with links to errors by version and the service's page for the same minutes,
+  the rollout chart (`TrendChart`'s existing `distinctColours` mode, F20's, so `TrendChart` did not change) with a
+  table of the latest shares, errors by version with the caution beside the list, "Started after this release", the
+  facts led by "Link from your CI" (https only, `noreferrer`, `no-referrer`), each deploy's two times when over 15
+  minutes apart, and what the CI sent, metadata in a closed `<details>`. Each section loads and fails on its own; a
+  missing release reads "No such release". `/releases` gains the coverage strip (services with coverage `none`).
+- **Retention** (T4.6): `releases/retention.py`: deploys by `created_at` and releases by `last_activity_at` past the
+  project's derived retention, the shortest plan's first; both for a project or organization deleted longer ago than
+  the shortest plan's derived retention. `jobs/expiry.sweep` now guards each table: a failing one is logged by name and
+  the rest go on.
+- **The words and raw reads** (T4.7): `apps/api/tests/test_release_words.py`.
+
+**Readings made while building** (none blocking; each open to overrule):
+
+- **Errors are compared over equal lengths:** this version from the start to the window's end or now, the previous
+  version over the same length before the start. The design says "the same durations" without placing them.
+- **The rollout read spans the comparison's read** (an hour, or the window, before the start, to the settled minute).
+- **A finding that started before the period** gives no window and no sentence; its "Back to the finding" link stays.
+- **The version predicates in `ERRORS_BY_VERSION_SQL` only narrow the read:** each side's count already requires its
+  version, and `HAVING` drops empty groups, so removing them changes no answer (seen in the removal run, below).
+
+**Tests, each seen failing first.** All were written after the code and checked by removal: the behaviour taken out,
+the test run and seen failing, the code restored (outputs in this session's scratch space):
+
+- Live, `test_releases_live.py` (+16): without per-minute completeness, AC36's failed `(False, 0) != (True, 1)`;
+  without combined versions or the environment read, AC67's failed; without last week, AC29's; with the finding
+  ignored, AC64's `(1, False) != (6, True)`; with FR46's tally at one, AC78's listed `payments`; without the door
+  predicate, AC69's listed `FromAPage` as new; without the sampling flag or the aged-out check, FR31's and FR30's;
+  without the metadata gate, AC76's (a viewer saw it); without the minute floor or the period's end, AC41's; without
+  grouping the rest, AC65's named v3 and v4; with no deploys, the facts test; without step 5, AC32's read
+  `no_version_no_deploy`; without the serving window, AC23's read `idle`; with every read error treated as failure,
+  AC68's timeout test. **Not seen failing:** removing the version predicates (above): they are pruning only.
+- `test_platform_releases.py` (+9): the time method on version rows, the previous stretch, the smallest window and
+  last week on side by side each failed.
+- `test_release_sync_live.py` (+4, AC74): release retention left out of the sweep, deploys lapsing by the sender's
+  time, the deleted-project clause, the per-table guard, and the project's own retention (replaced by 30) each failed.
+- `test_release_words.py` (6): "impact" in a screen string, "Caused by" in a response, "Due to" in the setup page, a
+  scheduler statement reading `spans`, and a duration in `ENVIRONMENTS_SQL` each failed.
+- Go: `flatten_test.go` and the log `flatten_test.go` failed with the door left unset (`""` for every door);
+  `block_test.go` failed with the column left out (`30 columns, the table has 31`); `consume/door_test.go` failed
+  with the browser word changed.
+- Web: `ReleaseScreen.test.ts` (new, 19) and `ReleasesScreen.test.ts` (+2): every reading dim (AC84), the caution
+  always shown (AC79), no last-week line (AC65), the environments warning dropped, the finding not sent (FR22), the
+  link's `rel` and `referrerPolicy` dropped (AC44), any url linked, the timeout ignored (FR51), FR46's words unused
+  (AC78), `__other__` labelled as other versions (FR26), the viewer's withheld metadata shown, later findings not
+  listed, and the coverage strip unfiltered each failed. `comparison.test.ts` lost the window-choice tests with the
+  rule it held, and gained the warnings, FR49 and last-week tests. The old page tests in `ReleasesScreen.test.ts` moved
+  into `ReleaseScreen.test.ts`. Every test pins the clock (`vi.useFakeTimers({ toFake: ["Date"] })`).
+- `test_releases.py` (+8): the error kinds, the rollout's labels, the metadata roles, and no sender text on the new
+  models, written after the code. `test_read_surface_structure.py` failed naming `get_errors`, then passed with them
+  listed and in `setup/api.md`; `sender-details` is not on the surface, as a person-only route.
+
+**Counts.** Offline, every store pointed at an unreachable port so live suites skip on purpose (`apps/api`,
+`apps/scheduler`, `packages/py-platform`, `packages/contracts`, `tools/release-demo`, `tools/detection-seed`, `-n 2`):
+11,817 passed, 124 skipped, 5 failed. `test_read_surface_structure.py` failed on the two new reader routes (its
+seen-failing record); with `get_errors` and `get_rollout` added it passed. `test_install_secrets.py`'s 4 read the
+offline run's own `NEXOVUE_KAFKA_BROKERS`; without it, both files: 114 passed. A first run with this session's stores
+reachable also ran other features' live suites against these bare stores (no gate seed, no Kafka): `test_services_live`
+and `test_llm_observability_live` errored for that reason, not run further. Live, on this session's own Postgres and ClickHouse (containers `f28s4-pg`, `f28s4-ch`,
+ports 35432 and 38123): `test_releases_live.py`, `test_errorgroups_live.py`, `test_findings_api_live.py`,
+`test_deploys_live.py`, `test_deletion_live.py`, `test_release_sync_live.py`, `test_release_facts_live.py`,
+`test_detection_prune_live.py`, `test_slo_prune_live.py`, `test_detection_release_neutrality_live.py`: 189 passed. Go,
+`apps/workers`: 28 packages ok; `go vet` and `golangci-lint` clean. Web, the whole suite: 2,294 passed (183 files),
+browser SDK 124. `uv run mypy .` (1,002 files), `ruff check .`, `ruff format --check .`,
+`pnpm -r --if-present run typecheck`, `biome check` on the touched folders and `verify-tokens.js`: clean.
+
+**Not run (deferred to hardening, as the brief says):** the errors read's cost at 24 hours on seeded data, and the
+2-second first-numbers target (AC67): both measurements; Design QA at 375px and in a browser (AC75 beyond what jsdom
+can show); Playwright; the *Judgeable* run with `tools/release-demo` and the full dev stack; `just check` (the
+coordinator's); `test_erasure_live.py` (no table added).
+
+**Found in the self-review, left as they are** (none blocking):
+
+- **Low:** `releases/service.errors_by_version` proves the project readable twice (once through the release), one
+  extra Postgres read per request.
+- **Low:** opened from a finding, the window tabs show "1 hour" selected until the comparison answers with the window it
+  chose.
+- **Low:** the token-refusal live test reaches the app's dependency overrides through the client's private transport.
+- **Not measured:** the comparison now reads up to four statements (versions, totals, last week, environments), and the
+  environments read scans one service's stored spans over the compared stretch, up to about two days.
+
+## Step 3, built 2026-11-09
+
+Markers that can be read, on every chart, including the finding (plan T3.0 to T3.9). What exists now, read from the
+code:
+
+- **Two reads** (T3.1): `GET /releases/markers` (`project_id`, `from`, `to`, optional `service`; the newest 500 with
+  `truncated` and `cap`) behind `releases.service.markers_in_window`, the function F20 calls (D30). Postgres only. A
+  mark is each reported deploy (with its state, same-version redeploys and failed ones included) and each counted
+  period's start, except an already-running one; a reported period's start is its deploy's, so it is not drawn twice.
+  Fields exactly `release_id`, `period_id`, `deploy_id`, `service_name`, `version`, `at`, `basis`, `state` (AC45).
+  `GET /releases/coverage` (`at` defaults to now; optional `service`): each service that sent telemetry
+  (`service_last_seen`) or has a release, with its value, last report at or before `at`, and `first_heard_at`. Both
+  call `require_readable_project`, are on the read surface and in `setup/api.md`.
+- **One coverage rule** (T3.1): `nexovue_platform.releases.coverage_of(first_reported, first_seen, *, at,
+  last_reported_at)`, used by the API (`releases.service.coverage_at`, `CoverageBook`) and the scheduler
+  (`releases/facts.coverage`). Any report counts, a failed one included: it is still deploy information.
+- **Charts** (T3.2 to T3.4): `shared/deploy-markers.ts` (`releaseMarkers`, `markerTag`, `clusterMarkers`, the
+  group's line and the cap sentence); `TrendChart` keeps one neutral dash per mark and adds `ReleaseStrip`, HTML tags
+  above the plot placed by `valToPos` after each draw ("failed", "rolled back", "seen", "3 releases" within 8 px, a
+  short mark otherwise); hover or focus shows `ReleaseHoverBox` in a portal, a click pins it with its links, Escape or
+  the close control closes it; drag still selects. `ChartReleases` under each chart group: the always-visible line, the
+  cap sentence, "Releases could not be loaded for this chart" with a retry, and the text list (closed by default, open
+  on the finding page). Overview, the service page and the finding's charts read the window on screen through
+  `shared/releases/api.ts`; the old `GET /deploys` hooks are deleted.
+- **The finding** (T3.5, T3.6): `FindingDetail.release_context` (`before` at any age, the service's coverage as of
+  the start with the last report and `first_heard_at`, `nearby` in the 2 hours before with this service first and
+  `called` from `service_edges_1m`, `called_known`, and a project finding's `affected`, the latest per service in 24
+  hours). The edges read failing leaves the list unmarked. *Release before this* under the header follows the wording
+  table, with "It came first. That is not evidence that it caused this." exactly on the rows naming an earlier release,
+  the setup link for `manage_credentials` and the sentence for others, the docs link for all; the link carries
+  `finding` and `finding_at`, and the release page then compares over the smallest window reaching the finding and
+  says so, or says it ends before it (FR22, AC64), with "Back to the finding". MCP `get_finding` labels the six new
+  name fields untrusted (`assistant/tools.py`).
+- **Errors** (T3.7): `ErrorGroupSummary.deploy_coverage`, from the group's services as of `first_seen` (the
+  better-heard service wins); the cell reads `after v2.1`, "none before", "none reported" or "not told", the unknown
+  mark only when unread; the panel always states the deploy line and the coverage words.
+- **FR44** (T3.8): `nexovue_scheduler.releases.facts` (`coverage`, `release_before`, `releases_near`, `PeriodFact`,
+  D56). `alerts/delivery.with_release_line` reads them after the claim commits, on its own connection, under
+  `asyncio.timeout(0.5)` including the wait for a connection, only for a batch of one `opened` service finding; on any
+  failure it logs "release line left out" and sends without it. `messages.RELEASE_FACTS` carries plain values, and
+  `_compose_finding` renders "Most recent release on this service: v2.1, 6 min before this. Order only, not cause." or
+  "We receive no deploy information for this service." in `details`, so every channel, PagerDuty included, carries it.
+  `messages.py` imports nothing from `releases` (`test_detection_isolation.py` unchanged and passing).
+- **Neutrality** (T3.9): `test_detection_release_neutrality_live.py`.
+- **The seed** (T3.0): `tools/detection-seed/seed.py` writes `service_versions_1m` split from each service minute
+  (rollouts of 10 minutes from a counted version), and the releases, periods, reported deploys and sync position.
+
+**The carried-over fix (Step 2's low finding 1; founder answer of 2026-11-09).** `first_reported_at` stays the
+release's reported fact (any state; the record's `seen_or_reported` check and the page's facts rest on it). Its two
+readers changed: the sync's "already running" now asks for the earliest report of a deploy that went out
+(`_KNOWN_RELEASES` reads `min(deployed_at)` over `started` and `finished` deploys, `KnownRelease.first_went_out_at`),
+so a version reported only as failed before its first counted minute is still already running; and the comparison's
+time method takes its moment from the compared period's reported start (`releases.reported_moment`), not the
+release's first report, so "failed at 10:00, finished at 11:00" compares from 11:00. The second also fixes a return's
+period, which was compared from the release's first report. The states that go out are one constant,
+`nexovue_platform.releases.OPENING_STATES`, used by the API and the sync (the third low finding's two copies are now
+one, beside `DEPLOY_STATES`).
+
+**Readings made while building** (none blocking; each open to overrule):
+
+- **The design's `PeriodFact` gains `already_running`.** FR44's line must not call a version already running when
+  counting began "the most recent release". It is a boolean fact, no text; F3's T1.4 sees it.
+- **FR44's failure is a log line, not a metric.** Delivery runs in a job's child process, whose metrics no scrape
+  sees (Step 1b's reading for the sync).
+- **The service page's chart axis now reads in the project's zone**, as its hover box and its detection strip do; it
+  was the browser's. The finding page already did.
+- **Error groups read every release's first times for the project on each list and detail request** (one grouped
+  statement over at most 50,000 rows), since the services are known only after the ClickHouse read. Not measured.
+- **The hover box opens under its tag in viewport pixels**; a pinned box does not follow the page when it scrolls.
+  Design QA should judge it.
+- **`fault.py` still writes `service_stats_1m` only**, so its minutes have no version rows: the comparison will read
+  them as incomplete once T4.1 builds that check. The seed's period ends approximate the sync's rule (the next rollout's
+  end), which is enough for demo data.
+
+**Tests, each seen failing first** (outputs in the session's scratch space):
+
+- Carried-over fix: `test_release_sync_live.py` (+3): the `failed` and `rolled_back` cases failed (`already_running`
+  false), then passed; the `finished` case guards the other side. `test_releases_live.py`: the no-version comparison
+  failed (`too_little_traffic`, its "before" side outside what is read), then passed. `test_platform_releases.py` (+9,
+  coverage and `reported_moment`): collection failed on the missing names, then passed.
+- `test_read_surface_structure.py` failed on the two new routes, then passed with `setup/api.md`. `test_mcp_injection.py`
+  failed on the six unlabelled `get_finding` fields, then passed.
+- `test_errorgroups.py` (+7), `test_alert_messages.py` (+7), `test_seed.py` (+5), `deploy-markers.test.ts` (11),
+  `finding-page.test.ts` (+14), `comparison.test.ts` (+3), `error-groups.test.ts` (+3): each failed on the missing
+  functions, then passed.
+- Written after the code, then checked by removal (each failed with the line taken out, passed with it back):
+  `test_releases_live.py` markers and coverage (+5: the already-running filter, the time bound on the last report,
+  the cap, `service_last_seen`); `test_findings_api_live.py` (+5: this-service-first, the callee mark, latest per
+  service, the `<= at` bound); `test_release_facts_live.py` (10: the delivery call, the timeout and the catch);
+  `test_detection_release_neutrality_live.py` (1: a rollup row added with the release made it fail);
+  `OverviewView.test.ts` (5), `ChartReleases.test.ts` (5: the pin, Escape), `ReleaseHoverBox.test.ts` (2: markup
+  instead of text), `FindingScreen.test.ts` (+4: the section, `open`, the permission), `ReleasesScreen.test.ts` (+1:
+  the finding's window), `ErrorsView.test.ts` (+1: the cell).
+
+**Counts.** Offline (`NEXOVUE_SKIP_LIVE_TESTS=1`), `apps/api`, `apps/scheduler`, `packages/py-platform`,
+`packages/contracts`, `tools/detection-seed`, `tools/release-demo`: 10,105 passed, 107 skipped, and the one MCP
+failure above, fixed (`test_mcp_injection.py` and `test_mcp_tools.py` then 106 passed). Live, on this session's own
+Postgres and ClickHouse (ports 25432 and 28123, since removed): `test_releases_live.py`, `test_findings_api_live.py`,
+`test_deploys_live.py`, `test_errorgroups_live.py`, `test_deletion_live.py`, `test_release_sync_live.py`,
+`test_release_facts_live.py`, `test_detection_release_neutrality_live.py`, `test_alert_delivery_live.py`,
+`test_alert_senders_live.py`, `test_alert_outbox_live.py`, `test_detection_project_job_live.py`,
+`test_detection_notify_live.py`: 240 passed. Web, the whole suite: 1,798 passed (151 files). `uv run mypy .` (870
+files), `ruff check .`, `ruff format --check .`, `pnpm -r --if-present run typecheck`, `biome check` on the touched web
+folders and `verify-tokens.js`: clean. The seed run against the same stores: 76,594 service rows and 77,019 version
+rows over two weeks and four services, no minute differing; 67 releases.
+
+**Not run:** `just check` (the coordinator's); Design QA at 375px and in a browser (the strip, the hover box, the
+finding section; one instant reading the same on the finding and release pages, AC75): not yet run, founder checks
+after Phase 2; the full dev stack (the judgeable "trigger a seeded finding and read the line in its notice" needs the
+receiver, worker and scheduler running); Go (no Go file changed); `test_erasure_live.py` (no table added).
+
+## Step 2, built 2026-11-08
+
+A person can set it up (plan T2.1 to T2.9; T2.10 below). What exists now, read from the code:
+
+- **The record** (T2.1): Postgres migration `0057_deploy_envelope_and_sealed_secrets` (revision "0057", down
+  revision "0054" for now: 0055 and 0056 are held by parallel work, so the coordinator re-chains it). `deploy_events`
+  gains `state`, `commit_sha`, `url`, `release_id` and `webhook_secret_id` (both `ON DELETE SET NULL`), `delivery_id`
+  NOT NULL at 200 with a plain unique key, and indexes on `created_at`, `release_id` and `(webhook_secret_id,
+  created_at)`; `project_webhook_secrets` swaps `secret` for `sealed_secret`, `secret_hint`, `last_used_at`;
+  `deploy_intake_state` is new, in `organizations/tables.py`. Indexes are built concurrently and the new keys and
+  check validated after `NOT VALID`. Existing secrets and id-less deploys are deleted (pre-deployment). Roll
+  forward only, listed in `test_migration_rules.py`.
+- **The webhook** (T2.2): `POST /deploys/webhook/{project_id}` takes `{"deploys": [...], "dry_run": false}`, 1 to
+  100 items, 512 KiB ("at most 512 KiB; send fewer items"). Order: open the live secrets, verify over the raw bytes
+  (`signatures.matching_secret`, constant time over all), mark the secret used, then parse. Every FR9 check, with
+  one 422 naming item and field; a signed refusal is recorded in `deploy_intake_state` and committed before the 422
+  unwinds (the precedent is sign-in's refusal). Repeats answer with what they stored. New items are charged to the
+  project's exact hourly quota (`DEPLOYS_ACCEPTED`, 1,000 per 3,600 s) by a conditional update, so a refused batch
+  charges nothing; then evict past 50,000 (now `nexovue_platform.releases.RELEASES_PER_PROJECT`, shared with the
+  sync), insert in (service, version) order `ON CONFLICT DO NOTHING`, file each under its release by the start
+  rule, place periods, one `deploy.batch_recorded`. `metadata` is masked by `nexovue_platform.masking`, the port of
+  the worker's default rules, held with Go to `packages/contracts/fixtures/metadata-masking.json`. Each answer:
+  `deploy_id`, `release_id`, `repeated`, `known`, `version_seen`, `recent_versions`.
+- **Secrets** (T2.3): sealed under `CREDENTIAL_ENCRYPTION_KEY`, purpose `deploy-webhook`, owner
+  `project_id:secret_id` (the id read from `uuidv7()` first); in `SEALED_COLUMNS`; shown once in
+  `MintedWebhookSecretResponse`; at most 5 live, under a project row lock. A seal that will not open is no match,
+  logged by id. Without the key, minting and the webhook answer 503.
+- **Audit** (T2.4): `deploy.webhook_secret_viewed` and `deploy.recorded` are gone; `deploy.batch_recorded` (secret,
+  count, first deploy) and `deploy.removed` (who, and the deploy or the secret and time) are new.
+- **Rate limit comment** (T2.5) corrected: the address tier bounds requests; the new quota bounds deploys.
+- **The console** (T2.6): *Deploys* in project settings for `manage_credentials` only: URL, secrets with ending,
+  created and used, mint (disabled at 5, with why), a minted secret shown once with `UnsavedChanges`, withdraw with
+  inline confirmation and "also remove what it sent since", numbered rotation steps, `Tabs` of recipes, a
+  `role=status` intake line polled every 5 seconds for 10 minutes, the release-cap sentence, current versions. The
+  non-admin sentence names deploy secrets.
+- **Setup** (T2.7): `docs/product/setup/deploys.md` (both ways in, `service.version` for Helm, Kustomize, Docker and
+  systemd, one project per environment, the three recipes, the body's rules and the 7-day limit, clear text,
+  reachability, sampling, rotation and removal, a post-deploy comparison read), with entries in `index.md`,
+  `api.md` and `troubleshooting.md`; Kubernetes, EC2, the four language pages, `browser.md` and onboarding now set
+  `service.version` from a build variable. The Kubernetes block also declared its variables after the line using
+  them, against its own ordering rule: fixed.
+- **The demo** (T2.8): `tools/otel-demo/doors.py` sends one batch for both services, minting a secret for the run and
+  withdrawing it after.
+- **Removing** (T2.9): `DELETE /deploys/{id}` and `DELETE /deploys/webhook-secrets/{id}?remove_since=`, both
+  `MayManageCredentials` (in `POLICY_OF`), each recalculating: a release's reported facts are worked out again from
+  the deploys left, one nothing supports is deleted, and report-decided periods are rebuilt.
+- **ADR-033** filed (the design's third proposed ADR).
+- **T2.10, the timed new person: not yet run, founder tests after Phase 2** (foundation item 28). The five-minute
+  claim is not withdrawn here: AC1 makes that the outcome only if nobody is found, which is the founder's to
+  decide.
+
+**Readings made while building** (none blocking; each open to overrule):
+
+- **On a service that sends no version in traffic, a newer report ends the period it replaces**, at the new start
+  (a `started` or `finished` one only: *Founder answer, 2026-11-09*);
+  a report arriving late for an earlier time opens a period ending where the next one starts; periods are placed in
+  claimed-time order within a batch. The design names only the return rule; without these, AC59's "v1, v2, v1" had no
+  v1 period to end. A service with versions in traffic is still the sync's alone to end and return.
+- **Names are stored exactly as sent, not stripped.** The old schema stripped whitespace; Python counts U+0085, a C1
+  control, as whitespace, so `v1\u0085` was accepted as `v1` while the worker folds it. Found by the new test holding
+  the door to `release-names.json`.
+- **An unknown field is refused** (named as "unknown field"), not ignored as before, so a misspelt `commit_sha`
+  shows in CI's output.
+- **The webhook answers 200**, with `stored` and per-item `repeated`, rather than 201: a batch can store some, all or
+  none.
+- **Signup no longer mints a deploy secret**: shown once, one minted there could never be read. `first-accounts.md`
+  and two billing comments that described door 4a's old header id are corrected.
+- **The section's current versions come from `GET /deploys/webhook-secrets`**, the one endpoint it polls; the design
+  names the list, not its route.
+- **Recipes sign with `python3` reading the secret from the environment**: `openssl dgst -hmac` takes the key as a
+  process argument, which FR14 forbids. They `set +e`, give each attempt 10 seconds and the retries 30, warn, and
+  exit 0, and leaving out `NEXOVUE_DRY_RUN` means a real deploy.
+- **A charge is spent before the insert**, in its own transaction: two copies of one body racing can each be charged,
+  and a deploy transaction that fails afterwards does not refund. Bounded by the batch size.
+
+**Tests, each seen failing first** (outputs kept in the session's scratch space):
+
+- `test_platform_masking.py` (26): collection failed on the missing module, then passed. Go
+  `mask/metadata_fixture_test.go` passed against the worker as written; with one fixture case altered it failed
+  naming the case, then the fixture was restored.
+- `test_deletion_live.py` (25): with `deploy_intake_state` left out of the inventory it failed naming it; restored,
+  passed.
+- `test_ratelimit.py` (+3), `test_keys_live.py` (+1, and the reseal case now covering deploy secrets): each failed
+  against the previous `limiter.py`/`policy.py`/`keys.py`, then passed.
+- `test_audit.py` (+3): failed on the missing functions, then passed.
+- `test_deploys.py` (134): the previous suite failed against the new code as expected; the new one was checked by
+  removal: without the time bound 2 failed, without the refusal's commit 1, without masking 1. Its name-fixture
+  test failed twice on U+0085 (above) before the fix.
+- `test_deploys_live.py` (30): written after the service, passed first run; checked by removal: the limiter's
+  condition (1 failed), the return rule (2), ending the previous period (1), recalculation (3), claimed-time order
+  (1).
+- **Founder answer of 2026-11-09, built the same day** (`releases/service.place_periods`, the one place every report
+  reaches a period, from the webhook and from recalculation after `DELETE /deploys/{id}` and a withdrawn secret's
+  removal): `test_deploys_live.py` now 39. Eight new cases, `failed` and `rolled_back` each: no period and the open one
+  left open on a service with no version in traffic and on one with versions in traffic; no return; recalculation
+  after a removal skips it. The opening case runs for `started` and `finished`. With the existing removal case's
+  expectation corrected (a lone failed report keeps no period), 9 failed against the code as built and 39 passed
+  after, on this session's own Postgres (port 25432, since torn down).
+- `test_authorization_coverage.py`: failed on the unplaced `delete_deploy` and the renamed `receive_deploys`, then
+  passed. `test_postgres_tenancy_structure.py`: failed on three period statements whose `org_id` sat in a helper,
+  then passed with it in each statement. `test_cross_service_contracts.py` failed on the eviction written as raw
+  SQL in a module that also holds ClickHouse SQL; rewritten in SQLAlchemy Core, passed.
+- `test_deploy_recipes.py` (53): against the original Kubernetes page the version check failed; with `exit 0`
+  replaced in the curl recipe, its three exit tests failed.
+- Web: `DeploysSection.test.ts` (15): with the section ungated 2 failed, with the guard off 1, with the secret as an
+  argument 3. `DetectionSection.test.ts` gained the Deploys stub its owner render now needs.
+
+**Counts.** Offline, with live suites left out (`NEXOVUE_SKIP_LIVE_TESTS=1`): `apps/api`, `packages/py-platform`,
+`apps/scheduler`, `packages/contracts`: 9,347 passed, 4 skipped. Live, on this session's own Postgres (port 25432,
+since torn down): `test_deploys_live.py`, `test_keys_live.py`, `test_deletion_live.py`: 59 passed. Go: the `mask`
+package's new test passed. Web: `features/projects`, `shared/components`, `features/onboarding`: 227 passed.
+`uv run mypy .` (798 files), `ruff check`, `ruff format --check`, `pnpm typecheck`, `biome check` on the changed web
+files and `verify-tokens.js`: clean. HMAC cost: 5 secret openings and 5 HMAC-SHA256 over 512 KiB, 1.82 ms median
+(3.06 ms max) per request on this machine (4 vCPU Xeon at 2.1 GHz), about 0.11 s of CPU a minute at the 60-a-minute
+address limit.
+
+**Not run:** `just check` (the coordinator's); `test_releases_live.py` and `test_release_sync_live.py`, which need
+ClickHouse (the sync's only change is reading the shared cap constant); the recipes on a hosted runner (no reachable
+address); the full dev stack (T2.8 ran against an API started locally on this session's Postgres); Design QA at 375px;
+T2.10.
+
+**Residual risks** (recorded, not fixed):
+
+- **Two copies of the recipes**: `deploys-api.ts` renders them for the console and `deploys.md` holds them for the
+  page. `test_deploy_recipes.py` runs the page's, and `DeploysSection.test.ts` checks the console's; a change to one
+  that misses the other is caught only where it breaks a check.
+- **AC51 races a sync-shaped writer**, the sync's own upsert statement in its order, not the scheduler job itself,
+  which the API's tests cannot import.
+- **"Remove since" is entered in the browser's time**, labelled so; the design's rule is the project's zone. Design
+  QA should judge it.
+- **A recipe's JSON is built with `printf`**: a service or version containing `"` or `\` makes an invalid body,
+  refused with a warning. Telemetry names rarely do; the page does not yet say so.
+- **Deploys that fail on the server after charging** do not refund the hour's allowance (above).
+## Step 1b, built 2026-11-08
+
+A release compared by version, on real traffic (plan T1.8 to T1.16). What exists now, read from the code:
+
+- **The record** (T1.8): Postgres migration **`0054_releases`** (the next free number after F19's 0053; F22 may also
+  take numbers in parallel, so the coordinator renumbers at commit if they collide), `releases`, `release_periods` and
+  `release_sync_state`, with models and `organizations/tables.py`. One open period per release and one period per
+  release and start are unique; '' and `__other__` are refused by the database. Roll forward only, like F19's.
+  **ADR-029** filed (the design's second proposed ADR). The third, the deploy envelope, is Step 2's.
+- **The comparison** (T1.9): `nexovue_platform/releases.py`, pure: the one name check (held to
+  `release-names.json`, as the Go side is), `storable`, `bucket_p95` (moved from detection's `method.py`, which
+  re-exports it), `compare_failure_share`, `compare_p95` and `choose_method`, the design's ordered list in full.
+- **The sync** (T1.10 to T1.13): `nexovue_scheduler/releases/` with `sweep:releases` on beat every minute, on its own
+  `releases` queue, capped at 2 under `scheduler-light`'s floor, in `worker_queues`' default and both compose files'
+  comments; `observe_project` under the project's session lock; the per-minute walk (`sync.walk`); writes sorted by
+  service and version in one transaction; `synced_through` forward only; 200 new releases a run; eviction past 50,000.
+  The store reads through `alerts.telemetry`'s reader, so it holds no driver. `test_detection_isolation.py` walks
+  detection and the alert roots and finds no path to the sync. The one cross-tenant statement, the sweep's
+  `_MOVED_SINCE_SYNC`, is named in the scheduler Postgres tenancy test.
+- **The API** (T1.14): `GET /releases` (window overlap, service and version filters, keyset page, the window's
+  totals, `has_any` and `latest` for the three empties), `GET /releases/{id}`, `GET /releases/{id}/comparison`
+  (`period`, `window` of 1, 6 or 24 hours, to the settled minute). On the read surface and `setup/api.md`; the
+  `/releases` prefix is on the telemetry rate-limit tier, as the design says, though only the comparison reads
+  ClickHouse.
+- **The console** (T1.15): `/releases` in Signals after Errors, and `/releases/$releaseId` with the opening sentence
+  (`role=status`), the two blocks with a table from `md` and stacked lines on a phone, the window tabs, the facts and
+  periods, each section failing on its own; `shared/format/version.ts` for long versions.
+- **AC22** (T1.16) and **the gate's alert evaluation start delay** (added to T1.10 by the founder on 2026-11-08):
+  both measured and passed on demo data (cost report, *Addendum, Step 1b*): about 60 seconds from the settled
+  minute to the release row, against 3 minutes; and an alert sweep claimed in 0.049 s (median) with 51 release
+  jobs queued and one on a 360,000-row first read, against 0.071 s with none.
+
+**AC28, recorded as a fact.** F6's project job over four weeks at 0.2% failing, then 40 minutes at 0.8% mixed (3% on a
+fifth of traffic), **opened no finding**: its minimum change at normal sensitivity is 2 percentage points
+(`detection/method.py`, `SENSITIVITIES`). A 30% control opened a critical one, so the harness can open one. The
+release page reads the same rollout side by side, 3.0% against 0.25%, "higher". `test_releases_live.py` asserts both,
+so a change in F6 shows there.
+
+**Readings made while building, against the plan's or design's wording** (none blocking; each open to overrule):
+
+- **`LOG_EDGES` had already moved** to `nexovue_platform/slo.py` with F19, so T1.9 moves only `bucket_p95`.
+- **`releases.store` is not added to the raw-client list** (T1.11): it reads through `alerts.telemetry`'s reader, as
+  F19's `slos/store.py` does, so one module fewer holds the driver. `PROJECT_BOUND_PACKAGE` became
+  `PROJECT_BOUND_PACKAGES = ("detection", "releases")`.
+- **The sync reads the hour before its new minutes again, not five minutes.** The 60-minute rule needs that hour, so
+  a version first counted in rows that arrived late within it also gets its true first minute. The design's stated
+  risk now reads "more than an hour late". A first run reads exactly 6 hours.
+- **How an end is dated** (the design names the rule, not the minute): a takeover ends a period at the first minute
+  of the other version's 10-minute run; a quiet end at the minute after its last request. "Named requests" leaves out
+  '' and `__other__`.
+- **Every version first counted in a service's first counted minute is already running** (connecting mid-rollout).
+- **Every request failing on both sides** has a spread: the pooled share is held one request from 1, as the design
+  holds it one from 0.
+- **The comparison response leaves out** `incomplete`, `minutes_differing`, `versions_combined` and
+  `mixed_environments` until T4.1 computes them, rather than answering `false`. `time_before_after` is computed from
+  the version rows when every row has no version (those rows are the service's totals, FR16); T4.1 adds last week
+  and completeness. No release has a reported time before T2.2, so it cannot occur yet.
+- **The sync's figures are log fields, not Prometheus metrics** (`release_sync`: `duration_ms`, rows read, new
+  releases and periods; `release_sync_bounded`: rows skipped, evictions, the cap). Jobs run in child processes, which
+  export no metrics in this codebase; the `releases` queue's age is the existing per-queue gauge.
+- **The list's empty state links the setup documentation only.** The Deploys section it would also link is T2.6.
+
+**Tests, each seen failing first** (outputs kept in the session's scratch space):
+
+- `test_platform_releases.py`: collection failed on the missing module, then 47 passed.
+- `test_deletion_live.py`: failed naming the three unclassified tables, then 25 passed.
+- `test_release_sync.py`: failed on the missing package, then 21 passed (one fixed in the code on the way: the cap
+  stopped a run on a minute bringing nothing new).
+- `test_beat_schedule.py` and `test_compose_contract.py`: failed on the missing beat entry and queue, then 71 passed.
+- `test_tenant_chokepoint_structure.py`: with the project predicate removed from the store, failed naming
+  `releases.store`; restored, 18 passed. `test_detection_isolation.py`: with an import of the sync placed inside a
+  function in `alerts/silence.py`, failed naming the chain; removed, 5 passed.
+  `test_scheduler_postgres_tenancy_structure.py`: failed naming `_MOVED_SINCE_SYNC`, then 14 passed.
+- `test_release_sync_live.py` (13) was written after the walk: its first run failed on a fixture mistake (a version
+  name colliding with a junk one); with eviction removed from the code, the 50,000-release case failed; restored, 13
+  passed.
+- `test_read_surface_structure.py`: failed on the three new reader routes, then passed with `setup/api.md` updated.
+- `test_detection_coordinator.py`: failed on the worker's default queues, then passed.
+- Web: `comparison.test.ts` failed with no module, then 18 passed; `route-manifest.test.ts` failed on the missing
+  Signals entry, then passed; `ReleasesScreen.test.ts` (9) failed 2 with the empty and zero-result branches broken,
+  then passed. `version.test.ts` (3) was written with its formatter and not seen failing.
+- `test_releases.py` (14) and `test_releases_live.py` (13) were written after the routes; they passed on first run.
+
+**Counts.** Offline, `packages/py-platform`, `apps/scheduler`, `apps/api` and `packages/contracts` tests with live suites
+left out: 9,142 passed and 1 failed, the worker-defaults test above, then fixed. Live, on this machine's stores:
+`test_release_sync_live.py`, `test_releases_live.py`, `test_deletion_live.py`, `test_jobs_live.py`,
+`test_detection_project_job_live.py`, `test_detection_shifts_live.py`: 106 passed. Web: the releases folder, the
+route manifest and the version formatter, 38 passed. `uv run mypy .`, `ruff check .`, `ruff format --check .`,
+`pnpm -r typecheck`, `biome check` on the changed web files and `verify-tokens.js`: clean.
+
+**Not run:** `just check` (the coordinator's); the full live suites beyond those named; Go (no Go file changed);
+Design QA in a browser at 375px (Gates); `test_erasure_live.py` (unchanged, needs SeaweedFS).
+
+## Step 1a, built 2026-11-07
+
+What exists now, read from the code:
+
+- **`service_versions_1m`**, ClickHouse migration `000038` (the next free number on the branch), `000035`'s shape plus
+  `version`, in the erasure inventory (`erasure/tables.py`, `erasure/statements.py`, `test_erasure_live.py`). T1.1.
+- **The worker's version map** (`derive/versions.go`): fed from `observeService`, so it counts exactly the spans
+  `service_stats_1m` counts; the drain cap of 20 per service per drain, the arrival caps of 64 per partition, service and
+  minute and 512 per tenant, partition and minute; folding into `__other__` for over-long or failing names; a service
+  the per-tenant cap leaves out leaves its versions out; `Disown`, `PendingVersions`, the fold report. The Go side of the
+  name check is `derive.NameAllowed`, held to `packages/contracts/fixtures/release-names.json`, which the webhook's
+  Python check reads in T2.2. T1.2.
+- **The browser door counts under no version** (`traceassembly/flatten.go`, `countedVersion`), until the browser-door
+  change keeps such spans out of both rollups and deletes that branch (D55). This matches that change's plan, which
+  filters before `counters.Observe` (`docs/changes/browser-door/plan.md`, T1.1): no conflict. T1.3.
+- **The writer** (`derive/versionwriter.go`) with its deduplication token, inserted last in `insertDerived`, never an
+  error and never holding progress: a refusal is counted in `derived_rows_refused`; a transient failure has its own
+  30-second budget (`consume.RetryWithin`, new), then is stepped over and the insert paused for 5 minutes, counted in
+  `version_rows_stepped_over` and `version_rows_skipped`. Heartbeat and release log lines carry `version_series` and
+  `versions_folded`. T1.4.
+- **`tools/release-demo`**: `send.py` (every named mode; a ledger of what the receiver accepted; `verify` against the
+  store) and `release_measure.py` (the timed runs and the gate's table), with `just release-demo` and
+  `just release-measure`, and both in `pyproject.toml`'s `testpaths` and `pythonpath`. `--deploys N` is not built: the
+  task gives it "from T2.2 on", when the new deploy body exists. T1.5, T1.6.
+- **`tools/detection-measure/scale.py`** reads `service_versions_1m` and each table's index memory in its storage census,
+  so `just detection-scale watch` at AC29's volume reports the version table beside `service_stats_1m`.
+- **ADR-025** filed (the first of the design's three proposed ADRs). The other two, the releases record and the deploy
+  envelope, are filed when Step 1b and Step 2 start, since nothing they decide is built yet.
+
+**Tests, each seen failing first.** Go: `derive/versions_test.go` (14 tests: AC15 for any mix over 40 seeds, AC18's
+25 versions, the two-drain fold, the 64-name junk burst, the per-partition and per-tenant arrival caps, long and
+control-character names, the shared name cases, the service cap, the empty version, a reproducible drain, the revoke
+with its arrival room, the arrival room freed with its minute), `versionwriter_test.go`, `consume/permanent_test.go`
+(the budgeted retry), `traceassembly/flatten_test.go` (AC17 before the change), `refusal_test.go` (AC19 for this table,
+AC54), `counterhandover_test.go` and `restart_test.go` (AC16), and `counters_order_test.go`, `disown_test.go` extended.
+A store probe, `derive/versionwriter_storeprobe_test.go`, writes one drain to both tables in a real ClickHouse 26.3 and
+reads the version rows summing to the service rows bucket by bucket, with a retried insert deduplicated: passed.
+Python: `tools/release-demo/test_send.py` (12), `test_release_demo_measure.py` (19: 9, then 10 more for T1.7, of which
+the folded-churn, GOMEMLIMIT and compose-limit tests failed against the earlier tool first; the five "totals differ"
+cases passed against it too, since it was stricter), `test_erasure_inventory.py` (failed on the missing table, then
+passed). `uv run pytest tools/release-demo -q`: 31 passed; `ruff check`, `ruff format --check` and `mypy .` clean.
+
+**End to end, on this machine's own stores** (ClickHouse, Postgres, Kafka on non-default ports, receiver and worker
+from source): `release-demo send rolling` then `verify` printed 240 and 239 requests sent on v1 and v2, the same stored
+in `service_versions_1m`, and the version rows summing to `service_stats_1m`.
+
+**Not run:** `just check` (the coordinator runs it); `test_erasure_live.py`, which needs the full dev stack with
+SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 
 ## Completed
@@ -28,22 +661,94 @@ None. Waiting for F6 (pull request #24) to merge.
 
 ## Next action
 
-Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1a (and the browser-door change it owns), after re-reading line references. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+Steps 4 (ClickHouse `000041`, `000042`) and 5 (Postgres `0074`, `0075`; ADR-066) committed 2026-11-12. Next, Step 6. Deferred to hardening: the errors read's cost at 24 hours, the 2-second target, Design
+QA at 375px, Playwright and the `tools/release-demo` judging. T2.10's timed new person and Steps 3 and 4's Design QA
+are the founder's, after Phase 2. `docs/architecture/database.md` gains the new tables in T5.7, as planned.
 
 
 ## Open decisions
 
-**None.** The customer conversations (foundation item 8) and the browser-door change (item 7) were settled by the foundation
-on 2026-11-02, and D1 now matches the foundation's section 9. The browser-door owner (F28) and the conditional gate after
-Step 1a were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below).
+**From Step 5, none blocking; each built as recommended, open to overrule.**
+
+- **The release summary's words are read by delivery, not the claim** (ADR-066). Design section 6 joined the release
+  tables in `_TAKEN`; AC42's isolation test refuses it, since detection imports the outbox. Options: keep (recommended:
+  both approved rules hold, and a failed read retries the batch instead of holding the claim); or exempt the outbox
+  from the isolation test, which weakens AC42.
+- **A by-time reading is stored and summarized, never flagged.** Options: keep (recommended: FR55 flags from the two
+  version methods, and the summary names the method's limit); or store nothing for it.
+- **The webhook adds the summary job too.** Options: keep (recommended: otherwise a reported-only release is never
+  summarized, against AC82); or a sweep that finds due periods, which needs one cross-tenant statement.
+- **A job that fails three times leaves the period with no reading and no summary.** Options: keep, logged
+  (recommended for now); or a later sweep for periods past due with no reading.
+- **The list's flag and combined state come from the reading stored 30 minutes in**, so a later change in the
+  release's numbers is shown on its page, not on the list. Options: keep (FR55); or store again at a later time.
+
+**From Step 4, none blocking; each built as recommended, open to overrule.**
+
+- ~~**The list's "Versions were combined on `checkout`" state is not built.**~~ Built in Step 5 from the stored
+  reading, as recommended.
+- ~~**FR45's warning in the Deploys section is not built.**~~ Built in Step 5 from the stored `mixed_environments`,
+  as recommended.
+- **A section moving from skeleton to numbers is not announced** (spec, *Accessibility*); only the opening sentence is
+  (`role=status`). Options: `aria-live="polite"` on each section's body (recommended, small), for Design QA to judge.
+- **The errors-by-version window is this version's start to the window's end, and the same length before** (reading
+  above). Options: keep (recommended: equal lengths, as FR29 says); or both versions over the same minutes, which
+  would read a rollout's old version as "in both".
+
+**From Step 3, none blocking; each built as recommended, open to overrule.**
+
+- **A versions-only service's errors cell reads "none reported".** The design names `after v2.1`, "none before" and
+  "not told". "None before" would be false there: the deploy before a group is read from signed deploys only (until
+  T5.1), so a version seen in traffic before the group would not be named. Options: keep "none reported" (recommended:
+  true, short, and the panel says "Your CI reports no deploys"); or read seen releases as the deploy before too, which
+  is T5.1's `DeployHistory` move and a wider change.
+- **A release reported only as failed or rolled back is never "the release before this".** It has no period (founder,
+  2026-11-09), and FR32 names the period before. It still shows on the finding's charts as a "failed" mark and in the
+  list under them. Options: keep (recommended: it did not replace what was running); or name the latest report of any
+  state in the section as well.
+- **A project finding with no release in its services' 24 hours reads "No release of these services in the 24 hours
+  before this started, from what we can see."** The wording table has no row for it. Overrule with other words.
+
+**One reading from Step 1b, not blocking.** **The per-run cap of 200 new releases never splits a minute.**
+`synced_through` is kept by the minute, so a strict cap would stop the sync for good on any minute holding more than
+200 new versions (500 services each first counted in one minute is enough: the measurement saw 1,000 in one run). The
+walk therefore takes a whole minute even past the cap, and stops only before a later minute that would cross it
+(`sync.walk`, `test_one_minute_over_the_cap_is_still_taken_so_a_run_always_moves`). Options: keep this (recommended:
+the cap still bounds every later minute, and a first run is bounded by its 6 hours and the arrival caps); or keep the
+minute but split its writes across runs, which needs a second position inside a minute. Overrule by saying which.
+
+**From Step 1a, none blocking.** Readings made while building Step 1a. **Founder answer, 2026-11-08:** the last three below (the gate's
+rows, churn run once, the alert-delay row) are **accepted as recommended**: the gate stands as passed on demo data, and the
+alert evaluation start delay is added to Step 1b's sync-job task when the plan is next revised and measured before Step 1b
+is called done. The first two stay open to overrule:
+
+- **The name check refuses DEL (U+007F).** FR9 says "C0 and C1 control characters"; DEL is in neither range strictly, but
+  it is Unicode category Cc with them. The check uses Cc, and the shared fixture states it. Overrule by removing the DEL
+  case from `release-names.json` and narrowing `derive.NameAllowed`.
+- **The empty version takes arrival room like any version.** The design does not say whether `''` is exempt from the
+  arrival caps. Treating it as a version means a junk burst can fold "no version" traffic into `__other__` too, which the
+  "versions were combined" label already covers.
+- **The gate applies the four ratio rows to the demo traffic and the churn row to churn** (design, *The gate*; founder
+  decision 24 splits cost checks from correctness checks the same way). "Totals exact" means nothing lost and every
+  service's versions, `__other__` included, holding what was sent, with no named version above it; folding a named
+  version short is allowed (FR17, AC18). Overrule by making churn meet the ratio bounds too, which it does not (21× rows,
+  +15.8% memory, 2.065× disk; a cost failure under decision 24, which keeps version comparison if it fits 16 GB).
+- **Churn ran once for 15 minutes,** not the design's 3 repeats of 30 minutes. Its margin is wide (151 of 1,088 MiB),
+  so the gate is called passed; the founder may ask for the full repeats.
+- **The gate's alert evaluation start delay row has no task.** It needs Step 1b's sync job. Proposed: add it to Step 1b's
+  sync-job task when the plan is next revised, and measure it before Step 1b is called done.
+
+The customer conversations (foundation item 8) and the browser-door change (item 7) were settled by the foundation on
+2026-11-02. The conditional gate after Step 1a was answered on 2026-11-02 (foundation item 24).
 
 ## Blocked
 
-- **The build is blocked on F6 merging** (findings, `service_stats_1m`, `detection_sweep`).
-- **Blocked on founder approval** of specification, design and plan.
-- **Step 1b waits for the one round of customer conversations** (foundation item 8).
+- **Founder decision, 2026-11-08:** Step 1b no longer waits on the buyer round (foundation item 27). Built 2026-11-08.
 - **Step 4 is blocked on the shared browser-door change** (below; foundation item 7, D58). **F28 owns it** (foundation item 22,
   2026-11-02). The plan holds no task for it yet; they are added when the plan is next revised.
+  **2026-11-07:** the browser-door change is built (all four steps; its live test asserts `service_versions_1m` too,
+  and it deleted `countedVersion`, D55) and is on `feature/phase-2` (2026-11-07) (`docs/changes/browser-door/status.md`).
+  **2026-11-12:** checked in the code and Step 4 built (*Step 4, built 2026-11-12*). Nothing blocks Step 5.
 
 ## Reviews
 
@@ -454,7 +1159,40 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-02
+2026-11-12: Steps 4 and 5 committed, Step 5's migrations re-chained to `0074` and `0075` on F4's `0073`. Earlier the same day: Step 5 built in `wt/f28s5`, and Step 4 in `wt/f28s4`.
+
+2026-11-09: Step 3 committed to `feature/phase-2`, with the carried-over fix to `first_reported_at`'s two readers.
+Earlier the same day: Step 2 committed to `feature/phase-2`; the founder's answer on failed and rolled-back reports
+built into it.
+
+## Founder answer, 2026-11-09
+
+**Does a report of a `failed` or `rolled_back` deploy open a period?** The design's
+step 6 opened one for a version with none, whatever its state, and that was built first; AC57 says only that
+`rolled_back` on a *seen* version sets its state. So a version first reported as `failed`, never seen, gets a
+reported period, appears on `/releases` as starting then, and on a service with no version in traffic ends the
+period before it. Options: keep it (as built: the sender said it was deployed, and the release page shows the
+state); or open periods only for `started` and `finished`, keeping the release and its state with no period, so a
+failed deploy never reads as serving. **Recommendation: the second**, since a failed deploy did not replace what was
+running; it is a small change in `releases/service.place_periods` and its live tests. **Founder answer, 2026-11-09:
+started and finished only.** Built: such a report is stored and its state shown, but opens no period, ends none and
+brings no version back (design, *From the webhook*, step 6; tests under *Step 2, built 2026-11-08*).
+
+Left as they are, found in the self-review, none blocking (each open to overrule):
+
+- **Fixed in Step 3 (2026-11-09)**, see *Step 3, built 2026-11-09*: **`first_reported_at` still counts a failed
+  report.** It is the release's reported fact, so it stays, but two
+  readers lean on it: the sync's `already_running` (`_first_on_service`: a version reported, even as failed, before
+  its first counted minute is not "already running"), and the comparison's time-based fallback on a service with no
+  version in traffic (`choose_method`'s `reported_at`: a version reported failed at 10:00, then finished at 11:00,
+  is compared from 10:00 while its period starts at 11:00). Neither opens or ends a period. The second is the one
+  worth changing (compare from the period's start); not done here, since it is the comparison's rule, not the
+  founder's question.
+- **A `started` report then a `failed` one for the same version** keeps the period `started` opened: the answer
+  says which reports open periods, not that a later failure closes one.
+- **`OPENS_A_PERIOD` names the states as plain strings** beside `deploys/schemas.DeployState`; a new state added
+  there would open no period until listed here. *Step 3:* now `nexovue_platform.releases.OPENING_STATES`, beside
+  `DEPLOY_STATES`, used by the API and the sync.
 
 ## Founder approval, 2026-11-02
 

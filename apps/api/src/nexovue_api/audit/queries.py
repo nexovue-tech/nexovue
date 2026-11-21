@@ -31,6 +31,8 @@ KINDS: Final[dict[EventKind, tuple[str, ...]]] = {
         # F6: a person's word on a finding, and a service's mute or snooze.
         "finding.",
         "service.",
+        # F3: a rule stopped from naming causes, or started again.
+        "explanation.",
     ),
     "support": ("support.",),
 }
@@ -102,3 +104,16 @@ async def names_of(
         user_id: name or ("a removed person" if removed_at is not None else email)
         for user_id, name, email, removed_at in rows.tuples()
     }
+
+
+async def entries_with_detail(
+    session: AsyncSession, *, org_id: uuid.UUID, target: str
+) -> list[AuditLogEntry]:
+    """Every entry in this organization about one target that carries a detail, whole, so
+    a caller can rewrite what it holds (a purge, FR68)."""
+    statement = select(AuditLogEntry).where(
+        AuditLogEntry.org_id == org_id,
+        AuditLogEntry.target == target,
+        AuditLogEntry.detail.is_not(None),
+    )
+    return list(await session.scalars(statement))

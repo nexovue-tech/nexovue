@@ -14,6 +14,7 @@ import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
+import { keepUrlWindow } from "@/shared/url-window";
 import type { NodeSummary, NodeTrendPoint, SignalSummary } from "./api";
 import { nodeSeriesKey, useNodes, useNodeTrend, useSignals } from "./api";
 import { DatabasesView } from "./databases/DatabasesView";
@@ -69,10 +70,10 @@ const CPU_COLUMN = "w-28 shrink-0 text-right";
 /* 104px of sparkline plus its 12px gutter, reserved on every row. */
 const TREND_COLUMN = "w-29 shrink-0 pl-3";
 const MEMORY_COLUMN = "w-32 shrink-0 text-right";
-const STORAGE_COLUMN = "hidden w-32 shrink-0 text-right lg:block";
+const STORAGE_COLUMN = "hidden w-32 shrink-0 text-right @3xl:block";
 const DISK_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 const NETWORK_COLUMN = "hidden w-28 shrink-0 text-right md:block";
-const SEEN_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
+const SEEN_COLUMN = "hidden w-24 shrink-0 text-right @3xl:block";
 
 /**
  * Hosts and databases are one destination, not two.
@@ -147,7 +148,12 @@ export function InfrastructureScreen() {
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every control they tried on the way.
   const show = (next: Record<string, string | undefined>) =>
-    void navigate({ to: "/infrastructure", search: () => filterParams(next), replace: true });
+    void navigate({
+      to: "/infrastructure",
+      // F3 FR16: a finding's window, carried in the address, survives a filter change.
+      search: () => ({ ...keepUrlWindow(search), ...filterParams(next) }),
+      replace: true,
+    });
 
   const narrowed = appliedFilters(definitions, filters).length > 0;
 
@@ -472,13 +478,13 @@ function NodeRow({
         <span className="shrink-0 font-mono text-2xs text-ink-dim">{node.kind}</span>
         {node.stale ? <StoppedReportingBadge node={node} /> : null}
         {node.container && node.host ? (
-          <span className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim lg:inline">
+          <span className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim @3xl:inline">
             on {node.host}
           </span>
         ) : null}
         {node.reporter_instance ? (
           <span
-            className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim lg:inline"
+            className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim @3xl:inline"
             title={`service.instance.id ${node.reporter_instance}`}
           >
             instance {node.reporter_instance}

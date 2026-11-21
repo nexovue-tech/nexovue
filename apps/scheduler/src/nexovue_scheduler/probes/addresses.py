@@ -20,6 +20,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any, Final
 
 import pycurl
@@ -105,6 +106,83 @@ def may_connect_to(address_text: str, *, private_allowed: bool) -> bool:
     )
 
 
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+# The widest range an operator may list (AC37: "a very wide range" is refused). Guesses: a
+# /16 is a whole office network, wider than any one model server needs.
+WIDEST_IPV4_PREFIX: Final = 16
+WIDEST_IPV6_PREFIX: Final = 48
+
+
+def _never_reachable(target: IPAddress | IPNetwork) -> bool:
+    """What stays refused even when listed: this container, the cloud's credentials
+    address, and ranges that route nowhere a model server lives (AC37)."""
+    return bool(
+        target.is_loopback
+        or target.is_link_local
+        or target.is_reserved
+        or target.is_multicast
+        or target.is_unspecified
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateEndpoints:
+    """The private addresses, each with a port, an install operator lets an AI provider
+    connection reach (`AI_PRIVATE_ENDPOINTS`, FR32; design *Provider interface*).
+
+    **This widens this module's promise** that a private address is reached only in
+    development, for one purpose: a local model on the customer's own network. Only an
+    operator can set it; a console user cannot. Loopback, link-local, reserved, multicast and
+    unspecified addresses stay refused even when listed, so the instance-credentials address
+    stays out of reach, and only an address that is private is ever let through.
+    """
+
+    entries: tuple[tuple[IPNetwork, int], ...] = ()
+
+    @classmethod
+    def parse(cls, configured: str) -> PrivateEndpoints:
+        """`10.0.0.5:11434,192.168.1.0/24:8000,[fd00::7]:11434`. Raises ValueError naming
+        what is wrong with an entry, so settings stop the process on a typo (AC37)."""
+        entries = []
+        for raw in (entry.strip() for entry in configured.split(",")):
+            if raw:
+                entries.append(_endpoint(raw))
+        return cls(tuple(entries))
+
+    def allows(self, address_text: str, port: int) -> bool:
+        try:
+            address = ipaddress.ip_address(address_text)
+        except ValueError:
+            return False
+        if _never_reachable(address) or not address.is_private:
+            return False
+        return any(address in network and port == allowed for network, allowed in self.entries)
+
+
+NO_PRIVATE_ENDPOINTS: Final = PrivateEndpoints()
+
+
+def _endpoint(raw: str) -> tuple[IPNetwork, int]:
+    if raw.startswith("["):
+        host, separator, port_text = raw[1:].partition("]:")
+    else:
+        host, separator, port_text = raw.rpartition(":")
+    if not separator or not port_text.isdigit() or not 0 < int(port_text) < 65536:
+        raise ValueError(f"{raw!r} needs a port, as address:port")
+    try:
+        network = ipaddress.ip_network(host, strict=True)
+    except ValueError as unreadable:
+        raise ValueError(f"{raw!r} is not an address or a range") from unreadable
+    if _never_reachable(network) or not network.is_private:
+        raise ValueError(f"{raw!r} is not wholly private, or is loopback or link-local")
+    widest = WIDEST_IPV4_PREFIX if network.version == 4 else WIDEST_IPV6_PREFIX
+    if network.prefixlen < widest:
+        raise ValueError(f"{raw!r} is wider than /{widest}; list the model server's address")
+    return network, int(port_text)
+
+
 def refusal_reason_for(refused_addresses: Iterable[str]) -> str | None:
     """The error to report instead of the client's, when we caused the failure.
 
@@ -129,18 +207,35 @@ class ConnectGuard:
     the one result that should be investigated looks like the most ordinary one.
     """
 
-    def __init__(self, *, private_allowed: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        private_allowed: bool = False,
+        private_endpoints: PrivateEndpoints = NO_PRIVATE_ENDPOINTS,
+        public_allowed: bool = True,
+    ) -> None:
         self.refused_addresses: list[str] = []
         # Passed in rather than read from the environment here, because every
         # other collaborator of a probe is passed in and a hidden module-level
         # read is the kind of thing that survives into production unnoticed.
         self._private_allowed = private_allowed
+        # F3: an operator's listed endpoints, and whether a public address may be reached
+        # at all (an AI call over plain `http` may reach a listed address and nothing else).
+        self._private_endpoints = private_endpoints
+        self._public_allowed = public_allowed
+
+    def _may_open(self, resolved: str, port: int) -> bool:
+        if self._private_endpoints.allows(resolved, port):
+            return True
+        return self._public_allowed and may_connect_to(
+            resolved, private_allowed=self._private_allowed
+        )
 
     def open_socket(self, purpose: int, address: Any) -> Any:
-        """libcurl's socket factory. `address.addr[0]` is the resolved host."""
+        """libcurl's socket factory. `address.addr` is the resolved host and port."""
         del purpose  # libcurl distinguishes proxy sockets; the rule is the same
         resolved = str(address.addr[0])
-        if not may_connect_to(resolved, private_allowed=self._private_allowed):
+        if not self._may_open(resolved, int(address.addr[1])):
             self.refused_addresses.append(resolved)
             return REFUSED
         return socket.socket(address.family, address.socktype, address.protocol)

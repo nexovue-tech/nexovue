@@ -30,7 +30,37 @@ ENV: Final = VERSIONS.parent / "env.py"
 # 0020, 0022 and 0026 drop billing records; 0041 findings, with people's acknowledgements
 # and false-alarm reasons, and rules people wrote; 0044 the PagerDuty alert each delivered
 # notification went to; 0046 the services a closed project finding was about.
-ROLL_FORWARD_ONLY: Final = ("0020", "0022", "0026", "0041", "0044", "0046")
+# 0051 adds finding_notes and finding_events, people's words and the organization's
+# record of what happened to a case, which exist nowhere else.
+# 0054 holds releases and their periods, which outlive the version rollup's 35 days.
+# 0056 adds dashboards and their versions, what people built (F20).
+# 0057 deletes clear-text deploy secrets, and holds deploys' states, commits and links.
+# 0058 holds F19's exclusions, people's reasons for leaving time out of a figure.
+# 0067 holds F3's ratings of an explanation and the rules an organization stopped.
+# 0070 holds where an organization's facts were sent (`ai_runs`) and an owner's consent.
+# 0071 holds an organization's sealed provider key.
+# 0073 holds who asked chat how much (`assistant_question_counts`) and what it sent where.
+# 0074 holds a project's choice of release-summary channel, and the summaries sent.
+ROLL_FORWARD_ONLY: Final = (
+    "0020",
+    "0022",
+    "0026",
+    "0041",
+    "0044",
+    "0046",
+    "0051",
+    "0052",
+    "0053",
+    "0054",
+    "0056",
+    "0057",
+    "0058",
+    "0067",
+    "0070",
+    "0071",
+    "0073",
+    "0074",
+)
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"
 

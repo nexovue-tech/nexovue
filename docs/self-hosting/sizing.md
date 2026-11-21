@@ -5,8 +5,11 @@ defaults suit the smallest server we support; a larger one is given more through
 
 ## The smallest server: 16 GB, 4 CPUs
 
-The defaults add up to about 13 GB of ceilings, leaving the rest to the operating system and the page
-cache ClickHouse reads through. Most services use well under their ceiling.
+The defaults add up to about 14.1 GB of ceilings (6 + 2 + 1 + 1.25 + about 3.5, and 0.375 for the
+AI container, by arithmetic; this page said "about 13 GB" until 2026-11-08), and about 14.5 GB with
+tracker connections on, leaving the rest to the operating system and the page cache ClickHouse reads
+through. Whether what is left is
+enough has not been measured on a 16 GB server. Most services use well under their ceiling.
 
 | Service | Ceiling | Setting |
 |---|---|---|
@@ -15,6 +18,11 @@ cache ClickHouse reads through. Most services use well under their ceiling.
 | Postgres (accounts and settings) | 1 GB | `POSTGRES_MEMORY` |
 | Worker (writes telemetry) | 1.25 GB | `WORKER_MEMORY`, `WORKER_GOMEMLIMIT` |
 | API, receiver, schedulers, edge, object store | about 3.5 GB together | — |
+| Tracker connections (`scheduler-connections`), only while `NEXOVUE_CONNECTIONS=yes` | 384 MB, a guess copied from the alert deliveries worker; not yet measured | — |
+| AI explanations (`scheduler-insight`), idle until an organization turns AI on | 384 MB: four children kept under 48 MiB each beside the parent, by arithmetic; **not yet measured** at 4 or 6 children | `SCHEDULER_INSIGHT_REPLICAS=0` runs with no AI container at all |
+
+A local model (Ollama, for example) is not in these figures: it runs outside nexovue, and needs its
+own memory on top.
 
 **Two settings that move together.** ClickHouse caps itself below its container's ceiling, and the
 worker's garbage collector needs to know its ceiling:

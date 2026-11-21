@@ -15,6 +15,7 @@ export function Button({
   pendingLabel,
   disabled = false,
   onClick,
+  className = "",
 }: {
   children: ReactNode;
   type?: "button" | "submit";
@@ -23,6 +24,8 @@ export function Button({
   pendingLabel?: string;
   disabled?: boolean;
   onClick?: () => void;
+  /** Extra layout classes: F22's case actions are taller and full-row (FR46). */
+  className?: string;
 }) {
   const tone =
     variant === "primary"
@@ -35,7 +38,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled || pending}
       aria-busy={pending || undefined}
-      className={`rounded-sm px-3 py-1.5 font-medium text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${tone}`}
+      className={`rounded-sm px-3 py-1.5 font-medium text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${tone} ${className}`}
     >
       {pending && pendingLabel ? pendingLabel : children}
     </button>

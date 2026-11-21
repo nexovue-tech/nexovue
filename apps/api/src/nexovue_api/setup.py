@@ -6,6 +6,10 @@ changes nothing. ClickHouse and the Kafka topics are the pipeline image's half (
 `nexovue setup schema` prints the newest Postgres migration this image carries and touches nothing:
 `nexovue rollback` compares two versions' answers to tell whether an upgrade changed the schema.
 
+After the migrations, the AI role's own account and its grants (`insight_account`, F3); a
+restore drops grants, and `start` runs this step, so they come back. `nexovue setup grants`
+runs that part alone.
+
 The bucket is created here, by a step that runs once with the operator's credentials, rather
 than by the API, which should not hold the permission to create one. Where the infrastructure
 already made the bucket — a cloud install — finding it is all this does.
@@ -23,6 +27,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+from nexovue_api import insight_account
 from nexovue_api.data.objectstore.store import ObjectStore
 from nexovue_api.settings import ObjectStoreSettings
 
@@ -69,10 +74,15 @@ def main(argv: list[str] | None = None) -> int:
     if arguments == ["schema"]:
         print(f"postgres {postgres_schema()}")
         return 0
+    if arguments == ["grants"]:
+        asyncio.run(insight_account.provision())
+        return 0
     if arguments:
-        raise SystemExit("usage: nexovue setup [schema]")
+        raise SystemExit("usage: nexovue setup [schema | grants]")
     migrate_postgres()
     print("postgres: at the newest migration")
+    # Never stops setup: AI is optional, and every refusal is said (AC71).
+    asyncio.run(insight_account.provision())
 
     settings = object_store_settings()
     if settings is None:

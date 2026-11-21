@@ -2,18 +2,28 @@ import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertsStrip } from "@/shared/alerts/AlertsStrip";
 import { useServiceCoverage } from "@/shared/alerts/api";
+import {
+  type AssistantSubject,
+  clearAssistantSubject,
+  setAssistantSubject,
+} from "@/shared/assistant-context";
+import type { ReleaseRead } from "@/shared/components/ChartReleases";
+import { ChartReleases } from "@/shared/components/ChartReleases";
+import { DashboardsShowingThisService } from "@/shared/components/DashboardsShowingThisService";
 import { DurationHeatmap } from "@/shared/components/DurationHeatmap";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { StartFromThisService } from "@/shared/components/StartFromThisService";
 import type { ChartSpan } from "@/shared/components/TrendChart";
 import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import type { DeployMarker } from "@/shared/deploy-markers";
-import { deployMarkers } from "@/shared/deploy-markers";
+import { releaseMarkers } from "@/shared/deploy-markers";
 import { useDetectionSettings, useServiceDetection } from "@/shared/detection/api";
+import { findingSpans } from "@/shared/finding-spans";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, formatPercent } from "@/shared/format/number";
@@ -21,6 +31,7 @@ import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { useProfiledServices } from "@/shared/profiles/api";
 import { ProfilingStrip } from "@/shared/profiles/ProfilingStrip";
+import { useReleaseMarkers } from "@/shared/releases/api";
 import { SCOPED_PATHS, scopedSearch } from "@/shared/scope";
 import type { LiveWindow } from "@/shared/selection";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
@@ -36,7 +47,6 @@ import type {
   TrendPoint,
 } from "./api";
 import {
-  useDeploys,
   useDurationHeatmap,
   useService,
   useServiceDependencies,
@@ -54,9 +64,9 @@ import {
   describeServiceErrors,
   describeSilence,
   detailState,
-  findingSpans,
   neighboursOf,
 } from "./service-detail";
+import { serviceTargetsLine, useServiceTargets } from "./slo-line";
 
 import type { TrendMetric, TrendPlot } from "./trend-series";
 import { buildTrendPlots, describePlot } from "./trend-series";
@@ -70,7 +80,7 @@ const PERCENT = 100;
 const RATE_COLUMN = "w-20 shrink-0 text-right";
 const ERRORS_COLUMN = "w-28 shrink-0 text-right";
 const LATENCY_COLUMN = "w-16 shrink-0 text-right";
-const WIDE_ONLY = "hidden lg:block";
+const WIDE_ONLY = "hidden @3xl:block";
 
 /** Each chart's y axis reads in its own unit; a bare number would say nothing. */
 const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
@@ -91,7 +101,17 @@ const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
  * The route component owns the selections and the queries; everything visible is in
  * `ServiceDetailView`, which is a function of its props and nothing else.
  */
+/** F4: chat's panel names this service while the page is open, and its starters follow. */
+function useServiceAsSubject(serviceName: string): void {
+  useEffect(() => {
+    const subject: AssistantSubject = { headline: serviceName, serviceName };
+    setAssistantSubject(subject);
+    return () => clearAssistantSubject(subject);
+  }, [serviceName]);
+}
+
 export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
+  useServiceAsSubject(serviceName);
   const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
   const windowPhrase = useWindowPhrase();
@@ -101,22 +121,21 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   const endpoints = useServiceEndpoints(projectId, serviceName, timeWindow);
   const dependencies = useServiceDependencies(projectId, timeWindow);
   const errors = useServiceErrors(projectId, serviceName, timeWindow);
-  const deploys = useDeploys(projectId);
+  const marks = useReleaseMarkers(projectId, timeWindow, serviceName);
   // Conditional (OD7): absent for a customer whose SDK sends no OTLP histogram,
   // which is most of them. `available` is the answer, not an empty array.
   const heatmap = useDurationHeatmap(projectId, serviceName, timeWindow);
 
-  // One read for the project, narrowed to this service and this window. A
-  // deploy of another service is an invitation to blame the wrong change for
-  // the step in this chart.
+  // This service's releases in this window, read for the window on screen. A release
+  // of another service is an invitation to blame the wrong change for the step here.
   const markers = useMemo(
     () =>
-      deployMarkers(deploys.data ?? [], {
+      releaseMarkers(marks.data?.markers ?? [], {
         serviceName,
         from: timeWindow.from,
         to: timeWindow.to,
       }),
-    [deploys.data, serviceName, timeWindow.from, timeWindow.to],
+    [marks.data, serviceName, timeWindow.from, timeWindow.to],
   );
 
   // The findings in this window, shaded on the charts (design, *The service screen*).
@@ -144,13 +163,22 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       alerts={<ServiceAlerts projectId={projectId} serviceName={serviceName} />}
       detection={
         projectId === undefined ? null : (
-          <DetectionStrip
-            projectId={projectId}
-            serviceName={serviceName}
-            detection={detection.data}
-            failed={detection.isError}
-            zone={settings.data?.timezone}
-          />
+          <>
+            <DetectionStrip
+              projectId={projectId}
+              serviceName={serviceName}
+              detection={detection.data}
+              failed={detection.isError}
+              zone={settings.data?.timezone}
+            />
+            <TargetsLine projectId={projectId} serviceName={serviceName} />
+            <DashboardsShowingThisService
+              service={serviceName}
+              projectId={projectId}
+              window={undefined}
+            />
+            <StartFromThisService service={serviceName} projectId={projectId} />
+          </>
         )
       }
       profiling={
@@ -167,7 +195,14 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       }}
       row={row}
       points={points}
-      markers={markers}
+      releases={{
+        markers,
+        isError: marks.isError,
+        onRetry: () => void marks.refetch(),
+        truncated: marks.data?.truncated ?? false,
+        cap: marks.data?.cap ?? 0,
+      }}
+      zone={settings.data?.timezone}
       spans={spans}
       endpoints={endpointRows}
       heatmap={heatmap.data}
@@ -184,6 +219,26 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
         onRetry: () => void errors.refetch(),
       }}
     />
+  );
+}
+
+/**
+ * "2 targets. 1 running out.", linked to the targets (F19 design, *Elsewhere*). Nothing
+ * while it is unknown or there is none: it is a pointer, not a reading.
+ */
+function TargetsLine({ projectId, serviceName }: { projectId: string; serviceName: string }) {
+  const targets = useServiceTargets(projectId);
+  const line = targets.data ? serviceTargetsLine(targets.data.targets, serviceName) : null;
+  if (line === null) return null;
+  return (
+    <p className="py-2 text-sm">
+      <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        Reliability targets
+      </span>{" "}
+      <Link to="/slos" className="font-medium text-brand-text hover:underline">
+        {line}
+      </Link>
+    </p>
   );
 }
 
@@ -215,8 +270,10 @@ export interface ServiceDetailViewProps {
   onRetry: () => void;
   row?: ServiceHealth;
   points: readonly TrendPoint[];
-  /** The deploys of this service inside this window, as rules on the charts. */
-  markers: readonly DeployMarker[];
+  /** This service's releases inside this window, marked on the charts (F28). */
+  releases: ReleaseRead;
+  /** The project's IANA zone, for the marks' times; the browser's until it is read. */
+  zone?: string;
   /** The findings open inside this window, shaded on the charts (F6). */
   spans?: readonly ChartSpan[];
   endpoints: readonly EndpointHealth[];
@@ -241,7 +298,8 @@ export function ServiceDetailView({
   onRetry,
   row,
   points,
-  markers,
+  releases,
+  zone,
   spans = [],
   endpoints,
   heatmap,
@@ -325,7 +383,8 @@ export function ServiceDetailView({
               plots={plots}
               serviceName={serviceName}
               bucketCount={points.length}
-              markers={markers}
+              releases={releases}
+              zone={zone}
               spans={spans}
             />
 
@@ -451,7 +510,7 @@ function ServiceHeader({
 /** The six numbers the overview row carries, given room to be read one at a time. */
 function HeadlineMetrics({ row }: { row: ServiceHealth }) {
   return (
-    <dl className="grid grid-cols-2 gap-px border-line border-y bg-line sm:grid-cols-3 lg:grid-cols-6">
+    <dl className="grid grid-cols-2 gap-px border-line border-y bg-line sm:grid-cols-3 @3xl:grid-cols-6">
       <Headline label="Req/min" value={formatRatePerMinute(row.requests_per_minute)} />
       <Headline label="Requests" value={formatCount(row.request_count)} />
       <Headline
@@ -503,13 +562,15 @@ function TrendSection({
   plots,
   serviceName,
   bucketCount,
-  markers,
+  releases,
+  zone,
   spans,
 }: {
   plots: readonly TrendPlot[];
   serviceName: string;
   bucketCount: number;
-  markers: readonly DeployMarker[];
+  releases: ReleaseRead;
+  zone?: string;
   spans: readonly ChartSpan[];
 }) {
   return (
@@ -519,20 +580,26 @@ function TrendSection({
         caption={
           bucketCount === 0
             ? "No buckets in this window — the rollup has nothing for this service yet."
-            : `Request rate, failure share and duration across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units — and three lines on the last, because the shape of a distribution is p50, p95 and p99 together.${markers.length > 0 ? ` Dashed rules are deploys of ${serviceName}.` : ""}${spans.length > 0 ? " Shaded stretches are findings." : ""}`
+            : `Request rate, failure share and duration across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units — and three lines on the last, because the shape of a distribution is p50, p95 and p99 together.${spans.length > 0 ? " Shaded stretches are findings." : ""}`
         }
       />
       {bucketCount > 0 ? (
-        <div className="grid gap-4 px-4 lg:grid-cols-3">
+        <div className="grid gap-4 px-4 @3xl:grid-cols-3">
           {plots.map((plot) => (
             <TrendPanel
               key={plot.metric}
               plot={plot}
-              markers={markers}
+              markers={releases.markers}
+              zone={zone}
               spans={spans}
               description={describePlot(plot, serviceName, bucketCount)}
             />
           ))}
+        </div>
+      ) : null}
+      {bucketCount > 0 ? (
+        <div className="px-4 pt-2">
+          <ChartReleases read={releases} zone={zone} />
         </div>
       ) : null}
     </>
@@ -542,11 +609,13 @@ function TrendSection({
 function TrendPanel({
   plot,
   markers,
+  zone,
   spans,
   description,
 }: {
   plot: TrendPlot;
   markers: readonly DeployMarker[];
+  zone?: string;
   spans: readonly ChartSpan[];
   description: string;
 }) {
@@ -564,6 +633,7 @@ function TrendPanel({
           seriesToken={plot.seriesToken}
           data={plot.data}
           markers={markers}
+          zone={zone}
           spans={spans}
           formatValue={AXIS_FORMAT[plot.metric]}
           description={description}

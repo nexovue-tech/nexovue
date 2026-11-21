@@ -7,10 +7,11 @@
  * a feature may not import app/, so the shared layer has to hold the value.
  */
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { formatDate } from "./format/time";
 import { refetchIntervalFor, useRefreshPreference } from "./refresh";
+import { useUrlWindow } from "./url-window";
 
 export interface TimeRange {
   id: string;
@@ -25,6 +26,16 @@ export const TIME_RANGES: readonly TimeRange[] = [
   { id: "24h", label: "24 hours", minutes: 1440 },
   { id: "7d", label: "7 days", minutes: 10_080 },
 ];
+
+/**
+ * Offered while a dashboard is open, and nowhere else (F20, FR52). It is not in
+ * `TIME_RANGES`, so it is never remembered, never read back from storage, and no other
+ * screen is offered a window its own reads were not built for.
+ */
+export const THIRTY_DAYS: TimeRange = { id: "30d", label: "30 days", minutes: 43_200 };
+
+/** The ranges a dashboard's top bar offers: the console's, and 30 days. */
+export const DASHBOARD_RANGES: readonly TimeRange[] = [...TIME_RANGES, THIRTY_DAYS];
 
 const DEFAULT_RANGE_ID = "1h";
 
@@ -60,6 +71,24 @@ interface Selection {
   rangeId: string;
   /** The window the whole console reads against, unless a screen overrides it. */
   window: WindowChoice;
+  /**
+   * The clock a screen declared its times in, while it overrides: the top bar's phrase,
+   * chip and picker read it (F20, FR46). Absent, every time is on the browser's clock.
+   */
+  zone?: string;
+}
+
+/**
+ * What one mounted screen shows in place of the reader's own choice (F20, design section
+ * 7): a dashboard opened from a link, or dragged to a moment. Every reader of
+ * `useSelection`, the top bar included, sees it, so a header and its data cannot
+ * disagree; and it is never remembered, so leaving the screen, or reloading elsewhere,
+ * shows the reader's own project and window (AC69).
+ */
+export interface ScreenOverride {
+  projectId?: string;
+  window?: WindowChoice;
+  zone?: string;
 }
 
 export const SELECTION_STORAGE_KEY = "nexovue.selection";
@@ -105,8 +134,13 @@ function validWindowChoice(choice: WindowChoice | undefined): WindowChoice | und
 }
 
 let selection: Selection = readStored();
+let override: ScreenOverride = {};
+// What readers see: the remembered choice with the override over it, rebuilt on change
+// only, since `useSyncExternalStore` needs the same object until something changes.
+let shown: Selection = selection;
 const listeners = new Set<() => void>();
 
+/** Only the reader's own choice is ever written: the override never reaches storage. */
 function remember() {
   try {
     localStorage.setItem(
@@ -119,7 +153,69 @@ function remember() {
 }
 
 function publish() {
+  shown = {
+    ...selection,
+    ...(override.projectId === undefined ? {} : { projectId: override.projectId }),
+    ...(override.window === undefined ? {} : { window: override.window }),
+    ...(override.zone === undefined ? {} : { zone: override.zone }),
+  };
   for (const listener of listeners) listener();
+}
+
+/** The screen's own say over what the reader chose, as it stands now. */
+export function readScreenOverride(): ScreenOverride {
+  return override;
+}
+
+/** The reader's own choice, with no screen's override over it. */
+export function readRememberedSelection(): Selection {
+  return selection;
+}
+
+/** Drops the override's say over a part the reader has just chosen on purpose. */
+function yieldTo(part: "projectId" | "window") {
+  if (override[part] === undefined) return;
+  const { [part]: _given, ...rest } = override;
+  override = rest;
+}
+
+/**
+ * A screen's own project, window or clock, shown while it holds and never remembered.
+ * Parts not named keep what the screen set before.
+ */
+export function setScreenOverride(next: ScreenOverride): void {
+  override = { ...override, ...next };
+  publish();
+}
+
+/**
+ * The reader follows a link out of the screen on purpose, such as a panel's service: what
+ * the screen showed becomes their own choice, remembered as any choice is (design
+ * section 7, FR35). The clock stays the screen's own.
+ */
+export function adoptScreenOverride(): void {
+  if (override.projectId === undefined && override.window === undefined) return;
+  selection = {
+    ...selection,
+    ...(override.projectId === undefined ? {} : { projectId: override.projectId }),
+    ...(override.window === undefined
+      ? {}
+      : {
+          window: override.window,
+          rangeId:
+            override.window.kind === "relative" ? override.window.rangeId : selection.rangeId,
+        }),
+  };
+  override = {};
+  remember();
+  publish();
+}
+
+/** The screen has gone: the reader's own choice shows again. */
+export function clearScreenOverride(): void {
+  if (Object.keys(override).length === 0) return;
+  override = {};
+  publish();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -128,14 +224,17 @@ function subscribe(listener: () => void): () => void {
 }
 
 export function setSelectedProjectId(projectId: string): void {
-  if (selection.projectId === projectId) return;
+  if (selection.projectId === projectId && override.projectId === undefined) return;
+  yieldTo("projectId");
   selection = { ...selection, projectId };
   remember();
   publish();
 }
 
 export function setSelectedRangeId(rangeId: string): void {
-  if (selection.rangeId === rangeId && selection.window.kind === "relative") return;
+  const unchanged = selection.rangeId === rangeId && selection.window.kind === "relative";
+  if (unchanged && override.window === undefined) return;
+  yieldTo("window");
   selection = { ...selection, rangeId, window: { kind: "relative", rangeId } };
   remember();
   publish();
@@ -150,20 +249,44 @@ export function setSelectedRangeId(rangeId: string): void {
 export function setAbsoluteWindow(from: string, to: string): void {
   const choice = validWindowChoice({ kind: "absolute", from, to });
   if (!choice) return;
+  yieldTo("window");
   selection = { ...selection, window: choice };
   remember();
   publish();
 }
 
 export function clearAbsoluteWindow(): void {
-  if (selection.window.kind === "relative") return;
+  if (selection.window.kind === "relative" && override.window === undefined) return;
+  // "Back to live" ends a screen's fixed or dragged window too (FR53).
+  yieldTo("window");
   selection = { ...selection, window: { kind: "relative", rangeId: selection.rangeId } };
   remember();
   publish();
 }
 
 export function useSelection(): Selection {
-  return useSyncExternalStore(subscribe, () => selection);
+  return useSyncExternalStore(subscribe, readSelection);
+}
+
+/** What every screen is read against now: the reader's choice, under any override. */
+export function readSelection(): Selection {
+  return shown;
+}
+
+/**
+ * The window this screen reads: a valid window in the address first, then the stored one
+ * (F3 FR16). The address's is never written back, so following a finding's link leaves
+ * the window a person chose for every other screen as it was (AC21).
+ */
+export function useWindowChoice(): WindowChoice {
+  const stored = useSelection().window;
+  const inAddress = useUrlWindow();
+  const from = inAddress?.from;
+  const to = inAddress?.to;
+  return useMemo<WindowChoice>(
+    () => (from && to ? { kind: "absolute", from, to } : stored),
+    [from, to, stored],
+  );
 }
 
 /**
@@ -211,7 +334,7 @@ export function describeChoice(choice: WindowChoice): string {
  * and "in the last 12:00–13:00" does not. Callers write "over {phrase}", never
  * "over the last {phrase}".
  */
-export function describeWindowChoice(choice: WindowChoice): string {
+export function describeWindowChoice(choice: WindowChoice, zone?: string): string {
   if (choice.kind === "relative") return `the last ${timeRangeById(choice.rangeId).label}`;
 
   const from = new Date(choice.from);
@@ -220,35 +343,59 @@ export function describeWindowChoice(choice: WindowChoice): string {
 
   // A range inside one day names the day once. Across days each end needs its own,
   // or "12:00–13:00 on 14 Sept" would quietly lose the day the range started.
-  return from.toDateString() === to.toDateString()
-    ? `${clock(from)}–${clock(to)} on ${day(from)}`
-    : `${day(from)}, ${clock(from)} to ${day(to)}, ${clock(to)}`;
+  return dayKey(from, zone) === dayKey(to, zone)
+    ? `${clock(from, zone)}–${clock(to, zone)} on ${day(from, zone)}`
+    : `${day(from, zone)}, ${clock(from, zone)} to ${day(to, zone)}, ${clock(to, zone)}`;
 }
 
 /* `hour12: false` for the reason `format/time.ts` sets it on every other clock in
    this console: the logs screen prints 13:22:47 and a window phrase reading
    "01:22 PM" beside it would be the same instant written two ways. */
-const WINDOW_CLOCK = new Intl.DateTimeFormat(undefined, {
+const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
   hour: "2-digit",
   minute: "2-digit",
   hour12: false,
-});
+};
+const WINDOW_CLOCK = new Intl.DateTimeFormat(undefined, CLOCK_OPTIONS);
 
-function clock(at: Date): string {
-  return WINDOW_CLOCK.format(at);
+/**
+ * A formatter on a named clock, or on the browser's when the name is not one this
+ * runtime knows: a phrase on the wrong clock is a smaller fault than no phrase (FR46).
+ */
+function zonedFormatter(
+  zone: string,
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  try {
+    return new Intl.DateTimeFormat(locale, { ...options, timeZone: zone });
+  } catch {
+    return new Intl.DateTimeFormat(locale, options);
+  }
 }
 
-function day(at: Date): string {
-  return formatDate(at.toISOString());
+function clock(at: Date, zone?: string): string {
+  return (zone ? zonedFormatter(zone, undefined, CLOCK_OPTIONS) : WINDOW_CLOCK).format(at);
+}
+
+/** Which calendar day an instant falls on, in the zone, as a comparable string. */
+function dayKey(at: Date, zone?: string): string {
+  return zone ? zonedFormatter(zone, "en-CA", {}).format(at) : at.toDateString();
+}
+
+function day(at: Date, zone?: string): string {
+  return zone
+    ? zonedFormatter(zone, "en-GB", { day: "numeric", month: "short" }).format(at)
+    : formatDate(at.toISOString());
 }
 
 /** What this screen is showing, for the sentence under its heading. */
 export function useWindowPhrase(): string {
-  return describeWindowChoice(useSelection().window);
+  return describeWindowChoice(useWindowChoice());
 }
 
 export function timeRangeById(rangeId: string): TimeRange {
-  return TIME_RANGES.find((range) => range.id === rangeId) ?? TIME_RANGES[1];
+  return DASHBOARD_RANGES.find((range) => range.id === rangeId) ?? TIME_RANGES[1];
 }
 
 export interface TimeWindow {
@@ -340,7 +487,7 @@ export function liveOptions(window: TimeWindow | LiveWindow): { refetchInterval:
 }
 
 export function useLiveWindow(): LiveWindow {
-  const { window: choice } = useSelection();
+  const choice = useWindowChoice();
   const preference = useRefreshPreference();
   const [now, setNow] = useState(() => Date.now());
 

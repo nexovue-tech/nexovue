@@ -15,6 +15,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
 )
 
 // attrServiceName is the resource attribute behind the promoted service_name
@@ -69,10 +70,23 @@ type stamps struct {
 // faithfully, so the whole message is rejected and parked rather than written
 // in part: dropping the odd metric would lose customer data silently, and
 // writing the rest would leave a hole nothing records.
+//
+// The one exception is a point claiming to be a synthetic check's reading from
+// a door other than the prober's (proberdoor). It is not customer data but a
+// forgery that would make a check read up, so it is dropped and the rest is
+// written; parking the message instead would let anyone fill the dead-letter
+// topic with well-formed junk. The drop is counted in syntheticRefused, which
+// the pipeline logs, so it is never silent (docs/changes/browser-door,
+// decision 4).
 func (d decoded) flatten(marks stamps) (rows, error) {
-	var out rows
+	var (
+		out     rows
+		refused int
+	)
+	prober := proberdoor.Trusted(d.envelope.GetDoor())
 	for _, resourceMetrics := range d.request.GetResourceMetrics() {
 		resourceAttrs := resourceMetrics.GetResource().GetAttributes()
+		forgedResource := !prober && proberdoor.ClaimsCheck(resourceAttrs)
 		shared := point{
 			ReceivedAt:    marks.receivedAt,
 			RetentionDays: marks.retentionDays,
@@ -85,15 +99,32 @@ func (d decoded) flatten(marks stamps) (rows, error) {
 			scoped := shared
 			scoped.ScopeName = scopeMetrics.GetScope().GetName()
 			scoped.ScopeVersion = scopeMetrics.GetScope().GetVersion()
-			if err := appendMetrics(&out, scoped, scopeMetrics.GetMetrics()); err != nil {
+			refuse := func(metric *metricspb.Metric) bool {
+				return forgedResource || (!prober && proberdoor.ClaimsMetric(metric.GetName()))
+			}
+			dropped, err := appendMetrics(&out, scoped, scopeMetrics.GetMetrics(), refuse)
+			if err != nil {
 				return rows{}, consume.RejectedBy(d.envelope, err)
 			}
+			refused += dropped
 		}
 	}
+	out.syntheticRefused.Note(refused, d.envelope)
 	return out, nil
 }
 
-func appendMetrics(out *rows, scoped point, metrics []*metricspb.Metric) error {
+// appendMetrics flattens each metric into out, or, for one refuse names, into
+// a scratch set that is discarded, and reports how many points it discarded.
+// Flattening the refused metric too means a shape this pipeline cannot store
+// still rejects the message, and the count is exactly the points that would
+// have been written.
+func appendMetrics(
+	out *rows,
+	scoped point,
+	metrics []*metricspb.Metric,
+	refuse func(*metricspb.Metric) bool,
+) (int, error) {
+	refused := 0
 	for _, metric := range metrics {
 		if metric == nil {
 			continue
@@ -103,11 +134,19 @@ func appendMetrics(out *rows, scoped point, metrics []*metricspb.Metric) error {
 		described.MetricUnit = metric.GetUnit()
 		described.MetricDescription = metric.GetDescription()
 
-		if err := appendMetric(out, described, metric); err != nil {
-			return err
+		if !refuse(metric) {
+			if err := appendMetric(out, described, metric); err != nil {
+				return 0, err
+			}
+			continue
 		}
+		var discarded rows
+		if err := appendMetric(&discarded, described, metric); err != nil {
+			return 0, err
+		}
+		refused += discarded.points()
 	}
-	return nil
+	return refused, nil
 }
 
 func appendMetric(out *rows, described point, metric *metricspb.Metric) error {

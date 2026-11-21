@@ -12,17 +12,22 @@ from nexovue_api.ratelimit.headers import (
     limit_headers,
     rejection_headers,
 )
-from nexovue_api.ratelimit.limiter import Decision
+from nexovue_api.ratelimit.limiter import Decision, RateLimiter
 from nexovue_api.ratelimit.policy import (
     AUTH_TIER,
     DEFAULT_TIER,
+    DEPLOYS_ACCEPTED,
     TELEMETRY_TIER,
     TOKEN_TIER,
+    WEBHOOK_PREFIX,
+    WEBHOOK_TIER,
     Quota,
     tier_for,
     tier_for_path,
 )
 from nexovue_api.settings import API_PREFIX
+
+HOUR_SECONDS = 3_600
 
 
 @pytest.mark.parametrize(
@@ -51,6 +56,32 @@ from nexovue_api.settings import API_PREFIX
 )
 def test_tier_for_path(path: str, expected: object) -> None:
     assert tier_for_path(path) is expected
+
+
+def test_a_connection_test_has_its_own_allowance() -> None:
+    """F22 T3.8: each test makes our infrastructure call a tracker, so it is Run now's kind
+    of request, with a send test's tight quota, and the result read shares it."""
+    from nexovue_api.ratelimit.policy import CONNECTION_TEST_TIER
+
+    for path in ("/connection-tests", "/connection-tests/a-request-id"):
+        assert tier_for_path(f"{API_PREFIX}{path}") is CONNECTION_TEST_TIER
+    assert CONNECTION_TEST_TIER.quota.limit <= 10
+    assert tier_for_path(f"{API_PREFIX}/connections") is DEFAULT_TIER
+
+
+def test_a_connection_webhook_has_its_own_allowance() -> None:
+    """F22 T5.1: a tracker's webhook is unauthenticated until its signature holds, so it is
+    counted apart from the `/connections` routes people use, at 120 a minute (a guess)."""
+    from nexovue_api.ratelimit.policy import CONNECTION_WEBHOOK_PREFIX, CONNECTION_WEBHOOK_TIER
+
+    path = f"{API_PREFIX}/connections/webhook/0b8f5a52-6c55-4a1e-9f0e-6f1d3f0a7c11"
+    assert path.startswith(CONNECTION_WEBHOOK_PREFIX)
+    assert tier_for_path(path) is CONNECTION_WEBHOOK_TIER
+    assert CONNECTION_WEBHOOK_TIER.quota.limit == 120
+    assert CONNECTION_WEBHOOK_TIER.quota.window_seconds == 60
+    assert not CONNECTION_WEBHOOK_TIER.quota.exact
+    # A connection's own routes stay where they were.
+    assert tier_for_path(f"{API_PREFIX}/connections/github/manifest") is DEFAULT_TIER
 
 
 A_TOKEN = f"{API_TOKEN_PREFIX}CIreadsCIreadsCIreadsCIreadsCIre"
@@ -149,3 +180,28 @@ def test_a_rejection_always_gives_a_retry_after_of_at_least_one_second() -> None
     )
 
     assert rejection_headers(decision)[RETRY_AFTER_HEADER] == "1"
+
+
+def test_deploys_are_counted_exactly_per_hour_once_signed() -> None:
+    """F28 FR13: 1,000 newly stored deploys an hour, shared by every API process, so a
+    batch of 100 is counted as 100 and a stolen secret cannot spend more. An hour long,
+    so the expiry sweep, which removes windows older than an hour, never cuts one short."""
+    assert DEPLOYS_ACCEPTED.exact
+    assert DEPLOYS_ACCEPTED.limit == 1_000
+    assert DEPLOYS_ACCEPTED.window_seconds == HOUR_SECONDS
+
+
+def test_the_webhook_address_tier_bounds_requests_and_the_quota_bounds_deploys() -> None:
+    """The address tier counts requests before anything is verified; a request may now
+    carry many deploys, so it is not what bounds them (T2.5)."""
+    assert tier_for_path(f"{WEBHOOK_PREFIX}some-project") is WEBHOOK_TIER
+    assert not WEBHOOK_TIER.quota.exact
+    assert WEBHOOK_TIER.quota.limit < DEPLOYS_ACCEPTED.limit
+
+
+async def test_only_an_exact_quota_counts_more_than_one_at_a_time() -> None:
+    """The in-process window is a log of request times; a cost there would be a lie."""
+    limiter = RateLimiter(None, instances=1)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="exact"):
+        await limiter.consume(scope="ip", identity="a", quota=DEFAULT_TIER.quota, cost=5)

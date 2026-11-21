@@ -20,6 +20,14 @@ _STORE_RESULT: Final = text(
     """
 )
 
+# `scheduler-insight` holds no right on `job_results`: its connection test's result goes
+# through migration 0070's function, which writes `kind` itself (F3 AC44).
+AI_CHECK_KIND: Final = "ai_check"
+_STORE_AI_CHECK_RESULT: Final = text(
+    "SELECT insight_store_check_result(CAST(:request_id AS uuid), CAST(:org_id AS uuid), "
+    "CAST(:payload AS jsonb), CAST(:ttl_seconds AS double precision))"
+)
+
 _RECORD_EVALUATION: Final = text(
     """
     INSERT INTO alert_evaluation_status (evaluation, finished_at, skipped)
@@ -52,6 +60,27 @@ async def store(
                 "request_id": request_id,
                 "org_id": org_id,
                 "kind": kind,
+                "payload": json.dumps(payload),
+                "ttl_seconds": ttl_seconds,
+            },
+        )
+
+
+async def store_ai_check(
+    engine: AsyncEngine,
+    *,
+    org_id: str,
+    request_id: str,
+    payload: dict[str, Any],
+    ttl_seconds: int,
+) -> None:
+    """`store` for the AI role's connection test, as its own account may: the first stands."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            _STORE_AI_CHECK_RESULT,
+            {
+                "request_id": request_id,
+                "org_id": org_id,
                 "payload": json.dumps(payload),
                 "ttl_seconds": ttl_seconds,
             },

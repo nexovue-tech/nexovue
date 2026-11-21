@@ -23,8 +23,8 @@ const edgesTable = "service_edges_1m"
 // on the way in, which is the same `-State` construction a materialized view
 // would do.
 const inputColumns = "tenant_id String, derived_retention_days UInt16, project_id String, " +
-	"client_service String, server_service String, server_peer_kind String, edge_kind String, " +
-	"minute DateTime, call_count UInt64, error_count UInt64, latency_ms Array(Float64)"
+	"client_service String, server_service String, server_peer_kind String, " +
+	"server_peer_attr String, door String, edge_kind String, minute DateTime, call_count UInt64, error_count UInt64, latency_ms Array(Float64)"
 
 // targetColumns names where each selected expression lands. Without it the
 // server matches on position, and a column added by a later ALTER lands at the
@@ -32,8 +32,8 @@ const inputColumns = "tenant_id String, derived_retention_days UInt16, project_i
 // `server_peer_kind` briefly tried to become the quantile state. Naming them
 // costs one line and makes the insert survive the next ALTER.
 const targetColumns = "(tenant_id, derived_retention_days, project_id, client_service, " +
-	"server_service, server_peer_kind, edge_kind, minute, call_count, error_count, " +
-	"latency_quantiles)"
+	"server_service, server_peer_kind, server_peer_attr, door, edge_kind, minute, call_count, " +
+	"error_count, latency_quantiles)"
 
 // insertStatement folds each row's durations into the quantile state the table
 // stores. arrayReduce applies the aggregate within one row, so the insert needs
@@ -44,8 +44,8 @@ const targetColumns = "(tenant_id, derived_retention_days, project_id, client_se
 // does not, and ClickHouse rejects the statement without it.
 const insertStatement = "INSERT INTO " + edgesTable + " " + targetColumns +
 	" SELECT tenant_id, derived_retention_days, " +
-	"project_id, client_service, server_service, server_peer_kind, edge_kind, minute, call_count, " +
-	"error_count, arrayReduce('quantilesState(0.5, 0.95, 0.99)', latency_ms) FROM input('" +
+	"project_id, client_service, server_service, server_peer_kind, server_peer_attr, door, " +
+	"edge_kind, minute, call_count, error_count, arrayReduce('quantilesState(0.5, 0.95, 0.99)', latency_ms) FROM input('" +
 	inputColumns + "') FORMAT Native"
 
 // block is one insert's worth of edges, held column by column. It is reused
@@ -57,6 +57,8 @@ type block struct {
 	clientService  proto.ColStr
 	serverService  proto.ColStr
 	serverPeerKind proto.ColStr
+	serverPeerAttr proto.ColStr
+	door           proto.ColStr
 	edgeKind       proto.ColStr
 	minute         proto.ColDateTime
 	callCount      proto.ColUInt64
@@ -75,6 +77,8 @@ func newBlock() *block {
 		{Name: "client_service", Data: &b.clientService},
 		{Name: "server_service", Data: &b.serverService},
 		{Name: "server_peer_kind", Data: &b.serverPeerKind},
+		{Name: "server_peer_attr", Data: &b.serverPeerAttr},
+		{Name: "door", Data: &b.door},
 		{Name: "edge_kind", Data: &b.edgeKind},
 		{Name: "minute", Data: &b.minute},
 		{Name: "call_count", Data: &b.callCount},
@@ -91,6 +95,8 @@ func (b *block) append(edge Edge) {
 	b.clientService.Append(edge.ClientService)
 	b.serverService.Append(edge.ServerService)
 	b.serverPeerKind.Append(edge.ServerPeerKind)
+	b.serverPeerAttr.Append(edge.ServerPeerAttr)
+	b.door.Append(edge.Door)
 	b.edgeKind.Append(edge.Kind)
 	b.minute.Append(edge.Minute)
 	b.callCount.Append(edge.CallCount)
@@ -111,7 +117,8 @@ func deduplicationToken(edges []Edge) string {
 	digest := insertdedup.NewDigest()
 	for _, edge := range edges {
 		digest.AddRow(edge.Minute.UTC(), edge.TenantID, edge.ProjectID, edge.RetentionDays,
-			edge.ClientService, edge.ServerService, edge.ServerPeerKind, edge.Kind,
+			edge.ClientService, edge.ServerService, edge.ServerPeerKind, edge.ServerPeerAttr,
+			edge.Door, edge.Kind,
 			edge.CallCount, edge.ErrorCount, edge.LatencyMS)
 	}
 	return digest.Token()

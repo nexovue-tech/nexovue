@@ -41,6 +41,11 @@ type Row struct {
 	// Services is sorted and distinct. Sorted for the same reason the rows are:
 	// one flush takes its locks in a stable order.
 	Services []string
+
+	// Heard is the services whose last-seen time this row moves: Services less
+	// those that arrived only through the browser door. Sorted and distinct, as
+	// Services is.
+	Heard []string
 }
 
 // bucket is what one tenant-day has accumulated since the last flush: counters
@@ -49,9 +54,17 @@ type Row struct {
 // The services are a set here and a set in Postgres, which is the whole reason
 // the billing unit survives a replay: adding a name twice leaves it unchanged,
 // where adding a count twice does not.
+//
+// heard is the part of the services some door other than the browser's carried,
+// which is what `service_last_seen` takes (see heardThrough).
 type bucket struct {
 	counts   Counts
 	services map[string]struct{}
+	heard    map[string]struct{}
+}
+
+func newBucket() *bucket {
+	return &bucket{services: make(map[string]struct{}), heard: make(map[string]struct{})}
 }
 
 // Meter accumulates counters in memory and hands them out in flushes, the way
@@ -98,12 +111,15 @@ func (m *Meter) Observe(
 	}
 	total, seen := m.totals[key]
 	if !seen {
-		total = &bucket{services: make(map[string]struct{})}
+		total = newBucket()
 		m.totals[key] = total
 	}
 	total.counts.add(metered.Counts)
 	for _, service := range metered.Services {
 		total.services[service] = struct{}{}
+	}
+	for _, service := range metered.Heard {
+		total.heard[service] = struct{}{}
 	}
 }
 
@@ -120,12 +136,15 @@ func (m *Meter) Drain() []Row {
 	for key, held := range m.totals {
 		into, seen := summed[key.tenantDay]
 		if !seen {
-			into = &bucket{services: make(map[string]struct{})}
+			into = newBucket()
 			summed[key.tenantDay] = into
 		}
 		into.counts.add(held.counts)
 		for service := range held.services {
 			into.services[service] = struct{}{}
+		}
+		for service := range held.heard {
+			into.heard[service] = struct{}{}
 		}
 	}
 	m.totals = make(map[counted]*bucket)
@@ -138,6 +157,7 @@ func (m *Meter) Drain() []Row {
 			Day:       key.day,
 			Counts:    held.counts,
 			Services:  sortedNames(held.services),
+			Heard:     sortedNames(held.heard),
 		})
 	}
 

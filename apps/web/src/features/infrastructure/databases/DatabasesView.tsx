@@ -47,7 +47,7 @@ const ROW_HEIGHT = 40;
 const MEAN_COLUMN = "w-20 shrink-0 text-right";
 const WORST_COLUMN = "w-20 shrink-0 text-right";
 const CALLS_COLUMN = "w-24 shrink-0 text-right";
-const TOTAL_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
+const TOTAL_COLUMN = "hidden w-24 shrink-0 text-right @3xl:block";
 const SEEN_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 
 export function DatabasesView() {

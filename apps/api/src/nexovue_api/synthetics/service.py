@@ -131,7 +131,39 @@ async def check_trends(
         _window_parameters(project_id, from_time, to_time)
         | {"bucket_seconds": bucket_seconds, "limit": MAX_TREND_ROWS},
     )
+    by_check = _trends_by_check(rows)
+    return CheckTrendResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        checks=[
+            CheckTrend(check_id=check_id, points=points)
+            for check_id, points in sorted(by_check.items())
+        ],
+    )
 
+
+async def check_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    check_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> tuple[int, list[CheckTrendPoint]]:
+    """One check's history across the window: the bucket width and its points, from one
+    statement bound to that check, with `check_trends`' buckets and row-to-model step
+    (F20, T5.1c, AC14, AC95)."""
+    bucket_seconds = resolve_bucket_seconds(from_time, to_time, None)
+    rows = await repository.query(
+        queries.CHECK_TREND_SQL,
+        _window_parameters(project_id, from_time, to_time)
+        | {"bucket_seconds": bucket_seconds, "limit": MAX_TREND_ROWS, "check_id": check_id},
+    )
+    return bucket_seconds, _trends_by_check(rows).get(check_id, [])
+
+
+def _trends_by_check(rows: list[dict[str, Any]]) -> dict[str, list[CheckTrendPoint]]:
     by_check: dict[str, list[CheckTrendPoint]] = defaultdict(list)
     for row in rows:
         successful = int(row["successful_runs"])
@@ -149,16 +181,7 @@ async def check_trends(
                 ),
             )
         )
-
-    return CheckTrendResponse(
-        window_start=from_time,
-        window_end=to_time,
-        bucket_seconds=bucket_seconds,
-        checks=[
-            CheckTrend(check_id=check_id, points=points)
-            for check_id, points in sorted(by_check.items())
-        ],
-    )
+    return by_check
 
 
 async def phase_breakdown(

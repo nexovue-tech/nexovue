@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SETTINGS_GROUPS } from "@/shared/settings/settings-nav";
 import { createAppRouter } from "../router";
 
+import consoleRoutesRaw from "./console-routes.json?raw";
 import { NAV_SECTIONS } from "./route-manifest";
 
 /**
@@ -87,7 +88,23 @@ describe("the sidebar", () => {
       "/alerts/incidents/$incidentId",
       // F6 (D12): reached from a finding's card, a service's timeline and its messages.
       "/findings/$findingId",
+      // F3 FR46: reached from the empty findings feed, and later from `/settings/ai`.
+      "/findings/sample",
+      // F19: reached from the targets list, a target's page and its actions.
+      "/slos/new",
+      "/slos/$sloId",
+      "/slos/$sloId/edit",
+      // F28: reached from the releases list's rows.
+      "/releases/$releaseId",
+      // F20: reached from the dashboard list, and the builder from the list and a dashboard.
+      "/dashboards/$dashboardId",
+      "/dashboards/new",
+      "/dashboards/$dashboardId/edit",
       "/settings/channels/$channelId",
+      // F22: reached from the Connections screen and from GitHub's own redirects.
+      "/settings/connections/github/start",
+      "/settings/connections/github/return",
+      "/settings/connections/github/installed",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.
       "/admin/onboard",
@@ -115,6 +132,48 @@ describe("the sidebar", () => {
     );
 
     expect(unreachable).toEqual([]);
+  });
+});
+
+describe("the front door (F20 Step 1, FR1, FR2)", () => {
+  it("serves the Findings feed at /, Overview at /overview, and no /findings list (AC1)", () => {
+    const served = servedPaths();
+
+    expect(served.has("/")).toBe(true);
+    expect(served.has("/overview")).toBe(true);
+    // A finding's own page stays: alert messages link to it.
+    expect(served.has("/findings/$findingId")).toBe(true);
+    // The list address is removed, not redirected: nexovue is pre-deployment.
+    expect(served.has("/findings")).toBe(false);
+  });
+
+  it("offers Findings at /, Overview at /overview, Alerts, targets, then dashboards in Home (AC2, F19 D22, F20)", () => {
+    expect(NAV_SECTIONS[0].items).toEqual([
+      { path: "/", title: "Findings" },
+      { path: "/overview", title: "Overview" },
+      { path: "/alerts", title: "Alerts" },
+      { path: "/slos", title: "Targets (SLOs)" },
+      { path: "/dashboards", title: "Dashboards" },
+    ]);
+  });
+});
+
+describe("the checked-in route list (FR43, AC54)", () => {
+  it("offers Releases in Signals, right after Errors (F28 design, `/releases`)", () => {
+    const signals = NAV_SECTIONS.find((section) => section.label === "Signals");
+    const paths = signals?.items.map((item) => item.path) ?? [];
+    expect(paths.indexOf("/releases")).toBe(paths.indexOf("/errors") + 1);
+  });
+
+  it("matches the router exactly, so the scheduler's link test reads the truth", () => {
+    // `console-routes.json` exists because the scheduler cannot import the
+    // console: its own test (`test_alert_links.py`) holds every link a message
+    // composes against this list, and this test holds the list to the router.
+    // `?raw` rather than a JSON module: the file is data two repositories read,
+    // and the app's tsconfig has no reason to grow `resolveJsonModule` for it.
+    const listed = JSON.parse(consoleRoutesRaw) as string[];
+
+    expect([...listed].sort()).toEqual([...servedPaths()].sort());
   });
 });
 

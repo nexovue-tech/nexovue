@@ -67,8 +67,13 @@ def configure_logging(
     """
     shared = _shared_processors(service=service, env=env, log_format=log_format)
 
+    # A logger cached on first use keeps the list it was built with, so the chain is
+    # replaced inside that one list: configuring again reaches loggers already used,
+    # as `structlog.testing.capture_logs` relies on.
+    chain = structlog.get_config()["processors"]
+    chain[:] = [*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter]
     structlog.configure(
-        processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        processors=chain,
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,

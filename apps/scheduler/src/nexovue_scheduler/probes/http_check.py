@@ -20,7 +20,11 @@ from urllib.parse import urlsplit
 
 import pycurl
 
-from nexovue_scheduler.probes.addresses import ConnectGuard
+from nexovue_scheduler.probes.addresses import (
+    NO_PRIVATE_ENDPOINTS,
+    ConnectGuard,
+    PrivateEndpoints,
+)
 from nexovue_scheduler.probes.result import (
     PHASE_DNS,
     PHASE_TCP,
@@ -41,6 +45,10 @@ USER_AGENT: Final = "nexovue-prober/0.1 (+https://nexovue.com/probes)"
 MAX_BODY_BYTES: Final = 1 * 1024 * 1024
 
 MAX_REDIRECTS: Final = 5
+
+# A header carrying a line break could end itself and start another, which libcurl would
+# send as written: refused before any connection (F3 AC34, plan T4.2).
+HEADER_REFUSAL: Final = "A header holds a control character and was not sent."
 
 # libcurl's answer when the write callback declined more bytes — which is us
 # stopping at the cap, not the target failing.
@@ -64,6 +72,8 @@ class PreparedRequest:
     body: bytes | None = None
     follow_redirects: bool = True
     timeout_seconds: int = 10
+    # Who is calling, for the receiver's logs: a probe by default; F3's AI calls say so.
+    user_agent: str = USER_AGENT
 
 
 class _ResponseReader:
@@ -96,16 +106,29 @@ class _ResponseReader:
         return None
 
 
-def perform(request: PreparedRequest, *, private_allowed: bool = False) -> HttpExchange:
+def perform(
+    request: PreparedRequest,
+    *,
+    private_allowed: bool = False,
+    private_endpoints: PrivateEndpoints = NO_PRIVATE_ENDPOINTS,
+    public_allowed: bool = True,
+) -> HttpExchange:
     """Send one request and report what happened, success or failure.
 
     Never raises for a target's behaviour — an unreachable host is a result, not
     an error. It raises only if pycurl itself cannot be configured, which is a
-    bug here rather than news about the target.
+    bug here rather than news about the target. `private_endpoints` and
+    `public_allowed` are F3's (`ConnectGuard`): an AI call's listed addresses.
     """
+    if _holds_control_character(request):
+        return _not_sent(request, HEADER_REFUSAL)
     reader = _ResponseReader()
     curl = pycurl.Curl()
-    guard = ConnectGuard(private_allowed=private_allowed)
+    guard = ConnectGuard(
+        private_allowed=private_allowed,
+        private_endpoints=private_endpoints,
+        public_allowed=public_allowed,
+    )
     try:
         _configure(curl, request, reader, guard)
         error: str | None = None
@@ -136,6 +159,29 @@ def perform(request: PreparedRequest, *, private_allowed: bool = False) -> HttpE
         curl.close()
 
 
+def _holds_control_character(request: PreparedRequest) -> bool:
+    texts = [request.user_agent, *(part for header in request.headers for part in header)]
+    # A tab is allowed inside a field value (RFC 9110); every other control character is not.
+    return any(
+        (ord(char) < 0x20 and char != "\t") or ord(char) == 0x7F for text in texts for char in text
+    )
+
+
+def _not_sent(request: PreparedRequest, error: str) -> HttpExchange:
+    return HttpExchange(
+        status_code=None,
+        headers=[],
+        body=b"",
+        body_truncated=False,
+        total_seconds=0.0,
+        # Nothing happened, so every phase is zero rather than missing.
+        phases=dict.fromkeys((PHASE_DNS, PHASE_TCP, PHASE_TLS, PHASE_TTFB, PHASE_TRANSFER), 0.0),
+        certificate=None,
+        effective_url=request.url,
+        error=error,
+    )
+
+
 def _configure(
     curl: Any, request: PreparedRequest, reader: _ResponseReader, guard: ConnectGuard
 ) -> None:
@@ -145,7 +191,7 @@ def _configure(
     curl.setopt(pycurl.OPENSOCKETFUNCTION, guard.open_socket)
     curl.setopt(pycurl.PROTOCOLS, pycurl.PROTO_HTTP | pycurl.PROTO_HTTPS)
     curl.setopt(pycurl.REDIR_PROTOCOLS, pycurl.PROTO_HTTP | pycurl.PROTO_HTTPS)
-    curl.setopt(pycurl.USERAGENT, USER_AGENT)
+    curl.setopt(pycurl.USERAGENT, request.user_agent)
     curl.setopt(pycurl.TIMEOUT, request.timeout_seconds)
     curl.setopt(pycurl.FOLLOWLOCATION, request.follow_redirects)
     curl.setopt(pycurl.MAXREDIRS, MAX_REDIRECTS)

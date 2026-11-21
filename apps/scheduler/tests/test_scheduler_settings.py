@@ -26,7 +26,43 @@ KNOWN_VARIABLES = (
     "ERASURE_BATCH_SIZE",
     "CHECK_SECRET_KEY",
     "CHECK_SECRET_PREVIOUS_KEYS",
+    "SCHEDULER_ROLE",
+    "NEXOVUE_DEPLOYMENT",
+    "NEXOVUE_CONNECTIONS",
+    "CONNECTION_SECRET_KEY",
+    "CONNECTION_SECRET_PREVIOUS_KEYS",
+    "SHOW_HELD_CAUSES",
+    "AI_SECRET_KEY",
+    "AI_SECRET_PREVIOUS_KEYS",
+    "AI_PRIVATE_ENDPOINTS",
 )
+
+# F22, AC33: exactly what `scheduler-connections` is given in the install Compose file.
+CONNECTIONS_ROLE_ENVIRONMENT = {
+    "ENV": "production",
+    "NEXOVUE_DEPLOYMENT": "self-hosted",
+    "LOG_LEVEL": "info",
+    "LOG_FORMAT": "json",
+    "SCHEDULER_ROLE": "connections",
+    "POSTGRES_DSN": "postgresql+asyncpg://nexovue:secret@postgres:5432/nexovue",
+    "APP_BASE_URL": "https://nexovue.example.com",
+    "CONNECTION_SECRET_KEY": "qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=",
+    "CONNECTION_SECRET_PREVIOUS_KEYS": "",
+}
+
+# F3, AC41: exactly what `scheduler-insight` is given in the install Compose file. No
+# Kafka, no check, channel or connection key, no mail, no object store, no ClickHouse.
+INSIGHT_ROLE_ENVIRONMENT = {
+    "ENV": "production",
+    "NEXOVUE_DEPLOYMENT": "self-hosted",
+    "LOG_LEVEL": "info",
+    "LOG_FORMAT": "json",
+    "SCHEDULER_ROLE": "insight",
+    "POSTGRES_DSN": "postgresql+asyncpg://nexovue_insight:secret@postgres:5432/nexovue",
+    "AI_SECRET_KEY": "Lh0pV3m8R2yQe5tW7uI9oP1aS4dF6gH8jK0lZ2xC5vB=",
+    "AI_SECRET_PREVIOUS_KEYS": "",
+    "AI_PRIVATE_ENDPOINTS": "",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -60,8 +96,61 @@ def test_missing_required_variable_is_named(monkeypatch: pytest.MonkeyPatch, mis
 
 
 def test_no_secret_carries_a_default() -> None:
-    for name in ("postgres_dsn", "kafka_brokers"):
-        assert Settings.model_fields[name].is_required(), f"{name} must have no default"
+    assert Settings.model_fields["postgres_dsn"].is_required()
+    # The brokers follow the role (F22, F3): required for `full`, below; none for a narrow role.
+    assert Settings.model_fields["kafka_brokers"].default == []
+
+
+def test_the_connections_role_starts_on_exactly_its_own_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC33: no Kafka, no check key, no mail or object store, and still production."""
+    _apply(monkeypatch, CONNECTIONS_ROLE_ENVIRONMENT)
+
+    settings = get_settings()
+
+    assert settings.scheduler_role == "connections"
+    assert settings.env == "production"
+    assert settings.kafka_brokers == []
+    assert (
+        settings.connection_secret_keys.current
+        == CONNECTIONS_ROLE_ENVIRONMENT["CONNECTION_SECRET_KEY"]
+    )
+
+
+def test_the_connections_role_refuses_production_without_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, {**CONNECTIONS_ROLE_ENVIRONMENT, "CONNECTION_SECRET_KEY": ""})
+
+    with pytest.raises(SettingsError, match="CONNECTION_SECRET_KEY"):
+        get_settings()
+
+
+def test_the_full_role_still_needs_its_brokers_and_check_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, {**CONNECTIONS_ROLE_ENVIRONMENT, "SCHEDULER_ROLE": "full"})
+
+    with pytest.raises(SettingsError, match="KAFKA_BROKERS"):
+        get_settings()
+
+
+def test_a_misspelt_role_stops_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "SCHEDULER_ROLE": "connection"})
+
+    with pytest.raises(SettingsError, match="SCHEDULER_ROLE"):
+        get_settings()
+
+
+@pytest.mark.parametrize(("value", "on"), [("yes", True), ("no", False), ("", True)])
+def test_connections_follow_the_install_s_setting(
+    monkeypatch: pytest.MonkeyPatch, value: str, on: bool
+) -> None:
+    """AC118: the same `NEXOVUE_CONNECTIONS` the API reads; on unless set to no."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "NEXOVUE_CONNECTIONS": value})
+
+    assert get_settings().connections_enabled is on
 
 
 def test_alert_mail_reads_the_same_variables_the_api_does(
@@ -194,3 +283,68 @@ def test_a_blank_provider_is_mail_left_unconfigured(monkeypatch: pytest.MonkeyPa
     _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "EMAIL_PROVIDER": ""})
 
     assert get_settings().email is None
+
+
+def test_held_causes_stay_held_unless_the_override_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 A60: the scheduler reads the same override the API does."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "SHOW_HELD_CAUSES": "true"})
+
+    assert get_settings().show_held_causes is True
+
+
+def test_production_refuses_to_show_held_causes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3 AC92: the override in production stops the process, whatever the role."""
+    _apply(monkeypatch, {**CONNECTIONS_ROLE_ENVIRONMENT, "SHOW_HELD_CAUSES": "true"})
+
+    with pytest.raises(SettingsError, match="SHOW_HELD_CAUSES"):
+        get_settings()
+
+
+def test_the_insight_role_starts_on_exactly_its_own_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 AC41: production, with no Kafka and no check key, on its own key alone."""
+    _apply(monkeypatch, INSIGHT_ROLE_ENVIRONMENT)
+
+    settings = get_settings()
+
+    assert settings.scheduler_role == "insight"
+    assert settings.ai_secret_keys.current == INSIGHT_ROLE_ENVIRONMENT["AI_SECRET_KEY"]
+    assert settings.kafka_brokers == []
+    assert settings.check_secret_key == ""
+    assert settings.connection_secret_key == ""
+
+
+def test_the_insight_role_refuses_production_without_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compose passes it with `:-`, so a missing key stops this role and no other (AC71)."""
+    _apply(monkeypatch, {**INSIGHT_ROLE_ENVIRONMENT, "AI_SECRET_KEY": ""})
+
+    with pytest.raises(SettingsError, match="AI_SECRET_KEY"):
+        get_settings()
+
+
+def test_the_insight_role_starts_without_its_key_outside_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, {**INSIGHT_ROLE_ENVIRONMENT, "ENV": "development", "AI_SECRET_KEY": ""})
+
+    assert get_settings().ai_secret_keys.current == ""
+
+
+@pytest.mark.parametrize("misspelt", ["insights", "ai", "Insight "])
+def test_a_misspelt_insight_role_stops_the_process(
+    monkeypatch: pytest.MonkeyPatch, misspelt: str
+) -> None:
+    _apply(monkeypatch, {**INSIGHT_ROLE_ENVIRONMENT, "SCHEDULER_ROLE": misspelt})
+
+    with pytest.raises(SettingsError, match="SCHEDULER_ROLE"):
+        get_settings()
+
+
+def test_no_other_role_needs_the_ai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connections role in production starts with no AI key: each role its own (FD10)."""
+    _apply(monkeypatch, CONNECTIONS_ROLE_ENVIRONMENT)
+
+    assert get_settings().ai_secret_keys.current == ""

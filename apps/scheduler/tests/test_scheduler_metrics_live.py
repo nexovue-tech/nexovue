@@ -222,3 +222,129 @@ async def test_detection_events_of_the_last_fifteen_minutes_are_counted_by_kind(
     expired, guarded = holds.HOLD_EXPIRED, holds.GUARD_ENGAGED
     assert after.detection_events_recent[expired] == before.detection_events_recent[expired] + 1
     assert after.detection_events_recent[guarded] == before.detection_events_recent[guarded]
+
+
+async def test_beat_says_whether_any_tracker_connection_is_live(engine: AsyncEngine) -> None:
+    """F22 AC118, AC123: `connections_active` is what lets the monitor tell a role left out on
+    purpose from one that died. It reads the rows, so it is beat's to say, and it is 0 while
+    connections are turned off, or when only F5's own App is connected."""
+    org_id = uuid.uuid4()
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            # Every live connection in this database, ended for this transaction only.
+            await connection.execute(
+                text(
+                    "UPDATE connections SET state = 'disconnected', sealed_credential = NULL, "
+                    "sealed_webhook_secret = NULL, sealed_manifest_code = NULL, "
+                    "setup_state_hash = NULL WHERE state <> 'disconnected'"
+                )
+            )
+            none = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(
+                text("INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'M')"),
+                {"id": org_id, "slug": f"metrics-{org_id.hex[:12]}"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state) "
+                    "VALUES (:org, 'github_fix', 'working')"
+                ),
+                {"org": org_id},
+            )
+            fix_only = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state) "
+                    "VALUES (:org, 'github', 'setting_up')"
+                ),
+                {"org": org_id},
+            )
+            one = await metrics.read_queues(connection, now=datetime.now(UTC))
+            turned_off = await metrics.read_queues(
+                connection, now=datetime.now(UTC), connections_enabled=False
+            )
+        finally:
+            await transaction.rollback()
+
+    assert (none.connections_active, fix_only.connections_active) == (0, 0)
+    assert (one.connections_active, turned_off.connections_active) == (1, 0)
+    metrics.publish(one)
+    assert metrics.CONNECTIONS_ACTIVE._value.get() == 1
+
+
+async def test_f3_s_readings_move_by_exactly_what_was_written(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F3 T5.10: an open finding 20 minutes old with no explanation, a version with a failed
+    read and a cut, an AI connection switched on, runs and the month's tokens; all counted
+    across organizations, with no tenant label, and beat's switch for the AI sweep."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            await connection.execute(text("UPDATE ai_connections SET enabled = false"))
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            was_on = await metrics.ai_connections_on(connection)
+            await add_finding(
+                connection, tenant, started_at=datetime.now(UTC) - timedelta(minutes=20)
+            )
+            explained = await add_finding(
+                connection, tenant, service="payments", started_at=datetime.now(UTC)
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO finding_explanations (org_id, project_id, finding_id, version,
+                        fingerprint, reads_failed, evidence, aliases, summary)
+                    VALUES (:org, :project, :finding, 1, repeat('a', 64), 2,
+                        '{"items": [{"kind": "absence", "values": {"reason": "truncated"}}]}',
+                        '{}', '{}')
+                    """
+                ),
+                {"org": tenant.org_id, "project": tenant.project_id, "finding": explained},
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO ai_connections (org_id, wire_format, base_url, model,
+                        monthly_token_limit, enabled, consented_at, consented_base_url,
+                        consented_fingerprint, consented_schema)
+                    VALUES (:org, 'openai_chat', 'https://p.example/v1', 'm', 10, true, now(),
+                        'https://p.example/v1', repeat('a', 64), 1)
+                    """
+                ),
+                {"org": tenant.org_id},
+            )
+            for outcome in ("done", "done", "invalid"):
+                await connection.execute(
+                    text(
+                        "INSERT INTO ai_runs (org_id, purpose, wire_format, model, "
+                        "provider_host, outcome) VALUES (:org, 'explain', 'openai_chat', 'm', "
+                        "'https://p.example', :outcome)"
+                    ),
+                    {"org": tenant.org_id, "outcome": outcome},
+                )
+            await connection.execute(
+                text(
+                    "INSERT INTO ai_usage_monthly (org_id, month, used_tokens) VALUES "
+                    "(:org, date_trunc('month', now() AT TIME ZONE 'UTC')::date, 700)"
+                ),
+                {"org": tenant.org_id},
+            )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+            is_on = await metrics.ai_connections_on(connection)
+        finally:
+            await transaction.rollback()
+
+    assert after.findings_unexplained - before.findings_unexplained == 1
+    assert after.evidence_reads_failed - before.evidence_reads_failed == 2
+    assert after.evidence_truncated - before.evidence_truncated == 1
+    assert (before.ai_connections_enabled, after.ai_connections_enabled) == (0, 1)
+    assert (was_on, is_on) == (False, True)
+    done = ("explain", "done")
+    assert after.ai_runs_recent[done] - before.ai_runs_recent.get(done, 0) == 2
+    assert after.ai_tokens_month - before.ai_tokens_month == 700
+    metrics.publish(after)
+    assert metrics.AI_CONNECTIONS_ENABLED._value.get() == 1

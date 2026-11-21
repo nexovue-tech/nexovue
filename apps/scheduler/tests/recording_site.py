@@ -43,6 +43,9 @@ class Reply:
     delay: float = 0.0
     body: bytes = b'{"ok": true}'
     headers: dict[str, str] = field(default_factory=lambda: {"Content-Type": "application/json"})
+    # Close the connection with no answer at all: a service that did the work and was
+    # cut off before it could say so (F22's commit-then-drop).
+    drop: bool = False
 
 
 @dataclass
@@ -50,8 +53,11 @@ class RecordingSite:
     host: str
     port: int
     requests: list[RecordedRequest]
-    # Path to the reply it gets; unknown paths get the default.
+    # Path to the reply it gets; unknown paths get `default`.
     replies: dict[str, Reply | Callable[[RecordedRequest], Reply]]
+    # What an unlisted path gets: one reply, or a function of the request, for a
+    # service whose paths carry ids (the simulated GitHub's `/repos/...`).
+    default: Reply | Callable[[RecordedRequest], Reply] = field(default_factory=Reply)
 
     def url(self, path: str = "/") -> str:
         return f"http://{self.host}:{self.port}{path}"
@@ -90,10 +96,13 @@ def serve_recording_site() -> Iterator[RecordingSite]:
                 body=body,
             )
             requests.append(recorded)
-            configured = replies.get(self.path.split("?", 1)[0], Reply())
+            configured = replies.get(self.path.split("?", 1)[0], site.default)
             reply = configured(recorded) if callable(configured) else configured
             if reply.delay:
                 time.sleep(reply.delay)
+            if reply.drop:
+                self.close_connection = True
+                return
             self.send_response(reply.status)
             for name, value in reply.headers.items():
                 self.send_header(name, value)
@@ -124,14 +133,12 @@ def serve_recording_site() -> Iterator[RecordingSite]:
             pass
 
     server = Server(("0.0.0.0", 0), Handler)
+    site = RecordingSite(
+        host=private_address(), port=server.server_address[1], requests=requests, replies=replies
+    )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield RecordingSite(
-            host=private_address(),
-            port=server.server_address[1],
-            requests=requests,
-            replies=replies,
-        )
+        yield site
     finally:
         server.shutdown()
         server.server_close()

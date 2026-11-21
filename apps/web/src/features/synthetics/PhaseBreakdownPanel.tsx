@@ -82,7 +82,7 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
           running.
         </p>
       ) : (
-        <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-start">
+        <div className="mt-4 flex flex-col gap-5 @3xl:flex-row @3xl:items-start">
           <div className="min-w-0 flex-1">
             <PhaseChart
               plot={plot}
@@ -143,7 +143,7 @@ function PhaseLegend({
   const total = bucket ? bucket.total_ms : meanTotalMs;
 
   return (
-    <div className="w-full shrink-0 lg:w-64">
+    <div className="w-full shrink-0 @3xl:w-64">
       <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
         {bucket ? formatClockTime(bucket.timestamp) : "Window mean"}
       </p>

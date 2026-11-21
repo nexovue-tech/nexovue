@@ -11,12 +11,23 @@ from __future__ import annotations
 import asyncio
 import socket
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
 
 import pytest
-from alert_fixtures import AlertTenant, add_channel, add_rule, anomaly_rule
+from alert_fixtures import (
+    AlertTenant,
+    add_channel,
+    add_finding,
+    add_rule,
+    anomaly_rule,
+    drop_tenant,
+    make_tenant,
+    rows,
+)
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from detection_history import (
     CLICKHOUSE_DSN,
@@ -41,10 +52,18 @@ from detection_history import span as _span
 from detection_history import state as _state
 from live import require_stack
 from nexovue_platform.alerts.model import service_subject
+from nexovue_platform.cases import (
+    CASE_JOIN_WINDOW,
+    DETACH_OPEN_JOINED_SQL,
+    RESOLVE_CASE_SQL,
+    detach_open_joined_parameters,
+    resolve_case_parameters,
+)
 from nexovue_platform.detection import TOO_MANY_SERVICES_KEY, WINDOW_REQUESTS_KEY
+from nexovue_platform.evidence import GATHER_EVIDENCE_TASK
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from nexovue_scheduler.alerts import incidents
 from nexovue_scheduler.alerts.rules import Rule
@@ -59,7 +78,9 @@ from nexovue_scheduler.detection.project_job import (
 )
 from nexovue_scheduler.detection.projects import ActiveProject, active_projects
 from nexovue_scheduler.detection.store import (
+    READINGS_TABLE,
     DetectionStore,
+    ProjectBinding,
     bind_project,
 )
 from nexovue_scheduler.jobs.registry import SoftTimeLimit
@@ -583,6 +604,7 @@ async def test_a_second_open_finding_for_one_scope_is_refused_whichever_job_comm
         "services": "[]",
         "signals": "[]",
         "started_at": ONSET,
+        "join_since": ONSET - CASE_JOIN_WINDOW,
     }
     try:
         async with first_engine.connect() as first, second_engine.connect() as second:
@@ -1137,3 +1159,552 @@ async def test_after_a_time_zone_change_and_a_rebuild_services_are_judged_not_le
     )
     modes = {reading.slower_mode, reading.failing_mode, reading.traffic_mode}
     assert modes <= {"weekly", "daily"}
+
+
+# ------------------------------------- a returning problem joins its case (F22 T2.1)
+
+# What the API's person acts take on a finding (`findings/queries.lock_finding`,
+# D78). Written here as SQL because the scheduler cannot import the API.
+_PERSON_LOCKS_ROOT: Final = text(
+    "SELECT id FROM findings WHERE org_id = :org_id AND id = :id FOR NO KEY UPDATE"
+)
+# A job that does not wait this long on a person's lock is not waiting on it.
+_NEVER_BLOCKS_SECONDS: Final = 5.0
+
+
+async def _active_case(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    *,
+    service: str | None = SERVICE,
+    acted_at: datetime,
+    state: str = "investigating",
+) -> Any:
+    """A closed finding holding a case a person last acted on at `acted_at`, as the
+    API's take leaves it."""
+    async with engine.begin() as connection:
+        root = await add_finding(
+            connection,
+            tenant,
+            service=service,
+            started_at=acted_at - timedelta(hours=2),
+            closed_at=acted_at - timedelta(hours=1),
+        )
+        await connection.execute(
+            text(
+                "UPDATE findings SET case_state = 'investigating', case_opened_at = :at, "
+                "case_activity_at = :at WHERE org_id = :org_id AND id = :id"
+            ),
+            {"org_id": tenant.org_id, "id": root, "at": acted_at},
+        )
+        if state == "resolved":
+            await connection.execute(
+                text(
+                    "UPDATE findings SET case_state = 'resolved', case_resolved_at = :at, "
+                    "case_resolution = 'resolved' WHERE org_id = :org_id AND id = :id"
+                ),
+                {"org_id": tenant.org_id, "id": root, "at": acted_at},
+            )
+    return root
+
+
+def _opening(
+    tenant: AlertTenant, *, scope: str = "service", service: str | None = SERVICE, now: datetime
+) -> dict[str, Any]:
+    """`_OPEN`'s values as the job binds them."""
+    return {
+        "org_id": tenant.org_id,
+        "project_id": tenant.project_id,
+        "scope": scope,
+        "service_name": service if scope == "service" else None,
+        "severity": "warning",
+        "muted": False,
+        "title": "a returning problem",
+        "signals": "[]",
+        "services": "[]",
+        "started_at": now,
+        "join_since": now - CASE_JOIN_WINDOW,
+    }
+
+
+async def _open_now(engine: AsyncEngine, tenant: AlertTenant, **opening: Any) -> Any:
+    async with engine.begin() as connection:
+        return (await connection.execute(project_job._OPEN, _opening(tenant, **opening))).one()
+
+
+async def test_a_new_finding_joins_its_service_s_case_only_inside_the_window(
+    engine: AsyncEngine, project: AlertTenant
+) -> None:
+    """AC12, FR9: a case a person acted on within 7 days takes the new finding; one
+    quiet for longer, or resolved (FR13), does not."""
+    now = ONSET
+    window = CASE_JOIN_WINDOW
+    recent = await _active_case(engine, project, acted_at=now - window + timedelta(minutes=1))
+    quiet = await _active_case(
+        engine, project, service="cart", acted_at=now - window - timedelta(minutes=1)
+    )
+    resolved = await _active_case(
+        engine, project, service="search", acted_at=now - timedelta(hours=1), state="resolved"
+    )
+
+    joined = await _open_now(engine, project, now=now)
+    standalone = await _open_now(engine, project, service="cart", now=now)
+    after_resolve = await _open_now(engine, project, service="search", now=now)
+
+    assert joined.root_finding_id == recent
+    assert standalone.root_finding_id is None and quiet is not None
+    assert after_resolve.root_finding_id is None and resolved is not None
+
+
+async def test_a_project_case_and_a_service_case_never_take_each_other_s_findings(
+    engine: AsyncEngine, project: AlertTenant
+) -> None:
+    """AC13, FR10: joining keeps to the same scope and service."""
+    now = ONSET
+    service_case = await _active_case(engine, project, acted_at=now - timedelta(hours=1))
+    project_case = await _active_case(
+        engine, project, service=None, acted_at=now - timedelta(hours=1)
+    )
+
+    project_finding = await _open_now(engine, project, scope="project", now=now)
+    other_service = await _open_now(engine, project, service="cart", now=now)
+
+    assert project_finding.root_finding_id == project_case
+    assert other_service.root_finding_id is None
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE findings SET state = 'closed', closed_reason = 'recovered', "
+                "closed_at = :at WHERE org_id = :org_id AND id = :id"
+            ),
+            {"org_id": project.org_id, "id": project_finding.id, "at": now},
+        )
+        await connection.execute(
+            text(
+                "UPDATE findings SET case_state = NULL, case_opened_at = NULL, "
+                "case_activity_at = NULL WHERE org_id = :org_id AND id = :id"
+            ),
+            {"org_id": project.org_id, "id": project_case},
+        )
+    project_again = await _open_now(engine, project, scope="project", now=now)
+    assert project_again.root_finding_id is None and service_case is not None
+
+
+async def _second_project(engine: AsyncEngine) -> AlertTenant:
+    made = await make_tenant(engine, with_check=False)
+    for table in ("service_stats_1m", "endpoint_stats_1m", READINGS_TABLE):
+        delete_after_run(table, str(made.org_id))
+    return made
+
+
+async def _pagerduty_and_slack(engine: AsyncEngine, tenant: AlertTenant) -> dict[Any, str]:
+    async with engine.begin() as connection:
+        slack = await add_channel(connection, tenant.org_id, kind="slack", name="Slack")
+        pagerduty = await add_channel(connection, tenant.org_id, kind="pagerduty", name="Pager")
+        await add_rule(
+            connection,
+            tenant.org_id,
+            tenant.project_id,
+            name="Findings",
+            condition=anomaly_rule("warning"),
+            channel_ids=[slack, pagerduty],
+        )
+    return {slack: "slack", pagerduty: "pagerduty"}
+
+
+def _two_rises(client: Client, tenant: AlertTenant, second_at: timedelta) -> list[datetime]:
+    """A rise at the onset, recovery, and the same rise again at `second_at`."""
+    span = _span(ONSET - timedelta(minutes=30), ONSET + second_at + timedelta(minutes=40))
+    slow = {
+        start + step * MINUTE: PAST_THE_MINIMUM
+        for start in (ONSET, ONSET + second_at)
+        for step in range(SUSTAIN)
+    }
+    _seed(client, tenant, span, slower_by=slow)
+    return _span(ONSET - timedelta(minutes=10), ONSET + second_at + timedelta(minutes=30))
+
+
+async def _take_once_open(engine: AsyncEngine, tenant: AlertTenant, at: datetime) -> bool:
+    """A person takes the open finding, as the API's take writes the row."""
+    async with engine.begin() as connection:
+        taken = await connection.execute(
+            text(
+                """
+                UPDATE findings SET case_state = 'investigating', case_opened_at = :at,
+                    case_activity_at = :at
+                WHERE org_id = :org_id AND project_id = :project_id AND state = 'open'
+                  AND case_state IS NULL AND root_finding_id IS NULL
+                RETURNING id
+                """
+            ),
+            {"org_id": tenant.org_id, "project_id": tenant.project_id, "at": at},
+        )
+        return taken.first() is not None
+
+
+async def _told_by_kind(
+    engine: AsyncEngine, tenant: AlertTenant, channels: dict[Any, str]
+) -> list[tuple[str, str, str]]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                "SELECT channel_id, kind, severity FROM notifications WHERE org_id = :org_id "
+                "ORDER BY created_at, id"
+            ),
+            {"org_id": tenant.org_id},
+        )
+        return [(channels[row.channel_id], row.kind, row.severity) for row in rows]
+
+
+async def test_a_case_changes_no_notification_and_its_returning_finding_joins_it(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC64 as the baseline of AC12: one scenario, run on a project whose first
+    finding is taken and on one whose is not, writes the same notifications —
+    PagerDuty's resolve on recovery and its page again for the return — and the same
+    findings. Only the case differs: the returning finding joins it, on its timeline."""
+    other = await _second_project(engine)
+    try:
+        second_at = timedelta(minutes=45)
+        told: dict[str, list[tuple[str, str, str]]] = {}
+        kept: dict[str, list[tuple[Any, ...]]] = {}
+        for label, tenant in (("taken", project), ("untouched", other)):
+            _seed_four_weeks(administrator, tenant)
+            await _baselines(engine, store, tenant)
+            channels = await _pagerduty_and_slack(engine, tenant)
+            taken = label == "untouched"
+            for minute in _two_rises(administrator, tenant, second_at):
+                await judge_project(engine, store, tenant.project_id, settled=minute, now=minute)
+                if not taken:
+                    taken = await _take_once_open(engine, tenant, minute)
+            assert taken
+            told[label] = await _told_by_kind(engine, tenant, channels)
+            findings = await _findings(engine, tenant)
+            kept[label] = [
+                (row.state, row.closed_reason, row.severity, row.started_at, row.muted)
+                for row in findings
+            ]
+            if label == "taken":
+                first, returning = findings
+                assert first.case_state == "investigating"
+                assert returning.root_finding_id == first.id
+                joined = await rows(
+                    engine,
+                    "SELECT detail FROM finding_events WHERE org_id = :org_id "
+                    "AND finding_id = :root AND kind = 'finding_joined_case'",
+                    org_id=tenant.org_id,
+                    root=first.id,
+                )
+                assert [row.detail for row in joined] == [{"joined_finding_id": str(returning.id)}]
+
+        assert told["taken"] == told["untouched"]
+        assert kept["taken"] == kept["untouched"] and len(kept["taken"]) == 2
+        pager = [kind for channel, kind, _ in told["taken"] if channel == "pagerduty"]
+        assert pager == ["opened", "resolved", "opened", "resolved"]
+    finally:
+        await drop_tenant(engine, other)
+
+
+async def _job_closes_and_opens(
+    connection: Any, tenant: AlertTenant, joined: Any, *, at: datetime
+) -> Any:
+    """The project job's batch, by its own statements: lock the service's open
+    finding, close it, and open the next, which joins the case."""
+    key = {"org_id": tenant.org_id, "project_id": tenant.project_id, "service_name": SERVICE}
+    (await connection.execute(project_job._OPEN_FINDING, key)).one()
+    await connection.execute(
+        project_job._CLOSE,
+        {
+            "org_id": tenant.org_id,
+            "id": joined,
+            "reason": "recovered",
+            "closed_at": at,
+            "signals": "[]",
+        },
+    )
+    return (await connection.execute(project_job._OPEN, _opening(tenant, now=at))).one()
+
+
+async def test_a_person_holding_the_root_never_blocks_the_job_and_then_detaches(
+    project: AlertTenant,
+) -> None:
+    """AC101, the barrier: a person holds the root while the job closes a joined
+    finding and opens the next in one batch. The job's insert takes a key share on
+    the root, which a person's `FOR NO KEY UPDATE` does not block, so the job
+    commits at once; the person's resolve then detaches the open joined finding."""
+    person_engine = create_async_engine(POSTGRES_DSN.replace("://", "+asyncpg://", 1))
+    job_engine = create_async_engine(POSTGRES_DSN.replace("://", "+asyncpg://", 1))
+    try:
+        root = await _active_case(job_engine, project, acted_at=ONSET - timedelta(hours=1))
+        joined = (await _open_now(job_engine, project, now=ONSET)).id
+        async with person_engine.connect() as person, job_engine.connect() as job:
+            await person.begin()
+            (await person.execute(_PERSON_LOCKS_ROOT, {"org_id": project.org_id, "id": root})).one()
+
+            await job.begin()
+            later = ONSET + timedelta(minutes=30)
+            opened = await asyncio.wait_for(
+                _job_closes_and_opens(job, project, joined, at=later), _NEVER_BLOCKS_SECONDS
+            )
+            await asyncio.wait_for(job.commit(), _NEVER_BLOCKS_SECONDS)
+            assert opened.root_finding_id == root
+
+            await person.execute(
+                text(RESOLVE_CASE_SQL),
+                resolve_case_parameters(
+                    org_id=project.org_id,
+                    finding_id=root,
+                    resolution="resolved",
+                    at=later,
+                    resolved_by=None,
+                ),
+            )
+            detached = await person.execute(
+                text(DETACH_OPEN_JOINED_SQL),
+                detach_open_joined_parameters(org_id=project.org_id, root_finding_id=root),
+            )
+            assert list(detached.scalars()) == [opened.id]
+            await person.commit()
+
+        by_id = {row.id: row for row in await _findings(job_engine, project)}
+        assert (by_id[joined].state, by_id[joined].closed_reason) == ("closed", "recovered")
+        assert by_id[joined].root_finding_id == root
+        assert (by_id[opened.id].state, by_id[opened.id].root_finding_id) == ("open", None)
+        assert by_id[root].case_state == "resolved"
+    finally:
+        await person_engine.dispose()
+        await job_engine.dispose()
+
+
+async def test_a_person_resolving_while_the_job_closes_and_opens_cannot_deadlock(
+    project: AlertTenant,
+) -> None:
+    """AC101's cycle: the person holds the root and waits on the joined finding to
+    detach it, while the job holds that finding and inserts the next, whose key
+    check needs the root. With `FOR UPDATE` on the root Postgres would abort one
+    side; with `FOR NO KEY UPDATE` both commit."""
+    person_engine = create_async_engine(POSTGRES_DSN.replace("://", "+asyncpg://", 1))
+    job_engine = create_async_engine(POSTGRES_DSN.replace("://", "+asyncpg://", 1))
+    try:
+        root = await _active_case(job_engine, project, acted_at=ONSET - timedelta(hours=1))
+        joined = (await _open_now(job_engine, project, now=ONSET)).id
+        later = ONSET + timedelta(minutes=30)
+        key = {"org_id": project.org_id, "project_id": project.project_id, "service_name": SERVICE}
+        async with person_engine.connect() as person, job_engine.connect() as job:
+            await person.begin()
+            await job.begin()
+            (await person.execute(_PERSON_LOCKS_ROOT, {"org_id": project.org_id, "id": root})).one()
+            (await job.execute(project_job._OPEN_FINDING, key)).one()
+
+            detaching = asyncio.create_task(
+                person.execute(
+                    text(DETACH_OPEN_JOINED_SQL),
+                    detach_open_joined_parameters(org_id=project.org_id, root_finding_id=root),
+                )
+            )
+            await asyncio.sleep(0.3)
+            assert not detaching.done(), "the person waits on the job's joined finding"
+
+            await job.execute(
+                project_job._CLOSE,
+                {
+                    "org_id": project.org_id,
+                    "id": joined,
+                    "reason": "recovered",
+                    "closed_at": later,
+                    "signals": "[]",
+                },
+            )
+            opened = (
+                await asyncio.wait_for(
+                    job.execute(project_job._OPEN, _opening(project, now=later)),
+                    _NEVER_BLOCKS_SECONDS,
+                )
+            ).one()
+            await asyncio.wait_for(job.commit(), _NEVER_BLOCKS_SECONDS)
+            await asyncio.wait_for(detaching, _NEVER_BLOCKS_SECONDS)
+            await person.commit()
+
+        by_id = {row.id: row for row in await _findings(job_engine, project)}
+        assert (by_id[joined].state, by_id[joined].closed_reason) == ("closed", "recovered")
+        assert by_id[opened.id].state == "open"
+    finally:
+        await person_engine.dispose()
+        await job_engine.dispose()
+
+
+async def _evidence_jobs(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple[str, str, float]]:
+    """F3's gathers still in the queue for the tenant: (finding, reason, seconds of delay)."""
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                "SELECT kwargs, extract(epoch FROM run_after - created_at) AS delay FROM jobs "
+                "WHERE org_id = :org_id AND task = :task ORDER BY created_at, run_after"
+            ),
+            {"org_id": tenant.org_id, "task": GATHER_EVIDENCE_TASK},
+        )
+        return [(row.kwargs["finding_id"], row.kwargs["reason"], float(row.delay)) for row in rows]
+
+
+# F3's gathers are proved by the transaction that added them, never by the queue: the dev
+# stack's own `evidence` worker, which CI runs beside this suite, claims an immediate gather
+# within a second and deletes it once it has run (`jobs/queue.py`, `_FINISH`). So what a
+# transaction wrote is read inside it, on its own connection (rows whose `xmin` is its id),
+# and whether it committed is asked of Postgres afterwards (`pg_xact_status`), which no
+# worker can change.
+_THIS_TRANSACTION: Final = "pg_current_xact_id()"
+_WRITTEN_HERE: Final = f"xmin = {_THIS_TRANSACTION}::xid"
+
+
+@dataclass(frozen=True, slots=True)
+class _Transaction:
+    """One service transaction of the project job, as it stood just before its commit."""
+
+    xact: int
+    # Each finding this transaction inserted or changed: its state.
+    findings: dict[str, str]
+    # Each gather it added: (finding, reason, seconds of delay).
+    gathers: list[tuple[str, str, float]]
+
+
+async def _this_transaction(connection: AsyncConnection, org_id: object) -> _Transaction:
+    xact = (
+        await connection.execute(text(f"SELECT CAST({_THIS_TRANSACTION}::text AS bigint)"))
+    ).scalar_one()
+    findings = await connection.execute(
+        text(f"SELECT id, state FROM findings WHERE org_id = :org_id AND {_WRITTEN_HERE}"),
+        {"org_id": org_id},
+    )
+    gathers = await connection.execute(
+        text(
+            "SELECT kwargs, extract(epoch FROM run_after - created_at) AS delay FROM jobs "
+            f"WHERE org_id = :org_id AND task = :task AND {_WRITTEN_HERE} ORDER BY run_after"
+        ),
+        {"org_id": org_id, "task": GATHER_EVIDENCE_TASK},
+    )
+    return _Transaction(
+        xact=xact,
+        findings={str(row.id): row.state for row in findings},
+        gathers=[
+            (row.kwargs["finding_id"], row.kwargs["reason"], float(row.delay)) for row in gathers
+        ],
+    )
+
+
+async def _fates(engine: AsyncEngine, transactions: list[_Transaction]) -> list[str]:
+    """Whether each transaction committed or aborted, from Postgres's commit log."""
+    async with engine.connect() as connection:
+        return [
+            (
+                await connection.execute(
+                    text("SELECT pg_xact_status(CAST(:xact AS xid8))"), {"xact": each.xact}
+                )
+            ).scalar_one()
+            for each in transactions
+        ]
+
+
+@pytest.fixture
+def service_transactions(monkeypatch: pytest.MonkeyPatch) -> list[_Transaction]:
+    """Each service transaction the project job runs, read at its last statement
+    (`_advance`, which moves the service's judged minute), on the transaction's own
+    connection."""
+    seen: list[_Transaction] = []
+    advance = project_job._advance
+
+    async def observed(
+        connection: AsyncConnection,
+        binding: ProjectBinding,
+        state: ServiceState,
+        judged: datetime,
+        signals: dict[str, Any],
+    ) -> None:
+        await advance(connection, binding, state, judged, signals)
+        seen.append(await _this_transaction(connection, binding.org_id))
+
+    monkeypatch.setattr(project_job, "_advance", observed)
+    return seen
+
+
+async def test_an_opening_adds_its_two_reads_and_a_close_its_last_in_its_transaction(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    service_transactions: list[_Transaction],
+) -> None:
+    """F3 AC2, AC79: opening adds `opened` now and `settled` in 5 minutes, and closing adds
+    `closed`, each in the transaction that changed the finding (A1), and both committed."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+
+    await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    assert (finding.state, finding.closed_reason) == ("closed", "recovered")
+    finding_id = str(finding.id)
+    wrote = [each for each in service_transactions if finding_id in each.findings]
+    opening = wrote[0]
+    closing = next(each for each in wrote if each.findings[finding_id] == "closed")
+    assert opening.findings[finding_id] == "open"
+    # Only the opening and the closing added gathers, and each its own.
+    assert [each for each in service_transactions if each.gathers] == [opening, closing]
+    assert [(f, reason) for f, reason, _ in opening.gathers] == [
+        (finding_id, "opened"),
+        (finding_id, "settled"),
+    ]
+    assert [(f, reason) for f, reason, _ in closing.gathers] == [(finding_id, "closed")]
+    delays = {reason: delay for _, reason, delay in opening.gathers + closing.gathers}
+    assert delays["opened"] < 5 and 295 < delays["settled"] < 305 and delays["closed"] < 5
+    # Each was committed with the change it rides on.
+    assert await _fates(engine, [opening, closing]) == ["committed", "committed"]
+
+
+async def test_an_opening_that_fails_to_commit_leaves_no_job_behind(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 AC2: a commit that fails after the opening leaves neither finding nor job."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+    probe = await _judge_through(engine, store, project, minutes)
+    opening = next(m for m, o in zip(minutes, probe, strict=True) if o.opened)
+    async with engine.begin() as connection:
+        for table in ("findings", "detection_state", "jobs"):
+            await connection.execute(
+                text(f"DELETE FROM {table} WHERE org_id = :org_id"), {"org_id": project.org_id}
+            )
+    await _judge_through(engine, store, project, [m for m in minutes if m < opening])
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM jobs WHERE org_id = :org_id"), {"org_id": project.org_id}
+        )
+
+    dying: list[_Transaction] = []
+
+    async def killed(connection: AsyncConnection, binding: ProjectBinding, *_: object) -> None:
+        dying.append(await _this_transaction(connection, binding.org_id))
+        raise RuntimeError("killed between the opening and the commit")
+
+    monkeypatch.setattr(project_job, "_advance", killed)
+    with pytest.raises(RuntimeError, match="killed"):
+        await judge_project(engine, store, project.project_id, settled=opening, now=opening)
+
+    # The opening and its two reads were written in the transaction that was killed...
+    (killed_opening,) = dying
+    (finding_id,) = killed_opening.findings
+    assert killed_opening.findings[finding_id] == "open"
+    assert [(f, reason) for f, reason, _ in killed_opening.gathers] == [
+        (finding_id, "opened"),
+        (finding_id, "settled"),
+    ]
+    # ...and it aborted, so neither survives: Postgres's own record, which no worker
+    # claiming from the queue can change.
+    assert await _fates(engine, dying) == ["aborted"]
+    assert await _findings(engine, project) == []
+    assert await _evidence_jobs(engine, project) == []

@@ -42,7 +42,13 @@ THE_SURFACE: Final = {
     "nexovue_api/projects/router.py:list_projects": "GET /projects",
     "nexovue_api/services/router.py:list_services": "GET /services",
     "nexovue_api/services/router.py:get_service": "GET /services/{service}",
+    # F4 T3.1a: each serves a chat tool of its own, so tokens gain them too (design, section 7).
+    "nexovue_api/services/router.py:service_trend": "GET /services/trend",
+    "nexovue_api/services/router.py:list_service_endpoints": "GET /services/{service}/endpoints",
+    "nexovue_api/infrastructure/router.py:list_nodes": "GET /infrastructure/hosts",
+    "nexovue_api/infrastructure/router.py:node_trends": "GET /infrastructure/trend",
     "nexovue_api/detection/router.py:service_detection": "GET /services/{service}/detection",
+    "nexovue_api/servicemap/router.py:get_service_map": "GET /service-map",
     "nexovue_api/traces/router.py:list_traces": "GET /traces",
     "nexovue_api/traces/router.py:get_trace": "GET /traces/{trace_id}",
     "nexovue_api/logs/search.py:search": "GET /logs/search",
@@ -53,8 +59,20 @@ THE_SURFACE: Final = {
     "nexovue_api/alerts/router.py:list_incidents": "GET /alerts/incidents",
     "nexovue_api/alerts/router.py:get_incident": "GET /alerts/incidents/{incident_id}",
     "nexovue_api/findings/router.py:list_findings": "GET /findings",
+    "nexovue_api/slos/router.py:list_slos": "GET /slos",
+    "nexovue_api/slos/router.py:get_slo": "GET /slos/{slo_id}",
+    "nexovue_api/slos/router.py:last_month": "GET /slos/months",
+    "nexovue_api/slos/router.py:months_csv": "GET /slos/months.csv",
+    "nexovue_api/slos/router.py:get_slo_months": "GET /slos/{slo_id}/months",
+    "nexovue_api/slos/router.py:get_slo_history": "GET /slos/{slo_id}/history",
+    "nexovue_api/slos/router.py:list_slo_exclusions": "GET /slos/{slo_id}/exclusions",
+    "nexovue_api/slos/readings/router.py:read_burn": "GET /slo-readings/{slo_id}/burn",
     "nexovue_api/findings/router.py:finding_stats": "GET /findings/stats",
     "nexovue_api/findings/router.py:get_finding": "GET /findings/{finding_id}",
+    # F22 FR20: a token reads kinds and times alone; the route itself narrows.
+    "nexovue_api/findings/router.py:read_timeline": "GET /findings/{finding_id}/timeline",
+    # F3 (A15, A68): a token reads a finding's facts, never any model words.
+    "nexovue_api/findings/router.py:read_explanation": "GET /findings/{finding_id}/explanation",
     "nexovue_api/detection/router.py:detection_status": (
         "GET /projects/{project_id}/detection/status"
     ),
@@ -64,6 +82,14 @@ THE_SURFACE: Final = {
     "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",
     "nexovue_api/synthetics/router.py:list_runs": "GET /synthetics/checks/{check_id}/runs",
     "nexovue_api/deploys/router.py:list_deploys": "GET /deploys",
+    # F28: releases and their comparison. No sender text (FR54).
+    "nexovue_api/releases/router.py:list_releases": "GET /releases",
+    "nexovue_api/releases/router.py:get_release": "GET /releases/{release_id}",
+    "nexovue_api/releases/router.py:get_comparison": "GET /releases/{release_id}/comparison",
+    "nexovue_api/releases/router.py:get_errors": "GET /releases/{release_id}/errors",
+    "nexovue_api/releases/router.py:get_rollout": "GET /releases/{release_id}/rollout",
+    "nexovue_api/releases/router.py:list_markers": "GET /releases/markers",
+    "nexovue_api/releases/router.py:list_coverage": "GET /releases/coverage",
     "nexovue_api/llm_observability/router.py:list_llm_calls": "GET /llm/calls",
 }
 
@@ -132,3 +158,40 @@ def test_every_surface_route_is_a_get(key: str) -> None:
     ]
     assert methods, f"{key} carries no route decorator"
     assert set(methods) == {"get"}, f"{key} serves {sorted(set(methods))}, not only GET"
+
+
+# F20 (AC9, D9): no API token reaches a dashboard route. `TenantRepository` itself depends
+# on `CurrentReader`, so a panels handler that dropped its gate would still read as
+# guarded to the rule above; each F20 handler must name its gate instead.
+DASHBOARD_ROUTERS: Final = ("nexovue_api/dashboards/", "nexovue_api/dashboardpanels/")
+# F20 handlers in another package's router. The series list hands attribute values to the
+# builder, which may be personal data, so no token reads it (design section 8, AC9, AC121).
+DASHBOARD_HANDLERS_ELSEWHERE: Final = ("nexovue_api/metrics/router.py:list_series",)
+DASHBOARD_GATES: Final = ("CurrentIdentity", "MayEditDashboards", "MayPurgeDashboards")
+
+
+def _dashboard_handlers() -> list[tuple[str, ast.AsyncFunctionDef | ast.FunctionDef]]:
+    return [
+        (key, node)
+        for key, node, decorators in _handlers()
+        if (key.startswith(DASHBOARD_ROUTERS) or key in DASHBOARD_HANDLERS_ELSEWHERE)
+        and any("router." in d for d in decorators)
+    ]
+
+
+def test_the_dashboard_handlers_were_found() -> None:
+    """A rule that parsed nothing passes for the wrong reason."""
+    found = {key for key, _ in _dashboard_handlers()}
+    assert len(found) >= 8
+    assert set(DASHBOARD_HANDLERS_ELSEWHERE) <= found
+
+
+@pytest.mark.parametrize("key", [key for key, _ in _dashboard_handlers()])
+def test_every_dashboard_handler_names_a_person_gate(key: str) -> None:
+    node = dict(_dashboard_handlers())[key]
+    annotations = _annotations(node)
+
+    assert any(gate in annotations for gate in DASHBOARD_GATES), (
+        f"{key} names none of {DASHBOARD_GATES}, so an API token may reach it"
+    )
+    assert READER not in annotations, f"{key} takes a {READER}: a token would reach it"

@@ -27,6 +27,8 @@ from nexovue_api.projects.schemas import (
     ProjectDetail,
     ProjectListResponse,
     ProjectUpdateRequest,
+    ReleaseSummaryResponse,
+    ReleaseSummaryWrite,
     SamplingConfigResponse,
     SamplingConfigWrite,
 )
@@ -97,6 +99,24 @@ async def replace_sampling_config(
 ) -> SamplingConfigResponse:
     return await service.write_sampling_config(
         db, org_id=identity.org_id, project_id=project_id, document=request.config
+    )
+
+
+@router.put("/{project_id}/release-summary", summary="Where this project's release summaries go")
+async def set_release_summary(
+    project_id: uuid.UUID,
+    request: ReleaseSummaryWrite,
+    identity: MayConfigureProjects,
+    db: DbSession,
+) -> ReleaseSummaryResponse:
+    """F28 FR55: one channel people read gets a summary of every release, or null for
+    none, the default. An owner or admin only (D53, AC83)."""
+    return await service.write_release_summary(
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        project_id=project_id,
+        channel_id=request.channel_id,
     )
 
 

@@ -1,0 +1,47 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Create a pull request', POST /repos/{owner}/{repo}/pulls with draft: true, on GitHub Free (D62: drafts on every plan since 1 May 2025, by GitHub's changelog).",
+  "request": {
+    "method": "POST",
+    "path": "/repos/acme/api/pulls"
+  },
+  "status": 201,
+  "compared": [
+    "number",
+    "state",
+    "draft",
+    "head.ref",
+    "head.sha",
+    "base.ref",
+    "html_url",
+    "user.type"
+  ],
+  "values": ["state", "draft", "head.ref", "user.type"],
+  "body": {
+    "id": 7000001,
+    "node_id": "PR_x",
+    "number": 1,
+    "state": "open",
+    "draft": true,
+    "locked": false,
+    "merged": false,
+    "merged_at": null,
+    "closed_at": null,
+    "title": "t",
+    "body": "b",
+    "user": {
+      "login": "nexovue-acme[bot]",
+      "type": "Bot"
+    },
+    "head": {
+      "ref": "nexovue/suggestion-1",
+      "sha": "0000000000000000000000000000000000000000",
+      "label": "acme:nexovue/suggestion-1"
+    },
+    "base": {
+      "ref": "main",
+      "label": "acme:main"
+    },
+    "url": "u",
+    "html_url": "u"
+  }
+}

@@ -11,14 +11,20 @@ import {
 import { parseNewRuleSearch } from "@/features/alerts/search";
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
-import { ERROR_FILTERS } from "@/features/errors/filters";
+import {
+  parseDashboardSearch,
+  parseNewDashboardSearch,
+} from "@/features/dashboards/dashboard-search";
+import { ERROR_FILTERS, parseErrorGroupSearch } from "@/features/errors/filters";
+import { parseFeedSearch } from "@/features/findings/feed-filter";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { llmCallFilters } from "@/features/llm-observability/filters";
-import { scopedService } from "@/features/logs/search";
+import { scopedService, searchPhrase } from "@/features/logs/search";
 import { severityFilterById } from "@/features/logs/severity";
 import { metricFilters } from "@/features/metrics/filters";
 import { parseProfilesSearch } from "@/features/profiles/search";
+import { parseReleaseSearch } from "@/features/releases/search";
 import { rumFilters } from "@/features/rum/filters";
 import { SERVICE_MAP_FILTERS } from "@/features/servicemap/filters";
 import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
@@ -26,8 +32,10 @@ import { SYNTHETIC_FILTERS } from "@/features/synthetics/filters";
 import { parseCheckSearch, parseNewCheckSearch } from "@/features/synthetics/search";
 import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
+import type { FilterValues } from "@/shared/components/FilterBar";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
+import { keepUrlProject, keepUrlWindow } from "@/shared/url-window";
 
 import { HostedOnly } from "./HostedOnly";
 import { AppShell } from "./layout/AppShell";
@@ -47,6 +55,18 @@ const OrganizationScreen = lazyRouteComponent(
 const PlatformScreen = lazyRouteComponent(
   () => import("@/features/admin/PlatformScreen"),
   "PlatformScreen",
+);
+const SampleExplanationScreen = lazyRouteComponent(
+  () => import("@/features/findings/SampleExplanationScreen"),
+  "SampleExplanationScreen",
+);
+const AISettingsScreen = lazyRouteComponent(
+  () => import("@/features/aisettings/AISettingsScreen"),
+  "AISettingsScreen",
+);
+const ExplanationSettingsScreen = lazyRouteComponent(
+  () => import("@/features/explanationsettings/ExplanationSettingsScreen"),
+  "ExplanationSettingsScreen",
 );
 const AlertsScreen = lazyRouteComponent(
   () => import("@/features/alerts/AlertsScreen"),
@@ -88,6 +108,34 @@ const EditRuleScreen = lazyRouteComponent(
 const NewRuleScreen = lazyRouteComponent(
   () => import("@/features/alerts/RuleEditor"),
   "NewRuleScreen",
+);
+const ReleasesScreen = lazyRouteComponent(
+  () => import("@/features/releases/ReleasesScreen"),
+  "ReleasesScreen",
+);
+const ReleaseScreen = lazyRouteComponent(
+  () => import("@/features/releases/ReleaseScreen"),
+  "ReleaseScreen",
+);
+const SlosScreen = lazyRouteComponent(() => import("@/features/slos/SlosScreen"), "SlosScreen");
+const SloScreen = lazyRouteComponent(() => import("@/features/slos/SloScreen"), "SloScreen");
+const NewSloScreen = lazyRouteComponent(() => import("@/features/slos/SloForm"), "NewSloScreen");
+const EditSloScreen = lazyRouteComponent(() => import("@/features/slos/SloForm"), "EditSloScreen");
+const DashboardListScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardListScreen"),
+  "DashboardListScreen",
+);
+const DashboardScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardScreen"),
+  "DashboardScreen",
+);
+const DashboardEditScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardEditScreen"),
+  "DashboardEditScreen",
+);
+const NewDashboardScreen = lazyRouteComponent(
+  () => import("@/features/dashboards/DashboardEditScreen"),
+  "NewDashboardScreen",
 );
 const AuditScreen = lazyRouteComponent(() => import("@/features/audit/AuditScreen"), "AuditScreen");
 const AcceptInviteScreen = lazyRouteComponent(
@@ -180,6 +228,22 @@ const ApiKeysScreen = lazyRouteComponent(
   () => import("@/features/settings/ApiKeysScreen"),
   "ApiKeysScreen",
 );
+const ConnectionsScreen = lazyRouteComponent(
+  () => import("@/features/settings/ConnectionsScreen"),
+  "ConnectionsScreen",
+);
+const GitHubStartScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubStartScreen"),
+  "GitHubStartScreen",
+);
+const GitHubReturnScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubReturnScreen"),
+  "GitHubReturnScreen",
+);
+const GitHubInstalledScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubReturnScreen"),
+  "GitHubInstalledScreen",
+);
 const SupportAccessScreen = lazyRouteComponent(
   () => import("@/features/support/SupportAccessScreen"),
   "SupportAccessScreen",
@@ -233,23 +297,28 @@ const shellRoute = createRoute({
 /* ------------------------------------------------------------------ the screens */
 
 /**
- * Overview holds `/` until the insight engine exists (OD2).
- *
- * Not "a dashboard became the front door": the founder's 2026-09-12 decision is
- * that insights and dashboards are both first-class, and the feed is still what
- * a person lands on once it is real. Until then `/` showing nothing was the
- * worse answer — a front door that says the product has not started.
+ * The Findings feed is the front door (FD15, F20 D58). The insight engine is
+ * real now (F6), so the founder's recorded decision applies: `/` is what a
+ * person lands on, and Overview keeps its own entry at `/overview`. The old
+ * `/findings` list address is gone rather than redirected — nexovue is
+ * pre-deployment, and only `/findings/$findingId` is linked from messages.
  */
-const overviewRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/",
-  component: OverviewScreen,
-});
-
 const findingsRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: "/findings",
+  path: "/",
   component: FindingsScreen,
+  // F22 FR22: the case filter lives in the address, so back returns to it (AC28). F4 T3.3a:
+  // a chat step's link names its project too.
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFeedSearch(search),
+    ...keepUrlProject(search),
+  }),
+});
+
+const overviewRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/overview",
+  component: OverviewScreen,
 });
 
 // What every finding card and message links to (D12): one finding, its evidence and
@@ -258,6 +327,19 @@ const findingRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/findings/$findingId",
   component: FindingScreen,
+  // The feed filter it was opened from, which its back link returns to (AC128).
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFeedSearch(search),
+    ...keepUrlProject(search),
+  }),
+});
+
+// F3 FR46: a labelled sample from fixed data, before any real finding exists. Static,
+// so it outranks `$findingId`.
+const sampleExplanationRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/findings/sample",
+  component: SampleExplanationScreen,
 });
 
 const servicesRoute = createRoute({
@@ -267,6 +349,7 @@ const servicesRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...parseFilterValues(SERVICE_FILTERS, search),
     ...(parseServiceOrder(search.order) === "worst" ? {} : { order: "slowest" as const }),
+    ...keepUrlProject(search),
   }),
 });
 
@@ -274,6 +357,8 @@ const serviceRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/services/$name",
   component: ServiceDetailRoute,
+  // F3 FR16: a finding's link carries its window here, and nothing else.
+  validateSearch: keepUrlWindow,
 });
 
 /** The route owns the parameter; the screen owns everything after it. */
@@ -286,8 +371,10 @@ const serviceMapRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/service-map",
   component: ServiceMapScreen,
-  validateSearch: (search: Record<string, unknown>) =>
-    parseFilterValues(SERVICE_MAP_FILTERS, search),
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFilterValues(SERVICE_MAP_FILTERS, search),
+    ...keepUrlProject(search),
+  }),
 });
 
 /**
@@ -299,13 +386,18 @@ const tracesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces",
   component: TraceListScreen,
-  validateSearch: (search: Record<string, unknown>) => toSearchParams(parseTraceFilters(search)),
+  // F3 FR16: the window a finding's link carries stays beside the filters (AC21).
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...keepUrlWindow(search),
+    ...toSearchParams(parseTraceFilters(search)),
+  }),
 });
 
 const traceRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces/$traceId",
   component: TraceWaterfallScreen,
+  validateSearch: keepUrlProject,
 });
 
 /** The route owns the parameter; the screen owns everything after it. */
@@ -318,7 +410,12 @@ const errorsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/errors",
   component: ErrorsScreen,
-  validateSearch: (search: Record<string, unknown>) => parseFilterValues(ERROR_FILTERS, search),
+  // F3: the window a finding's link carries, and the group it opens (FR16, AC105).
+  validateSearch: (search: Record<string, unknown>): FilterValues => ({
+    ...keepUrlWindow(search),
+    ...parseFilterValues(ERROR_FILTERS, search),
+    ...parseErrorGroupSearch(search),
+  }),
 });
 
 const logsRoute = createRoute({
@@ -328,7 +425,10 @@ const logsRoute = createRoute({
   // The service and the severity live here so arriving from another screen can
   // land already narrowed, and so a narrowed view is a link someone can send.
   validateSearch: (search: Record<string, unknown>) => ({
+    ...keepUrlWindow(search),
     ...(scopedService(search.service) ? { service: scopedService(search.service) as string } : {}),
+    // F4 T3.3: a chat step's search phrase, shown in the box on arrival.
+    ...(searchPhrase(search.q) ? { q: searchPhrase(search.q) as string } : {}),
     ...(severityFilterById(String(search.severity ?? "")).id === "all"
       ? {}
       : { severity: severityFilterById(String(search.severity ?? "")).id }),
@@ -342,6 +442,7 @@ const infrastructureRoute = createRoute({
   // Hosts and databases are two views of one route, so it validates both sets.
   // Their keys are disjoint, so neither view can see the other's filters.
   validateSearch: (search: Record<string, unknown>) => ({
+    ...keepUrlWindow(search),
     ...parseFilterValues(infrastructureFilters([]), search),
     ...parseFilterValues(databaseFilters([]), search),
   }),
@@ -357,6 +458,7 @@ const metricsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...metricFilters(search),
     ...(typeof search.metric === "string" && search.metric ? { metric: search.metric } : {}),
+    ...keepUrlProject(search),
   }),
 });
 
@@ -371,7 +473,10 @@ const syntheticsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/synthetics",
   component: SyntheticsScreen,
-  validateSearch: (search: Record<string, unknown>) => parseFilterValues(SYNTHETIC_FILTERS, search),
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFilterValues(SYNTHETIC_FILTERS, search),
+    ...keepUrlProject(search),
+  }),
 });
 
 // Declared before `$checkId` reads nothing into order: TanStack ranks a static
@@ -400,6 +505,7 @@ const alertsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/alerts",
   component: AlertsScreen,
+  validateSearch: keepUrlProject,
 });
 
 // A static segment outranks the parameter, so `new` is never read as a rule id.
@@ -421,7 +527,99 @@ const incidentRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/alerts/incidents/$incidentId",
   component: IncidentScreen,
+  validateSearch: keepUrlProject,
 });
+
+// F28: releases, after Errors in Signals. A release's page reads one period, the
+// latest when `?period=` is absent.
+const releasesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/releases",
+  component: ReleasesScreen,
+  // F3 FR16: a finding's "Deploys" link carries its window here.
+  validateSearch: keepUrlWindow,
+});
+
+const releaseRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/releases/$releaseId",
+  component: ReleaseScreen,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseReleaseSearch(search),
+    ...keepUrlProject(search),
+  }),
+});
+
+// F19: reliability targets. `new` is static, so it is never read as a target id.
+const slosRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos",
+  component: SlosScreen,
+});
+
+const newSloRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos/new",
+  component: NewSloScreen,
+});
+
+const sloRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos/$sloId",
+  component: SloScreen,
+});
+
+const editSloRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/slos/$sloId/edit",
+  component: EditSloScreen,
+});
+
+// F20: dashboards. `new` is static, so it is never read as a dashboard id.
+const dashboardsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards",
+  component: DashboardListScreen,
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/$dashboardId",
+  component: DashboardRoute,
+  // The address decides this page's project, window and picked service (F20, FR28).
+  validateSearch: parseDashboardSearch,
+});
+
+function DashboardRoute() {
+  const { dashboardId } = dashboardRoute.useParams();
+  // Keyed, so a tab's own interval and the lines kept from one dashboard never reach another.
+  return <DashboardScreen key={dashboardId} dashboardId={dashboardId} />;
+}
+
+// The builder: a draft from a starting point (`?template=`, with a picked `?service=`), a
+// checked file (`?file=`), or a blank one.
+const newDashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/new",
+  component: NewDashboardRoute,
+  validateSearch: parseNewDashboardSearch,
+});
+
+function NewDashboardRoute() {
+  const { template, service, file } = newDashboardRoute.useSearch();
+  return <NewDashboardScreen templateId={template} service={service} fileId={file} />;
+}
+
+const editDashboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/dashboards/$dashboardId/edit",
+  component: EditDashboardRoute,
+});
+
+function EditDashboardRoute() {
+  const { dashboardId } = editDashboardRoute.useParams();
+  return <DashboardEditScreen dashboardId={dashboardId} />;
+}
 
 const profilesRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -510,6 +708,20 @@ const settingsSupportRoute = createRoute({
   ),
 });
 
+// F3 FR23 to FR32: an organization's AI provider, its test, consent, switch and usage.
+const settingsAIRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/ai",
+  component: AISettingsScreen,
+});
+
+// F3 FR54: rating and rule counts, and a rule stopped from naming causes.
+const settingsExplanationsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/explanations",
+  component: ExplanationSettingsScreen,
+});
+
 const settingsChannelsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/channels",
@@ -520,6 +732,33 @@ const settingsChannelRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/channels/$channelId",
   component: ChannelDetailScreen,
+});
+
+/* F22. The start is loaded as a full page (a plain anchor), because the edge gives that one
+   address the policy that lets its form post to github.com (`Caddyfile`, AC73). GitHub returns
+   a person to `return` after creating the App and to `installed` after installing it. */
+const settingsConnectionsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections",
+  component: ConnectionsScreen,
+});
+
+const settingsGitHubStartRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/github/start",
+  component: () => <GitHubStartScreen />,
+});
+
+const settingsGitHubReturnRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/github/return",
+  component: GitHubReturnScreen,
+});
+
+const settingsGitHubInstalledRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/github/installed",
+  component: GitHubInstalledScreen,
 });
 
 const settingsProjectsRoute = createRoute({
@@ -679,13 +918,24 @@ const notFoundRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
-    overviewRoute,
     findingsRoute,
+    overviewRoute,
     findingRoute,
+    sampleExplanationRoute,
     alertsRoute,
     newRuleRoute,
     ruleRoute,
     incidentRoute,
+    slosRoute,
+    releasesRoute,
+    releaseRoute,
+    newSloRoute,
+    sloRoute,
+    editSloRoute,
+    dashboardsRoute,
+    newDashboardRoute,
+    dashboardRoute,
+    editDashboardRoute,
     servicesRoute,
     serviceRoute,
     serviceMapRoute,
@@ -712,8 +962,14 @@ const routeTree = rootRoute.addChildren([
     settingsApiTokensRoute,
     settingsAuditRoute,
     settingsSupportRoute,
+    settingsAIRoute,
+    settingsExplanationsRoute,
     settingsChannelsRoute,
     settingsChannelRoute,
+    settingsConnectionsRoute,
+    settingsGitHubStartRoute,
+    settingsGitHubReturnRoute,
+    settingsGitHubInstalledRoute,
     settingsProjectsRoute,
     settingsBillingRoute,
     settingsUsageRoute,
@@ -756,7 +1012,7 @@ function NotFound() {
           a drawer, and this screen used to leave a reader with nothing to press
           (`docs/quality/console-review-2026-09-20.md`). */}
       <Link to="/" className="mt-4 inline-block font-medium text-brand-text hover:underline">
-        Back to Overview
+        Back to Findings
       </Link>
     </section>
   );

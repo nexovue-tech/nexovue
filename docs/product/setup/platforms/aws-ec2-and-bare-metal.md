@@ -45,9 +45,21 @@ It prints the key, so do not paste the output anywhere.
 
 ## Attaching the host's identity
 
-```ini
-Environment=OTEL_RESOURCE_ATTRIBUTES=service.version=1.4.0,deployment.environment.name=production
+```bash
+# In your deploy step, with the build's own id:
+echo "OTEL_RESOURCE_ATTRIBUTES=service.version=$GIT_SHA,deployment.environment.name=production" \
+  | sudo tee /etc/nexovue/version.env
 ```
+
+```ini
+EnvironmentFile=/etc/nexovue/version.env
+```
+
+`service.version` comes from the build, so each deploy reports its own release: a fixed
+value such as `latest` reads as one release that never ends ([deploys.md](../deploys.md)).
+`deployment.environment.name` says which environment this host serves, and every span
+carries it. Keep one nexovue project per environment, each with its own key, so one
+environment's releases are never compared with another's traffic.
 
 On EC2, the language SDKs mostly do not read instance metadata on their own. If
 you want instance id, availability zone and instance type on every span, that is

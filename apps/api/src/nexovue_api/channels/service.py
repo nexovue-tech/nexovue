@@ -84,6 +84,11 @@ OWNERS_UNDELETABLE: Final = (
     "it instead."
 )
 OWNERS_FIXED: Final = "The organization owners channel has no settings to change; mute it instead."
+# F3 FR21: the follow-up never reaches PagerDuty or a webhook, so it has no switch there.
+EXPLAINED_PEOPLE_ONLY: Final = (
+    "The follow-up naming a likely place to look goes only to channels people read; "
+    "PagerDuty and webhooks never receive it."
+)
 
 
 def channel_box(keys: ConfiguredKeys) -> SealedBox:
@@ -165,6 +170,10 @@ async def update(
     if channel.kind == "owners" and (request.config is not None or request.secret is not None):
         raise InvalidRequestError(OWNERS_FIXED)
 
+    if request.sends_explained is not None:
+        if channel.kind not in READ_BY_PEOPLE:
+            raise InvalidRequestError(EXPLAINED_PEOPLE_ONLY)
+        channel.sends_explained = request.sends_explained
     if request.name is not None:
         channel.name = request.name.strip()
     secret = _validated_secret(channel.kind, request.secret, required=False)

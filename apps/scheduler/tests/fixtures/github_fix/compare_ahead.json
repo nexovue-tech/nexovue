@@ -1,0 +1,116 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Compare two commits', GET /repos/{owner}/{repo}/compare/{basehead}: ancestry of the running commit.",
+  "request": {
+    "method": "GET",
+    "path": "/repos/acme/api/compare/{first}...main"
+  },
+  "status": 200,
+  "compared": ["status", "ahead_by", "behind_by", "merge_base_commit.sha"],
+  "values": ["status", "behind_by"],
+  "body": {
+    "url": "u",
+    "status": "ahead",
+    "ahead_by": 1,
+    "behind_by": 0,
+    "total_commits": 1,
+    "base_commit": {
+      "sha": "0000000000000000000000000000000000000000",
+      "node_id": "C_x",
+      "url": "u",
+      "author": {
+        "name": "n",
+        "email": "e",
+        "date": "2026-11-11T00:00:00Z"
+      },
+      "committer": {
+        "name": "n",
+        "email": "e",
+        "date": "2026-11-11T00:00:00Z"
+      },
+      "message": "m",
+      "tree": {
+        "sha": "0000000000000000000000000000000000000000",
+        "url": "u"
+      },
+      "parents": [
+        {
+          "sha": "0000000000000000000000000000000000000000",
+          "url": "u"
+        }
+      ],
+      "verification": {
+        "verified": false,
+        "reason": "unsigned",
+        "signature": null,
+        "payload": null
+      }
+    },
+    "merge_base_commit": {
+      "sha": "0000000000000000000000000000000000000000",
+      "node_id": "C_x",
+      "url": "u",
+      "author": {
+        "name": "n",
+        "email": "e",
+        "date": "2026-11-11T00:00:00Z"
+      },
+      "committer": {
+        "name": "n",
+        "email": "e",
+        "date": "2026-11-11T00:00:00Z"
+      },
+      "message": "m",
+      "tree": {
+        "sha": "0000000000000000000000000000000000000000",
+        "url": "u"
+      },
+      "parents": [
+        {
+          "sha": "0000000000000000000000000000000000000000",
+          "url": "u"
+        }
+      ],
+      "verification": {
+        "verified": false,
+        "reason": "unsigned",
+        "signature": null,
+        "payload": null
+      }
+    },
+    "commits": [
+      {
+        "sha": "0000000000000000000000000000000000000000",
+        "node_id": "C_x",
+        "url": "u",
+        "author": {
+          "name": "n",
+          "email": "e",
+          "date": "2026-11-11T00:00:00Z"
+        },
+        "committer": {
+          "name": "n",
+          "email": "e",
+          "date": "2026-11-11T00:00:00Z"
+        },
+        "message": "m",
+        "tree": {
+          "sha": "0000000000000000000000000000000000000000",
+          "url": "u"
+        },
+        "parents": [
+          {
+            "sha": "0000000000000000000000000000000000000000",
+            "url": "u"
+          }
+        ],
+        "verification": {
+          "verified": false,
+          "reason": "unsigned",
+          "signature": null,
+          "payload": null
+        }
+      }
+    ],
+    "files": []
+  }
+}

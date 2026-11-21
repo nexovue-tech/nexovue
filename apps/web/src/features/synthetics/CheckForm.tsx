@@ -176,7 +176,7 @@ export function CheckForm({
         ) : null}
 
         {draft.kind === "multistep" ? (
-          <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
+          <div className="grid min-w-0 grid-cols-1 gap-4 @3xl:grid-cols-[16rem_minmax(0,1fr)]">
             <div className="flex flex-col gap-3">
               <StepList
                 steps={draft.steps}

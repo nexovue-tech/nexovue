@@ -72,6 +72,9 @@ func TestARevokedPartitionsShareLeavesTheCounters(t *testing.T) {
 	if len(drained.Endpoints) != 1 || drained.Endpoints[0].RequestCount != 4 {
 		t.Errorf("endpoint rollup drained %+v, want one row of 4 requests", drained.Endpoints)
 	}
+	if len(drained.Versions) != 1 || drained.Versions[0].RequestCount != 4 {
+		t.Errorf("version rollup drained %+v, want one row of 4 requests", drained.Versions)
+	}
 }
 
 // A partition this worker never counted on must cost nothing.

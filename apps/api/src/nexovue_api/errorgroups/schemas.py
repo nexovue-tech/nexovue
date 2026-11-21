@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from nexovue_api.wire import IsoTimestamp
@@ -10,6 +12,8 @@ from nexovue_api.wire import IsoTimestamp
 # at their own grouping or ours.
 GROUPED_BY_SDK: str = "sdk_fingerprint"
 GROUPED_BY_TEMPLATE: str = "type_and_message_template"
+# F28's coverage values (spec, *A service's coverage*).
+DeployCoverage = Literal["deploys_and_versions", "deploys_only", "versions_only", "none"]
 
 
 class PrecedingDeploy(BaseModel):
@@ -61,6 +65,10 @@ class ErrorGroupSummary(BaseModel):
     # The deploy before this group appeared, when one is recorded. Correlation
     # and nothing more; see `PrecedingDeploy`.
     preceding_deploy: PrecedingDeploy | None = None
+    # What we hear about these services' deploys as of `first_seen` (F28 FR38, D23):
+    # the cell's words tell "none before" from "not told". None when it was not read,
+    # the one case the unknown mark stands for.
+    deploy_coverage: DeployCoverage | None = None
 
 
 class ErrorGroupListResponse(BaseModel):

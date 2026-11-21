@@ -39,11 +39,17 @@ const GUARDED = [
   "features/projects/CheckSecretsSection.tsx",
   "features/projects/CheckVariablesSection.tsx",
   "features/projects/MaintenanceWindowsSection.tsx",
+  // F28 FR2: a just-minted deploy secret, shown once.
+  "features/projects/DeploysSection.tsx",
   "features/synthetics/CheckForm.tsx",
   "features/synthetics/ImportScreen.tsx",
   "features/alerts/RuleEditor.tsx",
   "features/alerts/ChannelForm.tsx",
   "features/alerts/ChannelDetailScreen.tsx",
+  // F20: a dashboard's draft, which nothing writes until Save.
+  "features/dashboards/DashboardEditScreen.tsx",
+  // F3: an AI provider's address, model, key and limit, which nothing writes until Save.
+  "features/aisettings/AISettingsScreen.tsx",
 ];
 
 /** Submitted immediately, with no draft behind them. */

@@ -1,0 +1,11 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Delete a reference', DELETE /repos/{owner}/{repo}/git/refs/{ref}: 204, no body.",
+  "request": {
+    "method": "DELETE",
+    "path": "/repos/acme/api/git/refs/heads/nexovue/suggestion-1"
+  },
+  "status": 204,
+  "compared": [],
+  "values": [],
+  "body": null
+}

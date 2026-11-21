@@ -27,7 +27,36 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.detection.coordinator",
     "nexovue_scheduler.detection.project_job",
     "nexovue_scheduler.detection.baselines",
+    "nexovue_scheduler.slos.job",
+    "nexovue_scheduler.releases.sync",
+    "nexovue_scheduler.releases.summary",
+    "nexovue_scheduler.cases",
+    "nexovue_scheduler.evidence.gather",
 )
+
+# The modules each kind of worker loads (`--tasks`), F3's mechanism. A narrow role names
+# its own, so a task runs only where its keys are: `connections` holds tracker keys and
+# never imports ClickHouse, Kafka or object-store code (F22 D80, AC34).
+TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
+    "all": TASK_MODULES,
+    "connections": ("nexovue_scheduler.connections.tasks",),
+    # F3: the AI role, on its own account and network: the connection test (Step 4), the
+    # wording job and its sweep (Step 5). `all` never loads these.
+    # F4: chat's loop and its sweep (plan T2.9), here and never in `TASK_MODULES`.
+    "insight": (
+        "nexovue_scheduler.insight.check",
+        "nexovue_scheduler.insight.word",
+        "nexovue_scheduler.insight.sweep",
+        "nexovue_scheduler.insight.assistant",
+        "nexovue_scheduler.insight.assistant_sweep",
+    ),
+}
+# The module a worker's forkserver imports before any child exists, per task set.
+PRELOAD_OF: Final[dict[str, str]] = {
+    "all": "nexovue_scheduler.jobs.preload",
+    "connections": "nexovue_scheduler.jobs.preload_connections",
+    "insight": "nexovue_scheduler.jobs.preload_insight",
+}
 
 _TASKS: dict[str, Callable[..., None]] = {}
 _ATTEMPT: ContextVar[int] = ContextVar("job_attempt", default=1)

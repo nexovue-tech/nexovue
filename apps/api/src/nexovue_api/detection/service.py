@@ -74,6 +74,7 @@ from nexovue_api.detection.schemas import (
     SignalStatus,
 )
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
+from nexovue_api.findings import explanation_queries
 from nexovue_api.findings import queries as findings_queries
 from nexovue_api.findings.schemas import SignalName
 from nexovue_api.profile.timezones import stored_timezone
@@ -283,8 +284,9 @@ async def mute_service(
 ) -> ServiceControls:
     """BR9: nothing is sent for the service, during the mute or after it, for at most
     30 days from now. Its findings are still recorded, marked muted. `length` None
-    ends it now."""
-    return await _quieten(
+    ends it now. A mute also holds the service's wording waiting for a run, in this
+    transaction, so a queued run spends nothing (F3 FR35, AC81)."""
+    controls = await _quieten(
         session,
         actor=actor,
         project_id=project_id,
@@ -297,6 +299,16 @@ async def mute_service(
         member=False,
         now=now,
     )
+    if length is not None:
+        await explanation_queries.stop_queued_wording(
+            session,
+            org_id=actor.org_id,
+            project_id=project_id,
+            service_name=service_name,
+            state="held",
+            at=now,
+        )
+    return controls
 
 
 async def _quieten(

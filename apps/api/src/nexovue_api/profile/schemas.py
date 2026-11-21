@@ -254,6 +254,66 @@ class ExportedActivity(BaseModel):
     detail: dict[str, Any] | None
 
 
+class ExportedNote(BaseModel):
+    """A case note the person wrote (F22 AC25, BR16), in their own words, and the
+    finding it is on. It stays the organization's record after they leave."""
+
+    id: uuid.UUID
+    finding_id: uuid.UUID
+    body: str
+    created_at: datetime
+
+
+class ExportedStep(BaseModel):
+    """A tool read chat made for the person's question: the tool, and its arguments as
+    stored, free-text phrases included (F4 AC34). Never what it read."""
+
+    tool: str
+    arguments: dict[str, Any]
+
+
+class ExportedQuestion(BaseModel):
+    """A question the person asked chat (F4 AC34): their words, its outcome, its checked
+    answer as stored, its steps, and whether they marked it wrong and why."""
+
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    project_id: uuid.UUID
+    question: str
+    state: str
+    answer: dict[str, Any] | None
+    wrong_reason: str | None
+    created_at: datetime
+    steps: list[ExportedStep]
+
+
+class ExportedSloChange(BaseModel):
+    """A change the person made to a reliability target (F19 FR30, AC88). It stays the
+    organization's record after they leave."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    slo_id: uuid.UUID
+    at: datetime
+    what: str
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+
+
+class ExportedSloExclusion(BaseModel):
+    """Time the person left out of a reliability target, with their reason (F19 FR29,
+    AC88). It stays the organization's record after they leave."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    slo_id: uuid.UUID
+    starts_at: datetime
+    ends_at: datetime
+    reason: str
+    created_at: datetime
+    removed_at: datetime | None
+
+
 class ExportedApiToken(BaseModel):
     """No prefix: it carries characters of the token itself."""
 
@@ -271,7 +331,8 @@ class PersonalDataExport(BaseModel):
     """Everything nexovue holds about one person as a person (spec, BR1).
 
     `activity` is newest first and bounded; `truncated` says it was cut, and
-    `oldest_activity_at` how far back it reaches.
+    `oldest_activity_at` how far back it reaches. `notes_written` is bounded on
+    its own, with `notes_truncated`.
     """
 
     exported_at: datetime
@@ -284,3 +345,15 @@ class PersonalDataExport(BaseModel):
     oldest_activity_at: datetime | None
     api_tokens: list[ExportedApiToken]
     invitations_sent: list[ExportedInvitationSent]
+    # Newest first and bounded on their own: `notes_truncated` says they were cut.
+    notes_written: list[ExportedNote]
+    notes_truncated: bool
+    # The reliability target changes they made, newest first, bounded the same way.
+    slo_target_changes: list[ExportedSloChange]
+    slo_target_changes_truncated: bool
+    slo_exclusions: list[ExportedSloExclusion]
+    slo_exclusions_truncated: bool
+    # F4: the questions they asked chat, newest first, bounded the same way. Runbooks they
+    # wrote join when runbooks exist (F4 plan Step 5).
+    chat_questions: list[ExportedQuestion]
+    chat_questions_truncated: bool

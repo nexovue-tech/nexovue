@@ -61,8 +61,8 @@ This is worth doing once and it pays for itself the first time you need to know
 which pod produced a trace:
 
 ```yaml
-            - name: OTEL_RESOURCE_ATTRIBUTES
-              value: k8s.namespace.name=$(NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.node.name=$(NODE_NAME),service.version=1.4.0
+            - name: SERVICE_VERSION
+              value: "{{ .Values.image.tag }}"
             - name: NAMESPACE
               valueFrom:
                 fieldRef:
@@ -75,13 +75,20 @@ which pod produced a trace:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: k8s.namespace.name=$(NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.node.name=$(NODE_NAME),service.version=$(SERVICE_VERSION)
 ```
 
-Same ordering rule: the referenced variables must be declared before the line
-that uses them.
+Same ordering rule: the referenced variables are declared before the line that
+uses them, so `OTEL_RESOURCE_ATTRIBUTES` comes last. `{{ .Values.image.tag }}` is Helm's;
+without Helm, put the tag there from your pipeline.
 
 `service.version` is what lets nexovue separate "the service is slow" from "the
-release we shipped at 14:00 is slow".
+release we shipped at 14:00 is slow", and it is how releases appear with no deploy
+step at all. Set it from the image tag your deploy already knows — the Helm value above,
+or a Kustomize-generated ConfigMap — never a fixed value such as `latest`, which reads as
+one release that never ends. [deploys.md](../deploys.md) has both, and how to report
+deploys from CI as well.
 
 ## The OpenTelemetry Operator
 

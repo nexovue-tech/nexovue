@@ -1,0 +1,23 @@
+{
+  "_source": "Shaped from GitHub's REST documentation for issues (docs.github.com/en/rest/issues/issues, read through a summarizing tool on 2026-11-02 for the design) and general knowledge. NOT verified against real GitHub: F22's T4.8 is not yet run (founder tests after Phase 2, foundation item 28) and will replace this with a sanitized real response. Values are made up. Pages: 'Create an issue' (POST /repos/{owner}/{repo}/issues, 201), 'Get an issue' (GET /repos/{owner}/{repo}/issues/{issue_number}), 'Update an issue' (PATCH, with state and state_reason). That a deleted issue answers 410 and a transferred one 301 to /repositories/{id}/issues/{n} is general knowledge, not read from a page.",
+  "id": 5000001,
+  "node_id": "I_kwDOAAAAAA",
+  "number": 1,
+  "title": "<replaced by the fake>",
+  "body": "<replaced by the fake>",
+  "state": "open",
+  "state_reason": null,
+  "locked": false,
+  "labels": [],
+  "assignees": [],
+  "comments": 0,
+  "user": {
+    "login": "<replaced by the fake: the App's bot>",
+    "type": "Bot"
+  },
+  "repository_url": "<replaced by the fake>",
+  "html_url": "<replaced by the fake>",
+  "created_at": "2026-11-09T12:00:00Z",
+  "updated_at": "2026-11-09T12:00:00Z",
+  "closed_at": null
+}

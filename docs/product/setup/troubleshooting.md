@@ -308,3 +308,28 @@ workers; the exporter's background thread does not survive the fork. See
 pointed at the HTTP endpoint, fails in a way that names neither the protocol nor
 the port. Set `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`. nexovue does not
 publish a gRPC port on the hosted endpoint today.
+
+## Deploys from CI do not appear
+
+The step never fails your pipeline, so a refused deploy shows as a warning line in its
+output rather than a red build. Read that line first; [deploys.md](deploys.md) has the
+recipes.
+
+**HTTP 401.** The signature did not match a live secret of this project: the secret in
+your CI's store is not one listed under **Deploys**, it was withdrawn, or the body
+changed between signing and sending. All of these read alike on purpose, and none is
+recorded in the console, since anyone could send one.
+
+**HTTP 422.** The body was signed and something in it was refused. The answer names the
+item and the field — `Item 3, field url` — and the Deploys section shows the same as the
+last refusal. A claimed `deployed_at` more than 5 minutes ahead of our clock usually
+means the runner's clock is wrong.
+
+**HTTP 429.** The project stored 1,000 new deploys this hour. Nothing in that batch was
+stored; it can be sent again after the `Retry-After`.
+
+**Accepted, but nothing on Releases.** Check for a leftover `NEXOVUE_DRY_RUN`: a dry run
+moves **Last check received** and stores nothing. Then read the answer's `known` and
+`version_seen`: `known: false` means no telemetry has arrived under that service name,
+usually a spelling difference, and `version_seen: false` means your traffic names its
+versions differently — report the same value your build sets as `service.version`.

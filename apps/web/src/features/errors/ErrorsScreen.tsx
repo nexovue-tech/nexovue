@@ -10,21 +10,23 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
-import { formatCount, UNKNOWN } from "@/shared/format/number";
+import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { keepUrlWindow } from "@/shared/url-window";
 import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
 import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
 import {
   DEPLOY_IS_NOT_A_CAUSE,
+  deployCell,
   describeErrors,
   describePrecedingDeploy,
   describeServices,
   firstWithStacktrace,
   isNewInWindow,
 } from "./error-groups";
-import { errorFilters } from "./filters";
+import { errorFilters, parseErrorGroupSearch } from "./filters";
 import type { SymbolicationState } from "./symbolication";
 import { useSymbolication } from "./symbolication";
 
@@ -32,10 +34,10 @@ const ROW_HEIGHT = 46;
 const OVERSCAN_ROWS = 8;
 
 /* Column widths, declared once so the header and every row cannot drift apart. */
-const SERVICES_COLUMN = "hidden w-40 shrink-0 pl-3 lg:block";
+const SERVICES_COLUMN = "hidden w-40 shrink-0 pl-3 @3xl:block";
 /* The last column to earn its width: a deploy is a lead, and the two facts beside it —
    what threw and when it started — are the ones nobody may lose to make room. */
-const DEPLOY_COLUMN = "hidden w-32 shrink-0 pl-3 xl:block";
+const DEPLOY_COLUMN = "hidden w-32 shrink-0 pl-3 @5xl:block";
 const COUNT_COLUMN = "w-16 shrink-0 text-right";
 const STARTED_COLUMN = "w-28 shrink-0 text-right";
 const LAST_SEEN_COLUMN = "hidden w-24 shrink-0 text-right sm:block";
@@ -66,9 +68,18 @@ export function ErrorsScreen() {
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every control they tried on the way.
   const show = (next: Record<string, string | undefined>) =>
-    void navigate({ to: "/errors", search: () => filterParams(next), replace: true });
+    void navigate({
+      to: "/errors",
+      // F3 FR16: a finding's window, carried in the address, survives a filter change.
+      search: () => ({ ...keepUrlWindow(search), ...filterParams(next) }),
+      replace: true,
+    });
 
-  const [selectedGroupId, setSelectedGroupId] = useState<string>();
+  // F3 (AC105): a finding's error fact opens its group through `?group=`; choosing
+  // another here is this screen's own state, as before.
+  const [selectedGroupId, setSelectedGroupId] = useState<string | undefined>(
+    () => parseErrorGroupSearch(search).group,
+  );
 
   const groups = useErrorGroups(projectId, timeWindow, filterParams(filters));
   const listed = groups.data?.groups ?? [];
@@ -179,7 +190,7 @@ export function ErrorsView({
   });
 
   return (
-    <div className="flex h-full min-h-0 flex-col lg:flex-row">
+    <div className="flex h-full min-h-0 flex-col @3xl:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 px-4 pt-5 pb-3">
           <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Errors</h1>
@@ -253,7 +264,7 @@ export function ErrorsView({
           aria-label="Error detail"
           // A column beside the list where there is width for one, a sheet over it where
           // there is not — at 375px a second column would leave no list at all.
-          className="fixed inset-x-0 bottom-0 z-20 h-[55dvh] border-line border-t bg-page shadow-overlay lg:static lg:h-auto lg:w-[26rem] lg:shrink-0 lg:border-t-0 lg:border-l lg:shadow-none"
+          className="fixed inset-x-0 bottom-0 z-20 h-[55dvh] border-line border-t bg-page shadow-overlay @3xl:static @3xl:h-auto @3xl:w-[26rem] @3xl:shrink-0 @3xl:border-t-0 @3xl:border-l @3xl:shadow-none"
         >
           <ErrorGroupPanel
             summary={selected}
@@ -326,7 +337,6 @@ function GroupRow({
   ceiling: number;
 }) {
   const startedHere = isNewInWindow(group);
-  const deploy = group.preceding_deploy;
   const afterDeploy = describePrecedingDeploy(group);
 
   return (
@@ -361,7 +371,7 @@ function GroupRow({
           className={`${DEPLOY_COLUMN} truncate font-mono text-2xs text-ink-dim`}
           title={afterDeploy === undefined ? undefined : `${afterDeploy}. ${DEPLOY_IS_NOT_A_CAUSE}`}
         >
-          {deploy === null ? UNKNOWN : `after ${deploy.version}`}
+          {deployCell(group)}
         </span>
 
         <span className={`${SERVICES_COLUMN} truncate font-mono text-2xs text-ink-dim`}>

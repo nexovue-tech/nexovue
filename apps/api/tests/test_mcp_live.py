@@ -21,8 +21,10 @@ from datetime import UTC, datetime
 from typing import Any, Final
 from urllib.parse import urlsplit
 
+import clickhouse_connect
 import httpx
 import pytest
+from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -35,6 +37,12 @@ from sqlalchemy.ext.asyncio import (
 from nexovue_api.apitokens import service as api_tokens
 from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.assistant.auth import NO_TOKEN, READER_KEY, AssistantAuthentication
+from nexovue_api.assistant.tools import _project_for
+from nexovue_api.auth.dependencies import Reader
+from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.data.postgres.models import Finding as FindingRow
+from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.findings import service as findings
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -252,3 +260,118 @@ async def test_a_revoked_token_is_refused_in_a_sentence_a_model_can_repeat(
     assert answer.status_code == 401
     assert json.loads(answer.text)["error"] == api_tokens.TOKEN_UNKNOWN
     assert seen == []
+
+
+# ------------------------------------------------- what the tools pass down (F4)
+
+CLICKHOUSE_DSN: Final = os.environ.get(
+    "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
+)
+
+require_stack(
+    reachable=_reachable(CLICKHOUSE_DSN, 8123),
+    suite="apps/api/tests/test_mcp_live.py",
+    remedy="ClickHouse is not reachable — run `just up`",
+)
+
+
+@pytest.fixture
+async def clickhouse() -> AsyncIterator[AsyncClient]:
+    parts = urlsplit(CLICKHOUSE_DSN)
+    client = await clickhouse_connect.get_async_client(
+        host=parts.hostname or "localhost",
+        port=parts.port or 8123,
+        username=parts.username or "nexovue",
+        password=parts.password or "nexovue_dev",
+        database=(parts.path or "/nexovue").lstrip("/"),
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+async def test_a_malformed_project_id_is_refused_in_a_sentence(db: AsyncSession) -> None:
+    """FR35: `uuid.UUID('not-an-id')` used to raise a bare ValueError, which the
+    tool wrapper hides as "error executing tool" — an answer a model cannot act
+    on. The refusal must say what a project_id is and where to get one."""
+    acme = await _tenant(db)
+    reader = Reader(org_id=acme.organization.id, project_scope=None, token_id=uuid.uuid4())
+
+    with pytest.raises(InvalidRequestError) as refused:
+        await _project_for(db, reader, "not-a-project-id")
+
+    assert "list_projects" in refused.value.detail
+
+
+async def test_get_finding_as_a_token_has_no_person_fields_and_keeps_scope(
+    db: AsyncSession, clickhouse: AsyncClient
+) -> None:
+    """AC46: the view `get_finding` reads with `for_member=False` names nobody
+    and quotes nothing a person wrote, and a finding outside the token's scope
+    answers byte-identically to one that does not exist."""
+    acme = await _tenant(db)
+    row = FindingRow(
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+        scope="service",
+        service_name="checkout",
+        severity="warning",
+        state="open",
+        title="checkout is 3 times slower than normal since 14:02 UTC",
+        signals=[
+            {
+                "signal": "slower",
+                "normal": 110.0,
+                "current": 330.0,
+                "worst": 412.0,
+                "comparison": "Tuesdays around 15:00, last 3 weeks",
+                "endpoint": None,
+            }
+        ],
+        started_at=datetime.now(UTC),
+    )
+    db.add(row)
+    await db.commit()
+    repository = TenantScopedRepository(clickhouse, tenant_id=str(acme.organization.id))
+
+    finding = await findings.get_finding(
+        db,
+        repository,
+        org_id=acme.organization.id,
+        finding_id=row.id,
+        project_scope=acme.project.id,
+        for_member=False,
+        now=datetime.now(UTC),
+    )
+
+    dumped = finding.model_dump()
+    for person_field in (
+        "acknowledged_by",
+        "acknowledged_by_name",
+        "feedback_reason",
+        "new_normal",
+    ):
+        assert person_field not in dumped, f"a token's finding carries {person_field}"
+
+    with pytest.raises(NotFoundError) as out_of_scope:
+        await findings.get_finding(
+            db,
+            repository,
+            org_id=acme.organization.id,
+            finding_id=row.id,
+            project_scope=uuid.uuid4(),
+            for_member=False,
+            now=datetime.now(UTC),
+        )
+    with pytest.raises(NotFoundError) as never_existed:
+        await findings.get_finding(
+            db,
+            repository,
+            org_id=acme.organization.id,
+            finding_id=uuid.uuid4(),
+            project_scope=acme.project.id,
+            for_member=False,
+            now=datetime.now(UTC),
+        )
+    assert out_of_scope.value.detail == never_existed.value.detail

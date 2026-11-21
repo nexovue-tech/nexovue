@@ -90,7 +90,7 @@
 | **F25** | Usage & cost view | ✅ Yes | 🔶 | 0 | Usage, allowance, projected cost, billing, charge history. **A real specification exists since 2026-09-21** and awaits approval — 14 business rules, 15 acceptance criteria, six gaps marked. Writing it found a hole nothing was holding: the allowance rule is implemented in Python and in Go and neither checked the other ([AC25.15](../features/usage-billing/spec.md)) |
 | **F26** | RBAC / user management | ✅ Yes | ✅ | **1** | **Built 2026-09-19** as Stage 1 of [Team, API and admin access](../features/team-and-api-access/spec.md) (with F31 and F36): invite by email, accept, four roles on every route and screen, remove, transfer ownership, audit log screen — see [status](../features/team-and-api-access/status.md) |
 | **F27** | Data controls | 🟡 Partly | 🔲 | Later | Masking, plan retention, tenant purge and CSV export built; archival tiers and a GDPR surface are not |
-| **F28** | Deployment / release tracking | 🟡 Partly | ✅ | 2 | [Approved](../features/deployment-release-tracking/spec.md), and what it specifies is not built. Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
+| **F28** | Deployment / release tracking | 🟡 Partly | ✅ | 2 | [Approved](../features/deployment-release-tracking/spec.md); Steps 1a to 5 built, Step 6 (launch claims) not. Releases from `service.version` and signed CI deploys, the comparison by version, markers on every chart, the finding's *Release before this*, errors by version, F3's facts and the opt-in release summary — see [status](../features/deployment-release-tracking/status.md) |
 | **F29** | LLM / AI-app observability | ✅ Yes | ✅ | 1 | Built to its [spec](../features/llm-observability/spec.md); see [status](../features/llm-observability/status.md) |
 | **F30** | Public status page | 🔴 No | 🔲 | Later | |
 | **F31** | Admin console (internal) | ✅ Yes | ✅ | **1** | **Built 2026-09-20** as Stage 3 of [Team, API and admin access](../features/team-and-api-access/spec.md): one super-admin user seeded from the environment signs in on the ordinary sign-in page and opens the platform area with a 30-minute step-up ([ADR-018](../decisions/ADR-018-the-operator-is-a-user-in-the-console.md), which supersedes ADR-016's separate app the same day); onboard a paying customer after the website payment ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)); hosted signup closed by a switch; suspend and resume ingest; comp a plan until a date; read-only, audited *view as* inside the owner's grant — see [status](../features/team-and-api-access/status.md) |
@@ -327,15 +327,16 @@ for the customer rather than handed over empty.
 Two halves, at different stages:
 
 - **The composed overview — built, 2026-09.** Auto-composed RED and USE panels from rollups that
-  already exist, holding `/` until the insight engine exists. Specified in
+  already exist. It held `/` until the insight engine existed; the engine shipped as F6, and F20's
+  Step 1 (2026-11-02) moved `/` to the Findings feed, with Overview at `/overview`. Specified in
   [`../features/console-redesign/`](../features/console-redesign/) (OD2 and
   `wireframes-dashboard.md`) and shipped as T30–T34 of that feature's task plan.
 - **The builder — still to specify.** Not foreclosed by the above: an auto-composed dashboard is a
   fixed instance of what a builder would produce, so the composed overview is the first step toward
   one rather than a substitute for it.
 
-**The front door is unchanged**: the Findings feed (F1) is what a person lands on. What changed is
-that the other surface stopped being a lesser one.
+**The front door is unchanged**: the Findings feed (F1) is what a person lands on — served at `/`
+since F20 Step 1 (2026-11-02). What changed is that the other surface stopped being a lesser one.
 
 ### F21 — Alerts & Notification Connectors ✅ DESIGNED
 Specified and approved 2026-09-18: [`docs/features/alerts/spec.md`](../features/alerts/spec.md); designed and
@@ -382,10 +383,10 @@ features are built while one-user-per-org is quietly true. *(Corrected 2026-09-1
 ### F27 — Data Controls 🔲 TO SPECIFY
 Retention settings per plan; PII masking rules configuration; data export/delete (GDPR surface); log archival tiers.
 
-### F28 — Deployment / Release Tracking ✅ SPECIFIED, NOT BUILT
-**Approved by the founder 2026-11-02, not built:** [spec](../features/deployment-release-tracking/spec.md), [design](../features/deployment-release-tracking/design.md), [plan](../features/deployment-release-tracking/plan.md). Where this older text differs, the spec is what was approved.
+### F28 — Deployment / Release Tracking 🟡 BUILT TO STEP 5
+**Approved by the founder 2026-11-02; Steps 1a to 5 built** ([status](../features/deployment-release-tracking/status.md)): [spec](../features/deployment-release-tracking/spec.md), [design](../features/deployment-release-tracking/design.md), [plan](../features/deployment-release-tracking/plan.md). The spec is what was approved; this entry's older wording is replaced by it.
 
-Releases list with deploy markers on all charts; before/after comparison per release (latency, error rate); post-deploy regression surfaced as a finding; suspect-release linkage on errors. Powered by deploy events (GitHub/CI webhooks).
+A release is a stored record of each version a service ran, from `service.version` in traffic and from signed CI deploys ([ADR-029](../decisions/ADR-029-a-release-is-a-stored-record-with-periods.md)). `/releases` lists them; each release compares failure share and p95 with the version it replaced, by version where traffic carries one, and says it compares numbers and never why they moved. Markers on every chart, *Release before this* on a finding, errors by version, facts for F3's evidence with no sender text, and an opt-in summary of each release to a channel people read ([ADR-066](../decisions/ADR-066-a-release-summary-is-a-notification-about-a-release-period.md)). A deploy is never presented as a cause, and a regression is not surfaced as a finding of its own: F6 judges every minute the same with or without releases.
 
 ### F29 — LLM / AI-App Observability 🔲 TO SPECIFY
 UI lens for customers building on LLMs: token usage, model latency and cost per endpoint/model, prompt/completion traces (gen_ai.* attributes), error rates of AI calls. Fast-growing category; architecture already carries the data.

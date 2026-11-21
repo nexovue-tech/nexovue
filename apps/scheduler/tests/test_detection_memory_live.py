@@ -111,3 +111,75 @@ async def test_a_baseline_job_s_peak_stays_bounded_over_four_full_weeks(
         )
     assert rows == SERVICES
     assert peak / 2**20 < PEAK_BOUND_MIB, f"the job's peak was {peak / 2**20:.0f} MiB"
+
+
+# F3 (plan T1.6; AC47's memory part): a gather at its row bounds — the most edges, error
+# groups and facts one finding may hold — stays under a child's own memory limit, so a
+# wide outage's facts never push `scheduler-light` past its ceiling.
+FORGED_CALLEES: Final = 2000
+NEW_GROUPS: Final = 2500
+
+
+def _seed_gather_bounds(client: Client, tenant: AlertTenant, at: datetime) -> None:
+    minute = int(at.timestamp())
+    client.command(
+        f"""
+        INSERT INTO service_edges_1m (tenant_id, project_id, client_service, server_service,
+            server_peer_kind, server_peer_attr, door, edge_kind, minute, call_count, error_count,
+            latency_quantiles)
+        SELECT '{tenant.org_id}', '{tenant.project_id}', 'checkout',
+               concat('(forged-', toString(number), ')'), '', 'peer.service', 'server', 'call',
+               toDateTime({minute}), number + 1, 0,
+               arrayReduce('quantilesState(0.5, 0.95, 0.99)', [toFloat64(5)])
+        FROM numbers({FORGED_CALLEES})
+        """
+    )
+    client.command(
+        f"""
+        INSERT INTO spans (tenant_id, project_id, service_name, timestamp, received_at,
+            exception_type, exception_message, trace_id, span_id)
+        SELECT '{tenant.org_id}', '{tenant.project_id}', 'checkout', toDateTime64({minute}, 9),
+               toDateTime64({minute}, 9), concat('Error', toString(number)), 'x',
+               lower(hex(randomString(16))), lower(hex(randomString(8)))
+        FROM numbers({NEW_GROUPS})
+        """
+    )
+
+
+async def test_a_gather_at_its_row_bounds_stays_under_a_child_s_own_limit(
+    engine: AsyncEngine, administrator: Client, project: AlertTenant
+) -> None:
+    from detection_history import READER_DSN
+
+    from nexovue_scheduler.evidence.gather import gather
+    from nexovue_scheduler.evidence.store import connect_store
+    from nexovue_scheduler.jobs.worker import MAX_CHILD_PRIVATE_BYTES
+
+    start = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=30)
+    _seed_gather_bounds(administrator, project, start + timedelta(minutes=1))
+    async with engine.begin() as connection:
+        finding_id = await connection.scalar(
+            text(
+                "INSERT INTO findings (org_id, project_id, scope, service_name, severity, state, "
+                "title, signals, started_at) VALUES (:org_id, :project_id, 'service', 'checkout', "
+                "'warning', 'open', 'checkout is slower', '[]', :start) RETURNING id"
+            ),
+            {"org_id": project.org_id, "project_id": project.project_id, "start": start},
+        )
+
+    tracemalloc.start()
+    try:
+        gathered = await gather(
+            engine,
+            connect_store(READER_DSN),
+            finding_id=finding_id,
+            org_id=project.org_id,
+            reason="opened",
+            deployment="self-hosted",
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert gathered is not None and gathered.version == 1
+    assert peak < MAX_CHILD_PRIVATE_BYTES, f"the gather's peak was {peak / 2**20:.0f} MiB"

@@ -31,7 +31,8 @@ Added 2026-09-19; the design is [`features/alerts/design.md`](../features/alerts
   `alerts/check_state.py`): the incident and its notifications commit with the state or not at all.
 - **The service conditions are judged every minute by beat** on the `light` queue: error rate and p95 from
   ClickHouse's `endpoint_stats_1m`, new error groups from `spans` and `logs`, silence from Postgres's
-  `service_last_seen`, which the Go usage meter writes. The scheduler reads ClickHouse through its own
+  `service_last_seen`, which the Go usage meter writes (never from the browser door, whose site key is public:
+  `docs/changes/browser-door-last-seen`). The scheduler reads ClickHouse through its own
   tenant-scoped reader (`alerts/telemetry.py`), held to the API's chokepoint rules (ADR-012).
 - **Notifications are a Postgres outbox** (ADR-013), delivered by the `scheduler-deliveries` worker on its own
   `deliveries` queue, through the prober's SSRF-guarded client. Leases, not locks, cover a send; one batch per

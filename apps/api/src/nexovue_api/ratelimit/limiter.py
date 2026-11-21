@@ -69,10 +69,13 @@ class RateLimiter:
         self._exact = ExactWindows(session_factory)
         self._local = LocalLimits(instances=instances)
 
-    async def consume(self, *, scope: str, identity: str, quota: Quota) -> Decision:
-        """Count one request against ``quota`` for ``identity``."""
+    async def consume(self, *, scope: str, identity: str, quota: Quota, cost: int = 1) -> Decision:
+        """Count ``cost`` against ``quota`` for ``identity``: one request, or, on the
+        exact path, a batch's worth of items (F28 FR13)."""
         if quota.exact:
-            return await self._exact.consume(scope=scope, identity=identity, quota=quota)
+            return await self._exact.consume(scope=scope, identity=identity, quota=quota, cost=cost)
+        if cost != 1:
+            raise ValueError("only an exact quota counts more than one at a time")
         return self._local.consume(scope=scope, identity=identity, quota=quota)
 
     async def acquire_slot(
@@ -156,36 +159,50 @@ class ExactWindows:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def consume(self, *, scope: str, identity: str, quota: Quota) -> Decision:
+    async def consume(self, *, scope: str, identity: str, quota: Quota, cost: int = 1) -> Decision:
+        """Add ``cost`` only if it fits, so a refused request charges nothing.
+
+        The update is conditional: a batch of 100 with 950 used is refused whole and
+        leaves the 50 still usable (F28 FR13, AC14). A cost larger than the whole
+        allowance can never fit, and is refused without touching the row.
+        """
+        if cost < 1:
+            raise ValueError("a cost is at least one")
         now = datetime.now(UTC)
         window = timedelta(seconds=quota.window_seconds)
         window_start = datetime.fromtimestamp(
             now.timestamp() // quota.window_seconds * quota.window_seconds, UTC
         )
         reset = _whole_seconds((window_start + window - now).total_seconds())
+        refused = Decision(allowed=False, quota=quota, remaining=0, reset_seconds=reset)
+        if cost > quota.limit:
+            return refused
         counted = insert(RateLimitWindow).values(
             key=f"{quota.name}:{scope}:{token_fingerprint(identity)}",
             window_start=window_start,
-            hits=1,
+            hits=cost,
         )
         try:
             async with self._session_factory.begin() as db:
                 hits = await db.scalar(
                     counted.on_conflict_do_update(
                         index_elements=[RateLimitWindow.key, RateLimitWindow.window_start],
-                        set_={"hits": RateLimitWindow.hits + 1},
+                        set_={"hits": RateLimitWindow.hits + cost},
+                        where=RateLimitWindow.hits + cost <= quota.limit,
                     ).returning(RateLimitWindow.hits)
                 )
         except (SQLAlchemyError, OSError):
-            # Refused, not allowed: this tier exists to stop password guessing,
-            # and a guesser must not be waved through because the count is down.
-            logger.exception("the auth limit could not be counted; refusing", policy=quota.name)
-            return Decision(allowed=False, quota=quota, remaining=0, reset_seconds=reset)
-        used = hits or 0
+            # Refused, not allowed: the auth tier exists to stop password guessing, and
+            # the deploy tier to bound a stolen secret; neither is waved through
+            # because the count is down.
+            logger.exception("an exact limit could not be counted; refusing", policy=quota.name)
+            return refused
+        if hits is None:
+            return refused
         return Decision(
-            allowed=used <= quota.limit,
+            allowed=True,
             quota=quota,
-            remaining=max(0, quota.limit - used),
+            remaining=max(0, quota.limit - hits),
             reset_seconds=reset,
         )
 

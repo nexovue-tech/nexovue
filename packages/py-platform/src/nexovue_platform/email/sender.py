@@ -54,6 +54,24 @@ class Message(Enum):
     CHANNEL_FAILING = "channel_failing"
     # F26. A person invited into an organization; the link sets their password.
     INVITE = "invite"
+    # F22. Someone else assigned a person a case (FR5): the fact, the service in
+    # its strict form, the severity, a link — never a finding title or a note.
+    CASE_ASSIGNED = "case_assigned"
+    # F22 Step 4 (D28, FR26, FR33): what a sweep owes about a case or a connection. Each
+    # carries the service's strict name, a link and fixed words: never a finding title,
+    # a note, or anything a tracker said.
+    CASE_TRACKER_CLOSED = "case_tracker_closed"
+    CASE_TRACKER_CLOSED_SIGNAL_OPEN = "case_tracker_closed_signal_open"
+    CASE_IDLE_WARNING = "case_idle_warning"
+    CONNECTION_NEEDS_ATTENTION = "connection_needs_attention"
+    CONNECTION_FAILING = "connection_failing"
+    CONNECTION_EXPIRING = "connection_expiring"
+    # F22 Step 6 (FR42): a repository the connection reaches turned public. Names the
+    # repository by its strict key; nothing an issue says.
+    CONNECTION_REPOSITORY_PUBLIC = "connection_repository_public"
+    # F3 (AC102, A67). An organization's AI connection changed in a way an owner must
+    # know: its model, or a change that ended their consent. Old and new host, never a key.
+    AI_CONNECTION_CHANGED = "ai_connection_changed"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

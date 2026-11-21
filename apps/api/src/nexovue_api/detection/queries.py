@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,9 @@ from nexovue_api.data.postgres.models import (
 
 # How many findings one service timeline returns, oldest first.
 MARKER_PAGE: Final = 200
+# How many findings a dashboard's window returns, newest first, so a busy window loses
+# its oldest (F20, design section 9).
+PROJECT_FINDINGS_PAGE: Final = 200
 
 
 async def project_run(
@@ -120,13 +123,65 @@ async def service_findings(
             Finding.project_id == project_id,
             Finding.scope == "service",
             Finding.service_name == service_name,
-            Finding.started_at <= end,
-            or_(Finding.closed_at.is_(None), Finding.closed_at >= start),
+            *_overlapping(start, end),
         )
         .order_by(Finding.started_at, Finding.id)
         .limit(limit)
     )
     return list(await session.scalars(statement))
+
+
+def _overlapping(start: datetime, end: datetime) -> tuple[ColumnElement[bool], ...]:
+    """A finding open at any moment of `[start, end]`: begun by its end, not closed before
+    its start. One predicate for the service timeline and a dashboard's window."""
+    return (
+        Finding.started_at <= end,
+        or_(Finding.closed_at.is_(None), Finding.closed_at >= start),
+    )
+
+
+async def project_findings_in_window(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    start: datetime,
+    end: datetime,
+    limit: int,
+    service_name: str | None = None,
+) -> list[Finding]:
+    """The project's findings that overlap `[start, end]`, newest first (F20, T2.14).
+
+    Project scope and service scope alike; with `service_name`, that service's and the
+    project's own. Newest first, unlike `service_findings`, because a dashboard's busy
+    window must lose its oldest, and the caller says so when `limit` is reached.
+    """
+    statement = select(Finding).where(
+        Finding.org_id == org_id, Finding.project_id == project_id, *_overlapping(start, end)
+    )
+    if service_name is not None:
+        statement = statement.where(
+            or_(Finding.scope == "project", Finding.service_name == service_name)
+        )
+    statement = statement.order_by(Finding.started_at.desc(), Finding.id.desc()).limit(limit)
+    return list(await session.scalars(statement))
+
+
+async def open_findings_by_service(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> dict[str, int]:
+    """Open findings per service; project-scope ones have no service and are left out."""
+    statement = (
+        select(Finding.service_name, func.count())
+        .where(
+            Finding.org_id == org_id,
+            Finding.project_id == project_id,
+            Finding.state == "open",
+            Finding.service_name.is_not(None),
+        )
+        .group_by(Finding.service_name)
+    )
+    return {str(name): int(count) for name, count in (await session.execute(statement)).all()}
 
 
 async def service_known(

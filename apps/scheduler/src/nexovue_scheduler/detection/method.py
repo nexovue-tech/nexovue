@@ -25,17 +25,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Final, Literal
 
-# --------------------------------------------------------------------- buckets
-
-# `service_stats_1m.latency_buckets`: 64 counts over boundaries log-spaced from
-# 1 ms to 60 s (apps/workers/internal/pipeline/derive/services.go). Edge i is
-# 60000^(i/64) ms; bucket i lies between edges i and i + 1, and a duration outside
-# the range folds into the end bucket on its side.
-BUCKET_COUNT: Final = 64
-_CEILING_MS: Final = 60_000.0
-LOG_EDGES: Final = tuple(
-    math.log(_CEILING_MS) * index / BUCKET_COUNT for index in range(BUCKET_COUNT + 1)
-)
+# The p95 of `service_stats_1m.latency_buckets`, shared with release comparisons (F28 D26),
+# and the 64 counts' log-spaced edges, shared with reliability targets, so the worker's Go
+# has one Python copy (F19, *Reading latency*). Re-exported: detection's callers import it here.
+from nexovue_platform.releases import bucket_p95 as bucket_p95
+from nexovue_platform.slo import BUCKET_COUNT, LOG_EDGES
 
 # ------------------------------------------------------------------ parameters
 
@@ -811,23 +805,6 @@ def _sorted_median(ordered: Sequence[float]) -> float:
 
 
 # ------------------------------------------------------------------ statistics
-
-
-def bucket_p95(buckets: Sequence[int]) -> float | None:
-    """The p95 of bucket counts, log-linear inside its bucket; None when empty."""
-    total = sum(buckets)
-    if total <= 0:
-        return None
-    target = 0.95 * total
-    running = 0
-    for index, count in enumerate(buckets):
-        running += count
-        if running >= target - 1e-9:
-            below = running - count
-            fraction = min(max((target - below) / max(count, 1e-12), 0.0), 1.0)
-            low, high = LOG_EDGES[index], LOG_EDGES[index + 1]
-            return math.exp(low + fraction * (high - low))
-    raise AssertionError("a positive total always reaches its 95th percentile")
 
 
 def threshold_share(buckets: Sequence[int]) -> tuple[int, float]:

@@ -37,6 +37,10 @@ dependencies = [
     # the queue, beat and the loop's pulse (ADR-021).
     # Pull, so it works when nexovue itself is down.
     "prometheus-client>=0.26",
+    # F22: a GitHub App signs in with a JSON Web Token signed RS256 by its private key.
+    # RS256 needs `cryptography`, which the `crypto` extra declares (PyJWT's installation
+    # page). Only `scheduler-connections` signs; the API holds no GitHub token.
+    "pyjwt[crypto]>=2.10",
 ]
 
 [build-system]

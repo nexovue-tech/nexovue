@@ -17,6 +17,7 @@ import {
 } from "./api";
 import { CheckSecretsSection } from "./CheckSecretsSection";
 import { CheckVariablesSection } from "./CheckVariablesSection";
+import { DeploysSection } from "./DeploysSection";
 import { DetectionSection } from "./DetectionSection";
 import { MaintenanceWindowsSection } from "./MaintenanceWindowsSection";
 import type { MaskingForm } from "./masking";
@@ -57,6 +58,8 @@ export function ProjectSettings({
   const canManageSecrets = useCan("manage_check_secrets");
   const canOperateAlerts = useCan("operate_alerts");
   const canConfigureDetection = useCan("configure_detection");
+  // F28 FR1: deploy secrets are credentials, an owner's or an admin's.
+  const canManageCredentials = useCan("manage_credentials");
   return (
     <div className="flex flex-col gap-10 border-line border-t pt-8">
       {canConfigure ? <Identity project={project} /> : null}
@@ -67,11 +70,12 @@ export function ProjectSettings({
       {canManageSecrets ? <CheckVariablesSection projectId={project.id} /> : null}
       {canOperateAlerts ? <MaintenanceWindowsSection projectId={project.id} /> : null}
       {canConfigureDetection ? <DetectionSection projectId={project.id} /> : null}
+      {canManageCredentials ? <DeploysSection projectId={project.id} /> : null}
       {canConfigure ? <Deletion project={project} onDeleted={onDeleted} /> : null}
       {canConfigure ? null : (
         <p className="max-w-2xl text-ink-dim text-sm">
-          Renaming, sampling, masking, detection and deleting a project are an owner's or an admin's
-          to change.
+          Renaming, sampling, masking, detection, deploy secrets and deleting a project are an
+          owner's or an admin's to change.
         </p>
       )}
     </div>

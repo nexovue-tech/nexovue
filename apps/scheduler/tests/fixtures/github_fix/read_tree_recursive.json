@@ -1,0 +1,32 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Get a tree', GET /repos/{owner}/{repo}/git/trees/{tree_sha}?recursive=1. Limit 100,000 entries or 7 MB, then `truncated` is true.",
+  "request": {
+    "method": "GET",
+    "path": "/repos/acme/api/git/trees/{tree}?recursive=1"
+  },
+  "status": 200,
+  "compared": ["sha", "tree", "truncated"],
+  "values": ["truncated"],
+  "body": {
+    "sha": "0000000000000000000000000000000000000000",
+    "url": "u",
+    "tree": [
+      {
+        "path": "services",
+        "mode": "040000",
+        "type": "tree",
+        "sha": "0000000000000000000000000000000000000000",
+        "url": "u"
+      },
+      {
+        "path": "services/checkout/pay.py",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "0000000000000000000000000000000000000000",
+        "size": 10,
+        "url": "u"
+      }
+    ],
+    "truncated": false
+  }
+}

@@ -70,14 +70,14 @@ export function SettingGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="mt-8 first:mt-0 lg:flex lg:gap-10">
-      <div className="lg:w-64 lg:shrink-0 lg:pt-1">
+    <section className="mt-8 first:mt-0 @3xl:flex @3xl:gap-10">
+      <div className="@3xl:w-64 @3xl:shrink-0 @3xl:pt-1">
         <h2 className="font-medium font-serif text-ink text-lg tracking-tight">{title}</h2>
         {description ? (
           <p className="mt-1 text-ink-dim text-sm leading-relaxed">{description}</p>
         ) : null}
       </div>
-      <div className="mt-3 min-w-0 flex-1 border-line border-t lg:mt-0">{children}</div>
+      <div className="mt-3 min-w-0 flex-1 border-line border-t @3xl:mt-0">{children}</div>
     </section>
   );
 }

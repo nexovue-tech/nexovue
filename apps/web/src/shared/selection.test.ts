@@ -4,13 +4,20 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { WindowChoice } from "./selection";
 import {
+  adoptScreenOverride,
   clearAbsoluteWindow,
+  clearScreenOverride,
+  DASHBOARD_RANGES,
   describeChoice,
   describeWindowChoice,
+  readSelection,
   resolveChoice,
   SELECTION_STORAGE_KEY,
   setAbsoluteWindow,
+  setScreenOverride,
+  setSelectedProjectId,
   setSelectedRangeId,
+  TIME_RANGES,
   windowCacheKey,
 } from "./selection";
 
@@ -21,6 +28,7 @@ const TUESDAY: WindowChoice = {
 };
 
 afterEach(() => {
+  clearScreenOverride();
   clearAbsoluteWindow();
   setSelectedRangeId("1h");
   localStorage.removeItem(SELECTION_STORAGE_KEY);
@@ -161,5 +169,123 @@ describe("the window a screen's sentences carry", () => {
         /^Every service you send traces from, over \S.*\.$/,
       );
     }
+  });
+});
+
+/**
+ * A screen's override (F20, T4.5): what a dashboard opened from a link, or dragged to a
+ * time, shows while it is mounted. The top bar reads the same value, so the header and
+ * the data cannot disagree, and it is never remembered, so leaving the screen or
+ * reloading elsewhere shows the reader's own choice (AC69's data half).
+ */
+describe("a screen's override", () => {
+  const STAGING = "0190e3f4-0000-7000-8000-00000000000b";
+  const PRODUCTION = "0190e3f4-0000-7000-8000-00000000000a";
+
+  it("is what every reader sees while it holds, zone included", () => {
+    setSelectedProjectId(PRODUCTION);
+    setScreenOverride({ projectId: STAGING, window: TUESDAY, zone: "Asia/Kolkata" });
+
+    expect(readSelection()).toMatchObject({
+      projectId: STAGING,
+      window: TUESDAY,
+      zone: "Asia/Kolkata",
+    });
+  });
+
+  it("is never remembered, even when the reader's own choice is", () => {
+    setSelectedProjectId(PRODUCTION);
+    setScreenOverride({ projectId: STAGING, window: TUESDAY });
+    // A change of range on purpose is remembered, as on any screen; the override is not.
+    setSelectedRangeId("24h");
+
+    const stored = localStorage.getItem(SELECTION_STORAGE_KEY) ?? "";
+    expect(stored).toContain(PRODUCTION);
+    expect(stored).not.toContain(STAGING);
+    expect(stored).not.toContain(TUESDAY.from);
+  });
+
+  it("gives way to the reader's own choice on the part they change", () => {
+    setSelectedProjectId(PRODUCTION);
+    setScreenOverride({ projectId: STAGING, window: TUESDAY });
+
+    setSelectedRangeId("6h");
+
+    expect(readSelection().window).toEqual({ kind: "relative", rangeId: "6h" });
+    expect(readSelection().projectId).toBe(STAGING);
+  });
+
+  it("leaves the reader's own choice behind it when the screen goes", () => {
+    setSelectedProjectId(PRODUCTION);
+    setSelectedRangeId("24h");
+    setScreenOverride({ projectId: STAGING, window: TUESDAY, zone: "Asia/Kolkata" });
+
+    clearScreenOverride();
+
+    expect(readSelection()).toMatchObject({
+      projectId: PRODUCTION,
+      window: { kind: "relative", rangeId: "24h" },
+    });
+    expect(readSelection().zone).toBeUndefined();
+  });
+
+  it("is ended by Back to live, even over a live window of the reader's own", () => {
+    setScreenOverride({ window: TUESDAY });
+
+    clearAbsoluteWindow();
+
+    expect(readSelection().window.kind).toBe("relative");
+  });
+
+  it("becomes the reader's own choice when they follow a link out of the screen", () => {
+    setSelectedProjectId(PRODUCTION);
+    setScreenOverride({ projectId: STAGING, window: TUESDAY, zone: "Asia/Kolkata" });
+
+    adoptScreenOverride();
+    clearScreenOverride();
+
+    expect(readSelection()).toMatchObject({ projectId: STAGING, window: TUESDAY });
+    expect(readSelection().zone).toBeUndefined();
+    expect(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "").toContain(STAGING);
+  });
+});
+
+describe("the window phrase on the project's clock (F20, FR46, AC64)", () => {
+  const FROM = "2026-11-10T02:00:00.000Z";
+  const TO = "2026-11-10T03:00:00.000Z";
+  const window: WindowChoice = { kind: "absolute", from: FROM, to: TO };
+
+  it("writes the times on the named zone, not the browser's", () => {
+    expect(describeWindowChoice(window, "Asia/Kolkata")).toBe("07:30–08:30 on 10 Nov");
+    expect(describeWindowChoice(window, "America/New_York")).toBe("21:00–22:00 on 9 Nov");
+  });
+
+  it("names the day at each end when the zone's day changes across the range", () => {
+    const across: WindowChoice = {
+      kind: "absolute",
+      from: "2026-11-10T18:00:00.000Z",
+      to: "2026-11-10T19:00:00.000Z",
+    };
+    // 23:30 to 00:30 in Kolkata: two days, so each end says its own.
+    expect(describeWindowChoice(across, "Asia/Kolkata")).toBe("10 Nov, 23:30 to 11 Nov, 00:30");
+  });
+
+  it("offers 30 days to a dashboard and never reads one back from storage (FR52)", () => {
+    expect(DASHBOARD_RANGES.map((range) => range.id)).toEqual([
+      ...TIME_RANGES.map((r) => r.id),
+      "30d",
+    ]);
+    expect(TIME_RANGES.some((range) => range.id === "30d")).toBe(false);
+    expect(describeWindowChoice({ kind: "relative", rangeId: "30d" })).toBe("the last 30 days");
+    expect(resolveChoice({ kind: "relative", rangeId: "30d" }, Date.parse(TO)).from).toBe(
+      new Date(Math.ceil(Date.parse(TO) / 10_000) * 10_000 - 30 * 24 * 60 * 60_000).toISOString(),
+    );
+  });
+
+  it("holds the screen's clock while it overrides, and drops it on leaving", () => {
+    setScreenOverride({ zone: "Asia/Kolkata" });
+    expect(readSelection().zone).toBe("Asia/Kolkata");
+    clearScreenOverride();
+    expect(readSelection().zone).toBeUndefined();
   });
 });

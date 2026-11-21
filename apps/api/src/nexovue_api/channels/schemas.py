@@ -36,6 +36,8 @@ class ChannelSummary(BaseModel):
     muted_by: uuid.UUID | None
     # When warnings wait (FR15): timezone, days (Monday is 0), start and end.
     quiet_hours: dict[str, Any] | None
+    # F3 FR48: whether a channel people read gets a finding's follow-up, `explained`.
+    sends_explained: bool
     created_at: datetime
     # Which rules send here — what deleting it would silence (FR25).
     rules: list[RuleUsingChannel]
@@ -65,6 +67,8 @@ class UpdateChannelRequest(BaseModel):
     name: ChannelName | None = None
     config: dict[str, Any] | None = None
     secret: str | None = None
+    # F3 FR48: turn the follow-up message off or on. Only for channels people read.
+    sends_explained: bool | None = None
 
 
 class QuietHoursRequest(BaseModel):

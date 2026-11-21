@@ -27,6 +27,16 @@ _VERIFIED_OWNERS: Final = text(
     """
 )
 
+# F22 FR33: a connection's and an unassigned case's emails go to owners and admins.
+_VERIFIED_ADMINS: Final = text(
+    """
+    SELECT email FROM users
+    WHERE org_id = :org_id AND role IN ('owner', 'admin') AND email_verified_at IS NOT NULL
+      AND removed_at IS NULL
+    ORDER BY email
+    """
+)
+
 NOT_CONFIGURED: Final = (
     "email is not configured on this deployment — set EMAIL_PROVIDER and the other "
     "EMAIL_* variables for the scheduler"
@@ -43,6 +53,12 @@ async def recipients(connection: AsyncConnection, channel: Channel) -> list[str]
 
 async def verified_owners(connection: AsyncConnection, org_id: uuid.UUID) -> list[str]:
     rows = await connection.execute(_VERIFIED_OWNERS, {"org_id": org_id})
+    return [row.email for row in rows]
+
+
+async def verified_admins(connection: AsyncConnection, org_id: uuid.UUID) -> list[str]:
+    """Owners and admins with a verified address, who are told about a connection (FR33)."""
+    rows = await connection.execute(_VERIFIED_ADMINS, {"org_id": org_id})
     return [row.email for row in rows]
 
 

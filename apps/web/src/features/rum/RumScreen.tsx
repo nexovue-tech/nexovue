@@ -216,7 +216,7 @@ function VitalGroup({
       <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
         {heading} <span className="normal-case tracking-normal">— {note}</span>
       </h2>
-      <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-2 grid gap-3 sm:grid-cols-2 @3xl:grid-cols-3">
         {vitals.map((vital) => (
           <VitalCard key={vital.name} vital={vital} />
         ))}

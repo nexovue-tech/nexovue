@@ -70,6 +70,9 @@ services:
       # The read-only account (users.d/reader.xml). A development default only:
       # both deployment files demand it.
       CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:-nexovue_reader_dev}
+      # The API's own read-only account, bounded per user (users.d/api-reader.xml). A
+      # development default only: both deployment files demand it.
+      CLICKHOUSE_API_READER_PASSWORD: ${CLICKHOUSE_API_READER_PASSWORD:-nexovue_api_reader_dev}
       # The account that can only read and delete (users.d/eraser.xml), for the
       # nightly erasure. A development default only: both deployment files demand it.
       CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:-nexovue_eraser_dev}
@@ -98,6 +101,7 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ../clickhouse/users.d/reader.xml:/etc/clickhouse-server/users.d/reader.xml:ro
+      - ../clickhouse/users.d/api-reader.xml:/etc/clickhouse-server/users.d/api-reader.xml:ro
       - ../clickhouse/users.d/eraser.xml:/etc/clickhouse-server/users.d/eraser.xml:ro
       - ../clickhouse/users.d/detection-writer.xml:/etc/clickhouse-server/users.d/detection-writer.xml:ro
       # One file, not the directory: config.d already holds the image's own
@@ -137,6 +141,9 @@ services:
     # Phase 2 RAG store needs no image swap. Postgres 18 for native uuidv7().
     image: pgvector/pgvector:0.8.6-pg18-trixie
     hostname: postgres
+    # F3: also on `ai`, the AI role's own network, whose only other member is that role (A4).
+    # Listed here, where the service is defined: an including file may not redefine it.
+    networks: [default, ai]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-nexovue}
       POSTGRES_USER: ${POSTGRES_USER:-nexovue}
@@ -187,6 +194,13 @@ services:
       resources:
         limits:
           memory: 512M
+
+# `ai` holds `scheduler-insight` and Postgres alone (and Prometheus when monitoring is on),
+# so the AI role reaches no Kafka, ClickHouse or object store by name. Not `internal`: the
+# role calls providers outside. Compose is not an outbound firewall (F3 AC42).
+networks:
+  default:
+  ai:
 
 volumes:
   kafka-data:

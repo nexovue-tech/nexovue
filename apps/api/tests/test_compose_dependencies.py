@@ -148,13 +148,21 @@ _DELIVERIES_KAFKA = (
     "require KAFKA_BROKERS, so the variable stays although it does not use it"
 )
 
+# F4: chat's tools read the API (`INTERNAL_API_URL`), but the AI role's other work, the
+# connection test, needs no API, and a question asked while the API is down cannot exist.
+# A read that fails is a failed step the model is told of, never a hang.
+_INSIGHT_API: Final = (
+    "chat's reads only; the connection test runs without it, and a failed read is a step"
+)
 DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
     "docker-compose.yaml": {
         "web": {"api": _WEB_API},
+        "scheduler-insight": {"api": _INSIGHT_API},
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
     },
     "nexovue.yaml": {
+        "scheduler-insight": {"api": _INSIGHT_API},
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
     },

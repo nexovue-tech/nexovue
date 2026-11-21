@@ -36,6 +36,11 @@ EXEMPT: Final = {
     # the request. Scoping this by org_id would require trusting the caller for
     # the very value the signature exists to establish.
     "live_webhook_secrets",
+    # F22, AC139: a tracker's webhook, for `live_webhook_secrets`' reason. The connection
+    # id in the path is all the caller has said, and the signature over the secret sealed
+    # on that row proves it; the organization is then read off the connection whose secret
+    # matched, and the one write after it binds that.
+    "live_webhook_connection",
     # Resolves an ingest key to its tenant. It is what *establishes* the tenant,
     # so it cannot be scoped by one.
     "find_live_key_by_prefix",
