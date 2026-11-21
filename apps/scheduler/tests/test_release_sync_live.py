@@ -711,6 +711,19 @@ async def _aged_release(
     return found
 
 
+async def _age_release(engine: AsyncEngine, release: uuid.UUID, *, idle_days: int) -> None:
+    """Make `release` idle for `idle_days`. A release that lapses before a deploy points at
+    it is taken by the stack's own sweep, so a test ages it last."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE releases SET first_seen_at = now() - make_interval(days => :days), "
+                "last_activity_at = now() - make_interval(days => :days) WHERE id = :id"
+            ),
+            {"days": idle_days, "id": release},
+        )
+
+
 async def _aged_deploy(
     engine: AsyncEngine,
     tenant: AlertTenant,
@@ -758,11 +771,12 @@ async def test_a_30_day_plan_keeps_29_days_and_drops_31_by_arrival_time(
 ) -> None:
     """AC74: by our clock, so a sender's back-dated `deployed_at` shortens nothing; a
     release lapsing while its deploy lives does not stop the sweep."""
-    old = await _aged_release(engine, acme, "v-old", idle_days=31)
+    old = await _aged_release(engine, acme, "v-old", idle_days=0)
     young = await _aged_release(engine, acme, "v-young", idle_days=29)
     gone = await _aged_deploy(engine, acme, arrived_days=31, claimed_days=31)
     back_dated = await _aged_deploy(engine, acme, arrived_days=1, claimed_days=40)
     outliving = await _aged_deploy(engine, acme, arrived_days=29, claimed_days=29, release_id=old)
+    await _age_release(engine, old, idle_days=31)
 
     await expiry.sweep(engine)
 

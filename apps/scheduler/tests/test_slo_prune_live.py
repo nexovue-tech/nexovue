@@ -39,10 +39,10 @@ KEPT: Final = timedelta(days=400)
 LONG_AGO: Final = datetime(2020, 1, 1, tzinfo=UTC)
 
 
-async def _target(
-    engine: AsyncEngine, tenant: AlertTenant, *, deleted_ago: timedelta | None, service: str
-) -> uuid.UUID:
-    deleted = None if deleted_ago is None else datetime.now(UTC) - deleted_ago
+async def _target(engine: AsyncEngine, tenant: AlertTenant, *, service: str) -> uuid.UUID:
+    """A live target. Deleting one past restoring is `_delete`, last: the stack's own sweep
+    purges every organization's lapsed targets, and one that lapsed before its figures were
+    written would be taken from under the test."""
     key = slo.definition_key(
         slo.SERVICE_AVAILABILITY, service_name=service, objective=Decimal("99.9"), window_days=28
     )
@@ -52,9 +52,9 @@ async def _target(
                 """
                 INSERT INTO slo_targets (org_id, project_id, name, kind, service_name,
                     objective_percent, window_days, upstream_sampling, definition_key,
-                    first_event_at, created_at, deleted_at)
+                    first_event_at, created_at)
                 VALUES (:org_id, :project_id, :service, 'service_availability', :service,
-                    99.9, 28, 'yes', :key, :first, :first, :deleted)
+                    99.9, 28, 'yes', :key, :first, :first)
                 RETURNING id
                 """
             ),
@@ -64,7 +64,6 @@ async def _target(
                 "service": service,
                 "key": key,
                 "first": LONG_AGO,
-                "deleted": deleted,
             },
         )
         await connection.execute(
@@ -75,6 +74,15 @@ async def _target(
             {"org_id": tenant.org_id, "project_id": tenant.project_id, "id": made},
         )
     return made
+
+
+async def _delete(engine: AsyncEngine, target: uuid.UUID, *, at: datetime) -> None:
+    """Delete `target` as of `at`, once its rows are written."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE slo_targets SET deleted_at = :at WHERE id = :id"),
+            {"at": at, "id": target},
+        )
 
 
 async def _days(
@@ -115,15 +123,18 @@ async def _rows(engine: AsyncEngine, statement: str, **keys: Any) -> list[Any]:
 async def test_ac71_a_target_deleted_30_days_ago_is_purged_and_keeps_its_months(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:
-    deleted_ago = timedelta(days=31)
-    gone = await _target(engine, tenant, deleted_ago=deleted_ago, service="checkout")
-    kept = await _target(engine, tenant, deleted_ago=timedelta(days=29), service="cart")
-    deleted_on = (datetime.now(UTC) - deleted_ago).date()
+    gone = await _target(engine, tenant, service="checkout")
+    kept = await _target(engine, tenant, service="cart")
+    # The month that ended before the deletion, and the one it fell in, which is under way.
+    deleted_at = datetime.now(UTC) - timedelta(days=31)
+    deleted_on = deleted_at.date()
     whole = slo.previous_month(slo.month_start(deleted_on))
     under_way = slo.month_start(deleted_on)
     await _days(engine, tenant, gone, _month_days(whole), good=9_980)
     await _days(engine, tenant, gone, [under_way], good=10_000)
     await _days(engine, tenant, kept, [whole], good=10_000)
+    await _delete(engine, gone, at=deleted_at)
+    await _delete(engine, kept, at=datetime.now(UTC) - timedelta(days=29))
 
     await expiry.sweep(engine)
 
@@ -159,11 +170,13 @@ async def test_ac71_a_target_deleted_30_days_ago_is_purged_and_keeps_its_months(
 async def test_a_purge_run_twice_writes_each_month_once(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:
-    gone = await _target(engine, tenant, deleted_ago=timedelta(days=45), service="checkout")
-    deleted_on = (datetime.now(UTC) - timedelta(days=45)).date()
+    gone = await _target(engine, tenant, service="checkout")
+    deleted_at = datetime.now(UTC) - timedelta(days=45)
+    deleted_on = deleted_at.date()
     await _days(
         engine, tenant, gone, _month_days(slo.previous_month(slo.month_start(deleted_on))), good=1
     )
+    await _delete(engine, gone, at=deleted_at)
 
     await expiry.sweep(engine)
     await expiry.sweep(engine)
@@ -177,7 +190,7 @@ async def test_a_purge_run_twice_writes_each_month_once(
 async def test_ac88_figures_changes_and_purged_months_lapse_at_400_days(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:
-    target = await _target(engine, tenant, deleted_ago=None, service="checkout")
+    target = await _target(engine, tenant, service="checkout")
     today = datetime.now(UTC).date()
     old_day, recent_day = today - KEPT - DAY, today - KEPT + DAY
     await _days(engine, tenant, target, [old_day, recent_day], good=10_000)
@@ -233,7 +246,7 @@ async def test_ac88_removed_exclusions_lapse_at_400_days_and_live_ones_stay(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:
     """F19 T4.7: a removed exclusion is kept 400 days after its removal, as changes are."""
-    target = await _target(engine, tenant, deleted_ago=None, service="checkout")
+    target = await _target(engine, tenant, service="checkout")
     async with engine.begin() as connection:
         for reason, removed in (
             ("Removed long ago", "now() - interval '401 days'"),

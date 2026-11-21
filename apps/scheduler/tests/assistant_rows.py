@@ -100,7 +100,7 @@ async def ask(
     async with AsyncSession(install, expire_on_commit=False) as session, session.begin():
         tenant = await provision_tenant(
             session,
-            organization_name="Chat account suite",
+            organization_name=f"Chat account suite {uuid.uuid4().hex[:8]}",
             email=f"chat-{uuid.uuid4().hex[:10]}@example.test",
             password="correct horse battery staple",
         )
