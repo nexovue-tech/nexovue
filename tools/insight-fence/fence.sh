@@ -79,12 +79,7 @@ docker volume rm "${project}_postgres-data"
 "$NEXOVUE_HOME/current/nexovue" restore "$snapshot" --yes
 
 step "AC46: setup granted again, read before anything else touches the account"
-granted=$(docker exec "$project-postgres-1" psql -U nexovue -d nexovue -tAc "
-    SELECT has_function_privilege('nexovue_insight', 'insight_claim_jobs(text,integer,integer)',
-                                  'EXECUTE')
-       AND NOT EXISTS (SELECT 1 FROM pg_proc AS p, aclexplode(p.proacl) AS a
-                       WHERE p.proname LIKE 'insight\_%' AND a.grantee = 0)")
-[ "$granted" = t ] || { echo "after the restore the AI account's grants are not as setup leaves them"; exit 1; }
+"$root/tools/insight-fence/grants-check.sh" "$project-postgres-1"
 
 step "the AI account, after the restore"
 NEXOVUE_POSTGRES_DSN="$(postgres_dsn)" NEXOVUE_INSIGHT_POSTGRES_PASSWORD="$(
