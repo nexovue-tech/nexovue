@@ -2,12 +2,12 @@
 
 ## Lifecycle status
 
-**In development.** **Step 5 built 2026-11-21, awaiting commit** (worktree `wt/f4s5`, on `feature/phase-2` 301f450): runbooks, knowledge chunks, keyword search, fact lines, runbook quotes; migration 0076, ADR-067; fake providers only; **T5.7's bed re-run not yet run: it needs the founder's key or local model, and waits on Step 4.** **Step 4 (real models, in the gate) is not built: it needs real models.** Step 1 (a safer MCP server) is on `feature/phase-2` (commit 5988d88, 2026-11-02). **Step 3 built 2026-11-12, committed 2026-11-12,** locally, not pushed, on top of Step 2; no migration, no new ADR; fake providers only, **real-model parts not yet run: they need the founder's key or local model.** **Step 2 built and committed 2026-11-12, committed locally on `wt/f4s2`, not pushed:** one commit on top of F3 Step 5 (`wt/f3s5`, fb9eee3). Against fake providers only; **the one real local-model call is not yet run: it needs the founder's key or local model.** The founder approved the specification, design and plan on 2026-11-02.
+**In development.** **Step 5 built 2026-11-21, committed** (worktree `wt/f4s5`, on `feature/phase-2` 301f450): runbooks, knowledge chunks, keyword search, fact lines, runbook quotes; migration 0076, ADR-067; fake providers only; **T5.7's bed re-run not yet run: it needs the founder's key or local model, and waits on Step 4.** **Step 4 (real models, in the gate) is not built: it needs real models.** Step 1 (a safer MCP server) is on `feature/phase-2` (commit 5988d88, 2026-11-02). **Step 3 built 2026-11-12, committed 2026-11-12,** locally, not pushed, on top of Step 2; no migration, no new ADR; fake providers only, **real-model parts not yet run: they need the founder's key or local model.** **Step 2 built and committed 2026-11-12, committed locally on `wt/f4s2`, not pushed:** one commit on top of F3 Step 5 (`wt/f3s5`, fb9eee3). Against fake providers only; **the one real local-model call is not yet run: it needs the founder's key or local model.** The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
 
-**Step 5 built 2026-11-21, awaiting commit** (worktree `wt/f4s5`, on `feature/phase-2` 301f450, which holds F4 Steps 1 to 3 and F3 Steps 1 to 5; not committed, not pushed). Migration **0076** (`down_revision` 0075). **ADR-067** (the design's knowledge ADR; ADR-068 and ADR-069 unused). Against fake providers only.
+**Step 5 built 2026-11-21, committed** (worktree `wt/f4s5`, on `feature/phase-2` 301f450, which holds F4 Steps 1 to 3 and F3 Steps 1 to 5; not committed, not pushed). Migration **0076** (`down_revision` 0075). **ADR-067** (the design's knowledge ADR; ADR-068 and ADR-069 unused). Against fake providers only.
 
 **Step 4 is not built and Step 5 does not need it,** read from the plan and the code: Step 4 builds the bed's chat seed, injection suite and cost runs (T4.1 to T4.4) against real models. Step 5's code needs none of it; only **T5.7** ("re-run the bed") does, so T5.7 is recorded as waiting on Step 4, and **not yet run: it needs the founder's key or local model.**
 
@@ -750,7 +750,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-21 (Step 5 built on wt/f4s5, awaiting commit. Step 3 committed locally, not pushed; built on wt/f4s3. Step 2 committed locally, not pushed)
+2026-11-21 (Step 5 built on wt/f4s5, committed. Step 3 committed locally, not pushed; built on wt/f4s3. Step 2 committed locally, not pushed)
 
 ## Founder approval, 2026-11-02
 

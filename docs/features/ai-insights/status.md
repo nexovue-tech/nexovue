@@ -3,7 +3,7 @@
 ## Lifecycle status
 
 **Fix 2026-11-21, awaiting review** (worktree `wt/f3fix`): a wording run is settled once, and the wording suites read a clock per test. See [wording settles once](../../changes/wording-settles-once/bug.md) (T5.3 to T5.5; no migration).
-**Step 5 built 2026-11-11, awaiting commit** (worktree `wt/f3s5`, on `feature/phase-2` 9ad0188): wording, checked by code, with a limit that stops new runs (plan T5.1 to T5.11). Built and tested against fake providers only. T5.8 waits for its Playwright check (hardening pass); T5.9 is not built (it needs `just insight-fence` and Playwright). Migration 0072, after 0071 (re-chained at commit). No ADR.
+**Step 5 built 2026-11-11, committed** (worktree `wt/f3s5`, on `feature/phase-2` 9ad0188): wording, checked by code, with a limit that stops new runs (plan T5.1 to T5.11). Built and tested against fake providers only. T5.8 waits for its Playwright check (hardening pass); T5.9 is not built (it needs `just insight-fence` and Playwright). Migration 0072, after 0071 (re-chained at commit). No ADR.
 **Step 4 built and committed 2026-11-11** (on `feature/phase-2`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. Migration 0071, after 0070.
 **Step 3 built and committed 2026-11-11** (on `feature/phase-2`): the fence, an idle AI container that can reach almost nothing (plan T3.1 to T3.11). The spike passed; T3.4, T3.10 and T3.11 stay unticked until `just insight-fence` runs. Migration 0070, after F22 Step 6's 0069.
 **Step 2 is on `feature/phase-2` (2026-11-09).** Links, the card, and the follow-up alert (plan T2.1 to T2.9, T2.12 to T2.14). T2.13 stays unticked for two of AC104's dates (*Open decisions*, 5). **Step 1 is on `feature/phase-2` (2026-11-09):** facts on the finding page, with no AI at all (plan T1.0 to T1.15); two of its tasks stay unticked for checks this machine could not run (*Not run*, below). The founder approved the specification, design and plan on 2026-11-02.
@@ -808,7 +808,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, awaiting commit; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
+2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

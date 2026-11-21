@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**In development. Step 5b, the budget reader, built 2026-11-21, awaiting commit** (added by the founder's decision 34, `phase-2-foundation.md` item 34, 2026-11-21; on `wt/f19budget`; no migration, no ADR). **Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
+**In development. Step 5b, the budget reader, built 2026-11-21, committed** (added by the founder's decision 34, `phase-2-foundation.md` item 34, 2026-11-21; on `wt/f19budget`; no migration, no ADR). **Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
 
 ## Current task
 
-**Plan Step 5b, *The budget reader other features read*: built 2026-11-21, awaiting commit.** The founder's decision 34 (2026-11-21) added it before Step 6 so F20's reliability-target panel (F20 T10.2, built alongside) has a reader. T5b.1 and T5b.2 ticked; no migration, no ADR; one open decision below (4).
+**Plan Step 5b, *The budget reader other features read*: built 2026-11-21, committed.** The founder's decision 34 (2026-11-21) added it before Step 6 so F20's reliability-target panel (F20 T10.2, built alongside) has a reader. T5b.1 and T5b.2 ticked; no migration, no ADR; one open decision below (4).
 
 Plan Step 5, *What a burn may withhold*: on `feature/phase-2` (2026-11-09; migrations 0063 and 0064, ADR-038). T5.1 to T5.9 ticked, with three open decisions below. Steps 1 to 4 are on `feature/phase-2`; T2.7's list awaits the founder's judgement.
 
@@ -639,7 +639,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-21 (Step 5b built, awaiting commit; before that 2026-11-09)
+2026-11-21 (Step 5b built, committed; before that 2026-11-09)
 
 ## Founder decision, 2026-11-02: SLO work runs on `scheduler-light` (D66)
 

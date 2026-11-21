@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Step 2b built 2026-11-21, awaiting commit.** The founder approved the specification, design and plan on 2026-11-02. Steps 1 (the deploy line and the brief, T1.1 to T1.5) and 2 (the checks, the bed's parts and the fake, T2.1 to T2.11) are on `feature/phase-2`. Step 2b (the general suggestion without code access, T2b.1 to T2b.11) is built in `wt/f5s2b`, on `feature/phase-2` 301f450. T1.6's Playwright spec and its Step 2b states are written and not run (deferred to the hardening pass). Steps 3 onward are not started.
+**Step 2b built 2026-11-21, committed.** The founder approved the specification, design and plan on 2026-11-02. Steps 1 (the deploy line and the brief, T1.1 to T1.5) and 2 (the checks, the bed's parts and the fake, T2.1 to T2.11) are on `feature/phase-2`. Step 2b (the general suggestion without code access, T2b.1 to T2b.11) is built in `wt/f5s2b`, on `feature/phase-2` 301f450. T1.6's Playwright spec and its Step 2b states are written and not run (deferred to the hardening pass). Steps 3 onward are not started.
 
 
 ## Current task
