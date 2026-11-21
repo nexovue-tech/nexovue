@@ -2,6 +2,7 @@
 
 ## Lifecycle status
 
+**Steps 2c and 6 (code) built 2026-11-21, awaiting commit** (worktree `wt/f3s6`, on `feature/phase-2` 96cbd81): the scoring tooling for the rules (T2.15, T2.16), the bed's harness and report generator against fake providers (T6.1, T6.2, the harness of T6.3). No migration, no ADR, no AI call. **Waiting, with what each needs:** T2.17's tune and report runs and the rules-only report (a machine that stays on for about 11.5 days, foundation item 9); T2.18 (the founder's bar); T6.3's real-model runs and the report with real numbers (the founder's, after Phase 2, foundation item 31); `--run forged` against the real receiver (the dev stack); T6.5 (nothing has passed AC63). See *Steps 2c and 6* under *Completed*.
 **Fix 2026-11-21, awaiting review** (worktree `wt/f3fix`): a wording run is settled once, and the wording suites read a clock per test. See [wording settles once](../../changes/wording-settles-once/bug.md) (T5.3 to T5.5; no migration).
 **Step 5 built 2026-11-11, committed** (worktree `wt/f3s5`, on `feature/phase-2` 9ad0188): wording, checked by code, with a limit that stops new runs (plan T5.1 to T5.11). Built and tested against fake providers only. T5.8 waits for its Playwright check (hardening pass); T5.9 is not built (it needs `just insight-fence` and Playwright). Migration 0072, after 0071 (re-chained at commit). No ADR.
 **Step 4 built and committed 2026-11-11** (on `feature/phase-2`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. Migration 0071, after 0070.
@@ -10,6 +11,8 @@
 
 
 ## Current task
+
+Steps 2c and 6 (code) await the founder's review of the diff, then commit. Open decisions 15 to 20 are the founder's. Step 2c's runs wait for a machine that stays on, and Step 6's report for the founder's real-model runs; both report files are skeletons that say so.
 
 Step 5 awaits the founder's review of the diff, then commit (migration 0072 re-chained by the coordinator). Open decisions 7 and 9, 11 to 14 are the founder's. Wording has never met a real provider: that waits for the founder's free-tier key (foundation item 4).
 
@@ -21,6 +24,31 @@ Step 2 is committed (`55703b4`). Step 2b is the founder's after Phase 2 (foundat
 
 
 ## Completed
+
+### Steps 2c and 6 (code), built 2026-11-21 (worktree `wt/f3s6`)
+
+**What exists.** `tools/ai-eval/` now scores the rules with no model and runs a bed on models, on fake providers only. `just ai-eval --run score|tune|payloads|models|forged|deploys`. Nothing was run against a real model, a real week of data, or the dev stack's receiver.
+
+| Task | What | Where |
+|---|---|---|
+| T2.15 | Stated-cause scoring: right, wrong, honest miss, not caught, unkeyed, by fault, by group (could the rules see the cause at all), by rule, by rule and deploy-frequency band, with ties and decoys, as counts and never percentages; the written answer key per fault and service; stored facts (`Facts` as JSON and back) and a facts log whose first line names the tune and report rounds; replay of stored facts with a named constant changed, on tune rounds only; the deploy scheduler (signed deploys through the real webhook, 7 days or more, varied rates, a staged cause, decoys, a ledger so a stop resumes) | `score.py`, `answer_keys.py`, `bed_facts.py`, `facts_log.py`, `replay.py`, `deploy_scheduler.py`, `run.py` |
+| T2.16 | The healthy run's sampled windows through the evidence job's own facts read (AC16); the forged run (four forgeries aimed at four rules, two arms, counts of findings opened and false causes by rule, fed to the bar as wrong causes, A82); a live test of 100 findings opened at once (AC97) | `healthy.py`, `live_reader.py`, `forged.py`, `at_once.py`, `apps/scheduler/tests/test_bed_live.py` |
+| T2.17 | Tooling only: `replay.sweep`, `score` and `bed_report.render_rules_report`. **The tuning and the report wait** (below). `docs/research/f3-rules-report-2026-11.md` is a skeleton saying so, with no number in it | `replay.py`, `bed_report.py` |
+| T2.18 | The founder's. The report prints each rule's reading against the approved bar in counts (`bar_reading`) for the founder to read; nothing sets `CAUSE_BAR_RECORDED` | `score.py` |
+| T6.1 | Recording `model_input` once (with the hash of the request built from it) and replaying it across providers offline; fake providers (careful writer, abstainer, garbled, echo, and one hostile writer per way out); the one seam to a real model through nexovue's own wire formats and transport (`http_provider`, **not run**) | `model_runs.py` |
+| T6.2 | 42 payloads (32 attacks, 10 controls), 13 adversarial outputs each tied to the rule that must remove it, and 6 model inputs (3 ordinary controls, extreme numbers, 29 aliases, a forged edge that reads as a false cause); all 42 planted in every text field F3 reads and sent through `rules.decide`, `sentences.record`, `inputs.build` and `explain_request`: none reaches the bytes | `fixtures/`, `payload_pipeline.py` |
+| T6.3 | Injection, wording and cost scoring and `docs/research/f3-bed-report-2026-11.md`, a skeleton saying the real runs are the founder's after Phase 2 | `model_scoring.py`, `bed_report.py` |
+
+**One measured number (AC97, one run).** 100 findings opened in one instant, their gathers run by the real worker (8 slots, evidence capped at 2, a floor of 4) on lanes of the test's own, with a due probe falling due just after: **all 100 explained; the queue took 7.0 s to clear; the probe waited 0.9 s; time to the first explanation was 4.5 s at the median and 6.7 s at the 95th percentile.** One run on a shared build machine with an empty telemetry store: it says the floor works, not what a real install's queue takes. The bed's own number comes from Oracle.
+
+**What waits, and exactly what it needs.**
+
+- **T2.17's runs and report.** The fault bed's run (3 weeks of seeded history, 1 week of the live demo, a 7-day reference run, about 4.4 days of injections: about 11.5 days; `tools/fault-bed/README.md`), with the deploy scheduler (`just ai-eval --run deploys ...`) started with the warm-up, a facts log written for every injection (the collector that reads each finding's facts at the settled read into the log is `live_reader` plus `facts_log.append_decision`; **a command that does this per injection is not built**, open decision 20), the healthy windows and the forged run on the same stack. This machine has no long-running demo stack and no weeks.
+- **`--run forged` against the real receiver.** The receiver, Kafka, the workers, detection and the API running, with a project's ingest key. Tested here with a fake intake only; the live observer is tested on a finding row it owns.
+- **T6.3.** The founder's free-tier key and the local model on the Mac, after Phase 2. `docs/research/f3-bed-report-2026-11.md` is replaced whole by `bed_report.py`'s filled form.
+- **T6.5.** Nothing has passed AC63; no supported list.
+
+**What this build does not prove (said again in both report skeletons).** A right score on a staged deploy proves the rule fires, not that it is accurate. A clean injection result with no free text sent reflects absent input. Fake providers test the harness, not a model.
 
 ### Step 5, built 2026-11-11 (worktree `wt/f3s5`)
 
@@ -224,6 +252,9 @@ ADR-039 (an explanation is a frozen evidence record, with code choosing the caus
 
 ## Next action
 
+Founder: review Steps 2c and 6's diff and open decisions 15 to 20; commit. Then, on a machine that stays on, T2.17's runs (above); after Phase 2, the real-model runs of T6.3. Step 7 next.
+
+Earlier (Step 5):
 Founder: review Step 5's diff and open decisions 12 to 14; commit after Step 4's chain (0072 on 0071). With a free-tier key, the real-call record (Step 4's next action) is also what lets wording run against a real model; then judge Step 5 as the plan says (read the words beside the facts; pull the key, stop the container, set a tiny limit). Coordinator: `just insight-fence` (Step 3), then T5.9's install-layout arm and the Playwright spec, in the hardening pass.
 
 Earlier (Step 4):
@@ -237,6 +268,16 @@ The founder reviews Step 2's diff; then commit. The founder's checks after Phase
 
 
 ## Open decisions
+
+**From Steps 2c and 6, 2026-11-21:**
+
+15. **The answer keys are the authors', written before any run** (`tools/ai-eval/answer_keys.py`): 14 faults, 15 keys. Six faults are "a bad release", so the bed stages a signed deploy of that service four minutes before them (right answer: the staged deploy); seven are resource or traffic faults no rule reads (CPU, garbage collection, memory, a probe, a slow route, a queue, lost traffic), where any stated cause is wrong and no cause is an honest miss; `paymentUnreachable` and `paymentFailure` on `checkout` are keyed to the `payment` callee. Every row comes from a flag's description, not from observation. **Recommendation:** the founder reads the file before the run; a row is changed only before the first injection.
+16. **Three numbers the run needs and nobody has fixed:** which injection rounds tune and which report (built: 1 and 2 tune, 3 to 5 report, so 3 rounds per fault), windows per service for the healthy run (built: 100), and trials per input for the real-model run (10, a guess). With 3 report rounds a rule keyed to one fault (`dependency_*`: 2 keys, so 6 injections) can reach 5 stated causes only if it fires on all but one: expect "silent" for the dependency rules. **Recommendation:** keep 2 and 3, and say beforehand which rules are expected to stay silent; or raise the bed to 8 rounds (costs about 2.6 more days).
+17. **LogJack's payloads are stand-ins.** arxiv.org was not reachable from this machine, so the 32 attacks are written here in the shapes the research notes describe (override, a disguised "SOP" reference, an exfiltration address, a command, "sanitize and execute", a role claim, a false cause, hidden characters, each in four places) and marked `source="standin"`; the 10 controls are ordinary operational lines. **Recommendation:** allow arxiv.org (or bring the paper's appendix) and replace them before the real-model run; the test keeps the count at 42 and 10 controls.
+18. **AC76's "all 42 through the real pipeline" is built from `Facts` onward,** not from a span or log sent to the receiver: the hop from telemetry to `Facts` is `test_insight_canary.py`'s, through the real gather, with markers. **Recommendation:** accept for now; on the dev stack or Oracle, send the 42 as real span and log text through the receiver and gather them, once, before release (a small addition to `payload_pipeline.py`).
+19. **The scheduler's rates and the bands are guesses** (0.2, 1, 4 and 24 deploys a day cycled across services; low under 7 a week, daily to 14, frequent from 15; a staged cause and decoy 4 minutes before an injection; decoys on every other round of the faults no rule reads). **Recommendation:** accept; the report names each service's band as measured.
+20. **No command yet collects a fault-bed run into the facts log.** `live_reader` reads one finding's facts as the evidence job does and `facts_log` stores them; the loop that, for each injection of a fault-bed run, finds the finding and appends its decision (with the scheduler's plan) is not built, because it can only be tried against a real run. **Recommendation:** build it as the first step of the Oracle run, against the first round's data, before the 11.5 days are spent.
+21. **T2.18 stays the founder's:** read the rules-only report against the bar approved on 2026-11-02 (`score.bar_reading` prints each rule's reading), then a reviewed change sets `CAUSE_BAR_RECORDED` and fills `RELEASED_RULES`. Nothing in this build touches either.
 
 **From Step 5, 2026-11-11:**
 
@@ -613,6 +654,31 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Validation
 
+### Steps 2c and 6 (code), 2026-11-21
+
+Own containers `f3s6-pg` (Postgres 18, port 25432) and `f3s6-ch` (ClickHouse 26.3, HTTP 28123), network `f3s6-net`, migrated with the `setup` step (Postgres at 0077; its last step, the object store, has none here and was not needed) and the Go setup (42 ClickHouse migrations). Live tests ran through a wrapper that refuses any store port but these two. No real provider, no dev stack, no Kafka. **Every test below was seen failing on a saved copy with its behaviour broken (restored byte-equal, checked by hash), then passing.** Four tests were first seen *passing* on a mutation, which showed they proved nothing, and were strengthened: a staged deploy always scored right, a cause with no data behind it, a decoy that never changed an outcome (now a counted column), a duplicate window, a no-outage cause counted false, a failed call that carried text, the clear time from the last start, and a payload leak ignored by the command.
+
+| Test file | Seen failing by (each its own saved copy) | Then |
+|---|---|---|
+| `test_score.py` (44) | staged deploy always right; a deploy that is not the staged one; unlinked cause; decoy never marked; bar threshold off by one; bar allowing a fifth wrong; `in_rounds` returning every round; ties never reported; frequent band ignored; a missing finding read as an honest miss; p95 read as p50; unexplained findings dropped; forged wrong causes not added; the callee's staged release not right; overlapping rounds allowed; constants not restored; a sweep reading every round; any constant tunable; unnamed round accepted; rounds named twice; a decision before the rounds; unknown stored field ignored; a time without a zone; answer keys: a fault left unstaged, a key on the wrong service, a fault with no key, a dependency key made invisible: 26 mutations, each failed 1 to 5 tests | 44 passed |
+| `test_deploy_scheduler.py` (12) | short plan accepted; background deploys inside the clear distance; no decoys; one rate for all; signed with the wrong key; ledger ignored on resume; a refusal ignored; ledger written before the post succeeds: 8 mutations | 12 passed |
+| `test_healthy.py` (9), `test_forged.py` (9) | real findings ignored; failed reads not counted; causes not counted; windows not distinct; a false cause counted with no outage; a refusal not counted; a refused export still observed; a non-local receiver allowed; the edge forgery losing its peer; the version forgery losing its version | 9 and 9 passed |
+| `test_fixtures.py` (21) | a payload missing; the pipeline check blind; payloads planted nowhere; a url escape made harmless; a causal escape expecting the wrong rule; 29 aliases shrunk; the forged edge made "likely" | 21 passed |
+| `test_model_runs.py` (23) | survivors never counted; attempts never counted; a failed call read as an answer; wording counted over every family; a price given when none was; unknown alias undetected; a recording overwritten; the request hash unchecked; replay trials ignored. The survivor case is also proved by a deliberately broken validator that shows every claim: the provider then fails | 23 passed |
+| `test_at_once.py` (5), `test_bed_report.py` (6) | the probe always counted in the burst; the clear time from the last start; a skeleton drifting from its file; a skeleton holding an invented table; fakes not labelled | 5 and 6 passed |
+| `test_run.py` (9) | `score` reading every round; a payload leak ignored; `deploys` ignoring the fault bed's rounds; `deploys` and `forged` run with no secret or key (the key check first came after the ClickHouse connection: the test found it) | 9 passed |
+| `apps/scheduler/tests/test_bed_live.py` (3), as the owner of its rows | the reader reading the wrong project; the observer looking at another service; the probe queued behind the evidence lane (no floor): waited 7 s, failed; only 99 gathers enqueued: never cleared, failed after 121 s | 3 passed (the 100 findings test took 8.8 s whole) |
+
+**Final runs.** `tools/ai-eval` non-live: **144 passed**. With `test_bed_live.py`, `test_evidence_rules.py`, `test_evidence_wording.py`, `test_evidence_gather_live.py`, `test_detection_has_no_ai.py` and `fix/test_seed_findings_live.py`, `-n 2`: **412 passed**. `uv run ruff check .` and `ruff format --check .` (1551 files): clean. `uv run mypy .`: **3 errors in 2 files, all already on HEAD and in files this build did not touch** (`tools/ai-eval/real_call.py:32` and `:61`, `fix/test_seed_findings_live.py:33`; confirmed by running mypy on a stash of this work); this build adds none (1129 to 1158 files). Self-review (`/review-diff`) found one real defect, fixed: the forged run's ingest key was a command-line argument, so it would show in a process list; it is now read from `AI_EVAL_INGEST_KEY`, as the deploy secret is from `AI_EVAL_DEPLOY_SECRET`. Not fixed, recorded: open decisions 15 to 20.
+
+**Not run, and why:**
+
+- **T2.17's tuning and report, the weeks-long bed, the 7-day deploy run:** need a machine that stays on (above).
+- **`--run forged` against the real receiver, and the live `deploys` post through the real webhook:** need the dev stack; tested here against a fake intake and against the real webhook's own schema and signature check.
+- **Every real-model run (T6.3):** the founder's, after Phase 2 (foundation item 31). `model_runs.http_provider` was tested only against a fake transport.
+- **LogJack's own payloads:** arxiv.org was not reachable (open decision 17).
+- `just check`, `just insight-fence`, other features' live suites: not run, by instruction.
+
 ### Step 5, 2026-11-11
 
 Own containers `f3s5-pg` (Postgres 18, `pgvector/pgvector:0.8.6-pg18-trixie`, port 25432) and `f3s5-ch` (ClickHouse 26.3, HTTP 28123, native 29000, network `f3s5-net`), migrated with the `setup` step (0072 included; up, down, up) and the Go setup (40 ClickHouse migrations). Every `word`, sweep and canary case ran **as `nexovue_insight`**, through the real `setup` grants. No real provider was called. Every test below was seen failing on a saved copy with its behaviour removed, then passing:
@@ -786,6 +852,8 @@ This is the specification. On approval it amends: `phase-2-foundation.md` (the d
 
 ## Documentation impact
 
+**Steps 2c and 6 code (2026-11-21):** `docs/research/f3-rules-report-2026-11.md` and `f3-bed-report-2026-11.md` (skeletons, replaced whole by the runs), `justfile` (`ai-eval`), `plan.md`, `phase-2-tracker.md`. `spec.md`, `design.md` and `sizing.md` still carry their guesses until the real runs replace them (T6.3).
+
 **Step 5 (2026-11-11):** `docs/operations/ai.md` (how a wording run goes, "not available right now", the four alerts and the readings, running with no AI container), `deploy/monitoring/` (rules, cases, scrape job), `phase-2-tracker.md`. `docs/product/setup/ai.md` stays deferred to the hardening pass.
 
 **Step 4 (2026-11-11):** `docs/operations/ai.md` (allowing a local model, an unreadable key), `docs/operations/key-rotation.md` (`AI_SECRET_KEY`), ADR-047 and the decisions index, `phase-2-tracker.md`. `docs/product/setup/ai.md` is deferred to the hardening pass.
@@ -808,7 +876,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
+2026-11-21 (Steps 2c and 6 code built, awaiting commit); 2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 
