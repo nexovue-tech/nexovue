@@ -265,8 +265,12 @@ test-py: gate-seed
     # fixtures, and a suite whose fixture writes rows for one tenant must not have
     # two workers inside it at once. It is not in `addopts`, so running one file
     # by hand stays serial and readable.
-    uv run pytest -n 6 --dist loadfile
+    # A bound below CI's 60-minute job limit (the suite takes about 20): a run that hangs is
+    # interrupted here, so pytest prints what was running and the step fails with its log kept,
+    # instead of the job being cancelled mid-step with no log at all.
+    timeout --signal=INT --kill-after=60s 40m uv run pytest -n 6 --dist loadfile
     code=$?
+    if [ $code -eq 124 ]; then echo "test-py did not finish in 40 minutes: a test hung; see the stacks above"; fi
     if [ $code -eq 5 ]; then echo "no tests collected yet — see the testing policy"; exit 0; fi
     exit $code
 
