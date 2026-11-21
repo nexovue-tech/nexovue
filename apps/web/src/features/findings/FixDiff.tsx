@@ -15,6 +15,9 @@ const LINK = "text-brand-text underline-offset-2 hover:underline [overflow-wrap:
 export function FixDiff({ proposal, zone }: { proposal: Proposal; zone?: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-3" data-testid="fix-diff">
+      {proposal.rebuilt_note ? (
+        <p className="max-w-prose text-ink text-sm">{proposal.rebuilt_note}</p>
+      ) : null}
       {proposal.flags.length > 0 ? <FlagList flags={proposal.flags} /> : null}
       <p className="max-w-prose text-ink-dim text-xs">{proposal.facts_note}</p>
       {proposal.files.map((file) => (
@@ -67,6 +70,7 @@ function FileDiff({
         <span className="shrink-0 text-ink-dim">{DIFF_WORDS.counts(file.added, file.removed)}</span>
       </summary>
       <div className="flex min-w-0 flex-col gap-2 border-line border-t px-1 py-2">
+        {file.moved_note ? <p className="px-2 text-ink text-sm">{file.moved_note}</p> : null}
         {file.hunks === null ? (
           <p className="px-2 text-ink-dim text-sm">{file.context_note}</p>
         ) : (

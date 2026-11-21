@@ -17,6 +17,10 @@ every organization, each row written by its own `org_id`:
    or removed its connection, and when a written suggestion is 30 days old (BR9).
 4. **Short-lived rows** past `expires_at`: packs, check runs, GitHub link attempts.
 5. **The Fix App's hourly refresh** of its repositories and grant, as a job each.
+6. **GitHub access gone for 72 hours** (BR9; Step 5): a repository the refresh has found
+   unreachable that long, or every repository of an App GitHub says is not installed that
+   long, has its consents withdrawn (`access_gone`), its work in flight ended and its
+   stored code deleted, as an owner's withdrawal would, audited.
 
 Step 4 (T4.8) adds a `proposing` row past every attempt of its job (`failed`,
 `timed_out`), and records each new result once, in the transaction that marks it recorded:
@@ -47,9 +51,13 @@ from nexovue_platform.evidence.aliases import AliasBook
 from nexovue_platform.fixes.consent import folder_covered
 from nexovue_platform.fixes.policy import CHECKS_VERSION, OwnerLists
 from nexovue_platform.fixes.records import (
+    ACCESS_GONE_AFTER,
+    AI_SOURCE_DISCLOSURE_WITHDRAWN,
     CALL_SECONDS_LONGEST,
     CANCELLED,
     CHECKS_REFUSED_AT_CLICK,
+    CODE_ACCESS_GONE,
+    CONSENT_WITHDRAWN_ACCESS_GONE,
     FAILED,
     FIX_CHECKS_REFUSED,
     FIX_WITHHELD,
@@ -59,6 +67,7 @@ from nexovue_platform.fixes.records import (
     LAPSED,
     PROPOSED,
     REFRESH_FIX_APP_TASK,
+    REPOSITORY_AUDIT_TARGET,
     SWEEP_FIXES_TASK,
     WITHHELD_RULES,
     proposing_lifetime,
@@ -179,6 +188,58 @@ _EXPIRED_ATTEMPTS: Final = text(
     "DELETE FROM github_link_attempts WHERE expires_at < :at AND "
     "(CAST(:only_org AS uuid) IS NULL OR org_id = CAST(:only_org AS uuid)) RETURNING org_id"
 )
+# Across every organization: repositories with a live consent whose GitHub access has been
+# gone past the limit (BR9): unreachable since a refresh first missed it, or an App GitHub
+# says is not installed (F22's standing, `needs_attention`).
+_ACCESS_GONE: Final = text(
+    """
+    SELECT repository.org_id, repository.id AS repository_id
+    FROM connection_repositories AS repository
+    JOIN connections AS app
+      ON app.org_id = repository.org_id AND app.id = repository.connection_id
+    WHERE app.kind = 'github_fix' AND app.state <> 'disconnected'
+      AND ((NOT repository.is_reachable AND repository.unreachable_since < :before)
+           OR (app.state = 'needs_attention' AND app.last_failure = 'app_not_installed'
+               AND app.failing_since < :before))
+      AND EXISTS (
+          SELECT 1 FROM fix_source_consents AS consent
+          WHERE consent.org_id = repository.org_id
+            AND consent.connection_repository_id = repository.id
+            AND consent.withdrawn_at IS NULL)
+      AND (CAST(:only_org AS uuid) IS NULL OR repository.org_id = CAST(:only_org AS uuid))
+    ORDER BY repository.id
+    LIMIT :batch
+    """
+)
+_WITHDRAW_FOR_ACCESS: Final = text(
+    """
+    UPDATE fix_source_consents
+    SET withdrawn_at = :at, withdrawn_reason = 'access_gone'
+    WHERE org_id = :org_id AND connection_repository_id = :repository_id
+      AND withdrawn_at IS NULL
+    RETURNING id, folder_scope
+    """
+)
+_REPOSITORY_CODE: Final = text(
+    """
+    SELECT id FROM finding_fixes
+    WHERE org_id = :org_id AND kind = 'source' AND connection_repository_id = :repository_id
+      AND code_deleted_at IS NULL
+      AND (files_read IS NOT NULL OR edits IS NOT NULL
+           OR state IN ('gathering', 'gathered', 'proposing'))
+    ORDER BY id
+    FOR UPDATE
+    """
+)
+_END_IN_FLIGHT: Final = text(
+    """
+    UPDATE finding_fixes
+    SET state = 'failed', reason = 'consent_ended_in_flight', state_changed_at = :at,
+        finished_at = :at, path_candidates = NULL, requested_paths = NULL
+    WHERE org_id = :org_id AND id = :fix_id
+      AND state IN ('gathering', 'gathered', 'proposing')
+    """
+)
 _APPS_DUE: Final = text(
     """
     SELECT id, org_id FROM connections
@@ -198,6 +259,7 @@ class SweptFixes:
     cleared: int
     expired: int
     refreshes: int
+    access_gone: int = 0
 
 
 async def sweep(
@@ -238,7 +300,14 @@ async def sweep(
                 (await connection.execute(statement, {"at": now, "only_org": only_org})).all()
             )
     refreshes = await _queue_refreshes(engine, now=now, only_org=only_org)
-    return SweptFixes(ended=ended, cleared=cleared, expired=expired, refreshes=refreshes)
+    access_gone = await _take_back_lost_access(engine, now=now, only_org=only_org)
+    return SweptFixes(
+        ended=ended,
+        cleared=cleared,
+        expired=expired,
+        refreshes=refreshes,
+        access_gone=access_gone,
+    )
 
 
 async def _record_results(engine: AsyncEngine, *, now: datetime, only_org: str | None) -> int:
@@ -415,14 +484,58 @@ async def _queue_refreshes(engine: AsyncEngine, *, now: datetime, only_org: str 
     return len(due)
 
 
+async def _take_back_lost_access(
+    engine: AsyncEngine, *, now: datetime, only_org: str | None
+) -> int:
+    """Step 6: each repository in its own transaction, consents first, then the rows, the
+    same order an owner's withdrawal takes its locks in."""
+    async with engine.connect() as connection:
+        due = (
+            await connection.execute(
+                _ACCESS_GONE,
+                {"before": now - ACCESS_GONE_AFTER, "batch": BATCH, "only_org": only_org},
+            )
+        ).all()
+    for repository in due:
+        ids = {"org_id": repository.org_id, "repository_id": repository.repository_id}
+        async with engine.begin() as connection:
+            withdrawn = (await connection.execute(_WITHDRAW_FOR_ACCESS, {**ids, "at": now})).all()
+            rows = (await connection.execute(_REPOSITORY_CODE, ids)).all()
+            for row in rows:
+                each = {"org_id": repository.org_id, "fix_id": row.id}
+                await connection.execute(_END_IN_FLIGHT, {**each, "at": now})
+                await connection.execute(_DROP_PACK, each)
+                await connection.execute(
+                    text(CLEAR_STORED_CODE), {**each, "reason": CODE_ACCESS_GONE}
+                )
+            for consent in withdrawn:
+                await connection.execute(
+                    text(RECORD_CASE_AUDIT_SQL),
+                    case_audit_parameters(
+                        org_id=repository.org_id,
+                        actor_user_id=None,
+                        action=AI_SOURCE_DISCLOSURE_WITHDRAWN,
+                        target=f"{REPOSITORY_AUDIT_TARGET}:{repository.repository_id}",
+                        detail={
+                            "consent_id": str(consent.id),
+                            "folder_scope": consent.folder_scope,
+                            "reason": CONSENT_WITHDRAWN_ACCESS_GONE,
+                            "code_deleted": len(rows),
+                        },
+                    ),
+                )
+    return len(due)
+
+
 @task(SWEEP_FIXES_TASK)
 def sweep_fixes_task() -> None:
     swept = with_engine(lambda engine: sweep(engine, clock=lambda: datetime.now(UTC)))
-    if swept.ended or swept.cleared or swept.expired or swept.refreshes:
+    if swept.ended or swept.cleared or swept.expired or swept.refreshes or swept.access_gone:
         logger.info(
             "the suggested fix sweep moved rows",
             ended=swept.ended,
             cleared=swept.cleared,
             expired=swept.expired,
             refreshes=swept.refreshes,
+            access_gone=swept.access_gone,
         )

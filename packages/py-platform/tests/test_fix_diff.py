@@ -28,6 +28,7 @@ from nexovue_platform.fixes.diff import (
     facts_have_shape,
     file_hunks,
     git_blob_id,
+    patch_hunks,
     suggestion_digest,
 )
 
@@ -357,3 +358,33 @@ def test_only_a_line_feed_ends_a_line(tmp_path: Path) -> None:
     git(tmp_path, "add", "f.py")
     patch = build_patch([PatchFile("f.py", REGULAR_FILE_MODE, content, (span,))])
     git(tmp_path, "apply", "--index", stdin=patch.encode())
+
+
+def test_the_patch_reads_back_as_the_hunks_it_was_built_from() -> None:
+    """Step 5: a read shows the check run's diff from the patch it stored (AC19), so the
+    page and the download are one text. CRLF, a missing final newline, non-ASCII text, an
+    executable and several hunks, in the patch's path order."""
+    files = sorted(patch_files(), key=lambda each: each.path)
+
+    read = patch_hunks(build_patch(files))
+
+    assert read == [file_hunks(each.old_content, each.spans) for each in files]
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_the_patch_reads_back_over_many_layouts(seed: int) -> None:
+    content, spans, _ = random_case(seed)
+    if not spans:
+        return
+    changed = PatchFile("src/x.py", REGULAR_FILE_MODE, content, tuple(spans))
+
+    assert patch_hunks(build_patch([changed])) == [file_hunks(content, spans)]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    ["not a patch\n", "diff --git a/x b/x\n@@ nonsense @@\n", "@@ -1,1 +1,1 @@\n-a\n+b\n"],
+)
+def test_text_this_module_did_not_write_is_refused(broken: str) -> None:
+    with pytest.raises(ValueError):
+        patch_hunks(broken)

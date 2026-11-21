@@ -1,9 +1,10 @@
 """Every sentence F5 says about a suggestion, by code (design, *Every sentence*; spec AC8).
 
 One constant, so a code with no sentence fails a test rather than reaching a page as a raw
-code, and AC37's banned words are checked once, here. Rung 2b's rows (plan T2b.7), and
-rung 3's as far as Step 3 (T3.7). `requester` is the line for someone who may ask (owner, admin,
-member); `viewer` for a viewer and a support view, or None where they see nothing.
+code, and AC37's banned words are checked once, here. Rung 2b's rows (plan T2b.7), rung
+3's from Step 3 (T3.7), and Step 5's patch, verdict and deleted code. `requester` is the
+line for someone who may ask (owner, admin, member); `viewer` for a viewer and a support
+view, or None where they see nothing.
 `{date}` and `{dependency}` are filled by the reader, from Nexovue's own values.
 """
 
@@ -13,7 +14,17 @@ from dataclasses import dataclass
 from typing import Final
 
 from nexovue_platform.fixes.pack import LEFT_OUT_REASONS
-from nexovue_platform.fixes.records import FIX_CHECK_REASONS, FIX_REASONS
+from nexovue_platform.fixes.records import (
+    CHECKS_REFUSED_AT_CLICK,
+    CODE_DELETED_REASONS,
+    FIX_CHECK_REASONS,
+    FIX_REASONS,
+    FIX_VERDICTS,
+    STALE_REASONS,
+    VERDICT_MERGE_AS_IS,
+    VERDICT_USEFUL_START,
+    VERDICT_WRONG,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +239,10 @@ REASON_SENTENCES: Final[dict[str, FixSentence]] = {
         "This suggestion no longer passes Nexovue's rules. Do not apply it. Tell your admin.",
         _NOT_PREPARED,
     ),
+    "project_deleted": FixSentence(
+        "This project was deleted, so this stopped. Nothing more was sent.",
+        "This project was deleted, so this stopped.",
+    ),
 }
 
 # Reasons shown neutrally, with no fix id and no failure tone (design, *State by role*).
@@ -385,6 +400,7 @@ COMMIT_UNKNOWN: Final = "The running version is not known, so this read the defa
 MOVED_ON_DEFAULT: Final = "This file has changed on the default branch since the running version."
 
 # Why a check run refused or failed (design, *The check run*): every `FIX_CHECK_REASONS`.
+# A patch check out of date, or refused by the rules, says what the suggestion's row says.
 CHECK_REASON_SENTENCES: Final[dict[str, str]] = {
     "not_linked": REASON_SENTENCES["not_linked"].requester,
     "no_github_access": REASON_SENTENCES["no_github_access"].requester,
@@ -393,6 +409,59 @@ CHECK_REASON_SENTENCES: Final[dict[str, str]] = {
     "permission_missing": REASON_SENTENCES["permission_missing"].requester,
     "consent_withdrawn": "An owner withdrew agreement, so this stopped.",
     "nexovue_error": REASON_SENTENCES["nexovue_error"].requester,
+    **{reason: REASON_SENTENCES[reason].requester for reason in STALE_REASONS},
+    CHECKS_REFUSED_AT_CLICK: REASON_SENTENCES[CHECKS_REFUSED_AT_CLICK].requester,
+}
+
+# Step 5: the patch (design, *State by role*, check rows; spec FR20a, FR21, UR6).
+PREPARE_PATCH: Final = "Prepare patch"
+PATCH_RUNNING_HEADING: Final = "Re-reading the files"
+PATCH_RUNNING: Final = "Re-reading the files and re-applying Nexovue's rules."
+PATCH_READY_HEADING: Final = "Ready to confirm"
+PATCH_BUILT_AGAINST: Final = (
+    "Built against {commit}, the default branch's head when it was re-read. Apply it with "
+    "git apply. It can be downloaded until {until}; prepare it again after that."
+)
+PATCH_NOT_PREPARED: Final = (
+    "Prepare the patch first: it is rebuilt from the repository as it is now."
+)
+CHECK_EXPIRED: Final = "This check is more than 15 minutes old. Check again."
+NO_WRITTEN_SUGGESTION: Final = "There is no written suggestion here to prepare or answer about."
+FACTS_FROM_HEAD: Final = (
+    "Line numbers and context are from the default branch's head at {commit}, re-read for "
+    "your patch."
+)
+MOVED_ON: Final = "This file moved on since the suggestion."
+MOVED_LEAD: Final = (
+    "A file moved on since the suggestion, and every change still applies. The changes below "
+    "are re-read from the default branch's head."
+)
+
+# FR29, UR11: "Was this suggestion useful?", and what an answer does.
+VERDICT_QUESTION: Final = "Was this suggestion useful?"
+VERDICT_LABELS: Final[dict[str, str]] = {
+    VERDICT_MERGE_AS_IS: "Yes, nearly as it is",
+    VERDICT_USEFUL_START: "Yes, as a start",
+    VERDICT_WRONG: "No, it was wrong",
+}
+VERDICT_RECORDED: Final = "Recorded. This changes nothing else."
+
+# BR9: a suggestion whose stored code is gone (design, *State by role*, `code_deleted_at`).
+CODE_DELETED_HEADING: Final = "Code deleted"
+CODE_DELETED_SENTENCE: Final = (
+    "Code deleted on {when}, because {why} Backups that hold it age out by {until}. What the "
+    "AI provider was sent follows your contract with them."
+)
+CODE_DELETED_WHY: Final[dict[str, str]] = {
+    "ended_short": "the suggestion ended without a change.",
+    "pull_request_done": "its pull request ended 7 days ago.",
+    "aged_out": "it was written 30 days ago.",
+    "consent_withdrawn": "an owner withdrew agreement to send this code.",
+    "disconnected": "the Nexovue suggestions App was disconnected.",
+    "ai_off": "AI was switched off.",
+    "access_gone": "Nexovue could not reach this repository on GitHub for 72 hours.",
+    "restored": "Nexovue was restored from a backup.",
+    "project_deleted": "the project was deleted.",
 }
 
 assert set(CHECK_REASON_SENTENCES) == set(FIX_CHECK_REASONS), (
@@ -402,3 +471,7 @@ assert set(REASON_SENTENCES) == set(FIX_REASONS), (
     "every reason a suggestion may store needs its sentence here"
 )
 assert set(LEFT_OUT_WHY) == set(LEFT_OUT_REASONS), "every left-out reason needs its sentence here"
+assert set(VERDICT_LABELS) == set(FIX_VERDICTS), "every verdict needs its words here"
+assert set(CODE_DELETED_WHY) == set(CODE_DELETED_REASONS), (
+    "every reason code is deleted needs its words here"
+)

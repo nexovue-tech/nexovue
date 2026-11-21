@@ -365,6 +365,22 @@ tests:
             exp_annotations:
               summary: "AI wording is on and no scheduler-insight is running"
 
+  - name: a suggested fix refused again on the same files opens a ticket at once
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_fix_checks_refused_recent{job="scheduler-beat"}'
+        values: "0 0 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NexovueSuggestionRefusedAgain
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: NexovueSuggestionRefusedAgain
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "1 suggested fixes failed Nexovue's rules again on the same files in the last hour"
+
   - name: no AI connection on and no scheduler-insight is quiet
     interval: 1m
     input_series:

@@ -1,13 +1,15 @@
-"""F5 rung 3's routes on a finding: Ask, the file list, Send and Cancel, and the brief's
-paths (spec FR5c, FR11 to FR13a; design, *Routes*; plan T3.9, T3.11, T3.16). HTTP only.
+"""F5 rung 3's routes on a finding: Ask, the file list, Send and Cancel, the brief's paths,
+the check run, the patch and the verdict (spec FR5c, FR11 to FR13a, FR20a, FR29; design,
+*Routes*; plan T3.9, T3.11, T3.16, T4.12, T5.1, T5.2). HTTP only.
 
 Apart from `fixes/router.py`, whose rungs 1 and 2 import no AI code (AC33): these read the
 AI connection and F3's limits to decide FR9. A person's routes only, so a token is refused
 below each and none is on the read surface (AC3); every write is `MayRequestFix`, and a
-support view is refused by method. Ask and the brief's paths read this service's stacks
-through the tenant chokepoint (`TenantRepository`), so `/findings` keeps the telemetry
-tier. **Nothing here calls GitHub or a provider**: each step adds a job; Send's goes to
-the AI role, and the check run's to `scheduler-connections`.
+support view is refused by method, and the patch, a read, by `MayReadFixCode`. Ask and the
+brief's paths read this service's stacks through the tenant chokepoint
+(`TenantRepository`), so `/findings` keeps the telemetry tier. **Nothing here calls GitHub
+or a provider**: each step adds a job; Send's goes to the AI role, and the check run's to
+`scheduler-connections`.
 """
 
 from __future__ import annotations
@@ -17,11 +19,15 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Body, status
+from fastapi.responses import PlainTextResponse
+from nexovue_platform.fixes.records import CHECK_FOR_READ
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
-from nexovue_api.auth.policy import MayRequestFix
+from nexovue_api.auth.policy import MayReadFixCode, MayRequestFix
 from nexovue_api.deps import AppSettings, DbSession
-from nexovue_api.findings import fix_checks, fix_service
+from nexovue_api.findings import fix_checks, fix_service, fix_verdict
+from nexovue_api.findings.fix_checks import PATCH_MEDIA_TYPE
+from nexovue_api.findings.fix_schemas import VerdictRequest, VerdictView
 from nexovue_api.findings.fix_source_schemas import (
     BriefFiles,
     BriefFilesStarted,
@@ -155,12 +161,60 @@ async def check_source_fix(
     fix_id: uuid.UUID,
     request: Annotated[CheckRequest | None, Body()] = None,
 ) -> CheckView:
-    """D20: under the owner's requirement, quoted code shows only after this person's own
-    `read` check passes. Adds one job; the result is polled through the suggestion's read.
-    One route for both kinds: a general row refuses, `general_has_no_code` (AC73)."""
-    del request  # `read` only, until T5.1 adds `patch`
+    """`read` (D20): under the owner's requirement, quoted code shows only after this
+    person's own check passes. `patch` (FR20a): the files re-read and the patch rebuilt for
+    this person. Adds one job; the result is polled through the suggestion's read. One
+    route for both kinds: a general row refuses, `general_has_no_code` (AC73)."""
     return await fix_checks.ask_check(
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        fix_id=fix_id,
+        purpose=CHECK_FOR_READ if request is None else request.for_,
+        now=datetime.now(UTC),
+    )
+
+
+@router.get(
+    "/{finding_id}/fixes/{fix_id}/patch",
+    summary="Download a suggestion as a patch, rebuilt by your own check",
+    response_class=PlainTextResponse,
+    responses={200: {"content": {PATCH_MEDIA_TYPE: {}}}},
+)
+async def download_patch(
+    identity: MayReadFixCode, db: DbSession, finding_id: uuid.UUID, fix_id: uuid.UUID
+) -> PlainTextResponse:
+    """UR6, FR20a: only this person's own passed patch check, within its 15 minutes, on a
+    written suggestion that still holds its code. Never a token or a support view."""
+    served = await fix_checks.serve_patch(
         db, identity=identity, finding_id=finding_id, fix_id=fix_id, now=datetime.now(UTC)
+    )
+    return PlainTextResponse(
+        served.text,
+        media_type=PATCH_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{served.filename}"'},
+    )
+
+
+@router.post(
+    "/{finding_id}/fixes/{fix_id}/verdict",
+    summary="Say whether a suggestion was useful; this changes nothing else",
+)
+async def record_verdict(
+    identity: MayRequestFix,
+    db: DbSession,
+    finding_id: uuid.UUID,
+    fix_id: uuid.UUID,
+    request: VerdictRequest,
+) -> VerdictView:
+    """FR29, UR11: one answer per suggestion, the last person's. Either kind."""
+    return await fix_verdict.record(
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        fix_id=fix_id,
+        verdict=request.verdict,
+        now=datetime.now(UTC),
     )
 
 

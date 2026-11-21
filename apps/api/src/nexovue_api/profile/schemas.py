@@ -348,6 +348,16 @@ class ExportedGitHubLink(BaseModel):
     linked_at: datetime
 
 
+class ExportedFixVerdict(BaseModel):
+    """A person's answer to "Was this suggestion useful?" (F5 FR29): which suggestion, on
+    which finding, the answer's code, and when. No code: a verdict holds none."""
+
+    fix_id: uuid.UUID
+    finding_id: uuid.UUID
+    verdict: str
+    answered_at: datetime
+
+
 class PersonalDataExport(BaseModel):
     """Everything nexovue holds about one person as a person (spec, BR1).
 
@@ -382,3 +392,6 @@ class PersonalDataExport(BaseModel):
     runbooks_truncated: bool
     # F5 (AC31): their linked GitHub account, if any; no token is ever held.
     github_link: ExportedGitHubLink | None = None
+    # F5 (FR29): their answers to "Was this suggestion useful?", newest first, bounded.
+    fix_verdicts: list[ExportedFixVerdict] = Field(default_factory=list)
+    fix_verdicts_truncated: bool = False

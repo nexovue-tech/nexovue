@@ -112,6 +112,10 @@ PROPOSAL_REASONS: Final = (
     *WITHHELD_RULES,
     CHECKS_REFUSED_AT_CLICK,
 )
+# Step 5's: work on a project that was deleted stops, and its stored code goes (ADR-094).
+# Either kind may end this way, so it is in neither kind's own list.
+PROJECT_DELETED: Final = "project_deleted"
+TAKEN_BACK_REASONS: Final = (PROJECT_DELETED,)
 FIX_REASONS: Final = tuple(
     dict.fromkeys(
         (
@@ -120,11 +124,14 @@ FIX_REASONS: Final = tuple(
             *SOURCE_FAILURES,
             *STALE_REASONS,
             *PROPOSAL_REASONS,
+            *TAKEN_BACK_REASONS,
         )
     )
 )
+# Migration 0081's list, before Step 5's code: its frozen copy is held to this.
+STEP_4_FIX_REASONS: Final = tuple(r for r in FIX_REASONS if r not in TAKEN_BACK_REASONS)
 # Migration 0079's list, before Step 4's codes: its frozen copy is held to this.
-STEP_3_FIX_REASONS: Final = tuple(r for r in FIX_REASONS if r not in PROPOSAL_REASONS)
+STEP_3_FIX_REASONS: Final = tuple(r for r in STEP_4_FIX_REASONS if r not in PROPOSAL_REASONS)
 
 # Where a source row's suggestion starts from (design, `basis`).
 BASIS_LIKELY_CAUSE: Final = "likely_cause"
@@ -139,16 +146,26 @@ CANDIDATE_SOURCES: Final = (FROM_STACK, FROM_PERSON, FROM_MODEL)
 # Why a file is in `files_read` (design, `files_read`).
 FILE_ROLES: Final = ("stack", "named", "imported", "asked", "test")
 # Why stored code was deleted (BR9's table; the restore too).
-CODE_DELETED_REASONS: Final = (
-    "ended_short",
+CODE_ENDED_SHORT: Final = "ended_short"
+CODE_AGED_OUT: Final = "aged_out"
+CODE_CONSENT_WITHDRAWN: Final = "consent_withdrawn"
+CODE_DISCONNECTED: Final = "disconnected"
+CODE_AI_OFF: Final = "ai_off"
+CODE_ACCESS_GONE: Final = "access_gone"
+CODE_RESTORED: Final = "restored"
+# Migration 0079's list: its frozen copy is held to this.
+STEP_3_CODE_DELETED_REASONS: Final = (
+    CODE_ENDED_SHORT,
     "pull_request_done",
-    "aged_out",
-    "consent_withdrawn",
-    "disconnected",
-    "ai_off",
-    "access_gone",
-    "restored",
+    CODE_AGED_OUT,
+    CODE_CONSENT_WITHDRAWN,
+    CODE_DISCONNECTED,
+    CODE_AI_OFF,
+    CODE_ACCESS_GONE,
+    CODE_RESTORED,
 )
+# Step 5 (migration 0082): the project was deleted (ADR-094).
+CODE_DELETED_REASONS: Final = (*STEP_3_CODE_DELETED_REASONS, PROJECT_DELETED)
 
 # The fixed code a second attempt tells the model (D51), never an echo of its words:
 # G1's wrong shape and G2's caps.
@@ -225,28 +242,34 @@ def suggest_general_fix_request(
     )
 
 
-# A check run's purpose and outcome (design, `finding_fix_checks`; Step 4 runs `read`).
+# A check run's purpose and outcome (design, `finding_fix_checks`): Step 4 runs `read`,
+# Step 5 `patch`; `draft` is Step 7's.
 CHECK_FOR_READ: Final = "read"
+CHECK_FOR_PATCH: Final = "patch"
 # Who may ask for a suggested fix, as the API's action table says for `REQUEST_FIX`; the
 # check run reads it again, so a role removed since the click refuses (design, step 1).
 # `test_fix_check_routes.py` holds it equal to the API's table.
 ROLES_WHO_ASK: Final = ("owner", "admin", "member")
-FIX_CHECK_PURPOSES: Final = ("patch", "draft", CHECK_FOR_READ)
+FIX_CHECK_PURPOSES: Final = (CHECK_FOR_PATCH, "draft", CHECK_FOR_READ)
 CHECK_RUNNING: Final = "running"
 CHECK_UNCHANGED: Final = "unchanged"
+CHECK_MOVED: Final = "moved"
+CHECK_STALE: Final = "stale"
 CHECK_REFUSED: Final = "refused"
 CHECK_FAILED: Final = "failed"
 FIX_CHECK_STATUSES: Final = (
     CHECK_RUNNING,
     CHECK_UNCHANGED,
-    "moved",
-    "stale",
+    CHECK_MOVED,
+    CHECK_STALE,
     CHECK_REFUSED,
     CHECK_FAILED,
 )
+# A check that passed: nothing moved, or a file moved and every edit still applies (FR21).
+CHECK_PASSED: Final = (CHECK_UNCHANGED, CHECK_MOVED)
 # Why a check run refused or failed (design, *The check run*, step 3). Migration 0081
 # holds the list in a CHECK.
-FIX_CHECK_REASONS: Final = (
+STEP_4_FIX_CHECK_REASONS: Final = (
     "not_linked",
     "no_github_access",
     "access_unknown",
@@ -255,8 +278,14 @@ FIX_CHECK_REASONS: Final = (
     "consent_withdrawn",
     "nexovue_error",
 )
+# Step 5 (migration 0082): a patch check also ends out of date, by the row's own reason, or
+# refused by the rules on the same inputs (D18's tamper signal).
+FIX_CHECK_REASONS: Final = (*STEP_4_FIX_CHECK_REASONS, *STALE_REASONS, CHECKS_REFUSED_AT_CLICK)
 # D20's guess: a passed `read` check lets this person read quoted code for an hour.
 READ_CHECK_LIFETIME: Final = timedelta(hours=1)
+# A passed `patch` check is served for this long, from when it finished (design: 15
+# minutes, a guess; NFR2).
+PATCH_CHECK_LIFETIME: Final = timedelta(minutes=15)
 # A click within this long of a finished check returns that one (a guess, design).
 CHECK_REUSED_WITHIN: Final = timedelta(seconds=60)
 # With no answer in this long, the API reads a check as failed, `check_timed_out` (a guess).
@@ -266,10 +295,12 @@ CHECK_ROW_LIFETIME: Final = timedelta(minutes=15)
 # Why a consent stopped (design, `fix_source_consents`): an owner, a disconnect, lost
 # GitHub access, or a restore.
 CONSENT_WITHDRAWN_BY_OWNER: Final = "owner"
+CONSENT_WITHDRAWN_BY_DISCONNECT: Final = "disconnected"
+CONSENT_WITHDRAWN_ACCESS_GONE: Final = "access_gone"
 CONSENT_WITHDRAWN_REASONS: Final = (
     CONSENT_WITHDRAWN_BY_OWNER,
-    "disconnected",
-    "access_gone",
+    CONSENT_WITHDRAWN_BY_DISCONNECT,
+    CONSENT_WITHDRAWN_ACCESS_GONE,
     "restored",
 )
 # A GitHub account link's attempt (design, `github_link_attempts`).
@@ -429,8 +460,27 @@ NOTIFY_REQUESTERS_TASK: Final = "nexovue_scheduler.fixes.notify_requesters"
 FIX_SENT: Final = "fix.sent"
 FIX_CODE_VIEWED: Final = "fix.code_viewed"
 FIX_CHECK_REFUSED: Final = "fix.check_refused"
-# D18's tamper signal: a written suggestion the sweep's re-run of the rules refused.
+# D18's tamper signal: a written suggestion the rules refused again on the same inputs, at
+# the sweep's first recording or at a check run (the detail's `at` says which).
 FIX_CHECKS_REFUSED: Final = "fix.checks_refused"
+# The API's audit words for a consent withdrawn, on its repository, which the sweep writes
+# too when GitHub access is gone (`audit/service.py`; held equal by `test_fix_takeback_live.py`).
+AI_SOURCE_DISCLOSURE_WITHDRAWN: Final = "ai.source_disclosure_withdrawn"
+REPOSITORY_AUDIT_TARGET: Final = "connection_repository"
+# Step 5: a patch served from a person's own passed check (design, *Audit*).
+FIX_PATCH_DOWNLOADED: Final = "fix.patch_downloaded"
+# A person's answer to "Was this suggestion useful?" (FR29, UR11), stored as these codes.
+FixVerdict = Literal["merge_as_is", "useful_start", "wrong"]
+VERDICT_MERGE_AS_IS: Final = "merge_as_is"
+VERDICT_USEFUL_START: Final = "useful_start"
+VERDICT_WRONG: Final = "wrong"
+FIX_VERDICTS: Final[tuple[FixVerdict, ...]] = ("merge_as_is", "useful_start", "wrong")
+# BR9's "GitHub access gone" row: an uninstalled App or an unreachable repository this long
+# withdraws consent and deletes stored code (a guess, design *The sweep*, step 6).
+ACCESS_GONE_AFTER: Final = timedelta(hours=72)
+# How long a backup may still hold deleted code (D29: 7 daily and 4 weekly snapshots,
+# `backups.py`), for the "Code deleted" line.
+BACKUPS_KEPT_FOR: Final = timedelta(weeks=4)
 # What each proposal call's run row says was sent (FR15a, FR38): the files by number, the
 # frames by number, the person's hint, and F3's facts when an explanation exists.
 SOURCE_FIELDS_SENT: Final = ("model_input", "files", "frames", "hint")

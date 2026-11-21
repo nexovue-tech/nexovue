@@ -38,6 +38,11 @@ KEEPERMAP_TABLES=(span_ingest_offsets span_written_offsets ingest_written_offset
 # The Postgres table holding the meter's watermark. Same class of state as the
 # four above, in the store that does get restored.
 POSTGRES_WATERMARK_TABLE="usage_ingest_offsets"
+# F5 (AC32, ADR-095): tables whose rows a backup never holds, because they are only a
+# customer's code or a sealed code: a suggestion's files read, each check's patch, a GitHub
+# link attempt. Dumped empty and left out of the manifest. The same list as
+# `nexovue_platform.fixes.statements.ROWS_NOT_BACKED_UP`, held equal by a test.
+POSTGRES_ROWS_NOT_KEPT=(finding_fix_source_packs finding_fix_checks github_link_attempts)
 
 # None of these three take stdin, and `docker exec -i` would swallow it. Called
 # inside a `while read` loop that cost a caller its whole result set once: the

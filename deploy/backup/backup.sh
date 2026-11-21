@@ -32,10 +32,16 @@ echo "snapshot: $snapshot"
 # and pg_restore refuses a truncated file instead of replaying half a database.
 # Written through stdout to the host, so nothing depends on the container being
 # able to write to a mount.
+# F5's code tables are dumped empty (AC32): a backup never holds a customer's files read,
+# a patch or a sealed code.
 echo "postgres: dumping"
+not_kept=()
+for table in "${POSTGRES_ROWS_NOT_KEPT[@]}"; do
+    not_kept+=("--exclude-table-data=public.$table")
+done
 docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" "$POSTGRES_CONTAINER" \
     pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-    --format=custom --compress=zstd > "$snapshot/postgres.dump"
+    --format=custom --compress=zstd "${not_kept[@]}" > "$snapshot/postgres.dump"
 
 # ---------- ClickHouse ----------
 # The server can only write to the disk backups.xml allows, which is inside its
@@ -91,9 +97,12 @@ echo "manifest: measuring"
 
     # The meter's watermark is recorded below rather than here: it is deliberately
     # not restored, so comparing its row count after a restore would fail by
-    # design and teach an operator to ignore this check.
+    # design and teach an operator to ignore this check. F5's code tables hold no
+    # rows in the dump, and are left out the same way.
     printf '%s\n' "$pg_dump_facts" \
-        | awk -F'\t' -v skip="$POSTGRES_WATERMARK_TABLE" '$1 == "rows" && $2 != skip { print "pg." $2 "=" $3 }'
+        | awk -F'\t' -v skip="$POSTGRES_WATERMARK_TABLE ${POSTGRES_ROWS_NOT_KEPT[*]}" '
+            BEGIN { count = split(skip, names, " "); for (i = 1; i <= count; i++) skipped[names[i]] = 1 }
+            $1 == "rows" && !($2 in skipped) { print "pg." $2 "=" $3 }'
 
     # Recorded and never restored, in either store. Here so an operator can see
     # what the pipeline had reached, and so a cold-start rebuild has a number to

@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "@/shared/api-client";
+import { API_BASE_PATH, apiClient } from "@/shared/api-client";
 import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
 import type { DetectionStatus, ProjectTotals } from "@/shared/detection/headline";
 import type { ExplanationFactTarget } from "@/shared/evidence-links";
@@ -1178,6 +1178,16 @@ export interface GeneralContent {
   earlier_reading: string | null;
 }
 
+/** FR29's question, its three answers, and the one recorded (Step 5). */
+export type FixVerdict = "merge_as_is" | "useful_start" | "wrong";
+
+export interface VerdictView {
+  question: string;
+  answers: { value: FixVerdict; label: string }[];
+  chosen: FixVerdict | null;
+  recorded: string | null;
+}
+
 export interface GeneralFix {
   id: string;
   state: GeneralState;
@@ -1187,6 +1197,7 @@ export interface GeneralFix {
   tokens_used: number;
   requested_at: string;
   finished_at: string | null;
+  verdict: VerdictView | null;
 }
 
 /** `GET /findings/{id}/fixes/general`: rung 2b for this person; a token is refused (AC74). */
@@ -1327,6 +1338,8 @@ export interface ProposalFile {
   context_note: string | null;
   open: boolean;
   explanations: { segments: ExplanationSegment[] }[];
+  /** Set once a patch check re-read this file from the head and it had moved (FR21). */
+  moved_note: string | null;
 }
 
 export interface ProposalFlag {
@@ -1351,6 +1364,8 @@ export interface Proposal {
   written_at: string | null;
   commit: string;
   tokens: number;
+  /** Set when the diff above is this person's patch check's, re-read from the head. */
+  rebuilt_note: string | null;
 }
 
 /** This person's own check run: running, passed, or why not (D20). */
@@ -1361,6 +1376,15 @@ export interface CheckView {
   heading: string;
   sentence: string | null;
   passed: boolean;
+  expires_at: string | null;
+}
+
+/** This person's own patch check: working, ready with its download, or why not (FR20a). */
+export interface PatchView {
+  status: string;
+  heading: string;
+  sentence: string | null;
+  downloadable: boolean;
   expires_at: string | null;
 }
 
@@ -1380,6 +1404,9 @@ export interface SourceFix {
   check: CheckView | null;
   file_count: number | null;
   line_count: number | null;
+  patch_action: string | null;
+  patch: PatchView | null;
+  verdict: VerdictView | null;
 }
 
 export interface FindingSourceFix {
@@ -1405,7 +1432,8 @@ export function useSourceFix(findingId: string) {
       const waiting =
         latest?.state === "gathering" ||
         latest?.state === "proposing" ||
-        latest?.check?.status === "running";
+        latest?.check?.status === "running" ||
+        latest?.patch?.status === "running";
       return waiting ? GENERAL_FIX_POLL_MS : false;
     },
     queryFn: ({ signal }) =>
@@ -1477,6 +1505,47 @@ export function useCheckMyAccess(findingId: string, fixId: string) {
       ),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+/** Prepare patch (FR20a): this person's own check re-reads the files; the read polls it. */
+export function usePreparePatch(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", "patch", findingId, fixId],
+    mutationFn: () =>
+      apiClient.post<CheckView>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/check`,
+        { for: "patch" },
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+/**
+ * Where this person's patch downloads from: a plain link, so the browser saves the file the
+ * API serves from their own passed check (UR6). Nothing here reads the answer.
+ */
+export function patchDownloadUrl(findingId: string, fixId: string): string {
+  return `${API_BASE_PATH}findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/patch`;
+}
+
+/** "Was this suggestion useful?" (FR29): either kind; it changes nothing else. */
+export function useRecordVerdict(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "verdict", findingId, fixId],
+    mutationFn: (verdict: FixVerdict) =>
+      apiClient.post<VerdictView>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/verdict`,
+        { verdict },
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+      void queryClient.invalidateQueries({ queryKey: generalFixQueryKey(findingId) });
     },
   });
 }

@@ -115,10 +115,19 @@ which the worker's kill should prevent, so look at that container's memory and k
 - `NexovueInsightMissing`: an AI connection is on and no `scheduler-insight` answers a scrape.
   Start it, or turn AI off in `/settings/ai`. Facts and alerts are unaffected.
 - `NexovueInsightBehind`: wording jobs have waited over 30 minutes while AI is on.
+- `NexovueSuggestionRefusedAgain` (F5, ADR-096): a written suggested fix failed Nexovue's own
+  rules again on the same rules, owner's list and files, at a person's check run or when the
+  sweep first recorded it. Nothing else can explain that, so treat it as tampering with a
+  stored suggestion: the suggestion is already ended and its code deleted, and the audit log's
+  `fix.checks_refused` entry names it (`at`: `check_run` or the sweep, `failure`: which rule).
+  Look at who could write `finding_fixes.edits` (the AI role's account, `nexovue_insight`, while a
+  row is `proposing`), and at that role's recent `ai_runs`. A new release of the rules or a file
+  that moved on GitHub reads "Out of date" instead, and never counts here.
 
 Beat also reports, with no tenant label: `nexovue_scheduler_ai_runs_recent{purpose,outcome}`,
 `nexovue_scheduler_ai_tokens_month`, `nexovue_scheduler_ai_connections_enabled`,
-`nexovue_scheduler_evidence_reads_failed_recent` and `nexovue_scheduler_evidence_truncated_recent`.
+`nexovue_scheduler_evidence_reads_failed_recent`, `nexovue_scheduler_evidence_truncated_recent`
+and `nexovue_scheduler_fix_checks_refused_recent` (the last hour).
 
 ## Not yet run against a real provider
 

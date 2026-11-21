@@ -21,6 +21,7 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -314,6 +315,51 @@ def file_patch(changed: PatchFile) -> str:
 def build_patch(files: Iterable[PatchFile]) -> str:
     """A git-format patch, files in path order, that `git apply` accepts (AC41)."""
     return "".join(file_patch(each) for each in sorted(files, key=lambda each: each.path))
+
+
+_HUNK_HEADER: Final = re.compile(r"^@@ -(\d+),(\d+) \+(\d+),(\d+) @@\n$")
+
+
+def patch_hunks(patch: str) -> list[list[Hunk]]:
+    """Each file's hunks, in the patch's order, read back from `build_patch`'s own text.
+
+    The check run stores the patch it built; a read shows the rebuilt diff from it, so the
+    page and the download can never differ (AC19). Only this module's own form is read:
+    anything else raises `ValueError`, and the read shows no code.
+    """
+    files: list[list[Hunk]] = []
+    open_hunk: list[tuple[Marker, str]] | None = None
+    header: tuple[int, int, int, int] = (0, 0, 0, 0)
+
+    def close() -> None:
+        if open_hunk is not None:
+            files[-1].append(Hunk(*header, lines=tuple(open_hunk)))
+
+    for line in split_lines(patch):
+        if line.startswith("diff --git "):
+            close()
+            open_hunk = None
+            files.append([])
+        elif line.startswith(("index ", "--- ", "+++ ")) and open_hunk is None:
+            continue
+        elif (match := _HUNK_HEADER.match(line)) is not None and files:
+            close()
+            old_start, old_count, new_start, new_count = (int(each) for each in match.groups())
+            header = (old_start, old_count, new_start, new_count)
+            open_hunk = []
+        elif line == NO_FINAL_NEWLINE and open_hunk:
+            marker, text = open_hunk[-1]
+            open_hunk[-1] = (marker, text.removesuffix("\n"))
+        elif open_hunk is not None and line[:1] in (" ", "-", "+"):
+            open_hunk.append((_marker(line[:1]), line[1:]))
+        else:
+            raise ValueError("not a patch this module wrote")
+    close()
+    return files
+
+
+def _marker(character: str) -> Marker:
+    return " " if character == " " else "-" if character == "-" else "+"
 
 
 def suggestion_digest(files: Iterable[tuple[str, str, str]]) -> str:

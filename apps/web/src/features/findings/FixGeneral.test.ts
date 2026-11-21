@@ -58,6 +58,7 @@ const PROPOSED: GeneralFix = {
     earlier_reading: null,
   },
   tokens_used: 1460,
+  verdict: null,
   requested_at: "2026-11-21T11:56:00Z",
   finished_at: "2026-11-21T11:57:00Z",
 };
@@ -280,5 +281,47 @@ describe("AC37 over every rung 2b state (AC72)", () => {
     const { section } = await page(rung2b);
 
     expect(readable(section as Element).replace(ALLOWED, "")).not.toMatch(BANNED);
+  });
+});
+
+describe("Step 5: was this general suggestion useful? (FR29, decision 25)", () => {
+  it("asks under the suggestion, and the answer posts to the same verdict route", async () => {
+    const asked: GeneralFix = {
+      ...PROPOSED,
+      verdict: {
+        question: "Was this suggestion useful?",
+        answers: [
+          { value: "merge_as_is", label: "Yes, nearly as it is" },
+          { value: "useful_start", label: "Yes, as a start" },
+          { value: "wrong", label: "No, it was wrong" },
+        ],
+        chosen: null,
+        recorded: null,
+      },
+    };
+    const { api, section } = await page(general({ latest: asked }), {
+      extra: {
+        "POST /findings/f-1/fixes/x-1/verdict": json({
+          ...asked.verdict,
+          chosen: "wrong",
+          recorded: "Recorded. This changes nothing else.",
+        }),
+      },
+    });
+
+    const text = readable(section as Element);
+    expect(text.indexOf(LABEL)).toBeLessThan(text.indexOf("Was this suggestion useful?"));
+    const wrong = section?.querySelector<HTMLInputElement>("input[type=radio][value=wrong]");
+    act(() => wrong?.click());
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const posted = api.calls.find((call) => call.path === "/findings/f-1/fixes/x-1/verdict");
+    expect(posted?.body).toEqual({ verdict: "wrong" });
+  });
+
+  it("a viewer sees no question", async () => {
+    const { section } = await page(general({ latest: PROPOSED }), { role: "viewer" });
+
+    expect(section?.querySelector('[data-testid="fix-verdict"]')).toBeNull();
   });
 });

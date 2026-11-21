@@ -382,17 +382,23 @@ async def test_ac77_older_suggestions_are_listed_quietly_and_an_earlier_reading_
 # ------------------------------------------------------------------ AC73
 
 
-@pytest.mark.parametrize("action", ["check", "patch", "draft-pull-request", "run-ci"])
+# The patch is a download since Step 5 (`GET`); the rest are clicks.
+@pytest.mark.parametrize(
+    ("method", "action"),
+    [("POST", "check"), ("GET", "patch"), ("POST", "draft-pull-request"), ("POST", "run-ci")],
+)
 async def test_ac73_a_general_row_refuses_every_action_on_code_with_a_named_code(
-    db: AsyncSession, now: datetime, action: str
+    db: AsyncSession, now: datetime, method: str, action: str
 ) -> None:
     acme, finding = await rows.ready(db, now)
     row = await rows.fix(db, finding, now)
 
     async with rows.client(db, rows.person(acme)) as client:
-        refused = await client.post(f"{API_PREFIX}/findings/{finding.id}/fixes/{row.id}/{action}")
-        missing = await client.post(
-            f"{API_PREFIX}/findings/{finding.id}/fixes/{uuid.uuid4()}/{action}"
+        refused = await client.request(
+            method, f"{API_PREFIX}/findings/{finding.id}/fixes/{row.id}/{action}"
+        )
+        missing = await client.request(
+            method, f"{API_PREFIX}/findings/{finding.id}/fixes/{uuid.uuid4()}/{action}"
         )
 
     assert refused.status_code == 409

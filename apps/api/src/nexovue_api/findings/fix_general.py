@@ -66,7 +66,7 @@ from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.permissions import Action, may
 from nexovue_api.data.postgres.models import AIConnection, FindingExplanation, FindingFix
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
-from nexovue_api.findings import explanation_queries, fix_queries, fix_state
+from nexovue_api.findings import explanation_queries, fix_queries, fix_state, fix_verdict
 from nexovue_api.findings.fix_schemas import (
     EarlierGeneral,
     FactReference,
@@ -76,6 +76,7 @@ from nexovue_api.findings.fix_schemas import (
     GeneralFix,
     GeneralOffer,
     GeneralState,
+    VerdictView,
 )
 from nexovue_api.findings.fix_state import FixState
 from nexovue_api.findings.queries import find_finding, lock_finding
@@ -225,7 +226,8 @@ async def _view(
     if state == PROPOSED:
         checked = await _checked(session, row, latest_version=latest_version)
         if isinstance(checked, GeneralContent):
-            return _row(row, state, GENERAL_HEADING, None, checked)
+            verdict = fix_verdict.view(row.verdict) if viewer.may_request else None
+            return _row(row, state, GENERAL_HEADING, None, checked, verdict=verdict)
         reason = checked
     else:
         reason = row.reason if row.reason in REASON_SENTENCES else "nexovue_error"
@@ -238,6 +240,8 @@ def _row(
     heading: str,
     sentence: str | None,
     content: GeneralContent | None,
+    *,
+    verdict: VerdictView | None = None,
 ) -> GeneralFix:
     return GeneralFix(
         id=row.id,
@@ -248,6 +252,7 @@ def _row(
         tokens_used=row.tokens_used,
         requested_at=row.requested_at,
         finished_at=row.finished_at,
+        verdict=verdict,
     )
 
 

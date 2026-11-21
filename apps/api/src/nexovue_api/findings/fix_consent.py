@@ -12,8 +12,8 @@ FR8, AC9, AC10a, AC12c; design, *`/settings/ai`: Source consent*; plan T3.5; ADR
   (AC9). Agreeing again to the same folder updates the row in place.
 - **Withdrawing** ends, in the same transaction, every suggestion of that repository still
   being prepared (`failed`, `consent_ended_in_flight`, its pack gone), and deletes the
-  stored code of every suggestion it covered, through the one statement
-  (`clear_stored_code`). The answer says how many.
+  stored code of every suggestion it covered, through `fix_takeback` and the one
+  statement (`clear_stored_code`). The answer says how many.
 
 Every statement binds the caller's organization. A support view reads states, never an
 owner's extra paths (AC11).
@@ -29,14 +29,12 @@ from typing import Final
 from nexovue_platform.fixes.consent import ProviderTerms, folder_covered, normal_folder
 from nexovue_platform.fixes.policy import NEVER_SENT_HARD
 from nexovue_platform.fixes.records import (
+    CODE_CONSENT_WITHDRAWN,
     CONSENT_ENDED_IN_FLIGHT,
     CONSENT_WITHDRAWN_BY_OWNER,
-    FAILED,
-    IN_FLIGHT_STATES,
     KIND_SOURCE,
 )
-from nexovue_platform.fixes.statements import CLEAR_STORED_CODE
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -52,12 +50,11 @@ from nexovue_api.connections.fix_schemas import (
 from nexovue_api.data.postgres.models import (
     ConnectionRepository,
     FindingFix,
-    FindingFixSourcePack,
     FixSourceConsent,
     User,
 )
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import fix_access
+from nexovue_api.findings import fix_access, fix_takeback
 
 WHOLE_REPOSITORY_SCOPE: Final = "whole-repository"
 # FR7's sentences, exact (spec FR7). The first is the provider sentence; the next the
@@ -319,19 +316,13 @@ async def withdraw(
         if folder_covered(folder_scope, row.folder)
         and not any(folder_covered(each.folder_scope, row.folder) for each in others)
     ]
-    for row in covered:
-        if row.state in IN_FLIGHT_STATES:
-            await _end_in_flight(db, row, now=now)
-    deleted = 0
-    for row in covered:
-        if row.files_read is not None or row.edits is not None or row.state in IN_FLIGHT_STATES:
-            deleted += int(
-                await db.scalar(
-                    text(CLEAR_STORED_CODE),
-                    {"org_id": org_id, "fix_id": row.id, "reason": "consent_withdrawn"},
-                )
-                or 0
-            )
+    deleted = await fix_takeback.end_and_clear(
+        db,
+        covered,
+        in_flight_reason=CONSENT_ENDED_IN_FLIGHT,
+        code_reason=CODE_CONSENT_WITHDRAWN,
+        now=now,
+    )
     audit.record_fix_event(
         db,
         org_id=org_id,
@@ -347,24 +338,3 @@ async def withdraw(
     )
     await db.commit()
     return SourceConsentWithdrawn(code_deleted=deleted)
-
-
-async def _end_in_flight(db: AsyncSession, row: FindingFix, *, now: datetime) -> None:
-    await db.execute(
-        update(FindingFix)
-        .where(FindingFix.org_id == row.org_id, FindingFix.id == row.id)
-        .values(
-            state=FAILED,
-            reason=CONSENT_ENDED_IN_FLIGHT,
-            state_changed_at=now,
-            finished_at=now,
-            path_candidates=None,
-            requested_paths=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    await db.execute(
-        delete(FindingFixSourcePack).where(
-            FindingFixSourcePack.org_id == row.org_id, FindingFixSourcePack.fix_id == row.id
-        )
-    )

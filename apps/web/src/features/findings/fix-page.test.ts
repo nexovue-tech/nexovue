@@ -85,6 +85,7 @@ describe("the Suggested fix section (AC37e, AC11a, FR10)", () => {
     tokens_used: 0,
     requested_at: "2026-11-21T11:00:00Z",
     finished_at: null,
+    verdict: null,
   };
 
   it("renders only for a role with a line, the offer, or a suggestion of this finding's", () => {

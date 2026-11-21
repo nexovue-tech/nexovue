@@ -8,9 +8,9 @@ waited, alerts waiting to be delivered, erasures overdue, and detection's
 progress — how old the newest settled minute is, how many projects it has
 stopped judging, how long the stalest has waited, and the events it recorded
 about nexovue's own intake (F6, C8), whether a tracker connection is live
-(F22), and F3's explanations and AI runs. Those are read from Postgres, not counted
-where they happen, because the sweep runs in a worker's child process, whose
-metrics no scrape sees.
+(F22), F3's explanations and AI runs, and F5's tamper signal. Those are read from
+Postgres, not counted where they happen, because the sweep runs in a worker's child
+process, whose metrics no scrape sees.
 
 The queue readings are across every organization on purpose: they are counts of
 our own work, and no label names a tenant. A project detection has stopped
@@ -141,6 +141,17 @@ _AI_RUNS_RECENT: Final = text(
     GROUP BY purpose, outcome
     """
 )
+# F5 (D18, decision 52): written suggestions the rules refused again on the same rules,
+# lists and files, at a check run or the sweep's first recording, in the last hour. The
+# one tamper signal: an upgrade or a moved file reads "Out of date" and never counts.
+F5_REFUSED_AGAIN_SECONDS: Final = 60 * 60
+_FIX_CHECKS_REFUSED: Final = text(
+    """
+    SELECT count(*) FROM finding_fixes
+    WHERE reason = 'checks_refused_at_click'
+      AND state_changed_at > now() - make_interval(secs => :recent)
+    """
+)
 
 LOOP_SILENT: Final = Gauge(
     "nexovue_scheduler_loop_silent_seconds", "Seconds since this process's loop last beat."
@@ -224,6 +235,11 @@ AI_TOKENS_MONTH: Final = Gauge(
     "nexovue_scheduler_ai_tokens_month",
     "Tokens AI runs used this month, across organizations (leader only).",
 )
+FIX_CHECKS_REFUSED: Final = Gauge(
+    "nexovue_scheduler_fix_checks_refused_recent",
+    "Suggested fixes Nexovue's rules refused again on the same files in the last hour "
+    "(leader only): F5's tamper signal.",
+)
 
 # How a worker's job ended — the label values JOBS_ENDED takes.
 FINISHED: Final = "finished"
@@ -249,6 +265,7 @@ class QueueReadings:
     ai_connections_enabled: int = 0
     ai_runs_recent: dict[tuple[str, str], int] = field(default_factory=dict)
     ai_tokens_month: int = 0
+    fix_checks_refused: int = 0
 
 
 async def connections_live(connection: AsyncConnection, *, enabled: bool) -> bool:
@@ -288,6 +305,9 @@ async def read_queues(
         )
     ).one()
     runs = await connection.execute(_AI_RUNS_RECENT, {"recent": F3_RECENT_SECONDS})
+    refused_again = await connection.scalar(
+        _FIX_CHECKS_REFUSED, {"recent": F5_REFUSED_AGAIN_SECONDS}
+    )
     return QueueReadings(
         jobs_ready={row.queue: int(row.ready) for row in jobs},
         oldest_ready_seconds={row.queue: float(row.oldest) for row in jobs},
@@ -307,6 +327,7 @@ async def read_queues(
         ai_connections_enabled=int(f3.connections_enabled),
         ai_runs_recent={(row.purpose, row.outcome): int(row.runs) for row in runs},
         ai_tokens_month=int(f3.tokens_month),
+        fix_checks_refused=int(refused_again or 0),
     )
 
 
@@ -334,6 +355,7 @@ def publish(readings: QueueReadings) -> None:
     for (purpose, outcome), runs in readings.ai_runs_recent.items():
         AI_RUNS_RECENT.labels(purpose=purpose, outcome=outcome).set(runs)
     AI_TOKENS_MONTH.set(readings.ai_tokens_month)
+    FIX_CHECKS_REFUSED.set(readings.fix_checks_refused)
 
 
 def forget_queues() -> None:
@@ -353,5 +375,6 @@ def forget_queues() -> None:
         EVIDENCE_TRUNCATED,
         AI_CONNECTIONS_ENABLED,
         AI_TOKENS_MONTH,
+        FIX_CHECKS_REFUSED,
     ):
         single.set(0)

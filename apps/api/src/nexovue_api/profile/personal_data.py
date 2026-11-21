@@ -21,7 +21,7 @@ from nexovue_api.auth import second_factor
 from nexovue_api.auth.credentials import CURRENT_PASSWORD_WRONG, verify_password
 from nexovue_api.auth.encryption import CredentialBox
 from nexovue_api.auth.totp import SecondFactorStore
-from nexovue_api.data.postgres.models import GitHubUserLink, Organization, User
+from nexovue_api.data.postgres.models import FindingFix, GitHubUserLink, Organization, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.members import queries as members_queries
 from nexovue_api.members import service as members
@@ -29,6 +29,7 @@ from nexovue_api.profile import queries
 from nexovue_api.profile.schemas import (
     ExportedActivity,
     ExportedApiToken,
+    ExportedFixVerdict,
     ExportedGitHubLink,
     ExportedInvitationReceived,
     ExportedInvitationSent,
@@ -55,6 +56,8 @@ MAX_SLO_CHANGES_EXPORTED: Final = 10_000
 MAX_CHAT_QUESTIONS_EXPORTED: Final = 10_000
 # And for runbooks they wrote (F4 AC34), each at most 32 KiB.
 MAX_RUNBOOKS_EXPORTED: Final = 10_000
+# And for their verdicts on suggested fixes (F5 FR29).
+MAX_FIX_VERDICTS_EXPORTED: Final = 10_000
 
 SOLE_OWNER_REFUSAL: Final = (
     "You are this organization's only owner. "
@@ -90,6 +93,7 @@ async def export(
     runbooks = await queries.runbooks_written(
         db, org_id=organization.id, user_id=user.id, limit=MAX_RUNBOOKS_EXPORTED + 1
     )
+    verdicts = await _fix_verdicts(db, org_id=organization.id, user_id=user.id)
     steps_of: dict[uuid.UUID, list[ExportedStep]] = defaultdict(list)
     for step in await queries.chat_steps(
         db, org_id=organization.id, message_ids=[question.id for question in kept_questions]
@@ -215,7 +219,35 @@ async def export(
         ],
         runbooks_truncated=len(runbooks) > MAX_RUNBOOKS_EXPORTED,
         github_link=await _github_link(db, org_id=organization.id, user_id=user.id),
+        fix_verdicts=[
+            ExportedFixVerdict(
+                fix_id=fix.id,
+                finding_id=fix.finding_id,
+                verdict=str(fix.verdict),
+                answered_at=fix.verdict_at,
+            )
+            for fix in verdicts[:MAX_FIX_VERDICTS_EXPORTED]
+            if fix.verdict_at is not None
+        ],
+        fix_verdicts_truncated=len(verdicts) > MAX_FIX_VERDICTS_EXPORTED,
     )
+
+
+async def _fix_verdicts(
+    db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID
+) -> list[FindingFix]:
+    """Their verdicts, newest first, one more than the bound, so the flag says one was cut."""
+    found = await db.scalars(
+        select(FindingFix)
+        .where(
+            FindingFix.org_id == org_id,
+            FindingFix.verdict_by == user_id,
+            FindingFix.verdict.is_not(None),
+        )
+        .order_by(FindingFix.verdict_at.desc())
+        .limit(MAX_FIX_VERDICTS_EXPORTED + 1)
+    )
+    return list(found)
 
 
 async def _github_link(

@@ -183,6 +183,15 @@ groups:
         annotations:
           summary: "AI wording jobs have waited {{ $value }}s for scheduler-insight"
 
+      # F5 (D18, ADR-096): a written suggestion Nexovue's rules refused again on the same
+      # rules, lists and files, at a check run or the sweep's first recording. The one
+      # tamper signal: new rules or a moved file read "Out of date" and never count.
+      - alert: NexovueSuggestionRefusedAgain
+        expr: max(nexovue_scheduler_fix_checks_refused_recent) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value }} suggested fixes failed Nexovue's rules again on the same files in the last hour"
+
       - alert: NexovueAlertsUndelivered
         expr: max(nexovue_scheduler_oldest_alert_waiting_seconds) > 300
         for: 5m

@@ -142,6 +142,14 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "why, and what you can do next:\n\n{link}\n\n"
         "This email carries no code or file names on purpose.",
     ),
+    Message.FIX_CONSENT_ENDED: (
+        "Agreement to send code for suggested fixes ended",
+        "An agreement to send repository code to the AI provider for suggested fixes ended, "
+        "because {changed} changed. No more code is sent until an owner agrees again. "
+        "Suggestions already stored stay until an owner withdraws the agreement, which "
+        "deletes them:\n\n{link}\n\n"
+        "This email carries no code or repository names on purpose.",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

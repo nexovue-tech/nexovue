@@ -294,6 +294,10 @@ class FakeControlPlane:
             # Closing a deleted project's incidents: alert rows are not modelled here;
             # test_alert_defaults_live proves them.
             return _Rows([])
+        if statement.column_descriptions[0]["name"] == "FindingFix":
+            # F5's suggestions are not modelled here; test_fix_takeback_live proves a deleted
+            # project's work stops and its code goes (ADR-094).
+            return _Rows([])
         values = _bound_values(statement)
         selected = statement.column_descriptions[0]["name"]
         matched = [

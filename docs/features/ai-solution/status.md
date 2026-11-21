@@ -2,12 +2,62 @@
 
 ## Lifecycle status
 
-**Step 4 built 2026-11-21, awaiting commit.** Steps 1, 2, 2b and 3 are on `feature/phase-2`. Step 4 (the suggestion, T4.1 to T4.15, and first the console's two GitHub return pages, decision 34) is built in `wt/f5s4`, on `feature/phase-2` caf2737, with **fake providers only** and against the simulated GitHub only; T4.11 (the optional outbound limit) is not built and is open decision 43. T1.6's Playwright spec, with its Step 2b, 3 and 4 states, is written and not run (hardening pass). Steps 5 onward are not started.
+**Step 5 built 2026-11-21, awaiting commit.** Steps 1 to 4 are on `feature/phase-2` (Step 4 at 1183abf). Step 5 (patch, verdict, and taking it all back, T5.1 to T5.5) is built in `wt/f5s5`, on that commit, with **no write access**, fake providers only and against the simulated GitHub only. T5.5's Docker release check is written and not run (by hand per release). Steps 6 onward are not started.
 
 
 ## Current task
 
-Step 4 awaits the founder's review of the diff and a commit (`F5 Step 4: the suggestion`). **Migration 0081 follows 0080** (F4 Step 7). Then open decisions 43 to 58, below.
+Step 5 awaits the founder's review of the diff and a commit (`F5 Step 5: patch, verdict, and taking it all back`). **Migration 0082 follows 0081.** Then open decisions 59 to 76 (and those still open from Steps 2b to 4).
+
+## Step 5, built 2026-11-21
+
+**What it ships.** A member who can read a written suggestion clicks **Prepare patch**: their own check run, on `scheduler-connections` with a read-only token, re-reads each changed file from the default branch's head, re-checks the display facts against the file as it was read, runs K1 to K10 again and stores the patch on their own check row; the page then shows that very patch's diff, marking files that moved, and a **Download patch** link served from their row for 15 minutes. A refusal on the same rules, list and files ends the suggestion and alerts (decision 52). Every written suggestion, of either kind, asks **"Was this suggestion useful?"** (decision 25), changing nothing else. Stored code is taken back at every end BR9 names, plus a deleted project and a removed member (ADR-094), and the backup and restore keep the promise (ADR-095). **No call writes to a repository** (foundation item 33); no real provider is called (item 31).
+
+- **Migration 0082** (`0082_ai_solution_patch.py`, `down_revision "0081"`, roll forward only): `finding_fixes.verdict`, `verdict_by` (composite key to `users`, `SET NULL`), `verdict_at`, with their CHECK; `project_deleted` in `reason` and `code_deleted_reason`; the out-of-date codes and `checks_refused_at_click` in `finding_fix_checks.reason`; `connection_repositories.unreachable_since`. No table, index or function; no list `test_ai_vocabulary.py` holds is widened, so it needs no revision entry. `clear_stored_code` needs no new column: none of 0082's holds code (`test_fix_patch_storage.py` holds that).
+- **T5.1, the check run for a patch** (ADR-096). `connections/fix_check.py` dispatches by purpose; `check_rows.py` holds the row's end, shared with `read`; `fix_patch.py` the patch steps; the pure decision in `nexovue_platform/fixes/recheck.py`; `diff.patch_hunks` reads a stored patch back. Out-of-date comparisons that need no file (rules, the owner's list, the code location, the likely cause by rule and fact id) run before any read; a file past the client's 1 MiB is `edit_no_longer_applies`; the store is conditional and taken under the suggestion's row lock, so a withdrawal cannot be overtaken (AC29a's check half). Refused again: `failed`, `checks_refused_at_click`, code deleted, `fix.checks_refused` audited (`at: check_run`), a warning; beat reads the last hour's count (`nexovue_scheduler_fix_checks_refused_recent`) and `NexovueSuggestionRefusedAgain` opens a ticket (rule, promtool test, runbook in `docs/operations/ai.md`).
+- **T5.2, the routes and section.** `POST .../check` takes `{"for": "patch"}`; `GET .../patch` (`MayReadFixCode`: a person with `REQUEST_FIX`, never a token or a support view; audited `fix.patch_downloaded`); `POST .../verdict` for both kinds (`findings/fix_verdict.py`); rung 2b's `POST .../patch` placeholder removed, AC73 now held on the `GET`. The read gains `patch_action`, `patch` and `verdict`, the rebuilt diff with `moved_note`, an out-of-date row's old diff with no action (`read_stale`), and **Code deleted** with when, why and until when backups hold it. Web: `PreparePatch` in `FixFiles.tsx`, `FixVerdict.tsx` (a radio group), the notes in `FixDiff.tsx`, rung 2b's question in `FixGeneral.tsx`, `api.ts` hooks and `patchDownloadUrl` (a plain link; no status read outside `api-client.ts`).
+- **T5.3, taking it back** (ADR-094). `findings/fix_takeback.py`: one `end_and_clear` for an owner's withdrawal (`fix_consent.py` now uses it), F22's disconnect hook (registered through F22's `register_disconnect_hook`; consents withdrawn `disconnected`), a deleted project (`projects.service.delete`), a removed member (`members.service.scrub`: link, attempts and their check rows). The sweep's GitHub-access-gone pass (72 hours from `unreachable_since`, or an App not installed), which withdraws consent `access_gone`; F22's refresh keeps `unreachable_since`. The owners' one email when consent ends by itself (`fixes/notify.py`, `FIX_CONSENT_ENDED`, naming what changed). Verdicts in the personal-data export.
+- **T5.4, the backup.** `POSTGRES_ROWS_NOT_KEPT` in `common.sh`; `--exclude-table-data` for each; left out of the manifest.
+- **T5.5, the restore.** `restore-postgres.sh` runs `clear-stored-code.sql` after `pg_restore` (written by `statements.restore_sql()`, held equal by `test_fix_backup_scripts.py`): code deleted again, work in flight `failed`, every consent withdrawn; `nexovue restore` already stopped both F5 roles. `docs/operations/backup-and-restore.md` states the crash window. `test_fix_restore_docker.py` is the release check (`release_check` marker, root `pyproject.toml`), **written, not run**.
+
+**Shared files touched, and why (kept minimal).** F22: `connections/service.py` (the hook registry refuses a second copy of a hook), `scheduler/connections/tasks.py` (`unreachable_since` written by the refresh). F6/F1: `projects/service.py` (one call), `members/service.py` (the inline link deletes moved into F5's `forget_person`), `test_projects.py` (its fake session answers F5's read with no rows), `test_deletion_live.py` (F5's rows in the fixture). Shared: `auth/policy.py` (`MayReadFixCode`), `profile/personal_data.py`, `profile/schemas.py`, `email/sender.py`, `email/templates.py`, `metrics.py`, `deploy/backup/*`, `deploy/monitoring/*`, `pyproject.toml` (the marker), `docs/features/personal-data/spec.md` (the export list), `docs/operations/ai.md`, `backup-and-restore.md`, the authorization, tenancy, migration-rules and general-route tests. F3, F4: none.
+
+### Tests, each seen failing
+
+Each behaviour was broken by a scripted edit, its test run, and the file restored and compared byte for byte (`seefail.py`, this session's scratchpad, `f5s5-own`); every restore compared equal. 64 breaks, each `-x`, so 1 is the first failure.
+
+| Test | Behaviour broken | Failed |
+|---|---|---|
+| `test_fix_patch_check_live.py` (15) | the patch stored on the own check · moved detected · a moved file no longer applying is stale, not refused · past the client's cap · rules, list, location stale before reading · tamper clears code · display facts against the base · the owner's requirement before any read · a withdrawal before the store · one person's check only · a consent ended by itself does not stop it | 1 each |
+| `test_fix_recheck.py` (12) | the digest over the head's blob † · gone, unreadable, not a regular file · an unreadable base · the mode kept · what a read refuses is refused again | 1 each |
+| `test_fix_diff.py` | the patch reads back its own text | 1 |
+| `test_fix_patch_routes_live.py` (15) | Prepare is a patch check · link first · deleted code cannot be prepared · the download audited · another person's check never served · past 15 minutes · a support view refused · the moved diff · a refused check says why · out of date shows the old diff · code deleted says when, why, until · a verdict changes nothing else · a viewer cannot answer · an unwritten suggestion · a general one on the same route | 1 each |
+| `test_fix_takeback_live.py` (9) | an owner's withdrawal · the hook registered · a disconnect withdraws consent · a tracker disconnect touches nothing · project deletion · member removal takes their checks · the export lists verdicts · the restore's statements withdraw consent · the audit words held equal | 1 each |
+| `test_fix_backup_scripts.py` (6) | the restore SQL is the one list · the dump excludes the tables · the manifest leaves them out · the restore empties after `pg_restore` | 1 each |
+| `test_fix_access_gone_live.py` (10) | access gone 72 hours · under 72 hours keeps · an App not installed · the clock keeps the first miss · it clears when the repository answers · F3's automatic off keeps code · a consent ended by a new model keeps code · stale keeps code until 30 days · each owner told, once · unchanged terms tell nobody · the changes named in order | 1 each |
+| `test_scheduler_metrics_live.py`, `test_fix_patch_storage.py`, `test_deletion_live.py` | the gauge counts only the last hour's refusals · 0082's frozen words · an F5 table left out of the inventory | 1 each |
+| `FixFiles.test.ts`, `FixGeneral.test.ts` | Prepare posts a patch check · the download is the person's own link · a running check offers no second Prepare † · the verdict posts its answer · rung 2b asks too | 1 each |
+
+† first passed and was redone, recorded honestly: the digest break went unseen because an unmoved file's head and base blob are the same (the moved test now asserts the digest); the first "no second Prepare" break rendered a button with no label (redone so it shows the label). **Clocks:** pure tests use fixed values; scheduler suites one `now` per test, passed to the job, the sweep and `write_reach`, every sweep and notifier narrowed to the test's own organization (`only_org`); API suites the suite's per-test `now`. The notifier's `ended_notice_sent_at` is the database's `now()`, asserted only as set. **Bounded waits:** no test polls; the release check's subprocesses each carry a timeout.
+
+### Validation, 2026-11-21
+
+Against this step's own container only: `f5s5-postgres` (`pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, network `f5s5-net`, volume `f5s5-pgdata`, migrated to 0082 by `nexovue_api.setup`), through a wrapper refusing any other store port. No ClickHouse was started.
+
+- **F5's suites and every gate touched, one run (`-n 2`): 6,583 passed; 7 failed in `test_projects.py`** (its fake session had no answer for F5's new read at project deletion; taught it, re-run: 92 passed). It covered all `test_fix_*` (API, scheduler, platform), `test_github_link_live.py`, AC33's walk, both tenancy structure tests, authorization coverage, read surface (structure, spec), rate-limit coverage, migration rules, `test_ai_vocabulary.py`, keys, deletion, personal data, members, policy, insight grants, compose contract (with `POSTGRES_INSIGHT_PASSWORD` unset), cross-service contracts, connections (F22's simulated GitHub suites, recordings), beat, metrics, audit read, projects, `packages/py-platform/tests`, `tools/ai-eval` except its ClickHouse seeder. Then the suites calling the changed services (admin, read surface live, wording, dashboards, assistant privacy, cases, alert defaults, projects live): 253 passed; jobs and email: 26 passed; after review fixes, the patch, check, access-gone, deletion, rooms and AC33 suites: 72 passed.
+- `promtool check rules` (26 rules) and `promtool test rules`: success. `shellcheck` on `deploy/nexovue` and the backup scripts: clean.
+- `uv run mypy .`: no issues in 1,248 files. `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,653 files formatted. Biome on `src/features/findings`: no errors. `pnpm -r --if-present run typecheck`: passed. `verify-tokens`: passed.
+- **The whole web suite: 213 files, 2,662 tests passed.**
+- **Not run:** `just check`; `test_fix_restore_docker.py` (release check, by hand); the ClickHouse seeder's live test (no ClickHouse started); any real provider (the founder's, after Phase 2); real GitHub; Playwright.
+
+### Deferred to F5's hardening pass
+
+- The Docker release check (AC6a, AC32) through `nexovue restore` on an installed kit.
+- Browser and phone checks of the patch and verdict rows (no Playwright states were asked for at this step), performance, customer pages (`docs/self-hosting/backup.md` does not yet mention F5's tables), Design QA, the founder's *Judgeable* (`git apply` of a downloaded patch on a real scratch repository, after Phase 2).
+
+### Review (`/review-diff`), 2026-11-21
+
+No HIGH or MEDIUM finding left open. Fixed: a suggestion deleted with its finding between the click and the check (or between the read and the store) would have raised in the job (now ends quietly; its check row went with it); a web test's wait returned nothing to wait on (now waits on the line). Recorded, not fixed (LOW): under the owner's requirement, a passed `patch` check made before the owner switched the requirement on can unlock quoted code for its 15 minutes without an access check (decision 67); the owners' notice stamps the database's clock, not a passed one. Unintended changes: none; every shared file is named above.
 
 ## Step 4, built 2026-11-21
 
@@ -355,12 +405,33 @@ Each was written with its code, then proved by removing the behaviour from the f
 
 ## Next action
 
-The founder reviews and commits Step 4, and answers open decisions 43 to 58 (16 to 33 and 36 to 42 remain open from Steps 2b and 3). Step 5 (patch, verdict, and taking it all back) is next.
+The founder reviews and commits Step 5, and answers open decisions 59 to 76 (16 to 33, 36 to 38, 40 to 51, 53 and 56 to 58 remain open from Steps 2b to 4). Step 6 (the evaluation, and the founder's gate on write access) is next; its real runs are the founder's, after Phase 2.
 
 **Earlier text, kept for the record:** start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
 
 
 ## Open decisions
+
+**From Step 5's build, 2026-11-21.** None blocks the commit. Each is built as recommended.
+
+59. **A deleted project is an end of stored code** (ADR-094): its suggestions of either kind still being prepared stop (`failed`, `project_deleted`, a new code in 0082) and its stored code goes. BR9's table does not name it; without it a `proposing` row would send files for a project that is gone. **Recommendation:** keep; add the row to BR9.
+60. **A removed member's check runs go** with their GitHub link; their verdicts stay, naming them by id ("Former member"). **Recommendation:** keep.
+61. **A person's verdicts are in their personal-data export,** following chat's "this was wrong" mark; `personal-data/spec.md` amended. **Recommendation:** keep.
+62. **One verdict per suggestion, the last person's,** asked of a written suggestion of either kind and of an out-of-date rung 3 one, by anyone with `REQUEST_FIX`, code withheld or not; no audit entry (it changes nothing; the row says who and when). **Recommendation:** keep; the summary panel (UR12) counts them.
+63. **The verdict and the patch are on rung 3's router, for both kinds,** as `/check` is (decision 45); rung 2b's `POST .../patch` placeholder is removed and AC73 holds on `GET .../patch`. **Recommendation:** keep; amend the design's *Routes*.
+64. **The rebuilt diff is read back from the stored patch** (`patch_hunks`), so page and file are one text; flags are worked out again, and new letters from what the hunks show, which can only add flags. **Recommendation:** keep; Design QA judges.
+65. **Out-of-date comparisons come before any file is read,** in the order rules, the owner's list, the code location, the likely cause; an owner's changed list reads `rules_changed`; the cause is compared by F3's stable rule name and fact id. **Recommendation:** keep; amend the design's step 5 order.
+66. **The check run's tamper end deletes code at once** (BR9's first row), which deletes the check rows too, so the person's poll reads the suggestion's own `failed` sentence. **Recommendation:** keep.
+67. **A `patch` check without the owner's requirement asks GitHub nothing about the person** (design), yet a passed one counts as an access check if the owner switches the requirement on within its 15 minutes. **Recommendation:** accept (LOW); or record on the check row whether access was checked, with Step 7's migration.
+68. **The 72-hour clock** is `connection_repositories.unreachable_since` (F22's table, written by F22's refresh) or the App's `failing_since` with `app_not_installed`; marking pull requests `untracked` is Step 7's. **Recommendation:** keep.
+69. **The owners' email is sent by `fixes/notify.py` on `light`,** which compares consents with the AI connection itself (the design put the comparison in the sweep, which holds no mail settings): one email per owner per organization per pass, naming every change in fixed words, and no repository name. **Recommendation:** keep; amend the design's sweep step 7.
+70. **The design's second alert, `sweep_fixes` not finished in 15 minutes, is not built:** the sweep records no finish in Postgres for beat to read. **Recommendation:** build with Step 9's operations work.
+71. **The restore also deletes link attempts and ends work in flight as `consent_ended_in_flight`** (the consents are withdrawn in the same transaction). **Recommendation:** keep.
+72. **A `release_check` pytest marker** (root `pyproject.toml`) keeps `test_fix_restore_docker.py` out of every other run; its guard runs at test time, not collection. **Recommendation:** keep; add it to the release checklist.
+73. **"Code deleted" shows only for a written suggestion** (`proposed`, `stale`); an ended one keeps its reason's sentence. Backups "age out by" the deletion date plus 4 weeks (D29's guess). **Recommendation:** keep.
+74. **Step 5's figures are guesses,** each named once: a patch check lasts 15 minutes (`PATCH_CHECK_LIFETIME`), access gone 72 hours (`ACCESS_GONE_AFTER`), backups 4 weeks (`BACKUPS_KEPT_FOR`), the alert's hour (`F5_REFUSED_AGAIN_SECONDS`). **Recommendation:** the bed and operations replace them.
+75. **Decisions 25 and 52 are resolved** (the verdict; the alert, ADR-096). **Decision 39 is resolved** for its Step 5 part: the owners' email and the 72-hour withdrawal are built.
+76. **The patch download is a plain link** to the API's path (`patchDownloadUrl`), so the browser saves the file; a refusal there (an expired check) downloads the API's problem text. The link shows only while the check stands. **Recommendation:** accept; Design QA may prefer a fetched download through `api-client.ts`.
 
 **From Step 4's build, 2026-11-21.** None blocks the commit. Each is built as recommended, except 43, which is not built.
 

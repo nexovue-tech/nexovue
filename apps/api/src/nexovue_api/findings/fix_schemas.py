@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from nexovue_platform.fixes.records import GeneralLanguage
+from nexovue_platform.fixes.records import FixVerdict, GeneralLanguage
 from pydantic import BaseModel
 
 from nexovue_api.findings.schemas import ExplanationSegment
@@ -107,6 +107,25 @@ class GeneralContent(BaseModel):
     earlier_reading: str | None
 
 
+class VerdictAnswer(BaseModel):
+    value: FixVerdict
+    label: str
+
+
+class VerdictView(BaseModel):
+    """FR29's question, its three answers, and the one recorded, if any (UR11)."""
+
+    question: str
+    answers: list[VerdictAnswer]
+    chosen: FixVerdict | None
+    # "Recorded. This changes nothing else." once an answer is stored.
+    recorded: str | None
+
+
+class VerdictRequest(BaseModel):
+    verdict: FixVerdict
+
+
 class GeneralFix(BaseModel):
     """One general suggestion, in this person's shape. `content` only at `proposed`, and
     only when G1 to G9 pass again on this read (FR36, AC71)."""
@@ -119,6 +138,8 @@ class GeneralFix(BaseModel):
     tokens_used: int
     requested_at: datetime
     finished_at: datetime | None
+    # Step 5: "Was this suggestion useful?", for a person who may ask, at `proposed`.
+    verdict: VerdictView | None = None
 
 
 class EarlierGeneral(BaseModel):

@@ -208,7 +208,6 @@ POLICY_OF: Final = {
     # every working role's and no viewer's. The four actions on code refuse a general row
     # (AC73) and carry the same gate, which their source rows will need (Steps 4 to 7).
     "nexovue_api/findings/fixes/general_router.py:ask_general_fix": "MayRequestFix",
-    "nexovue_api/findings/fixes/general_router.py:patch_fix": "MayRequestFix",
     "nexovue_api/findings/fixes/general_router.py:draft_pull_request": "MayRequestFix",
     "nexovue_api/findings/fixes/general_router.py:run_ci": "MayRequestFix",
     # F5 Step 3: rung 3's Ask, list, Send and Cancel, and the brief's paths (FR5c, FR11).
@@ -219,6 +218,7 @@ POLICY_OF: Final = {
     "nexovue_api/findings/fixes/source/router.py:ask_brief_files": "MayRequestFix",
     # F5 Step 4 (T4.12): Check my access, one route for both kinds (AC73's general half).
     "nexovue_api/findings/fixes/source/router.py:check_source_fix": "MayRequestFix",
+    "nexovue_api/findings/fixes/source/router.py:record_verdict": "MayRequestFix",
     # F5's Fix App and code locations are an admin's; consent an owner's (FR6, AC10a).
     "nexovue_api/connections/fix/router.py:start_fix_app": "MayManageConnections",
     "nexovue_api/connections/fix/router.py:complete_fix_app": "MayManageConnections",

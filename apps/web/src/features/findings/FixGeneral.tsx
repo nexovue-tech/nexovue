@@ -7,6 +7,7 @@ import { SelectField } from "@/shared/components/SelectField";
 import type { FindingGeneralFix, GeneralContent, GeneralFix, GeneralLanguage } from "./api";
 import { useAskGeneralFix } from "./api";
 import { Segments } from "./ExplanationSection";
+import { FixVerdict } from "./FixVerdict";
 import {
   askedAgo,
   GENERAL_WORDS,
@@ -25,10 +26,12 @@ import {
  * segments, so nothing here can become a link.
  */
 export function GeneralSuggestion({
+  findingId,
   fix,
   now,
   zone,
 }: {
+  findingId: string;
   fix: GeneralFix;
   now: number;
   zone?: string;
@@ -47,6 +50,9 @@ export function GeneralSuggestion({
         <p className="text-ink-dim text-xs">
           {tokensAndAge(fix.tokens_used, fix.requested_at, now)}
         </p>
+      ) : null}
+      {fix.verdict && fix.content ? (
+        <FixVerdict findingId={findingId} fixId={fix.id} verdict={fix.verdict} />
       ) : null}
     </article>
   );

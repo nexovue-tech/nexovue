@@ -53,6 +53,7 @@ from nexovue_platform.fixes.records import (
     PROPOSED,
     PROPOSING,
     REFUSED,
+    STALE,
     TRIES_PER_FINDING,
     build_source_pack_request,
     match_brief_paths_request,
@@ -108,7 +109,14 @@ from nexovue_api.data.postgres.models import (
     JobResult,
 )
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import fix_access, fix_paths, fix_proposal, fix_queries, fix_state
+from nexovue_api.findings import (
+    fix_access,
+    fix_paths,
+    fix_proposal,
+    fix_queries,
+    fix_state,
+    fix_verdict,
+)
 from nexovue_api.findings.fix_general import Viewer
 from nexovue_api.findings.fix_schemas import FixSectionLine
 from nexovue_api.findings.fix_source_schemas import (
@@ -136,6 +144,8 @@ from nexovue_api.findings.queries import find_finding, lock_finding
 from nexovue_api.settings import Settings
 
 SOURCE_STATES: Final = frozenset(get_args(SourceState))
+# A suggestion was written: it shows its code, or that its code was deleted (BR9).
+WRITTEN_STATES: Final = (PROPOSED, STALE)
 
 NOT_FOUND: Final = "No such finding."
 NO_SUCH_FIX: Final = "No such suggestion for this finding."
@@ -268,9 +278,13 @@ async def _view(
         heading = GATHERED_HEADING if viewer.may_request else GATHERING_HEADING
         sentence = None if viewer.may_request else BEING_PREPARED_VIEWER
         files = await _files(db, row, state) if viewer.may_request else None
-    elif row.state == PROPOSED:
+    elif row.state in WRITTEN_STATES and row.code_deleted_at is not None:
+        shown = fix_proposal.code_deleted(row)
+        heading, sentence = shown.heading, shown.sentence
+    elif row.state in WRITTEN_STATES:
         key = await _repository_key(db, row)
-        shown = await fix_proposal.read_proposed(
+        read = fix_proposal.read_proposed if row.state == PROPOSED else fix_proposal.read_stale
+        shown = await read(
             db,
             row,
             user_id=user_id,
@@ -306,6 +320,11 @@ async def _view(
         check=None if shown is None else shown.check,
         file_count=None if shown is None else shown.file_count,
         line_count=None if shown is None else shown.line_count,
+        patch_action=None if shown is None else shown.patch_action,
+        patch=None if shown is None else shown.patch,
+        verdict=fix_verdict.view(row.verdict)
+        if viewer.may_request and fix_verdict.answerable(row)
+        else None,
     )
 
 

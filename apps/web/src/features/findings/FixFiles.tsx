@@ -7,14 +7,17 @@ import { TextField } from "@/shared/components/TextField";
 import { rememberLinkReturn } from "@/shared/github-link-return";
 import type { AskedRound, FindingSourceFix, Proposal, SourceFiles, SourceFix } from "./api";
 import {
+  patchDownloadUrl,
   useAskSourceFix,
   useCancelSourceFix,
   useChangeSourceFiles,
   useCheckMyAccess,
+  usePreparePatch,
   useSendSourceFiles,
   useStartGitHubLink,
 } from "./api";
 import { FixDiff } from "./FixDiff";
+import { FixVerdict } from "./FixVerdict";
 import { askedAgo, DIFF_WORDS, minutesLeft, SOURCE_WORDS, sourceTitle } from "./fix-page";
 
 const MAX_TYPED = 5;
@@ -169,6 +172,55 @@ function SourceState({ findingId, fix, now }: { findingId: string; fix: SourceFi
       {fix.files ? <FileList findingId={findingId} fix={fix} files={fix.files} now={now} /> : null}
       {fix.proposal ? <Written proposal={fix.proposal} now={now} /> : null}
       {fix.code_withheld ? <CheckMyAccess findingId={findingId} fix={fix} /> : null}
+      {fix.patch_action || fix.patch ? <PreparePatch findingId={findingId} fix={fix} /> : null}
+      {fix.verdict ? (
+        <FixVerdict findingId={findingId} fixId={fix.id} verdict={fix.verdict} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Rung 4 (Step 5): Prepare patch asks this person's own check run to re-read the files from
+ * GitHub and rebuild the patch; while it works the read polls, and once it stands the
+ * Download is a plain link to the file the API serves from that check alone (UR6, FR20a).
+ */
+function PreparePatch({ findingId, fix }: { findingId: string; fix: SourceFix }) {
+  const prepare = usePreparePatch(findingId, fix.id);
+  const patch = fix.patch;
+  return (
+    <div className="flex min-w-0 flex-col gap-2" data-testid="prepare-patch">
+      {patch ? (
+        <>
+          <h4 className="font-medium text-ink text-sm">{patch.heading}</h4>
+          {patch.sentence ? (
+            <p className="max-w-prose text-ink text-sm [overflow-wrap:anywhere]">
+              {patch.sentence}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-3">
+        {patch?.downloadable ? (
+          <a
+            className="inline-flex min-h-11 items-center font-medium text-brand-text text-sm underline-offset-2 hover:underline"
+            href={patchDownloadUrl(findingId, fix.id)}
+            download
+          >
+            {SOURCE_WORDS.downloadPatch}
+          </a>
+        ) : null}
+        {fix.patch_action ? (
+          <Button variant="secondary" pending={prepare.isPending} onClick={() => prepare.mutate()}>
+            {fix.patch_action}
+          </Button>
+        ) : null}
+      </div>
+      {prepare.error ? (
+        <p role="alert" className="max-w-prose text-ink text-sm">
+          {errorDetail(prepare.error)}
+        </p>
+      ) : null}
     </div>
   );
 }

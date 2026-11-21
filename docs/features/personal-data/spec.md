@@ -53,7 +53,9 @@ platform operator, who has no customer data of their own here.
   checked answer as stored, its steps' arguments as stored (free-text search phrases included) and
   their "this was wrong" mark, bounded on their own with a `chat_questions_truncated` flag; and the
   runbooks they wrote, in their own words, with their project, bounded on their own with a
-  `runbooks_truncated` flag (F4 AC34, Step 5). A runbook stays the organization's after its author
+  `runbooks_truncated` flag (F4 AC34, Step 5); their linked GitHub account (F5 AC31) and their
+  answers to "Was this suggestion useful?" (F5 FR29), bounded with a `fix_verdicts_truncated`
+  flag. A runbook stays the organization's after its author
   leaves, its author shown as *Former member*. Never another person's data, never the
   organization's telemetry.
 - **Deleting an account is the member removal that already exists** (sessions ended, email freed,

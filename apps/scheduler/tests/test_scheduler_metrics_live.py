@@ -348,3 +348,52 @@ async def test_f3_s_readings_move_by_exactly_what_was_written(
     assert after.ai_tokens_month - before.ai_tokens_month == 700
     metrics.publish(after)
     assert metrics.AI_CONNECTIONS_ENABLED._value.get() == 1
+
+
+async def test_f5_s_tamper_signal_counts_refusals_again_in_the_last_hour_only(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F5 T5.1 (D18, ADR-096): a suggestion the rules refused again on the same files in the
+    last hour counts; an older one, and one merely out of date, do not."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            for minutes, state, reason in (
+                (10, "failed", "checks_refused_at_click"),
+                (90, "failed", "checks_refused_at_click"),
+                (5, "stale", "rules_changed"),
+            ):
+                finding = await add_finding(
+                    connection,
+                    tenant,
+                    service=f"svc-{minutes}",
+                    started_at=datetime.now(UTC) - timedelta(hours=3),
+                )
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state,
+                            reason, state_changed_at)
+                        VALUES (:org, :project, :finding, 'source', :state, :reason,
+                            now() - make_interval(mins => :minutes))
+                        """
+                    ),
+                    {
+                        "org": tenant.org_id,
+                        "project": tenant.project_id,
+                        "finding": finding,
+                        "state": state,
+                        "reason": reason,
+                        "minutes": minutes,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.fix_checks_refused - before.fix_checks_refused == 1
+    metrics.publish(after)
+    assert metrics.FIX_CHECKS_REFUSED._value.get() == after.fix_checks_refused

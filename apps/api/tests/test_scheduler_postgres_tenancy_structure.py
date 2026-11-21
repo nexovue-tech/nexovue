@@ -239,6 +239,12 @@ CROSS_TENANT_STATEMENTS: Final = (
         "_AI_RUNS_RECENT",
         "an install-wide gauge: AI runs by purpose and outcome, counts only (F3 T5.10)",
     ),
+    _across(
+        "metrics",
+        "_FIX_CHECKS_REFUSED",
+        "an install-wide gauge: suggested fixes the rules refused again on the same files, a "
+        "count only, for F5's tamper alert (D18, T5.1)",
+    ),
     # F3's AI sweep, run as `nexovue_insight` (plan T5.5).
     _across(
         "insight.store",
@@ -286,6 +292,20 @@ CROSS_TENANT_STATEMENTS: Final = (
         "F5's requester emails (T4.8): source suggestions owed an email, across every "
         "organization; each is taken, and its person read, by its own `org_id`",
     ),
+    CrossTenantStatement(
+        "nexovue_platform.fixes.statements",
+        "restore_sql",
+        "F5's restore (T5.5, ADR-095): run by `restore-postgres.sh` once over the whole "
+        "database a snapshot replaced, every organization's, never by a job; it deletes "
+        "code and withdraws consent only",
+    ),
+    _across(
+        "fixes.notify",
+        "_ENDED_CONSENTS",
+        "F5's owners' email (T5.3, AC59): organizations with an agreement that ended by itself, "
+        "each joined to its own AI connection; each is taken, and its owners read, by its "
+        "own `org_id`",
+    ),
     _across(
         "connections.fix_sweep",
         "_CODE_DUE",
@@ -307,6 +327,13 @@ CROSS_TENANT_STATEMENTS: Final = (
         "connections.fix_sweep",
         "_APPS_DUE",
         f"{_SWEEP}: Fix Apps due their hourly refresh; each job carries its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_ACCESS_GONE",
+        f"{_SWEEP}: repositories with a live consent whose GitHub access has been gone past "
+        "BR9's 72 hours (Step 5); each repository's consents and code are taken back by its "
+        "own `org_id`, joined to its own organization's App",
     ),
     _across(
         "metrics",

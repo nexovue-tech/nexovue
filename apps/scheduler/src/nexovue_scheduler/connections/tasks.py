@@ -101,6 +101,7 @@ _UPSERT_PLACE: Final = text(
             CASE WHEN :is_private THEN NULL ELSE CAST(:at AS timestamptz) END)
     ON CONFLICT (connection_id, external_id)
     DO UPDATE SET key = EXCLUDED.key, is_private = EXCLUDED.is_private, is_reachable = true,
+        unreachable_since = NULL,
         public_told_at = CASE
             WHEN connection_repositories.is_private AND NOT EXCLUDED.is_private THEN NULL
             ELSE connection_repositories.public_told_at END,
@@ -111,9 +112,12 @@ _UPSERT_PLACE: Final = text(
     WHERE connection_repositories.org_id = :org_id
     """
 )
+# `unreachable_since` keeps the first refresh that missed it: F5's 72 hours (BR9) count
+# from there, and a repository that answers again starts afresh.
 _UNREACHED_PLACES: Final = text(
     """
-    UPDATE connection_repositories SET is_reachable = false
+    UPDATE connection_repositories
+    SET is_reachable = false, unreachable_since = COALESCE(unreachable_since, :at)
     WHERE org_id = :org_id AND connection_id = :connection_id
       AND NOT (external_id = ANY(CAST(:reached AS text[])))
     """
@@ -286,7 +290,8 @@ async def write_reach(
                 },
             )
         await connection.execute(
-            _UNREACHED_PLACES, {**ids, "reached": [place.external_id for place in reach.places]}
+            _UNREACHED_PLACES,
+            {**ids, "reached": [place.external_id for place in reach.places], "at": now},
         )
         await connection.execute(_RESUME_LINKS, {**ids, "at": now})
 

@@ -78,6 +78,10 @@ class Message(Enum):
     FIX_FILES_READY = "fix_files_ready"
     FIX_SUGGESTION_READY = "fix_suggestion_ready"
     FIX_SUGGESTION_ENDED = "fix_suggestion_ended"
+    # F5 (A7, AC59): each owner, once, when an agreement to send code ended by itself
+    # because the AI connection's address, format, key or model changed. Fixed words for
+    # what changed and a settings link: no repository, path or code.
+    FIX_CONSENT_ENDED = "fix_consent_ended"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

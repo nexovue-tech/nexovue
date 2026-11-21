@@ -83,6 +83,7 @@ from nexovue_platform.fixes.records import (
     FIX_KINDS,
     FIX_REASONS,
     FIX_STATES,
+    FIX_VERDICTS,
     GENERAL_LANGUAGES,
     GENERAL_SUGGESTION_MAX_BYTES,
     GITHUB_LINK_REASONS,
@@ -2376,6 +2377,11 @@ class FindingFix(Base):
     )
     sent_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     sent_at: Mapped[OptionalTimestamp]
+    # FR29, UR11 (migration 0082): one answer per suggestion, the last person's. Not source:
+    # it stays when code is deleted, and goes with the finding.
+    verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verdict_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    verdict_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -2383,6 +2389,17 @@ class FindingFix(Base):
             ["findings.org_id", "findings.id"],
             ondelete="CASCADE",
             name="fk_finding_fixes_finding",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "verdict_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (verdict_by)",
+            name="fk_finding_fixes_verdict_by",
+        ),
+        CheckConstraint(
+            "(verdict IS NULL) = (verdict_at IS NULL) AND (verdict IS NULL OR verdict IN "
+            f"({_quoted(FIX_VERDICTS)}))",
+            name="verdict_is_known",
         ),
         ForeignKeyConstraint(
             ["org_id", "connection_repository_id"],
@@ -2964,6 +2981,8 @@ class ConnectionRepository(Base):
     is_reachable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true"), default=True
     )
+    # Since when a refresh has found it unreachable (migration 0082): F5's 72 hours (BR9).
+    unreachable_since: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (

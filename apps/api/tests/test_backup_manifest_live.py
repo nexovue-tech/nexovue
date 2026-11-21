@@ -33,7 +33,8 @@ from live import require_stack
 
 import nexovue_api
 
-BACKUP_SCRIPT: Final = Path(nexovue_api.__file__).parents[4] / "deploy" / "backup" / "backup.sh"
+BACKUP_DIR: Final = Path(nexovue_api.__file__).parents[4] / "deploy" / "backup"
+BACKUP_SCRIPT: Final = BACKUP_DIR / "backup.sh"
 PROJECT: Final = os.environ.get("NEXOVUE_PROJECT", "nexovue")
 POSTGRES_CONTAINER: Final = os.environ.get("POSTGRES_CONTAINER", f"{PROJECT}-postgres-1")
 CLICKHOUSE_CONTAINER: Final = os.environ.get("CLICKHOUSE_CONTAINER", f"{PROJECT}-clickhouse-1")
@@ -188,6 +189,23 @@ def _manifest(snapshot: Path) -> dict[str, str]:
     return dict(pairs)
 
 
+def _rows_not_kept() -> frozenset[str]:
+    """The tables backup.sh dumps empty and leaves out of the manifest, read from the list it
+    reads (`POSTGRES_ROWS_NOT_KEPT` in common.sh), so this test never keeps a copy of it."""
+    listed = subprocess.run(
+        [
+            *("bash", "-c", 'source "$1" && printf \'%s\\n\' "${POSTGRES_ROWS_NOT_KEPT[@]}"'),
+            *("common.sh", str(BACKUP_DIR / "common.sh")),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tables = frozenset(listed.stdout.split())
+    assert tables, "common.sh names the tables a backup never holds"
+    return tables
+
+
 def _restored_counts(snapshot: Path, database: str) -> dict[str, str]:
     """Every public table's row count once the dump is restored into `database`."""
     assert REAL_DOCKER is not None
@@ -218,11 +236,17 @@ def test_each_postgres_count_is_the_rows_the_dump_holds(
     assert _psql(f"SELECT count(*) FROM {probe_table}") == "2", "the write after the dump landed"
     assert restored[probe_table] == "1", "the dump holds the row written before it, only"
     assert manifest[f"pg.{probe_table}"] == "1", "counted from the dump, not from the live table"
+    not_kept = _rows_not_kept()
+    assert {table: restored[table] for table in not_kept} == dict.fromkeys(not_kept, "0"), (
+        "dumped empty: a backup never holds a customer's code or a sealed code (AC32)"
+    )
     recorded = {
         key[len("pg.") :]: value for key, value in manifest.items() if key.startswith("pg.")
     }
     assert recorded == {
-        table: count for table, count in restored.items() if table != WATERMARK_TABLE
+        table: count
+        for table, count in restored.items()
+        if table != WATERMARK_TABLE and table not in not_kept
     }
     assert manifest[f"watermark.pg.{WATERMARK_TABLE}"] == restored[WATERMARK_TABLE]
     assert manifest["alembic_revision"] == _psql(

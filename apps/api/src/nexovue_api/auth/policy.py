@@ -21,7 +21,7 @@ quietly widens is a failed build, not a review comment.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends
 
@@ -93,3 +93,17 @@ MayReadAudit = Annotated[Identity, Depends(require(Action.READ_AUDIT))]
 MayCommitSpend = Annotated[Identity, Depends(require(Action.COMMIT_SPEND))]
 MayGrantSupport = Annotated[Identity, Depends(require(Action.GRANT_SUPPORT))]
 MayEndTheOrganization = Annotated[Identity, Depends(require(Action.END_ORGANIZATION))]
+
+SUPPORT_VIEW_READS_NO_CODE: Final = "A support view does not show customer code."
+
+
+def _may_read_fix_code(identity: CurrentIdentity) -> Identity:
+    """F5's quoted code as a file (design, *Routes*, `MayReadFixCode`): a person who may ask
+    for a suggested fix, and never a support view, which a read would otherwise let through
+    (`_hold_support_view` refuses only writes). `CurrentIdentity` already refuses a token."""
+    if identity.impersonation is not None:
+        raise PermissionDeniedError(SUPPORT_VIEW_READS_NO_CODE)
+    return require(Action.REQUEST_FIX)(identity)
+
+
+MayReadFixCode = Annotated[Identity, Depends(_may_read_fix_code)]

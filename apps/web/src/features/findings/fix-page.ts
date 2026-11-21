@@ -158,6 +158,7 @@ export function tokensAndAge(tokens: number, askedAt: string, now: number): stri
 
 export const SOURCE_WORDS = {
   notLoaded: "The suggested fix could not be loaded",
+  downloadPatch: "Download patch",
   pathLabel: (index: number) => `File path ${index + 1}`,
   addPath: "Name another file",
   email: "Email me when this needs me",

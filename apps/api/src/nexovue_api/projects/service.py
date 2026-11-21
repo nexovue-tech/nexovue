@@ -41,7 +41,7 @@ from nexovue_api.auth.dependencies import Reader
 from nexovue_api.channels import queries as channel_queries
 from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import explanation_queries
+from nexovue_api.findings import explanation_queries, fix_takeback
 from nexovue_api.projects import config, queries
 from nexovue_api.projects.schemas import (
     MaskingConfigResponse,
@@ -195,6 +195,10 @@ async def delete(
     # its findings sends nothing (FR28, AC39); the job also re-checks before it spends.
     await explanation_queries.stop_queued_wording(
         session, org_id=org_id, project_id=project_id, state="off", at=deleted_at
+    )
+    # F5 (ADR-094): its suggested fixes still being prepared stop, and their stored code goes.
+    await fix_takeback.end_for_project(
+        session, org_id=org_id, project_id=project_id, now=deleted_at
     )
     closed = ProjectDeleted(
         project_id=project.id,

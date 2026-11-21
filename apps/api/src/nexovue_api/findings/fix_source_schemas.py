@@ -15,7 +15,7 @@ from typing import Final, Literal
 from nexovue_platform.fixes.records import HINT_MAX_CHARACTERS, MAX_FILES, MAX_TYPED_PATHS
 from pydantic import BaseModel, Field
 
-from nexovue_api.findings.fix_schemas import FixSectionLine
+from nexovue_api.findings.fix_schemas import FixSectionLine, VerdictView
 from nexovue_api.findings.schemas import ExplanationSegment
 
 PATH_MAX_CHARACTERS: Final = 200
@@ -174,6 +174,9 @@ class ProposalFile(BaseModel):
     context_note: str | None
     open: bool
     explanations: list[ProposalExplanation]
+    # Step 5: after a passed patch check the hunks are the check's, from the head; a file
+    # that changed there since the suggestion says so (FR21's "moved").
+    moved_note: str | None = None
 
 
 class Proposal(BaseModel):
@@ -191,6 +194,8 @@ class Proposal(BaseModel):
     written_at: datetime | None
     commit: str
     tokens: int
+    # Step 5: set when the hunks above were rebuilt by this person's patch check.
+    rebuilt_note: str | None = None
 
 
 class CheckView(BaseModel):
@@ -202,6 +207,18 @@ class CheckView(BaseModel):
     heading: str
     sentence: str | None
     passed: bool
+    expires_at: datetime | None
+
+
+class PatchView(BaseModel):
+    """This person's own patch check (design, *State by role*, check rows; FR20a): working,
+    ready with its download, or why not. Never another person's (AC40)."""
+
+    status: str
+    heading: str
+    sentence: str | None
+    # Only while the check stands: this person's download, served from their own row.
+    downloadable: bool
     expires_at: datetime | None
 
 
@@ -225,6 +242,10 @@ class SourceFix(BaseModel):
     # A viewer's counts (design, *State by role*, `proposed`).
     file_count: int | None = None
     line_count: int | None = None
+    # Step 5: "Prepare patch", and this person's own patch check; FR29's question.
+    patch_action: str | None = None
+    patch: PatchView | None = None
+    verdict: VerdictView | None = None
 
 
 class EarlierSource(BaseModel):
@@ -261,6 +282,7 @@ class BriefFiles(BaseModel):
 
 
 class CheckRequest(BaseModel):
-    """`POST .../check`. Step 4 runs `read`, **Check my access**; T5.1 adds `patch`."""
+    """`POST .../check`: `read` is **Check my access** (Step 4), `patch` is **Prepare
+    patch** (Step 5). The draft's `draft` is Step 7's."""
 
-    for_: Literal["read"] = Field(alias="for")
+    for_: Literal["read", "patch"] = Field(alias="for")

@@ -64,6 +64,9 @@ const GATHERED: SourceFix = {
   check: null,
   file_count: null,
   line_count: null,
+  patch_action: null,
+  patch: null,
+  verdict: null,
   files: {
     asked_round: null,
     files: [
@@ -290,6 +293,7 @@ const PROPOSED: SourceFix = {
           },
         ],
         explanations: [{ segments: [{ text: "checkout fails after a deploy." }] }],
+        moved_note: null,
       },
     ],
     explanation_label: "The model's explanation, not checked by Nexovue",
@@ -299,6 +303,7 @@ const PROPOSED: SourceFix = {
     written_at: "2026-11-21T11:00:00Z",
     commit: "ccccccc",
     tokens: 18204,
+    rebuilt_note: null,
   },
 };
 
@@ -398,5 +403,114 @@ describe("Step 4: a written suggestion (T4.6, AC10, AC37e)", () => {
     );
     expect(text).toContain("services/shop/.env: never sent: secrets and keys");
     expect(text).toContain("Round 2 of at most 3.");
+  });
+});
+
+describe("Step 5: the patch and the verdict (T5.2, FR20a, FR21, FR29)", () => {
+  const ready: SourceFix = {
+    ...PROPOSED,
+    patch_action: "Prepare patch",
+    patch: {
+      status: "moved",
+      heading: "Ready to confirm",
+      sentence:
+        "Built against ddddddd, the default branch's head when it was re-read. Apply it with git apply. It can be downloaded until 12:15 UTC; prepare it again after that.",
+      downloadable: true,
+      expires_at: "2026-11-21T12:15:00Z",
+    },
+    verdict: {
+      question: "Was this suggestion useful?",
+      answers: [
+        { value: "merge_as_is", label: "Yes, nearly as it is" },
+        { value: "useful_start", label: "Yes, as a start" },
+        { value: "wrong", label: "No, it was wrong" },
+      ],
+      chosen: null,
+      recorded: null,
+    },
+    proposal: PROPOSED.proposal && {
+      ...PROPOSED.proposal,
+      rebuilt_note:
+        "A file moved on since the suggestion, and every change still applies. The changes below are re-read from the default branch's head.",
+      files: PROPOSED.proposal.files.map((file) => ({
+        ...file,
+        moved_note: "This file moved on since the suggestion.",
+      })),
+    },
+  };
+
+  it("Prepare patch posts a patch check, and a standing check downloads from the person's own link", async () => {
+    const { api, section } = await page(source({ latest: ready }), {
+      "POST /findings/f-1/fixes/s-1/check": json({
+        id: "c-2",
+        purpose: "patch",
+        status: "running",
+        heading: "Re-reading the files",
+        sentence: null,
+        passed: false,
+        expires_at: null,
+      }),
+    });
+
+    const text = readable(section as Element);
+    expect(text).toContain("Ready to confirm");
+    expect(text).toContain("This file moved on since the suggestion.");
+    const link = section?.querySelector<HTMLAnchorElement>("a[download]");
+    expect(link?.getAttribute("href")).toBe("/api/v1/findings/f-1/fixes/s-1/patch");
+    expect(link?.textContent).toBe("Download patch");
+    const button = [...(section?.querySelectorAll("button") ?? [])].find(
+      (each) => each.textContent === "Prepare patch",
+    );
+    click(button);
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const posted = api.calls.find((call) => call.path === "/findings/f-1/fixes/s-1/check");
+    expect(posted?.body).toEqual({ for: "patch" });
+  });
+
+  it("a check still re-reading shows its sentence, no download, and no second Prepare", async () => {
+    const working: SourceFix = {
+      ...ready,
+      patch_action: null,
+      patch: {
+        status: "running",
+        heading: "Re-reading the files",
+        sentence: "Re-reading the files and re-applying Nexovue's rules.",
+        downloadable: false,
+        expires_at: null,
+      },
+    };
+    const { section } = await page(source({ latest: working }));
+
+    expect(readable(section as Element)).toContain("Re-reading the files and re-applying");
+    expect(section?.querySelector("a[download]")).toBeNull();
+    expect(
+      [...(section?.querySelectorAll("button") ?? [])].some(
+        (each) => each.textContent === "Prepare patch",
+      ),
+    ).toBe(false);
+  });
+
+  it("answering the question posts the verdict and shows that it changes nothing else", async () => {
+    const { api, section } = await page(source({ latest: ready }), {
+      "POST /findings/f-1/fixes/s-1/verdict": json({
+        ...ready.verdict,
+        chosen: "useful_start",
+        recorded: "Recorded. This changes nothing else.",
+      }),
+    });
+
+    const answer = [
+      ...(section?.querySelectorAll<HTMLInputElement>("input[type=radio]") ?? []),
+    ].find((each) => each.value === "useful_start");
+    click(answer);
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const posted = api.calls.find((call) => call.path === "/findings/f-1/fixes/s-1/verdict");
+    expect(posted?.body).toEqual({ verdict: "useful_start" });
+    await waitFor(
+      () => readable(section as Element).includes("Recorded. This changes nothing else."),
+      "the recorded line",
+    );
   });
 });

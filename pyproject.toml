@@ -117,9 +117,13 @@ pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audi
 # FastAPI's dependency caches are emptied after each test: they kept every test's overrides,
 # and with them its session and engine, alive (tests/helpers/fastapi_caches.py).
 # `insight_fence` suites need an installed kit (F3 AC42, AC46); `just insight-fence` runs them with
-# `-m insight_fence`, which replaces this one, and `just check` never collects them.
-addopts = "-p clickhouse_cleanup -p fastapi_caches -m 'not insight_fence'"
-markers = ["insight_fence: needs the installed kit `just insight-fence` builds (F3 plan T3.11)"]
+# `-m insight_fence`, which replaces this one, and `just check` never collects them. `release_check`
+# suites run the backup scripts against a stack's own containers, by hand per release (F5 T5.5).
+addopts = "-p clickhouse_cleanup -p fastapi_caches -m 'not insight_fence and not release_check'"
+markers = [
+    "insight_fence: needs the installed kit `just insight-fence` builds (F3 plan T3.11)",
+    "release_check: run by hand per release against real volumes, never in the gate (F5 T5.5)",
+]
 testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval"]
 
 [tool.uv.sources]

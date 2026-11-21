@@ -424,6 +424,23 @@ def check_access(github: FixGitHub, token: str, key: str, github_user_id: int | 
         raise Ending(FAILED, "no_github_access")
 
 
+def folder_files(
+    github: FixGitHub, token: str, key: str, folder: str | None, commit: str
+) -> list[TreeFile]:
+    """The folder's files only, at `commit`, walked down by name, so nothing outside can
+    match. Repository paths. The pack job and the check run both read through this."""
+    prefix = f"{folder}/" if folder else ""
+    sha = github.tree_of_commit(token, key, commit)
+    for segment in folder.split("/") if folder else []:
+        entries = github.tree(token, key, sha, recursive=False)
+        found = [e for e in entries if e.path == segment and e.kind == "tree"]
+        if not found:
+            return []
+        sha = found[0].sha
+    entries = github.tree(token, key, sha, recursive=True)
+    return [TreeFile(prefix + e.path, e.mode, e.sha, e.size) for e in entries if e.kind == "blob"]
+
+
 class _Reader:
     """One repository folder, read at one commit, for one job."""
 
@@ -460,20 +477,7 @@ class _Reader:
     # ------------------------------------------------------------- the tree
 
     def subtree(self, commit: str) -> list[TreeFile]:
-        """The folder's files only, walked down by name, so nothing outside can match."""
-        sha = self._github.tree_of_commit(self._token, self._key, commit)
-        for segment in (self._folder or "").split("/") if self._folder else []:
-            entries = self._github.tree(self._token, self._key, sha, recursive=False)
-            found = [e for e in entries if e.path == segment and e.kind == "tree"]
-            if not found:
-                return []
-            sha = found[0].sha
-        entries = self._github.tree(self._token, self._key, sha, recursive=True)
-        return [
-            TreeFile(self._prefix + e.path, e.mode, e.sha, e.size)
-            for e in entries
-            if e.kind == "blob"
-        ]
+        return folder_files(self._github, self._token, self._key, self._folder, commit)
 
     def _relative(self, path: str) -> str:
         return path.removeprefix(self._prefix)

@@ -47,7 +47,7 @@ def _words(frozen: str) -> tuple[str, ...]:
         ("_FIX_REASONS", records.STEP_3_FIX_REASONS),
         ("_BASES", records.BASES),
         ("_CANDIDATE_SOURCES", records.CANDIDATE_SOURCES),
-        ("_CODE_DELETED_REASONS", records.CODE_DELETED_REASONS),
+        ("_CODE_DELETED_REASONS", records.STEP_3_CODE_DELETED_REASONS),
         ("_CHECK_PURPOSES", records.FIX_CHECK_PURPOSES),
         ("_CHECK_STATUSES", records.FIX_CHECK_STATUSES),
         ("_LINK_STATUSES", records.GITHUB_LINK_STATUSES),

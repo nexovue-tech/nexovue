@@ -174,7 +174,9 @@ export function FixSection({
       <p role="status" data-testid="fix-status" className="sr-only">
         {latest ? stateWords(latest.state) : ""}
       </p>
-      {latest ? <GeneralSuggestion fix={latest} now={now} zone={zone} /> : null}
+      {latest ? (
+        <GeneralSuggestion findingId={findingId} fix={latest} now={now} zone={zone} />
+      ) : null}
       {line ? <p className="max-w-prose text-ink-dim text-sm">{line.sentence}</p> : null}
       {source && sourceShows ? (
         <SourceSection findingId={findingId} source={source} now={now} />

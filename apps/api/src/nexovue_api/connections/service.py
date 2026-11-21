@@ -122,7 +122,8 @@ DISCONNECT_HOOKS: list[DisconnectHook] = []
 
 
 def register_disconnect_hook(hook: DisconnectHook) -> None:
-    DISCONNECT_HOOKS.append(hook)
+    if hook not in DISCONNECT_HOOKS:
+        DISCONNECT_HOOKS.append(hook)
 
 
 def sealed_box(keys: ConfiguredKeys, purpose: str) -> SealedBox:

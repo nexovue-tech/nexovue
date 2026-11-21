@@ -19,6 +19,7 @@ This suite fails rather than skips when the stack is down; see tests/helpers/liv
 from __future__ import annotations
 
 import os
+import secrets
 import socket
 import uuid
 from collections.abc import AsyncIterator
@@ -78,8 +79,15 @@ from nexovue_api.data.postgres.models import (
     Finding,
     FindingExplanation,
     FindingExplanationRating,
+    FindingFix,
+    FindingFixCheck,
+    FindingFixCodeView,
+    FindingFixSourcePack,
     FindingIncident,
     FindingLink,
+    FixSourceConsent,
+    GitHubLinkAttempt,
+    GitHubUserLink,
     Incident,
     Integration,
     Job,
@@ -92,6 +100,7 @@ from nexovue_api.data.postgres.models import (
     Organization,
     PlanGrant,
     ProjectWebhookSecret,
+    ServiceCodeLocation,
     ServiceDetectionSettings,
     ServiceLastSeen,
     SessionRecord,
@@ -214,6 +223,16 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "assistant_question_counts",
     "assistant_monthly_counts",
     "assistant_read_log",
+    # F5: a written suggestion (with a person's verdict), its files, a check run and a first
+    # view; a code location, an owner's consent; a person's GitHub link and an attempt.
+    "finding_fixes",
+    "finding_fix_source_packs",
+    "finding_fix_checks",
+    "finding_fix_code_views",
+    "service_code_locations",
+    "fix_source_consents",
+    "github_user_links",
+    "github_link_attempts",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -316,6 +335,15 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "assistant_question_counts": ROWS_PER_TABLE,
     "assistant_monthly_counts": ROWS_PER_TABLE,
     "assistant_read_log": ROWS_PER_TABLE,
+    # F5 (AC30): one of each per organization, on its first finding and repository.
+    "finding_fixes": 1,
+    "finding_fix_source_packs": 1,
+    "finding_fix_checks": 1,
+    "finding_fix_code_views": 1,
+    "service_code_locations": 1,
+    "fix_source_consents": 1,
+    "github_user_links": 1,
+    "github_link_attempts": 1,
 }
 
 
@@ -991,6 +1019,89 @@ async def _write_ai_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> Non
         )
     await _seed_chat(db, tenant, now)
     await db.flush()
+    await _seed_suggestions(db, tenant, now)
+    await db.flush()
+
+
+async def _seed_suggestions(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """F5's rows (AC30): every table holding customer code, a verdict or a GitHub identity."""
+    finding_id = await db.scalar(
+        select(Finding.id).where(Finding.org_id == tenant.org_id).order_by(Finding.id).limit(1)
+    )
+    repository_id = await db.scalar(
+        select(ConnectionRepository.id)
+        .where(ConnectionRepository.org_id == tenant.org_id)
+        .order_by(ConnectionRepository.id)
+        .limit(1)
+    )
+    fix = FindingFix(
+        id=uuid.uuid4(),
+        org_id=tenant.org_id,
+        project_id=tenant.project_id,
+        finding_id=finding_id,
+        kind="source",
+        state="proposed",
+        connection_repository_id=repository_id,
+        folder="src",
+        files_read={"files": []},
+        edits=[{"file_ref": "file_1"}],
+        requested_by=tenant.user_id,
+        verdict="useful_start",
+        verdict_by=tenant.user_id,
+        verdict_at=now,
+    )
+    db.add(fix)
+    await db.flush()
+    db.add(
+        FindingFixSourcePack(
+            fix_id=fix.id, org_id=tenant.org_id, files=[], frames=[], bytes=0, expires_at=now
+        )
+    )
+    db.add(
+        FindingFixCheck(
+            org_id=tenant.org_id,
+            fix_id=fix.id,
+            requested_by=tenant.user_id,
+            purpose="patch",
+            status="unchanged",
+            patch="diff --git a/src/x.py b/src/x.py\n",
+            expires_at=now,
+        )
+    )
+    db.add(FindingFixCodeView(fix_id=fix.id, user_id=tenant.user_id, org_id=tenant.org_id))
+    db.add(
+        ServiceCodeLocation(
+            org_id=tenant.org_id,
+            service_name="checkout",
+            connection_repository_id=repository_id,
+            folder="src",
+        )
+    )
+    db.add(
+        FixSourceConsent(
+            org_id=tenant.org_id,
+            connection_repository_id=repository_id,
+            provider_base_url="https://provider.example/v1",
+            provider_format="openai_chat",
+            model="model-a",
+            require_github_access=False,
+            consented_at=now,
+        )
+    )
+    db.add(
+        GitHubUserLink(
+            user_id=tenant.user_id, org_id=tenant.org_id, github_user_id=1, github_login="person"
+        )
+    )
+    db.add(
+        GitHubLinkAttempt(
+            org_id=tenant.org_id,
+            user_id=tenant.user_id,
+            session_hash=secrets.token_hex(32),
+            state_hash=secrets.token_hex(32),
+            expires_at=now,
+        )
+    )
 
 
 async def _seed_chat(db: AsyncSession, tenant: Tenant, now: datetime) -> None:

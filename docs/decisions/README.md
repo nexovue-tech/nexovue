@@ -56,6 +56,9 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-083 — A service's code location is its own row, for the organization with a project's override](ADR-083-a-services-code-location-is-its-own-row-with-a-projects-override.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
 - [ADR-084 — Source consent is per repository and folder, and worked out at each use](ADR-084-source-consent-is-per-repository-and-folder-worked-out-at-each-use.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
 - [ADR-091 — The AI account deletes a sent pack only through a function, never a table grant](ADR-091-the-ai-account-deletes-a-sent-pack-only-through-a-function.md) — with F5 Step 4, 2026-11-21. Refines the F5 design's grants
+- [ADR-094 — A suggestion's stored code is taken back at every end, through one list](ADR-094-stored-code-is-taken-back-at-every-end-through-one-list.md) — with F5 Step 5, 2026-11-21. Adds a deleted project and a removed member to BR9's ends
+- [ADR-095 — Backups hold no pack, patch or link code, and a restore takes code back again](ADR-095-backups-hold-no-pack-patch-or-link-code-and-a-restore-takes-code-back.md) — with F5 Step 5, 2026-11-21
+- [ADR-096 — A patch is rebuilt by the person's own check run, and a refusal on the same inputs alerts](ADR-096-a-patch-is-rebuilt-by-the-persons-own-check-and-a-refusal-on-the-same-inputs-alerts.md) — with F5 Step 5, 2026-11-21. Settles F5 open decision 52
 - [ADR-088 — A case note is chat's knowledge by copy, gone with its note, inert, and ranked above nexovue's own lines](ADR-088-a-note-is-chat-knowledge-by-copy-and-ranks-above-composed-lines.md) — with F4 Step 7, 2026-11-21. Extends ADR-067 to F22's notes
 
 ## Earlier decisions, 0001–0112

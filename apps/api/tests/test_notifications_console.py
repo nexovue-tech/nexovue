@@ -202,6 +202,11 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
         Message.FIX_FILES_READY: {"link": "https://app.nexovue.com/findings/1"},
         Message.FIX_SUGGESTION_READY: {"link": "https://app.nexovue.com/findings/1"},
         Message.FIX_SUGGESTION_ENDED: {"link": "https://app.nexovue.com/findings/1"},
+        # F5 AC59: each owner told an agreement to send code ended, in fixed words.
+        Message.FIX_CONSENT_ENDED: {
+            "changed": "the AI provider's key and the AI model",
+            "link": "https://app.nexovue.com/settings/ai",
+        },
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 

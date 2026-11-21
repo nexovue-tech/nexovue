@@ -40,9 +40,9 @@ def _words(frozen: str) -> tuple[str, ...]:
 @pytest.mark.parametrize(
     ("frozen", "shared"),
     [
-        ("_FIX_REASONS", records.FIX_REASONS),
+        ("_FIX_REASONS", records.STEP_4_FIX_REASONS),
         ("_RETRY_CODES", records.RETRY_CODES),
-        ("_CHECK_REASONS", records.FIX_CHECK_REASONS),
+        ("_CHECK_REASONS", records.STEP_4_FIX_CHECK_REASONS),
     ],
 )
 def test_0081_froze_exactly_the_shared_words(frozen: str, shared: tuple[str, ...]) -> None:
