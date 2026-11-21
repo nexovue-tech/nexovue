@@ -10,9 +10,9 @@ Held:
 - **AC15b, a table-by-table row diff.** Every Postgres table is hashed before and after;
   only `assistant_steps`, the question's own `assistant_messages` row (named columns), the
   read record, the count tables, `ai_runs` and `ai_usage_monthly` may change. Anything else
-  fails. ClickHouse's row counts must not change. The running stack writes its demo's rows
-  meanwhile, so a table with an organization is read for this test's two, and three of the
-  stack's own clocks are left out (`STACK_CLOCKS`).
+  fails. ClickHouse's row counts must not change. The running stack and the other test files
+  write their own organizations' rows meanwhile, so a table that reaches an organization is
+  read for this test's two, and four of the stack's own clocks are left out (`STACK_CLOCKS`).
 - **AC9.** Another organization's finding, project and service never reach the provider.
 
 The rows are committed, since the API and the worker each use their own connections; each
@@ -73,10 +73,19 @@ ALLOWED_TABLES: Final = frozenset(
         "ai_usage_monthly",
     }
 )
-# Bookkeeping with no organization that the running stack's beat and workers write on their
-# own clock (measured on the dev stack, 2026-11-21); no tenant's data is in them.
+# Bookkeeping that the running stack's beat and workers write on their own clock (measured on
+# the dev stack, 2026-11-21); no tenant's data is in them. The first three have no
+# organization. `detection_project_runs` is detection's clock for each project it works on,
+# which a project with an open finding is (D24, D34): the stack's sweep and project job write
+# this test's every minute, with no question asked. The loop's role has no grant on it, and
+# no API route writes it.
 STACK_CLOCKS: Final = frozenset(
-    {"alert_evaluation_status", "detection_sweep", "usage_ingest_offsets"}
+    {
+        "alert_evaluation_status",
+        "detection_sweep",
+        "usage_ingest_offsets",
+        "detection_project_runs",
+    }
 )
 MESSAGE_COLUMNS_WRITTEN: Final = frozenset(
     {
@@ -137,20 +146,32 @@ async def _finding(install: AsyncEngine, tenant: Any, service_name: str) -> None
         )
 
 
+# How a table's rows reach an organization, for the snapshot: its own `org_id`, the
+# organization itself, or the user, project or API token a row belongs to.
+_OWN_ROWS: Final = (
+    ("org_id", "t.org_id = ANY(:organizations)"),
+    ("user_id", "t.user_id IN (SELECT id FROM users WHERE org_id = ANY(:organizations))"),
+    ("project_id", "t.project_id IN (SELECT id FROM projects WHERE org_id = ANY(:organizations))"),
+    ("token_id", "t.token_id IN (SELECT id FROM api_tokens WHERE org_id = ANY(:organizations))"),
+)
+
+
 async def _snapshot(install: AsyncEngine, organizations: list[uuid.UUID]) -> dict[str, str]:
-    """Every table's contents as one hash, so any write anywhere shows. The stack runs beside
-    this test and writes other organizations' rows all the time (its demo's checks, detection,
-    usage, jobs), so a table with an organization is read for this test's two only, where any
-    write the question caused, through its own ticket or another tenant's ids, would land."""
+    """Every table's contents as one hash, so any write anywhere shows. The stack and the other
+    test files run beside this test and write other organizations' rows all the time (their
+    tenants, the demo's checks, detection, usage, jobs), so a table that reaches an organization
+    is read for this test's two only, where any write the question caused, through its own
+    ticket or another tenant's ids, would land. `organizations` itself has no `org_id`: it is
+    read by `id`, or another file's tenant made or deleted meanwhile would count as a write."""
     async with install.connect() as db:
-        tenanted = set(
-            await db.scalars(
-                text(
-                    "SELECT table_name FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND column_name = 'org_id'"
-                )
+        columns: dict[str, set[str]] = {}
+        for row in await db.execute(
+            text(
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public'"
             )
-        )
+        ):
+            columns.setdefault(row.table_name, set()).add(row.column_name)
         tables = [
             row.tablename
             for row in await db.execute(
@@ -160,17 +181,24 @@ async def _snapshot(install: AsyncEngine, organizations: list[uuid.UUID]) -> dic
         ]
         found: dict[str, str] = {}
         for table in tables:
-            rows = "t.org_id = ANY(:organizations)" if table in tenanted else "TRUE"
             found[table] = str(
                 await db.scalar(
                     text(
                         f"SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) "
-                        f"FROM {table} AS t WHERE {rows}"
+                        f"FROM {table} AS t WHERE {_own_rows(table, columns[table])}"
                     ),
                     {"organizations": organizations},
                 )
             )
     return found
+
+
+def _own_rows(table: str, columns: set[str]) -> str:
+    """The condition that keeps `table`'s rows of this test's organizations; every row of a
+    table that reaches no organization."""
+    if table == "organizations":
+        return "t.id = ANY(:organizations)"
+    return next((rows for column, rows in _OWN_ROWS if column in columns), "TRUE")
 
 
 def _clickhouse_rows(organizations: list[uuid.UUID]) -> dict[str, int]:
