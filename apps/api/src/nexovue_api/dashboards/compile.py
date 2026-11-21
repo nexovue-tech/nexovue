@@ -17,6 +17,11 @@ named `checkout` beside them is a second (spec, *The templates*). At read time
 `check_id` in the displayed project before any scan, and the scan's key carries that
 id, so one name on two projects can never share a read.
 
+**A reliability target by name is a pre-read alone.** A `slo_budget` panel compiles to no
+key: F19's reader answers from Postgres before any scan (`slos.service.budgets_named`),
+so thirty of them cost no read and change no worst case (spec: "0: a Postgres read
+only"). `dashboardpanels/service.py` decides its state from that pre-read.
+
 **A chosen metric series counts as two** (design, *`series_changed`*). Its own read, and,
 only when that comes back empty, one further charged read asking whether the metric still
 reports under other attributes. The second is the panel's `fallback`: it counts in the
@@ -52,6 +57,7 @@ from nexovue_api.dashboards.definition import (
     ServiceNumberPanel,
     ServicesTablePanel,
     ServiceTrendPanel,
+    SloBudgetPanel,
     StatementTrendPanel,
     StoredDefinition,
     TopNodesTrendPanel,
@@ -147,7 +153,8 @@ class ScanKey:
 class CompiledPanel:
     panel_id: str
     kind: str
-    # None for a panel with no reader: a note, open findings, or an unknown kind.
+    # None for a panel with no reader: a note, open findings, a reliability target (read
+    # from Postgres before any scan), or an unknown kind.
     scan: ScanKey | None
     # A compared number's read of the previous window.
     compare: ScanKey | None = None
@@ -246,6 +253,8 @@ def scan_of(panel: AnyPanel) -> ScanKey | None:
                 series_hash=settings.series,
                 aggregation=settings.aggregation,
             )
+        case SloBudgetPanel():
+            return None  # read from Postgres before any scan, never scanned
     return None
 
 

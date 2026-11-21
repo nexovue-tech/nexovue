@@ -9,7 +9,9 @@ their paths here.
 T3.6 adds the target's tabs and the *Last month* view by name, and "error budget",
 which only the *Definition* tab may say (AC13). T4.9 adds the `slo_burn` messages'
 wording, `alerts/slo_words.py`. T5.7 adds the finding page's linked burn, the service
-page's targets line and the snooze and mute controls.
+page's targets line and the snooze and mute controls. Step 5b (with F20's T10.2d) adds the
+words the target page, a finding and a dashboard share (`shared/slo/`), and a dashboard's
+reliability-target panel.
 """
 
 from __future__ import annotations
@@ -31,6 +33,10 @@ SCANNED: Final = {
     "apps/web/src/features/findings": ("finding-words.ts",),
     "apps/web/src/features/servicedetail": ("slo-line.ts",),
     "apps/web/src/shared/detection": ("quiet.ts",),
+    # Step 5b, F20 T10.2d: the words the target page, a finding and a dashboard share, and a
+    # dashboard's reliability-target panel.
+    "apps/web/src/shared/slo": ("*.ts", "*.tsx"),
+    "apps/web/src/features/dashboards": ("slo-budget-words.ts", "SloBudgetPanel.tsx"),
 }
 # Files each step names, so a renamed tab cannot leave the scan by being absent.
 NAMED: Final = (
@@ -43,6 +49,10 @@ NAMED: Final = (
     "apps/web/src/features/findings/finding-words.ts",
     "apps/web/src/features/servicedetail/slo-line.ts",
     "apps/web/src/shared/detection/quiet.ts",
+    "apps/web/src/shared/slo/words.ts",
+    "apps/web/src/shared/slo/SloBadge.tsx",
+    "apps/web/src/features/dashboards/slo-budget-words.ts",
+    "apps/web/src/features/dashboards/SloBudgetPanel.tsx",
 )
 # A phrase one file alone may say, beyond `FORBIDDEN`'s allow-lists (AC13: "error
 # budget" only on the Definition tab).
@@ -124,6 +134,13 @@ def test_no_forbidden_word_is_said(path: Path) -> None:
 @pytest.mark.parametrize("named", NAMED)
 def test_every_named_screen_file_exists_to_be_scanned(named: str) -> None:
     assert (REPOSITORY / named).is_file(), f"{named} is gone: this test must follow it"
+
+
+@pytest.mark.parametrize("named", NAMED)
+def test_every_named_screen_file_is_one_the_scan_reads(named: str) -> None:
+    """A file can exist and still fall outside `SCANNED`'s patterns, as a `.tsx` moved
+    into a folder scanned for `.ts` alone would."""
+    assert REPOSITORY / named in _files(), f"{named} exists but the scan does not read it"
 
 
 def test_error_budget_is_said_on_the_definition_tab_and_allowed_nowhere_else() -> None:

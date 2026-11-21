@@ -252,6 +252,15 @@ describe("what a definition costs at worst (FR7)", () => {
     // As `compile.py` counts them: two rankings, two node metrics.
     expect(worstCaseReads(definition)).toBe(4);
   });
+
+  it("counts no read for a reliability target, which Postgres answers first (T10.2b)", () => {
+    const targets = ["checkout availability", "api latency", "login check"].map((name, index) =>
+      panel(`p_slo_${index}`, { kind: "slo_budget", height: "small", settings: { slo: name } }),
+    );
+    const definition = documentWith(RATE, ...targets).definition;
+    // As `compile.py` counts them: checkout's one read, and none for the targets.
+    expect(worstCaseReads(definition)).toBe(1);
+  });
 });
 
 describe("what the live region says (AC37)", () => {

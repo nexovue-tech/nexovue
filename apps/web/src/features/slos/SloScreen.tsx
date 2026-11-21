@@ -7,10 +7,10 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Tabs } from "@/shared/components/Tabs";
 import { useCan } from "@/shared/identity";
+import { SloBadge } from "@/shared/slo/SloBadge";
 
 import type { SloView } from "./api";
 import { useChangeSlo, useDeleteSlo, useSlo } from "./api";
-import { SloBadge } from "./SloBadge";
 import { SloBurnChart } from "./SloBurnChart";
 import { SloDefinitionTab } from "./SloDefinitionTab";
 import { SloHistoryTab } from "./SloHistoryTab";

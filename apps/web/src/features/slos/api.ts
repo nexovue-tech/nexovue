@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { API_BASE_PATH, apiClient } from "@/shared/api-client";
+import type { SloState } from "@/shared/slo/words";
 
 import { REFRESH_MS } from "./slo-words";
 
@@ -9,18 +10,7 @@ import { REFRESH_MS } from "./slo-words";
  * ClickHouse is down (AC40). Shapes are the API's `slos/schemas.py`.
  */
 
-export type SloState =
-  | "disabled"
-  | "not_up_to_date"
-  | "source_gone"
-  | "running_out"
-  | "counting"
-  | "not_measured"
-  | "no_recent_requests"
-  | "building_history"
-  | "nothing_left"
-  | "too_little_traffic"
-  | "on_track";
+export type { SloState };
 
 export type SloVariant =
   | "plain"

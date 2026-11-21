@@ -173,3 +173,14 @@ def test_chat_s_quotes_read_on_the_telemetry_tier_and_its_poll_on_the_default() 
     assert tier_for_path(f"{API_PREFIX}/assistant-quotes/{message}") is TELEMETRY_TIER
     poll = f"{API_PREFIX}/assistant/conversations/{message}/messages/{message}"
     assert tier_for_path(poll) is DEFAULT_TIER
+
+
+def test_a_targets_budget_reads_on_the_default_tier_and_its_burn_line_on_the_telemetry() -> None:
+    """F19 D59, Step 5b: `/slos/{id}/budget` reads Postgres alone, for the list's reason: on
+    the telemetry tier a dashboard's reliability-target panels would wait behind ClickHouse
+    reads for a cap they never use. The burn line, which reads ClickHouse, stays there."""
+    from nexovue_api.ratelimit.policy import DEFAULT_TIER
+
+    target = "0195f000-0000-7000-8000-000000000003"
+    assert tier_for_path(f"{API_PREFIX}/slos/{target}/budget") is DEFAULT_TIER
+    assert tier_for_path(f"{API_PREFIX}/slo-readings/{target}/burn") is TELEMETRY_TIER

@@ -483,7 +483,7 @@ web /slos, /slos/new, /slos/$sloId, /slos/$sloId/edit
 | `PATCH /slos/{id}` | `CONFIGURE_SLOS` | Postgres |
 | `DELETE /slos/{id}` | `CONFIGURE_SLOS` | Postgres. A soft delete |
 | `POST /slos/{id}/restore` | `CONFIGURE_SLOS` | Postgres, and queues a recount |
-| `GET /slos/{id}/budget?window=` | Any reader | **Postgres only.** Status. The `slo_budget` panel's source |
+| `GET /slos/{id}/budget?window=` | Any reader | **Postgres only.** Status. The `slo_budget` panel's source. *Built 2026-11-21 (plan Step 5b) with no `window`: the target's own window, the recommendation of open decision 4 in `status.md`* |
 | `GET /slo-readings/{id}/burn` | Any reader | ClickHouse: the rate over the last 24 hours, for the chart. Telemetry tier |
 | `GET /slos/{id}/months` | Any reader | Postgres |
 | `GET /slos/months?project_id=&month=` | Any reader | Postgres. *Last month*, in one read rather than up to 200 |

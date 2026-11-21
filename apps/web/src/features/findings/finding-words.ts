@@ -1,3 +1,5 @@
+import { allowedNoun, lastsFor } from "@/shared/slo/words";
+
 import type { CaseResolution, ClosedReason, LinkedBurn } from "./api";
 
 /**
@@ -60,34 +62,23 @@ export const FLAPPING_JOINER = "This service is flapping";
 // F19 (design, *Elsewhere*; AC85): a reliability target's burn linked to this finding.
 // Each kind keeps its own noun, so a latency target never says "failures" and a check
 // never says "requests" (AC89). AC13's scan reads this file.
-const ALLOWED_NOUN: Record<string, string> = {
-  service_latency: "allowed slow requests",
-  check_availability: "allowed failed runs",
-};
 const STILL_ALLOWED: Record<string, string> = {
   service_latency: "Slow requests still allowed",
   check_availability: "Failed runs still allowed",
 };
-const HOURS_IN_TWO_DAYS = 48;
-
-function lasts(hours: number): string {
-  if (hours <= 0) return "Nothing is left.";
-  if (hours < 1) return "What is left lasts under an hour.";
-  if (hours < HOURS_IN_TWO_DAYS) return `What is left lasts about ${Math.floor(hours)} hours.`;
-  return `What is left lasts about ${Math.floor(hours / 24)} days.`;
-}
 
 /**
  * The burn beside a finding, with its rate and what is left while it is open (AC85).
  * An ended burn's figures are those of its last minute, so they are not shown.
  */
 export function linkedBurnLine(burn: LinkedBurn, ended: boolean): string {
-  const noun = ALLOWED_NOUN[burn.kind ?? ""] ?? "allowed failures";
+  const noun = allowedNoun(burn.kind ?? "");
   if (ended) return `Was using ${noun} too fast: ${burn.label}.`;
   const said = [`Also using ${noun} too fast: ${burn.label}.`];
   if (burn.rate !== null) said.push(`${Math.floor(burn.rate)} times faster than allowed.`);
-  if (burn.hours_left !== null) {
-    said.push(lasts(burn.hours_left));
+  const lasts = lastsFor(burn.hours_left);
+  if (lasts !== null) {
+    said.push(lasts);
   } else if (burn.left !== null && burn.allowed !== null) {
     const words = STILL_ALLOWED[burn.kind ?? ""] ?? "Failures still allowed";
     said.push(`${words}: ${Math.max(burn.left, 0)} of ${burn.allowed}.`);

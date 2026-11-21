@@ -11,7 +11,8 @@ links, hosts only), AC141 (`default_range`'s list held to the console's).
 Step 2 knew three kinds: `project_trend`, `service_trend` and `note` (plan, Step 2).
 Step 4 adds `top_services_trend` and `node_trend` (T4.1, T4.2). Step 5 adds every other
 kind but `metric_series` and `slo_budget` (T5.1a to T5.2), with the measures, the check
-signals and the table rows of the spec's table, and the install's own limits (T5.6c).
+signals and the table rows of the spec's table, and the install's own limits (T5.6c). Step
+10 adds `slo_budget`: one target by name, and no scan (T10.2a, T10.2b).
 """
 
 from __future__ import annotations
@@ -797,8 +798,8 @@ def test_every_kind_naming_a_service_lists_it_for_showing_this_service() -> None
     assert compiled.uses_picker is True
 
 
-def test_every_kind_in_the_spec_s_table_is_known_but_slo_budget() -> None:
-    """FR6's list, less `slo_budget` (plan Step 10)."""
+def test_every_kind_in_the_spec_s_table_is_known() -> None:
+    """FR6's list, whole since `slo_budget` (plan Step 10, T10.2a)."""
     known = {panel.model_fields["kind"].annotation.__args__[0] for panel in _known_panels()}
     assert known == {
         "project_trend",
@@ -808,6 +809,7 @@ def test_every_kind_in_the_spec_s_table_is_known_but_slo_budget() -> None:
         "note",
         *STEP_5,
         "metric_series",
+        "slo_budget",
     }
 
 
@@ -1017,3 +1019,56 @@ def test_only_service_health_offers_the_picker() -> None:
         templates.SERVICE_HEALTH: True,
         templates.INFRASTRUCTURE: False,
     }
+
+
+# ------------------------------------------------- Step 10, T10.2a and T10.2b
+
+
+def _target(name: Any = "checkout availability", **changes: Any) -> dict[str, Any]:
+    return _panel("p_slo", kind="slo_budget", settings={"slo": name}, **changes)
+
+
+@pytest.mark.parametrize("height", HEIGHTS)
+def test_t10_2a_a_reliability_target_panel_names_its_target_at_any_height(height: str) -> None:
+    parsed = _accepted(_document(panels=[_target(height=height)]))
+
+    [panel] = parsed.definition.panels
+    assert panel.kind == "slo_budget"
+    assert panel.settings.model_dump() == {"slo": "checkout availability"}
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {},
+        {"slo": ""},
+        {"slo": "x" * 121},
+        {"slo": "with\x00nul"},
+        {"slo": {"picker": True}},
+        {"slo": "checkout availability", "service": "checkout"},
+        {"slo_id": "0195f000-0000-7000-8000-000000000003"},
+    ],
+)
+def test_t10_2a_a_reliability_target_setting_outside_the_table_is_refused(
+    settings: dict[str, Any],
+) -> None:
+    """One name of F19's 1 to 120 characters, bound and never spliced; no id, so a file
+    holds none (FR42); no service and no picker, since a target names its own source."""
+    _refused(_document(panels=[_panel("p_slo", kind="slo_budget", settings=settings)]))
+
+
+def test_t10_2a_the_longest_name_f19_allows_is_accepted() -> None:
+    _accepted(_document(panels=[_target("x" * 120)]))
+
+
+def test_t10_2b_reliability_target_panels_are_a_pre_read_and_cost_no_scan() -> None:
+    """Spec: "0: a Postgres read only". Thirty of them change no worst case; the service
+    chart beside them keeps its one read."""
+    panels = [_target(f"target {number}", id=f"p_slo_{number}") for number in range(29)]
+    compiled = compiling.compile_for_save(
+        _accepted(_document(panels=[*panels, _panel()])).definition
+    )
+
+    assert compiled.worst_case_scans == 1
+    assert all(panel.scan is None for panel in compiled.panels if panel.kind == "slo_budget")
+    assert compiled.service_names == ["checkout"]

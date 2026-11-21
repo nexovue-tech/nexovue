@@ -3,14 +3,15 @@ import type { OkResult } from "./kept-readings";
 import { NumberPanel } from "./NumberPanel";
 import { PanelWords } from "./PanelFrame";
 import { combinedWords, mixedUnitsWords, TABLE_KINDS, TIME_KINDS } from "./panel-words";
+import { SloBudgetPanel } from "./SloBudgetPanel";
 import { TablePanel } from "./TablePanel";
 import { TimePanel } from "./TimePanel";
 import type { Marks } from "./time-lines";
 
 /**
- * One panel's reading, drawn by its kind: a chart, a number or a table (F20, T5.6a). The
- * read view, the builder and the side sheet's preview all draw through this, so a draft
- * looks as the saved dashboard will (FR49).
+ * One panel's reading, drawn by its kind: a chart, a number, a table, or a reliability
+ * target's standing (F20, T5.6a, T10.2d). The read view, the builder and the side sheet's
+ * preview all draw through this, so a draft looks as the saved dashboard will (FR49).
  */
 export function PanelReading({
   panel,
@@ -21,6 +22,7 @@ export function PanelReading({
   onDrag,
   marks,
   asTable = false,
+  now = Date.now(),
 }: {
   panel: StoredPanel;
   reading: OkResult;
@@ -30,6 +32,8 @@ export function PanelReading({
   onDrag?: (fromSeconds: number, toSeconds: number) => void;
   marks?: Marks;
   asTable?: boolean;
+  /** The reader's clock, for a reliability target's "as of" and staleness. */
+  now?: number;
 }) {
   // Two units cannot be added into one line, so none is drawn (AC51).
   const mixed = mixedUnitsWords(panel, reading.units);
@@ -51,6 +55,7 @@ export function PanelReading({
     );
   }
   if (reading.number) return <NumberPanel panel={panel} number={reading.number} />;
+  if (reading.budget) return <SloBudgetPanel budget={reading.budget} now={now} />;
   if (TABLE_KINDS.has(panel.kind) && reading.rows) {
     return <TablePanel kind={panel.kind} rows={reading.rows} caption={description} zone={zone} />;
   }

@@ -18,8 +18,8 @@ is refused there, because Postgres cannot store it.
 
 Step 2 knew three kinds; Step 4 added `top_services_trend` and `node_trend` (plan, T4.1,
 T4.2); Step 5 added the rest of the spec's list but `metric_series` and `slo_budget` (FR6;
-plan T5.1a to T5.2); Step 8 adds `metric_series` (T8.2). Every value marked as a cap is the
-spec's *guess* until plan T5.7 measures it.
+plan T5.1a to T5.2); Step 8 adds `metric_series` (T8.2), and Step 10 `slo_budget` (T10.2a).
+Every value marked as a cap is the spec's *guess* until plan T5.7 measures it.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ import unicodedata
 from typing import Annotated, Any, Final, Literal
 from urllib.parse import parse_qsl, urlsplit
 
+from nexovue_platform import slo
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -272,6 +273,23 @@ class CheckTrendSettings(_Strict):
     signal: CheckSignal
 
 
+# A reliability target's name (F19), no longer than F19 lets a name be: a longer one could
+# never match, so it is refused at save rather than read as `not_in_project` forever.
+SloName = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=slo.NAME_LONGEST),
+    AfterValidator(_refuse_nul),
+]
+
+
+class SloBudgetSettings(_Strict):
+    """A reliability target by its name, resolved in the displayed project at read time
+    (D5), as a check is, so one dashboard works on staging and production and a file holds
+    no id (FR42). No service and no picker: a target names its own source."""
+
+    slo: SloName
+
+
 # A TCP port, as the database screen keys a server.
 Port = Annotated[int, Field(ge=0, le=65_535)]
 
@@ -497,6 +515,14 @@ class MetricSeriesPanel(_TimePanel):
     settings: MetricSeriesSettings
 
 
+class SloBudgetPanel(_Panel):
+    """How one reliability target stands, from F19's Postgres-only reader (Step 10, T10.2):
+    a pre-read and no scan, so it reads while ClickHouse cannot. Not a chart, so any height."""
+
+    kind: Literal["slo_budget"]
+    settings: SloBudgetSettings
+
+
 KnownPanel = (
     ProjectTrendPanel
     | ServiceTrendPanel
@@ -517,6 +543,7 @@ KnownPanel = (
     | WebVitalsTablePanel
     | NotePanel
     | MetricSeriesPanel
+    | SloBudgetPanel
 )
 Panel = Annotated[KnownPanel, Field(discriminator="kind")]
 TIME_KINDS: Final = frozenset(

@@ -19,10 +19,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Final, cast
 
 import pytest
+from nexovue_platform import slo
 from nexovue_platform.releases import EMPTY_DEPLOY_HISTORY
 from sqlalchemy.exc import OperationalError
 
@@ -43,6 +45,8 @@ from nexovue_api.ratelimit.charge import Refused
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.releases import service as releases
 from nexovue_api.services import queries as service_queries
+from nexovue_api.slos import service as slos
+from nexovue_api.slos.schemas import SloBudget, SloFigures
 from nexovue_api.wire import to_iso_millis
 
 NOW: Final = datetime(2026, 11, 8, 10, 0, 30, tzinfo=UTC)
@@ -1615,3 +1619,135 @@ async def test_a_compared_number_reading_over_limit_starts_no_scan_either(
 
     assert answer["panels"]["p_number"] == {"state": "over_limit", "kind": "project_number"}
     assert (store.statements, charge.claims) == ([], 0)
+
+
+# --------------------------------------------------------------- Step 10, T10.2c
+
+
+def _budget(name: str) -> SloBudget:
+    """A reliability target as F19's reader answers it (`slos.schemas.SloBudget`)."""
+    return SloBudget(
+        id=uuid.uuid4(),
+        project_id=PROJECT,
+        name=name,
+        label="checkout availability, 99.9% over 28 days",
+        kind="service_availability",
+        allowance_words="Failures still allowed",
+        objective_percent=Decimal("99.9"),
+        window_days=28,
+        state=slo.State.ON_TRACK,
+        variant=slo.Variant.PLAIN,
+        qualifiers=[],
+        attention=False,
+        severity=None,
+        hours_left=None,
+        figures=SloFigures(
+            good=2_799_720,
+            total=2_800_000,
+            failures=280,
+            allowed=2_800,
+            left=2_520,
+            missed_by=0,
+            figure_percent=Decimal("99.99"),
+            coverage=1.0,
+            lost_minutes=0,
+            excluded_minutes=0,
+            days_held=28,
+        ),
+        burn=None,
+        evaluated_minute=NOW.replace(second=0) - timedelta(minutes=1),
+        created_at=NOW - timedelta(days=60),
+        zone="UTC",
+    )
+
+
+class _Targets:
+    """F19's by-name reader, answering the project's live targets and recording each ask."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *live: str) -> None:
+        self.live = {name: _budget(name) for name in live}
+        self.asked: list[dict[str, Any]] = []
+
+        async def budgets_named(_: Any, **asked: Any) -> dict[str, SloBudget]:
+            self.asked.append(asked)
+            return {name: self.live[name] for name in asked["names"] if name in self.live}
+
+        monkeypatch.setattr(slos, "budgets_named", budgets_named)
+
+
+def _target_panel(panel_id: str, name: str) -> dict[str, Any]:
+    return _panel(panel_id, kind="slo_budget", slo=name)
+
+
+async def test_t10_2c_a_live_target_reads_ok_with_its_budget_and_no_scan_or_charge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    targets = _Targets(monkeypatch, "checkout availability")
+    batch = _Batch(monkeypatch, _definition(_target_panel("p_slo", "checkout availability")))
+    repository, charge = _Repository(), _Charge()
+
+    answer = await batch.read(repository, charge=charge)
+
+    panel = answer["panels"]["p_slo"]
+    assert panel["state"] == "ok" and panel["kind"] == "slo_budget"
+    assert panel["budget"] == targets.live["checkout availability"].model_dump(mode="json")
+    assert panel["read_at"] == to_iso_millis(NOW)
+    assert (repository.statements, charge.claims) == ([], 0)
+    [asked] = targets.asked
+    assert (asked["reader"].org_id, asked["project_id"]) == (ORG, PROJECT)
+    assert asked["names"] == ["checkout availability"] and asked["now"] == NOW
+
+
+async def test_t10_2c_a_name_the_project_holds_no_live_target_by_reads_not_in_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical whether it is another project's, deleted, renamed or nowhere (AC22): F19's
+    reader answers only this project's live names, so all of them are simply absent."""
+    _Targets(monkeypatch, "checkout availability")
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _target_panel("p_known", "checkout availability"),
+            _target_panel("p_gone", "old name"),
+        ),
+    )
+
+    answer = await batch.read(_Repository())
+
+    assert answer["panels"]["p_gone"] == {"state": "not_in_project", "kind": "slo_budget"}
+    assert answer["panels"]["p_known"]["state"] == "ok"
+
+
+async def test_t10_2c_a_target_reads_while_the_operator_has_paused_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It scans nothing, so the pause that stops ClickHouse reads (FR69) does not touch it."""
+    _Targets(monkeypatch, "checkout availability")
+    batch = _Batch(
+        monkeypatch,
+        _definition(
+            _target_panel("p_slo", "checkout availability"),
+            _panel("p_chart", kind="project_trend", signal="rate"),
+        ),
+        limits=DashboardLimits(scans_enabled=False),
+    )
+
+    answer = await batch.read(_Repository())
+
+    assert answer["panels"]["p_slo"]["state"] == "ok"
+    assert answer["panels"]["p_chart"]["state"] == "paused_by_operator"
+
+
+async def test_t10_2c_a_draft_reads_its_target_and_a_page_with_none_asks_for_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    targets = _Targets(monkeypatch, "checkout availability")
+    batch = _Batch(monkeypatch, _definition(_panel("p_1", service="checkout", signal="rate")))
+
+    await batch.read(_Repository())
+    drafted = await batch.preview(
+        _Repository(), _definition(_target_panel("p_slo", "checkout availability"))
+    )
+
+    assert drafted["panels"]["p_slo"]["state"] == "ok"
+    assert [asked["names"] for asked in targets.asked] == [[], ["checkout availability"]]

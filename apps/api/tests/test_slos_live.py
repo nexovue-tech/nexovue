@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from test_findings_cases_live import Team, _call, _team, db  # noqa: F401  shared fixtures
 
 from nexovue_api.audit import service as audit
+from nexovue_api.auth.dependencies import Reader
 from nexovue_api.data.postgres.models import (
     AlertRule,
     AuditLogEntry,
@@ -53,6 +54,9 @@ from nexovue_api.data.postgres.models import (
     SloTarget,
     SloTargetChange,
 )
+from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.slos import service as slo_service
+from nexovue_api.slos.schemas import SloBudget
 
 PERSON_FIELDS = ("created_by", "deleted_by", "removed_by", "actor_user_id")
 
@@ -1397,3 +1401,185 @@ async def test_ac85_a_finding_s_linked_burn_carries_its_label_and_current_figure
         "allowed": 672,
         "left": 312,
     }
+
+
+# ================================================= Step 5b: the budget others read
+
+
+BUDGET_NOW = datetime(2026, 11, 21, 10, 4, 30, tzinfo=UTC)
+
+
+async def _judged_and_burning(db: AsyncSession, team: Team, target_id: str) -> None:  # noqa: F811
+    """A target counted over its whole window and judged a minute before `BUDGET_NOW`,
+    running out: what the job stores, so the view and the budget have something to say."""
+    today = BUDGET_NOW.date()
+    await _counted(
+        db,
+        team,
+        target_id,
+        {today - timedelta(days=offset): (99_990, 100_000) for offset in range(28)},
+    )
+    evaluated = BUDGET_NOW.replace(second=0) - timedelta(minutes=1)
+    db.add(
+        SloStatus(
+            slo_id=uuid.UUID(target_id),
+            org_id=team.org_id,
+            project_id=team.project_id,
+            evaluated_minute=evaluated,
+            last_event_minute=evaluated,
+            burning_since=evaluated - timedelta(minutes=20),
+            last_held_minute=evaluated,
+            tiers={
+                "chart_tier": "fast",
+                "rate": 14.7,
+                "hours_left": 50.0,
+                "by_tier": {"fast": {"can_judge": True, "holds": True}},
+                "burn": {"severity": "critical", "rate": 14.7, "hours_left": 50.0},
+            },
+        )
+    )
+    await db.flush()
+
+
+def _token(team: Team) -> Reader:
+    return Reader(org_id=team.org_id, project_scope=team.project_id, token_id=uuid.uuid4())
+
+
+async def test_step5b_a_budget_is_the_target_s_own_view_without_who_is_told(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    target = await _create(db, acme)
+    await _judged_and_burning(db, acme, target["id"])
+    target_id = uuid.UUID(target["id"])
+
+    view = await slo_service.read_target(
+        db, reader=_token(acme), target_id=target_id, now=BUDGET_NOW
+    )
+    budget = await slo_service.budget(db, reader=_token(acme), target_id=target_id, now=BUDGET_NOW)
+
+    assert budget.model_dump() == view.model_dump(include=set(SloBudget.model_fields))
+    assert budget.state == slo.State.RUNNING_OUT
+    assert budget.burn is not None and budget.burn.rate == 14.7
+    assert (budget.figures.allowed, budget.figures.failures) == (2_800, 280)
+    assert budget.evaluated_minute == BUDGET_NOW.replace(second=0) - timedelta(minutes=1)
+    assert "told" not in budget.model_dump() and "description" not in budget.model_dump()
+
+
+async def test_step5b_by_name_finds_the_live_target_in_the_project_and_nothing_else(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    """A name finds this project's live target alone: never another project's, another
+    organization's, a deleted one, or a renamed one under its old name."""
+    kept = await _create(db, acme, name="kept")
+    renamed = await _create(db, acme, name="old name", objective_percent="99.5")
+    deleted = await _create(db, acme, name="deleted", objective_percent="99")
+    await _call(db, acme, acme.member, "PATCH", f"/slos/{renamed['id']}", {"name": "new name"})
+    await _call(db, acme, acme.member, "DELETE", f"/slos/{deleted['id']}")
+    staging = await _call(
+        db, acme, acme.owner, "POST", "/projects", {"name": "staging", "slug": "staging"}
+    )
+    elsewhere = uuid.UUID(staging.json()["id"])
+    await _reported(db, acme, elsewhere)
+    in_staging = await _call(
+        db, acme, acme.member, "POST", f"/slos?project_id={elsewhere}", _body(name="staging only")
+    )
+    assert in_staging.status_code == 201, in_staging.text
+    await _create(db, globex, name="globex only")
+
+    found = await slo_service.budgets_named(
+        db,
+        reader=_token(acme),
+        project_id=acme.project_id,
+        names=["kept", "old name", "new name", "deleted", "staging only", "globex only"],
+        now=BUDGET_NOW,
+    )
+
+    assert {name: str(each.id) for name, each in found.items()} == {
+        "kept": kept["id"],
+        "new name": renamed["id"],
+    }
+    assert (
+        await slo_service.budgets_named(
+            db, reader=_token(acme), project_id=acme.project_id, names=[], now=BUDGET_NOW
+        )
+        == {}
+    )
+
+
+async def test_step5b_by_name_refuses_a_project_outside_the_reader_s_scope(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    """The project is proved the reader's before any name is read: a token of one project
+    asking about another of its organization (AC33), and another organization's (AC35)."""
+    staging = await _call(
+        db, acme, acme.owner, "POST", "/projects", {"name": "staging", "slug": "staging"}
+    )
+    elsewhere = uuid.UUID(staging.json()["id"])
+    await _reported(db, acme, elsewhere)
+    created = await _call(
+        db, acme, acme.member, "POST", f"/slos?project_id={elsewhere}", _body(name="staging only")
+    )
+    assert created.status_code == 201, created.text
+    await _create(db, globex, name="globex only")
+
+    for project_id, name in ((elsewhere, "staging only"), (globex.project_id, "globex only")):
+        with pytest.raises(NotFoundError):
+            await slo_service.budgets_named(
+                db, reader=_token(acme), project_id=project_id, names=[name], now=BUDGET_NOW
+            )
+
+
+async def test_step5b_the_budget_route_reads_for_a_token_and_names_no_person(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """AC33 and AC40 for `/budget`: a token reads it, it holds no person, and the
+    client's ClickHouse stub, which refuses every read, is never asked."""
+    target = await _create(db, acme)
+    await _judged_and_burning(db, acme, target["id"])
+
+    read = await _call(db, acme, None, "GET", f"/slos/{target['id']}/budget")
+    one = await _call(db, acme, None, "GET", f"/slos/{target['id']}")
+
+    assert read.status_code == 200, read.text
+    assert _holds_no_person(read.json())
+    budget = read.json()
+    assert budget["id"] == target["id"] and budget["name"] == "checkout availability"
+    assert budget["figures"] == one.json()["figures"]
+    assert budget["burn"] == one.json()["burn"]
+    assert "told" not in budget
+
+
+async def test_step5b_the_budget_route_answers_404_outside_the_reader_s_reach(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    """AC33: a token of one project, another project's target; AC35: another
+    organization's; FR31: a deleted target."""
+    staging = await _call(
+        db, acme, acme.owner, "POST", "/projects", {"name": "staging", "slug": "staging"}
+    )
+    elsewhere = uuid.UUID(staging.json()["id"])
+    await _reported(db, acme, elsewhere)
+    in_staging = await _call(
+        db, acme, acme.member, "POST", f"/slos?project_id={elsewhere}", _body()
+    )
+    theirs = await _create(db, globex)
+    gone = await _create(db, acme, name="gone")
+    await _call(db, acme, acme.member, "DELETE", f"/slos/{gone['id']}")
+
+    other_project = await _call(db, acme, None, "GET", f"/slos/{in_staging.json()['id']}/budget")
+    other_org = await _call(db, acme, acme.owner, "GET", f"/slos/{theirs['id']}/budget")
+    deleted = await _call(db, acme, acme.owner, "GET", f"/slos/{gone['id']}/budget")
+
+    assert (other_project.status_code, other_org.status_code, deleted.status_code) == (
+        404,
+        404,
+        404,
+    )

@@ -24,6 +24,7 @@ from nexovue_api.auth.policy import MayConfigureSlos
 from nexovue_api.deps import DbSession
 from nexovue_api.slos import exclusions, months, service
 from nexovue_api.slos.schemas import (
+    SloBudget,
     SloChange,
     SloCreate,
     SloExclusion,
@@ -95,6 +96,13 @@ async def months_csv(
 @router.get("/{slo_id}", summary="One reliability target and where it stands")
 async def get_slo(reader: CurrentReader, db: DbSession, slo_id: uuid.UUID) -> SloView:
     return await service.read_target(db, reader=reader, target_id=slo_id, now=datetime.now(UTC))
+
+
+@router.get(
+    "/{slo_id}/budget", summary="What is left of a target's allowance, and how fast it goes"
+)
+async def get_slo_budget(reader: CurrentReader, db: DbSession, slo_id: uuid.UUID) -> SloBudget:
+    return await service.budget(db, reader=reader, target_id=slo_id, now=datetime.now(UTC))
 
 
 @router.get("/{slo_id}/months", summary="A target's months, newest first, up to 13")

@@ -7,8 +7,9 @@ from the definition and the panel context, so they survive any ClickHouse failur
 `series_changed` and `too_many_series` belong to metric series (plan Step 8).
 
 **One `ok` shape for every kind**, since the state is the discriminator: a chart fills
-`series`, a number `number`, and a table `rows`, each row the model its own screen
-returns, so a table cell and the screen's cell are one row-to-model step (BR3).
+`series`, a number `number`, a table `rows`, and a reliability target `budget` (F19's own
+`SloBudget`), each row the model its own screen returns, so a table cell and the screen's
+cell are one row-to-model step (BR3).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from nexovue_api.metrics.schemas import MetricAttribute
 from nexovue_api.rum.schemas import WebVitalSummary
 from nexovue_api.servicemap.schemas import ServiceEdge
 from nexovue_api.services.schemas import EndpointHealth, ServiceHealth
+from nexovue_api.slos.schemas import SloBudget
 from nexovue_api.wire import IsoTimestamp
 
 
@@ -98,6 +100,8 @@ class OkPanel(BaseModel):
     # readings carried. More than one unit draws no line, since they cannot be added (AC51).
     series_combined: int | None = None
     units: list[str] | None = None
+    # A reliability target's standing, from F19's Postgres-only reader (T10.2c).
+    budget: SloBudget | None = None
 
 
 class EmptyPanel(BaseModel):
@@ -110,7 +114,8 @@ class EmptyPanel(BaseModel):
 
 
 class NotInProjectPanel(BaseModel):
-    """This project holds no record of the service, and the words claim only that (FR16)."""
+    """This project holds no record of the service, or no check or live reliability target
+    by the panel's name, and the words claim only that (FR16, AC22)."""
 
     state: Literal["not_in_project"] = "not_in_project"
     kind: str

@@ -3,7 +3,8 @@
 The sequence, and why each step is where it is:
 
 1. **Postgres first, all of it.** The dashboard, the project, each check a panel names
-   resolved by name in the project, the plan's raw retention, and when each named
+   resolved by name in the project, each reliability target a panel names read by name
+   through F19's own reader (T10.2c), the plan's raw retention, and when each named
    service last reported, before any scan starts: an `AsyncSession` must not be shared
    between concurrent tasks, so scans get a repository and never the session.
 2. **Stamp "last opened"**, at most hourly and never in a support view (FR37).
@@ -11,7 +12,8 @@ The sequence, and why each step is where it is:
    while it waits on ClickHouse.
 4. **Compile.** Each stored panel parses alone (an unknown one reads `unknown_kind`),
    what Postgres or the install already decides needs no scan (`needs_service`, a check
-   `not_in_project` or `ambiguous`, `window_too_wide`, `paused_by_operator`), equal
+   `not_in_project` or `ambiguous`, a reliability target `ok` or `not_in_project`,
+   `window_too_wide`, `paused_by_operator`), equal
    scans merge, and keys past the scan cap read `over_limit` with no scan. A chosen
    metric series' second read holds its place under the cap from here.
 5. **Scan in layout order**, 4 at once, each through the shared reads (kept, joined or
@@ -39,7 +41,7 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.auth.dependencies import Identity
+from nexovue_api.auth.dependencies import Identity, Reader
 from nexovue_api.dashboardpanels.caps import ScanCaps
 from nexovue_api.dashboardpanels.scans import (
     RAW_READERS,
@@ -110,6 +112,7 @@ from nexovue_api.dashboards.definition import (
     ProjectTrendPanel,
     ServiceNumberPanel,
     ServiceTrendPanel,
+    SloBudgetPanel,
     StatementTrendPanel,
     StoredDefinition,
     TopNodesTrendPanel,
@@ -127,6 +130,8 @@ from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.releases import service as releases
 from nexovue_api.services.schemas import OverviewPoint, TrendPoint
 from nexovue_api.services.service import CoveredService, CoveredTotals
+from nexovue_api.slos import service as slos
+from nexovue_api.slos.schemas import SloBudget
 
 logger = get_logger(__name__)
 
@@ -438,6 +443,10 @@ class _PreRead:
     picked: str | None
     # Each check name a panel names, and the ids of the project's checks by that name.
     checks: dict[str, list[str]]
+    # Each reliability target name a panel names that is a live target of the project.
+    slos: dict[str, SloBudget]
+    # When the pre-reads ran: what a reliability target panel's `read_at` says.
+    read_at: datetime
     # The plan's raw retention in days, where a plan bounds a raw panel's window.
     raw_retention_days: int | None
 
@@ -460,6 +469,13 @@ async def _plan_with_pre_reads(
     checks = await dashboard_queries.checks_named(
         db, org_id=identity.org_id, project_id=project.id, names=names
     )
+    targets = await slos.budgets_named(
+        db,
+        reader=Reader(org_id=identity.org_id, identity=identity),
+        project_id=project.id,
+        names=sorted({panel.settings.slo for panel in chosen if isinstance(panel, SloBudgetPanel)}),
+        now=now,
+    )
     raw = any(key.reader in RAW_READERS for panel in chosen for key in compile_panel(panel).keys)
     retention = (
         await dashboards.plan_retention(db, identity=identity, now=now)
@@ -471,6 +487,8 @@ async def _plan_with_pre_reads(
         pre_read=_PreRead(
             picked=service if stored.service_picker else None,
             checks=checks,
+            slos=targets,
+            read_at=now,
             raw_retention_days=None if retention is None else retention.raw_days,
         ),
         limits=reads.limits,
@@ -531,6 +549,8 @@ def _entry(
     compiled = compile_panel(panel)
     if isinstance(panel, UnknownPanel):
         return _Entry(panel, compiled, decided=UnknownKindPanel())
+    if isinstance(panel, SloBudgetPanel):
+        return _Entry(panel, compiled, decided=_slo_budget(panel, pre_read))
     if compiled.scan is None:
         return _Entry(panel, compiled)  # a note or open findings: the console draws it
     if not limits.scans_enabled:
@@ -555,6 +575,24 @@ def _entry(
     compare = resolve(compiled.compare, picked=pre_read.picked)
     fallback = resolve(compiled.fallback, picked=pre_read.picked)
     return _Entry(panel, compiled, scan=scan, compare=compare, fallback=fallback)
+
+
+def _slo_budget(panel: SloBudgetPanel, pre_read: _PreRead) -> PanelResult:
+    """A reliability target from the pre-read, with no scan, so the operator's pause and
+    the scan cap never touch it. A name the project's live targets do not hold reads
+    `not_in_project`, identical whether it is elsewhere, deleted, renamed or nowhere (AC22).
+    Names are unique among a project's live targets, so it is never `ambiguous`."""
+    found = pre_read.slos.get(panel.settings.slo)
+    if found is None:
+        return NotInProjectPanel(kind=panel.kind)
+    return OkPanel(
+        kind=panel.kind,
+        read_at=pre_read.read_at,
+        bucket_seconds=0,
+        data_starts_at=None,
+        data_ends_at=None,
+        budget=found,
+    )
 
 
 def _window_limit_days(scan: ScanKey, pre_read: _PreRead, limits: DashboardLimits) -> int | None:

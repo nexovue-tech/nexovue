@@ -478,7 +478,7 @@ describe("Step 5's kinds", () => {
         ?.click(),
     );
 
-  it("offers every kind the spec lists but slo_budget (FR6)", async () => {
+  it("offers every kind the spec lists (FR6), the reliability target since T10.2d", async () => {
     const container = await mount();
     const offered = [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")].map(
       (radio) => radio.value,
@@ -504,6 +504,7 @@ describe("Step 5's kinds", () => {
         "database_statements_table",
         "web_vitals_table",
         "metric_series",
+        "slo_budget",
         "note",
       ].sort(),
     );
@@ -546,6 +547,44 @@ describe("Step 5's kinds", () => {
       ["error_groups_table", { service: null, rows: 10 }],
       ["check_trend", { check: `Log${RTL_OVERRIDE}in`, signal: "uptime" }],
     ]);
+  });
+});
+
+describe("Step 10's reliability target (T10.2d)", () => {
+  const choose = (container: Element, kind: string) =>
+    act(() =>
+      [...container.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+        .find((radio) => radio.value === kind)
+        ?.click(),
+    );
+
+  it("chooses a target from the project's own, escaped, or takes a typed name", async () => {
+    const calls = stubApi({
+      "GET /slos": json({ targets: [{ name: `check${RTL_OVERRIDE}out` }, { name: "api" }] }),
+    });
+    const kept: StoredPanel[] = [];
+    const container = await mount({ onKeep: (panel) => void kept.push(panel) });
+
+    choose(container, "slo_budget");
+    act(() => button(container, "Add to dashboard")?.click());
+    expect(text(container)).toContain("Choose a reliability target, or type its name.");
+    await waitFor(() => container.querySelectorAll("select option").length > 2, "the targets");
+    const target = labelled<HTMLSelectElement>(container, "Reliability target");
+    expect([...target.options].map((option) => option.textContent)).toEqual([
+      "Choose a reliability target",
+      "api",
+      "check[U+202E]out",
+    ]);
+    act(() => typeInto(target, target.options[2]?.value ?? ""));
+    act(() => button(container, "Add to dashboard")?.click());
+    act(() => typeInto(labelled(container, "Or type its name"), "  not listed yet  "));
+    act(() => button(container, "Add to dashboard")?.click());
+
+    expect(kept.map((panel) => [panel.kind, panel.settings])).toEqual([
+      ["slo_budget", { slo: `check${RTL_OVERRIDE}out` }],
+      ["slo_budget", { slo: "not listed yet" }],
+    ]);
+    expect(calls.filter((call) => call.path === "/slos")).toHaveLength(1);
   });
 });
 

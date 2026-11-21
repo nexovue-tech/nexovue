@@ -8,11 +8,11 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Tabs } from "@/shared/components/Tabs";
 import { useCan } from "@/shared/identity";
 import { useProjectSelection } from "@/shared/projects";
+import { SloBadge } from "@/shared/slo/SloBadge";
 
 import type { DeletedSlo, SloView } from "./api";
 import { useRestoreSlo, useSlos } from "./api";
 import { LastMonthView } from "./LastMonthView";
-import { SloBadge } from "./SloBadge";
 import {
   deletedLineOf,
   headlineOf,

@@ -1,9 +1,10 @@
-import type { SloView } from "./api";
-import { badgeOf, type Tone, toneOf } from "./slo-words";
+import { badgeOf, type SloStanding, type Tone, toneOf } from "./words";
 
 /**
- * The design's tones, from the severity tokens: a critical filled with its badge fill, a
- * warning outlined, the rest words only (rule 6). The words always say the state.
+ * A reliability target's state as a badge, on its own page, on the list and on a
+ * dashboard's panel, so all three say and colour it alike. The design's tones, from the
+ * severity tokens: a critical filled with its badge fill, a warning outlined, the rest
+ * words only (rule 6). The words always say the state.
  */
 const TONE_CLASS: Record<Tone, string> = {
   critical: "border border-critical-border bg-critical-subtle text-critical-text",
@@ -12,7 +13,7 @@ const TONE_CLASS: Record<Tone, string> = {
   none: "",
 };
 
-export function SloBadge({ view }: { view: Pick<SloView, "state" | "severity" | "attention"> }) {
+export function SloBadge({ view }: { view: SloStanding }) {
   const badge = badgeOf(view);
   if (badge === null) return null;
   return (

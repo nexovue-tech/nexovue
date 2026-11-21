@@ -54,6 +54,22 @@ async def target_with_status(
     return (await db.execute(statement)).one_or_none()
 
 
+async def live_targets_named(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, names: Sequence[str]
+) -> Sequence[Any]:
+    """The project's live targets holding any of these names, each with its status
+    (Step 5b). A live name is unique in its project (`uq_slo_targets_live_name`), so a
+    name finds one target or none; another project's or organization's never."""
+    if not names:
+        return []
+    statement = _with_status_and_check(org_id).where(
+        SloTarget.project_id == project_id,
+        SloTarget.deleted_at.is_(None),
+        SloTarget.name.in_(list(names)),
+    )
+    return (await db.execute(statement)).all()
+
+
 def _with_status_and_check(org_id: uuid.UUID) -> Any:
     """One organization's rows of (target, status, deleted-by name, check name, interval)."""
     return (

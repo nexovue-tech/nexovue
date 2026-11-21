@@ -3,6 +3,7 @@ import { formatRelativeTime } from "@/shared/format/time";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 
 import type { PanelResult, Signal, StoredPanel } from "./api";
+import { noTargetWords } from "./slo-budget-words";
 
 /**
  * What a panel is called and what it says when it has no line to draw (F20, design
@@ -41,11 +42,15 @@ export const TABLE_KINDS: ReadonlySet<string> = new Set([
   "web_vitals_table",
 ]);
 
+/** A reliability target's standing, read from F19's figures with no scan (T10.2). */
+export const SLO_BUDGET = "slo_budget";
+
 /** Every kind this console draws; a stored panel of any other reads `unknown_kind` (FR8). */
 export const KNOWN_KINDS: ReadonlySet<string> = new Set([
   ...TIME_KINDS,
   ...NUMBER_KINDS,
   ...TABLE_KINDS,
+  SLO_BUDGET,
   "note",
 ]);
 
@@ -202,6 +207,8 @@ export function panelTitle(panel: StoredPanel): { service?: string; text: string
       return withService(MEASURE_NAMES[stringSetting(panel, "measure")] ?? "Number");
     case "open_findings":
       return withService("Open findings");
+    case SLO_BUDGET:
+      return { text: own ?? visibleEscapes(stringSetting(panel, "slo")) };
     case "metric_series":
       return withService(metricTitle(panel));
   }
@@ -364,6 +371,9 @@ export function stateWords(
     case "not_in_project":
       if (panel.kind === "check_trend") {
         return `No check named ${visibleEscapes(stringSetting(panel, "check"))} in ${visibleEscapes(context.projectName)}.`;
+      }
+      if (panel.kind === SLO_BUDGET) {
+        return noTargetWords(stringSetting(panel, "slo"), context.projectName);
       }
       return `No record of ${serviceOf(panel) ? visibleEscapes(serviceOf(panel) ?? "") : "this service"} in ${visibleEscapes(context.projectName)}.`;
     case "ambiguous": {

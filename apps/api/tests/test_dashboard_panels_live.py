@@ -45,6 +45,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -55,6 +56,7 @@ import pytest
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
+from nexovue_platform import slo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_findings_cases_live import Team, _client, _reachable, _team, db  # noqa: F401
@@ -62,7 +64,14 @@ from test_findings_cases_live import Team, _client, _reachable, _team, db  # noq
 from nexovue_api.auth.dependencies import get_tenant_repository
 from nexovue_api.auth.sessions import Session
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import Check, Dashboard, ServiceLastSeen, User
+from nexovue_api.data.postgres.models import (
+    Check,
+    Dashboard,
+    Project,
+    ServiceLastSeen,
+    SloTarget,
+    User,
+)
 from nexovue_api.middleware.ratelimit import SCOPE_ORGANIZATION, SCOPE_SESSION
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import (
@@ -1682,3 +1691,74 @@ async def test_ac40_a_file_imported_into_another_organization_reads_only_its_own
     assert _line(answer["p_login"], "uptime_percent").count(0.0) >= 14
     assert answer["p_search"] == {"state": "not_in_project", "kind": "check_trend"}
     assert answer["p_checkout"]["state"] == "not_in_project"
+
+
+# --------------------------------------------------------------- Step 10, T10.2c
+
+
+async def _slo_target(db: AsyncSession, team: Team, project_id: uuid.UUID, name: str) -> SloTarget:  # noqa: F811
+    """A live target written as F19's create writes one, with nothing counted yet."""
+    target = SloTarget(
+        org_id=team.org_id,
+        project_id=project_id,
+        name=name,
+        kind=slo.SERVICE_AVAILABILITY,
+        service_name="checkout",
+        objective_percent=Decimal("99.9"),
+        window_days=28,
+        upstream_sampling="no",
+        definition_key=f"key-{uuid.uuid4()}",
+    )
+    db.add(target)
+    await db.flush()
+    return target
+
+
+async def test_t10_2c_a_reliability_target_reads_its_budget_and_another_s_name_reads_nothing(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    reader: AsyncClient,
+) -> None:
+    """A target of the displayed project reads what `GET /slos/{id}/budget` reads, with no
+    statement run. The same name in another project of the organization or in another
+    organization, a deleted target, and a renamed one's old name read `not_in_project`
+    (AC22), and so does a draft's panel naming one."""
+    globex = await _team(db, f"Remote{uuid.uuid4().hex[:8]}")
+    staging = Project(org_id=acme.org_id, name="staging", slug=f"staging-{uuid.uuid4().hex[:6]}")
+    db.add(staging)
+    await db.flush()
+    live = await _slo_target(db, acme, acme.project_id, "checkout availability")
+    await _slo_target(db, acme, staging.id, "staging only")
+    await _slo_target(db, globex, globex.project_id, "globex only")
+    gone = await _slo_target(db, acme, acme.project_id, "gone")
+    gone.deleted_at = datetime.now(UTC)
+    renamed = await _slo_target(db, acme, acme.project_id, "old name")
+    renamed.name = "new name"
+    await db.flush()
+    names = ("checkout availability", "staging only", "globex only", "gone", "old name")
+    panels = [_panel(f"p_{number}", "slo_budget", slo=name) for number, name in enumerate(names)]
+    dashboard = await _dashboard(db, acme, *panels)
+    window = _fixed(_hour_ago(), 30, acme)
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    async with _app_client(db, acme, acme.member, reader) as client:
+        app = client._transport.app  # type: ignore[attr-defined]
+        app.dependency_overrides[get_tenant_repository] = lambda: _Recorded(
+            reader, str(acme.org_id), ran
+        )
+        read = await _batch(client, dashboard, window)
+        budget = (await client.get(f"{API_PREFIX}/slos/{live.id}/budget")).json()
+        drafted = await client.post(
+            f"{API_PREFIX}/dashboard-panels/preview",
+            json=window | {"definition": _definition(panels[0], panels[2])},
+        )
+
+    assert read["p_0"]["state"] == "ok"
+    assert read["p_0"]["budget"] == budget
+    assert read["p_0"]["budget"]["id"] == str(live.id)
+    for panel_id in ("p_1", "p_2", "p_3", "p_4"):
+        assert read[panel_id] == {"state": "not_in_project", "kind": "slo_budget"}, panel_id
+    assert drafted.status_code == 200, drafted.text
+    assert drafted.json()["panels"]["p_0"]["budget"]["id"] == str(live.id)
+    assert drafted.json()["panels"]["p_2"]["state"] == "not_in_project"
+    assert ran == []

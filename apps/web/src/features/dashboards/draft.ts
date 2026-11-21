@@ -1,5 +1,5 @@
 import type { DashboardDocument, Definition, PanelHeight, StoredPanel } from "./api";
-import { panelTitle, TABLE_KINDS, TIME_KINDS } from "./panel-words";
+import { panelTitle, SLO_BUDGET, TABLE_KINDS, TIME_KINDS } from "./panel-words";
 
 /**
  * The builder's draft (F20, T3.2): a pure reducer over the dashboard document, so every
@@ -277,6 +277,9 @@ function readsOf(panel: StoredPanel): string[] {
         ? [read]
         : [read, `metric-reports:${metric}`];
     }
+    case SLO_BUDGET:
+      // Read from Postgres before any scan (T10.2b): never a read.
+      return [];
     default:
       // A note and open findings read nothing; an unknown kind is never read.
       return [];

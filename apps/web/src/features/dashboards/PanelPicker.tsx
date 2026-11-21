@@ -27,6 +27,7 @@ import {
   useNodeChoices,
   usePanelPreview,
   useServiceChoices,
+  useSloChoices,
   useStatementChoices,
 } from "./api";
 import { NotePanel } from "./NotePanel";
@@ -76,6 +77,7 @@ type Kind =
   | "database_statements_table"
   | "web_vitals_table"
   | "metric_series"
+  | "slo_budget"
   | "note";
 type Order = "worst" | "slowest";
 
@@ -109,6 +111,10 @@ const KIND_GROUPS: readonly { question: string; kinds: readonly { id: Kind; labe
       ],
     },
     { question: "Checks", kinds: [{ id: "check_trend", label: "One check over time" }] },
+    {
+      question: "Reliability targets",
+      kinds: [{ id: "slo_budget", label: "How one reliability target stands" }],
+    },
     {
       question: "Errors",
       kinds: [{ id: "error_groups_table", label: "The most frequent errors" }],
@@ -249,6 +255,8 @@ interface Form {
   endpoint: string;
   checkSignal: string;
   check: string;
+  /** A reliability target's name, as F19 stores it. */
+  slo: string;
   /** The chosen statement, as its key; NONE until one is chosen. */
   statement: string;
   label: string;
@@ -287,6 +295,7 @@ function formOf(panel: StoredPanel | undefined): Form {
     endpoint: setting(panel, "endpoint"),
     checkSignal: panel?.settings.signal === "duration" ? "duration" : "uptime",
     check: setting(panel, "check"),
+    slo: setting(panel, "slo"),
     statement:
       panel?.kind === "statement_trend"
         ? statementKey({
@@ -410,6 +419,11 @@ function settingsOf(form: Form): Record<string, unknown> {
     case "check_trend":
       if (form.check.trim() === "") return { missing: "Choose a check, or type its name." };
       return { check: form.check.trim(), signal: form.checkSignal };
+    case "slo_budget":
+      if (form.slo.trim() === "") {
+        return { missing: "Choose a reliability target, or type its name." };
+      }
+      return { slo: form.slo.trim() };
     case "statement_trend": {
       const statement = statementFromKey(form.statement);
       if (statement === undefined) return { missing: "Choose a statement." };
@@ -509,6 +523,7 @@ export function PanelPicker({
   const machines = form.kind === "node_trend" || form.kind === "top_nodes_trend";
   const nodes = useNodeChoices(machines ? projectId : undefined, choice);
   const checks = useCheckChoices(form.kind === "check_trend" ? projectId : undefined);
+  const targets = useSloChoices(form.kind === "slo_budget" ? projectId : undefined);
   const statements = useStatementChoices(
     form.kind === "statement_trend" ? projectId : undefined,
     choice,
@@ -607,6 +622,7 @@ export function PanelPicker({
           form={form}
           update={update}
           checks={checks}
+          targets={targets}
           statements={statements}
           metrics={[...new Set((nodes.data ?? []).flatMap((node) => node.signals))].sort()}
         />
@@ -1014,12 +1030,14 @@ function StepFiveFields({
   form,
   update,
   checks,
+  targets,
   statements,
   metrics,
 }: {
   form: Form;
   update: (changes: Partial<Form>) => void;
   checks: { isPending: boolean; isError: boolean; data: string[] | undefined };
+  targets: { isPending: boolean; isError: boolean; data: string[] | undefined };
   statements: { isPending: boolean; isError: boolean; data: StatementChoice[] | undefined };
   metrics: string[];
 }) {
@@ -1101,6 +1119,38 @@ function StepFiveFields({
             optionLabel={(signal) => signal.label}
             onChange={(checkSignal) => update({ checkSignal })}
             stacked
+          />
+        </>
+      );
+    case "slo_budget":
+      return (
+        <>
+          {targets.isPending ? (
+            <SkeletonRows rows={1} label="Listing reliability targets" />
+          ) : targets.isError ? (
+            <p className="text-sm text-warning-text">
+              Could not list reliability targets. Type a name instead.
+            </p>
+          ) : (
+            <SelectField
+              label="Reliability target"
+              value={(targets.data ?? []).includes(form.slo) ? form.slo : NONE}
+              options={[
+                { id: NONE, label: "Choose a reliability target" },
+                ...(targets.data ?? []).map((name) => ({ id: name, label: visibleEscapes(name) })),
+              ]}
+              optionLabel={(option) => option.label}
+              onChange={(slo) => update({ slo })}
+              stacked
+            />
+          )}
+          <TextField
+            label="Or type its name"
+            name="typed-slo"
+            value={form.slo}
+            onChange={(slo) => update({ slo })}
+            hint="Read by name in the displayed project, so one dashboard works on each."
+            required={false}
           />
         </>
       );

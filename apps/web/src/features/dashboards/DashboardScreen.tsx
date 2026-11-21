@@ -959,6 +959,7 @@ function PanelCell(
           panel={panel}
           reading={result}
           zone={zone}
+          now={now}
           syncKey={syncKeyOf(dashboard.id)}
           onDrag={props.onDrag}
           marks={marking.marks}

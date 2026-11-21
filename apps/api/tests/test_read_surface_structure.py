@@ -61,6 +61,8 @@ THE_SURFACE: Final = {
     "nexovue_api/findings/router.py:list_findings": "GET /findings",
     "nexovue_api/slos/router.py:list_slos": "GET /slos",
     "nexovue_api/slos/router.py:get_slo": "GET /slos/{slo_id}",
+    # F19 Step 5b: F20's reliability-target panel reads the same function.
+    "nexovue_api/slos/router.py:get_slo_budget": "GET /slos/{slo_id}/budget",
     "nexovue_api/slos/router.py:last_month": "GET /slos/months",
     "nexovue_api/slos/router.py:months_csv": "GET /slos/months.csv",
     "nexovue_api/slos/router.py:get_slo_months": "GET /slos/{slo_id}/months",

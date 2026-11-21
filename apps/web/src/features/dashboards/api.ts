@@ -7,6 +7,7 @@ import type { DetectionStatus } from "@/shared/detection/headline";
 import { DASHBOARD_REFRESH_FLOOR_MS } from "@/shared/refresh";
 import type { WindowChoice } from "@/shared/selection";
 import { resolveChoice, windowCacheKey } from "@/shared/selection";
+import type { SloState } from "@/shared/slo/words";
 
 /**
  * Dashboards (F20): `/dashboards`, Postgres only, and `/dashboard-panels/read`, the batch
@@ -210,6 +211,32 @@ export interface NumberReading {
   previous_coverage?: number | null;
 }
 
+/**
+ * A reliability target's standing, as F19's `GET /slos/{id}/budget` returns it (F19 plan
+ * Step 5b; T10.2): its figures and state over its own window, and, while it is running
+ * out, the burn's rate as last worked out. The name is customer text (FR61).
+ */
+export interface SloBudget {
+  id: string;
+  project_id: string;
+  name: string;
+  label: string;
+  kind: string;
+  /** "Failures still allowed", in the kind's own words (FR12). */
+  allowance_words: string;
+  objective_percent: string;
+  window_days: number;
+  state: SloState;
+  severity: "critical" | "warning" | null;
+  /** Counted in the target list's headline (FR10a); the badge's tone reads it. */
+  attention: boolean;
+  figures: { allowed: number; left: number; failures: number; figure_percent: string | null };
+  burn: { rate: number; since: string; hours_left: number | null; resolving: boolean } | null;
+  evaluated_minute: string | null;
+  created_at: string;
+  zone: string;
+}
+
 /** A table row as its own screen's route returns it; each table kind reads its own fields. */
 export type TableRow = Record<string, unknown>;
 
@@ -231,6 +258,8 @@ export type PanelResult =
       series_combined?: number | null;
       /** Every unit a metric series' readings carried; more than one draws no line (AC51). */
       units?: string[] | null;
+      /** A reliability target panel's standing, read from Postgres with no scan (T10.2c). */
+      budget?: SloBudget | null;
     }
   | { state: "empty"; kind: string; read_at: string; last_seen_at: string | null }
   | { state: "too_many_series"; kind: string; limit: number }
@@ -524,6 +553,23 @@ export function useCheckChoices(projectId: string | undefined) {
       }),
     // Names, once each: two checks of one name are one choice, which reads `ambiguous`.
     select: (response) => [...new Set(response.checks.map((check) => check.name))].sort(),
+  });
+}
+
+/**
+ * The displayed project's live reliability targets, by name, for a target panel's real
+ * values (FR23). `GET /slos` answers from Postgres alone; names are unique per project.
+ */
+export function useSloChoices(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["dashboard-slo-choices", projectId] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<{ targets: { name: string }[] }>("slos", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+    select: (response) => response.targets.map((target) => target.name).sort(),
   });
 }
 

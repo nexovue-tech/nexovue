@@ -1,6 +1,7 @@
 # Plan: SLO tracking (F19)
 
 > **Status:** Approved by the founder, 2026-11-02, with D66. Rewritten the same day against the revised spec. Ready to implement once F6 merges.
+> **2026-11-21:** Step 5b, the budget reader F20's panel reads, added by the founder's decision 34 (`phase-2-foundation.md`, item 34), before Step 6.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step name the file
 > that changes and the test that proves it, read from the code. **The founder approves this plan before any file is edited.**
@@ -227,6 +228,24 @@ The result is written into `status.md`, whichever way it goes.
 - [x] **T5.9** — `docs/product/setup/alerts/webhooks.md`, `channels.md` · what a burn sends, and that a person's channel may withhold · reviewed
   *2026-11-09: written and self-reviewed against the code; the founder's read is at commit.*
 
+### Step 5b — The budget reader other features read
+
+*Added 2026-11-21 by the founder's decision 34 (`docs/product/phase-2-foundation.md`, item 34): F19 gains the reader F20's reliability-target panel needs, before this plan's hardening step. F20's T10.2 is re-planned onto it (`dashboards/plan.md`, Step 10).*
+
+*Judgeable:* the founder opens `GET /slos/{id}/budget` for a target on the demo, with a token, and reads the same figures, state and burn the target's page shows. A token for another project reads 404. A dashboard panel naming the target (F20, T10.2) draws them; renamed, it reads "No reliability target named … in production".
+
+**Read from the code, 2026-11-21, on `wt/f19budget`.** The design names the reader (*API*: `GET /slos/{id}/budget`, "Postgres only. Status. The `slo_budget` panel's source"; *The `slo_budget` panel*: "a budget function [that] takes no repository and reads Postgres only, rendering the same `SloBudget` schema `/budget` returns, including the rate `slo_status` stored at `evaluated_minute`"), and no step built it:
+
+- `slos/router.py:95-97` has `GET /slos/{slo_id}`, and no `/budget`. No `SloBudget` exists in `apps` or `packages`.
+- `slos/service.py:137` `read_target` already reads everything the budget is: the target, its `slo_status`, its stored days over its own window, and the project's burn rules for who is told, all from Postgres (`queries.target_with_status`, `queries.py:50`; `_days`, `service.py:582`; `_routing`, `:625`), then `_view` (`:697`) works out the figures and state with the platform's one function, so the budget is a projection of that view and needs **no ClickHouse read and no new arithmetic**. The burn's rate is the one `slo_status.tiers["burn"]` stored at `evaluated_minute` (`slo.burn_from_status`; `_burn_view`, `:681`).
+- **No by-name lookup exists.** Names are unique per project among live targets (`uq_slo_targets_live_name`, `models.py:3302`), so a name in one project is one target or none: never two.
+- `slos/router.py` names no repository, so it stays on the default rate-limit tier (design, *API*: "`slos/router.py` reads Postgres only … and must never name a repository"); `/slo-readings` alone is on the telemetry tier (`ratelimit/policy.py:275`).
+- **No migration and no ADR:** every value is already stored.
+
+- [x] **T5b.1** — `apps/api/.../slos/schemas.py` (new `SloBudget`), `slos/service.py` (new `budget` by id and `budgets_named` by name, both building the target's view as `read_target` does and projecting it), `slos/queries.py` (new `live_targets_named`: binds `org_id` and `project_id`, live targets only, `name = ANY`) · `SloBudget` holds the target's id, project, name, nexovue's label, kind, allowance words, objective, window, state, variant, qualifiers, attention, severity, hours left, the window's figures (`SloFigures`), the stored burn (`SloBurnView`), `evaluated_minute`, `created_at` and the zone; **no `told`** (rule and channel names), no description and no person. The window is the target's own (7 or 28 days by whole days), as the list and the target's page read it. `budgets_named` takes the reader and the project, proves the project is the reader's (`require_readable_project`), reads every asked name in one statement, and answers only the names it found; another project's, another organization's, a deleted target, and an old name after a rename are absent · proved by `apps/api/tests/test_slos_live.py`: a budget equals the target's own view field for field (figures, state, burn, as of); by name it finds the live target in the project and nothing for the same name in another project, in another organization, after a delete, or under its old name after a rename; the read asks no ClickHouse (AC40, the repository stub); and `test_postgres_tenancy_structure.py` holding the new statement
+- [x] **T5b.2** — `slos/router.py` (`GET /slos/{slo_id}/budget`, `CurrentReader`), `apps/api/tests/test_read_surface_structure.py` (`THE_SURFACE` entry), `docs/product/setup/api.md` (its row), `apps/api/tests/test_ratelimit_coverage.py` (new: the route stays on the default tier) · on the read surface and nothing more: a GET, so `test_authorization_coverage.py` (which judges every mutation) has no entry to add; a token reads it with no person in it; a token scoped to another project, another organization and a deleted target each get 404; the generated read-surface document gains it from the route · proved by `test_slos_live.py` (AC33 and AC35 for `/budget`), `test_read_surface_structure.py`, `test_read_surface_spec.py`, `test_ratelimit_coverage.py`, and `test_authorization_coverage.py` passing unchanged
+  *2026-11-21: built as planned, no migration and no ADR (`status.md`, Step 5b). `attention` joined the budget during the self-review, so the panel's badge takes its tone as the list's does. The design's `?window=` was not built: open decision 4.*
+
 ### Step 6 — Proving it: cost, demo faults, operations, docs and claims
 
 *Judgeable:* You read `status.md` and see measured cost at the target scale, the fault run's result labelled as demo, a readiness report, and a claims sheet in which each claim names its proof. Nothing here should surprise you.
@@ -400,6 +419,8 @@ Checked again 2026-11-02. What is left is the founder's, and none blocks writing
 | Q4 | Can a legitimate browser span be `SERVER`? | No | **Decided:** no, so P2 filters by door. `spec.md` D63 |
 | Q5 | Who a figure may be quoted to | No | **Approved 2026-11-02:** internal and board only; customer quoting goes to the lawyer (foundation item 16) |
 | Q6 | The demand gate's bar | No longer | **Decided:** `spec.md` D62. What to do if it fails stays the founder's at the time |
+| Q7 | Step 5b: which window `/budget` is for. The design's route reads `GET /slos/{id}/budget?window=`, and nothing says what `window` would choose | No | `status.md`, *Open decisions*, 4. **Recommended and built:** the target's own window only, with no parameter, since a target's figure has one window and a dashboard's time range never changes it |
+| Q8 | Step 5b: how a renamed target reads on a panel stored by name | No | **Settled by the design** (*The `slo_budget` panel*): "a deleted or renamed target reads as not found". F20 says that as its existing `not_in_project` |
 
 ## Gates
 

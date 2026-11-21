@@ -2,9 +2,11 @@
 
 ## Lifecycle status
 
-**In development. Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
+**In development. Step 5b, the budget reader, built 2026-11-21, awaiting commit** (added by the founder's decision 34, `phase-2-foundation.md` item 34, 2026-11-21; on `wt/f19budget`; no migration, no ADR). **Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
 
 ## Current task
+
+**Plan Step 5b, *The budget reader other features read*: built 2026-11-21, awaiting commit.** The founder's decision 34 (2026-11-21) added it before Step 6 so F20's reliability-target panel (F20 T10.2, built alongside) has a reader. T5b.1 and T5b.2 ticked; no migration, no ADR; one open decision below (4).
 
 Plan Step 5, *What a burn may withhold*: on `feature/phase-2` (2026-11-09; migrations 0063 and 0064, ADR-038). T5.1 to T5.9 ticked, with three open decisions below. Steps 1 to 4 are on `feature/phase-2`; T2.7's list awaits the founder's judgement.
 
@@ -20,7 +22,33 @@ Plan Step 5, *What a burn may withhold*: on `feature/phase-2` (2026-11-09; migra
 
 ## Next action
 
+**Step 5b (2026-11-21):** the coordinator reviews the diff and commits it with F20's T10.2, which reads it. The founder answers open decision 4 (which window `/budget` is for) and walks Step 5b's *Judgeable* (`GET /slos/{id}/budget` with a token on the demo; the panel renamed) after Phase 2. Step 6 next.
+
 The coordinator commits Step 5 after `just check`, restoring 0063's `down_revision` to the parallel 0061 (or the next free number) and renumbering 0063, 0064 and ADR-038 if taken. The founder answers Step 5's three open decisions (*Open decisions*, below), judges T2.7's list, and checks one inbox message and one PagerDuty alert against the running demo after Phase 2 (Step 5's *Judgeable*, not walked here). Step 6 next.
+
+## Step 5b, built 2026-11-21
+
+**Why it exists.** The founder's decision 34 (`phase-2-foundation.md`, item 34, 2026-11-21): F20's reliability-target panel (F20 T10.2) needs F19's reader, which the design named (*API*; *The `slo_budget` panel*) and no step built (F20 `status.md`, decision 35). It was added to this plan as Step 5b, before Step 6, the hardening step.
+
+**What was built, by task.**
+
+| Task | Done | Where |
+|---|---|---|
+| T5b.1 | `SloBudget`: the target's id, project, name, nexovue's label, kind, allowance words, objective, window, state, variant, qualifiers, attention, severity, hours left, `SloFigures`, the stored burn (`SloBurnView`, its rate as `slo_status` stored it at `evaluated_minute`), `evaluated_minute`, `created_at` and the zone, projected from the target's own `SloView` (`SloBudget.of_view`), so its figures, state and burn are the target page's, over the target's own window; no `told`, description or person. `service.budget` (by id, through `read_target`) and `service.budgets_named` (the project proved the reader's by `require_readable_project`, every name in one statement, only names found answered). `queries.live_targets_named` binds `org_id` (through `_with_status_and_check`), `project_id`, live targets and `name = ANY`. Postgres only, no repository | `slos/schemas.py`, `slos/service.py`, `slos/queries.py` |
+| T5b.2 | `GET /slos/{slo_id}/budget` on `CurrentReader`; in `THE_SURFACE` and the customer list; on the default rate-limit tier, held by a new test beside the burn line's telemetry tier; a GET, so no entry in `test_authorization_coverage.py`, which judges mutations | `slos/router.py`, `test_read_surface_structure.py`, `docs/product/setup/api.md`, `test_ratelimit_coverage.py` |
+
+**Files the plan's tasks do not name, and why.** `docs/features/slo-tracking/design.md` (the route's row now says it was built without `window`, open decision 4). Shared with F20's T10.2, which names them: `apps/web/src/shared/slo/words.ts` and `shared/slo/SloBadge.tsx` (moved from `features/slos/SloBadge.tsx`), and so `features/slos/slo-words.ts`, `features/slos/api.ts`, `SlosScreen.tsx`, `SloScreen.tsx` and `features/findings/finding-words.ts`, which now import the state names, badge, tone, nouns and "what is left lasts" from there instead of keeping copies; `apps/api/tests/test_slo_words.py` scans the new files and now also checks that every named file is one the scan reads.
+
+**Decisions taken while building, within the design.** Each is the founder's to overrule.
+
+- **The budget is the target's view, projected, not a second calculation.** It cannot disagree with the target's page.
+- **Who is told is left out.** A dashboard is read by everyone in the organization; rule and channel names are routing, not how a target stands.
+- **`attention` is carried** so a badge takes the tone the list gives it (a silence past its usual length reads as a warning).
+- **No rate when not running out.** The target page says none either; the stored rate is the burn's.
+
+**Not built or not proved, said plainly.** The *Judgeable* on the demo (a token's read, a rename on a panel): not walked; the founder's after Phase 2. No browser run.
+
+**Self-review (`/review-diff`), 2026-11-21.** Tenancy: the one new statement binds `org_id` and `project_id`, and the project is proved the reader's before any name is read (a token of one project asking about another of its organization reads 404, which the first version of the test did not isolate: a mutation dropping the scope check survived until the test asked about a same-organization project). Authorization: one GET on the read surface, no mutation. No migration. No credential, no person in the answer. One MEDIUM finding fixed: the panel coloured states differently from the target page; the badge and its tone moved to `shared/slo/` and `attention` joined the budget. Unintended changes: none; every file is named above or in F20's Step 10.
 
 ## Step 5, built 2026-11-09
 
@@ -257,6 +285,10 @@ Every service's `GET /health` was pre-ticked. On one day, `checkout` had 48,728 
 
 ## Open decisions
 
+One from Step 5b, 2026-11-21:
+
+4. **Which window `GET /slos/{id}/budget` is for.** The design's route reads `GET /slos/{id}/budget?window=`, and nothing in the spec or design says what `window` would choose. A target's figure has one window, its own 7 or 28 days by whole days, which the list, the target's page and every message use; a dashboard's time range (the hour or day a chart shows) never changes it, and a figure over another window would be a different number under the same name. **Built: the target's own window, with no parameter.** **Options:** (a) keep: one figure per target, everywhere; (b) add `window` choosing 7 or 28 days apart from the target's, a second figure the target page does not show. **Recommendation: (a)**, and the design's row drops `?window=` once answered.
+
 Three from Step 5, 2026-11-09. Step 4's seven were answered 2026-11-09 (below).
 
 1. **The finding page's burn figures come from the incident, not `/slos/{id}`.** The design's *Elsewhere* says the label comes with `LinkedIncident` "and the figures from `/slos/{id}` in the browser". Built: the figures come with `LinkedIncident.burn`, from the incident's detail, which the job rewrites every minute while the burn is open (`refresh_detail`), the same figures the incident page shows. **Options:** (a) keep: one request, no second feature's API inside the findings feature, and identical figures to the incident page; (b) fetch `/slos/{id}` in the browser, as written. **Recommendation: (a)**, and amend the design's line.
@@ -295,7 +327,8 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 
 - **P2 affects what is already on this branch.** By reading the code, anyone holding a site key can forge server spans under any service name, and they count in the rollups F6 judges. It was not run. This should be seen before F6's release is decided.
 - **F28's design still says "2 of 8" for `scheduler-light`** (`deployment-release-tracking/design.md:356`). F3's floor keeps probes and alert sweeps 4 of 8 (`ai-insights/design.md:271,829`), and F3 already asks F28 to correct this (`:785`). Nothing for the founder to decide. Since D66, F19's queues share those other 4 too.
-- **F20's document disagrees with F19 until its author takes the hand-off.** F20 stores the SLO by name, and F19 now does too. F20 also wants the panel's burn rate from ClickHouse, and F19 recommends Postgres (design, *API*; `dashboards/design.md:436,446-447,970`). Both sides split the budget and burn functions the same way. F20's document was left alone.
+- **A parallel run of `test_slo_job_live.py` fails, a serial run passes (found 2026-11-21, not fixed; it predates Step 5b, which touches no scheduler code).** With `pytest -n 2`, one of AC8's cases fails with `org_id … is not present in table "organizations"`: the test drives the real `job.queue_jobs`, which hands out work for every tenant with a live target, so it queues a job for the other worker's tenant just as that tenant's fixture deletes it. Serially, all 199 scheduler SLO tests pass. A fix would scope the hand-out the test drives, or hold tenants until both workers finish; it belongs to Step 6's test work.
+- **F20's document disagrees with F19 until its author takes the hand-off.** *2026-11-21: settled in code: the panel reads `budgets_named`, Postgres only, no scan (F20 T10.2).* F20 stores the SLO by name, and F19 now does too. F20 also wants the panel's burn rate from ClickHouse, and F19 recommends Postgres (design, *API*; `dashboards/design.md:436,446-447,970`). Both sides split the budget and burn functions the same way. F20's document was left alone.
 - **SLO work shares `scheduler-light` (D66).** It waits behind detection, evidence and release reads, so burns can be judged a minute or two late under load, and a crash of that container stops probes and SLO judging together. Probes and alert sweeps never wait behind SLO work.
 - **The rule on what a burn may withhold changes a path F6 has tested closely.** It is gated on a burn being involved, existing tests must pass unedited, and they run again beside an open burn.
 - **All costs are unmeasured.** Reads, jobs, slots, `scheduler-light`'s 768M with SLO work added, and Postgres writes are arithmetic and guesses until T6.2. The named endpoint read is the largest figure.
@@ -309,6 +342,16 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 - **AC38's outside tester** comes from the conversation round (spec D64). If nobody there agrees to a later screen test, it reads "not proved".
 
 ## Validation
+
+**Step 5b, 2026-11-21,** on worktree `wt/f19budget`, against its own stores only (`f19b-postgres`, Postgres 18 with pgvector, port 55432; `f19b-clickhouse`, ClickHouse 26.3.20.7, ports 58123 and 59000), migrated to Alembic 0075 and ClickHouse's 42 migrations; a wrapper refused any other store port. Removed afterwards. `just check` was not run, by instruction.
+
+| What | Result |
+|---|---|
+| Seen failing first (each by one change to the code, the suite run, the file restored byte-equal) | `test_slos_live.py` Step 5b: a deleted target found by name; another project's found by name; the project scope not proved (**survived at first**: the test asked about another organization's project, which fails at the organization check anyway; strengthened to ask about a same-organization project outside the token's scope, then caught); a different burn in the budget; a deleted target read by id; no `/budget` route. `test_read_surface_structure.py` with the entry removed; `test_ratelimit_coverage.py` with `/slos` put on the telemetry tier; `test_postgres_tenancy_structure.py` with the by-name statement unbound from `org_id`. Web, shared with F20: `shared/slo/words.ts`'s "what is left lasts" broken at a day (caught by F19's, findings' and F20's suites), the tone of a warning changed (caught), and the badge moved out of the word scan (**survived at first**: `NAMED` only proved the file exists; a new test now proves the scan reads it, then caught) |
+| F19 and F20 API suites with the gates, one run after the last change, `-n 2` | `test_slos_live.py`, every `test_slo_*` but `test_slo_system.py` (needs the whole stack), every dashboard suite, authorization, read-surface (structure, spec, live), rate-limit coverage, both tenancy structure tests, the chokepoint, cross-service contracts, conventions, policy and isolation: **3,866 passed, 1 skipped** (a conventions case: the billing router has no wildcard route). After the self-review's changes (`attention`, the shared badge, the scan check), the suites they touch, again at `-n 2`: `test_slos_live.py`, the dashboard panel suites (offline and live), definition, word scan, read surface, rate-limit, tenancy structure, authorization, cross-service contracts and both no-AI suites: **3,479 passed** |
+| F19 scheduler suites | All eight `test_slo_*`: **199 passed** serially; under `-n 2`, one of AC8's cases fails (*Risks*: a pre-existing test-isolation fault, not this step's) |
+| Web | Whole suite: **206 files, 2,571 tests passed**. Biome clean on every touched path; `pnpm -r --if-present run typecheck` clean; `verify-tokens.js` clean |
+| Repository | `uv run mypy .` clean (1,082 files); `uv run ruff check .` and `uv run ruff format --check .` clean |
 
 **Step 5, 2026-11-09,** on worktree `wt/f19s5`, against its own stores (`f19s5-pg`, Postgres 18 with pgvector, port 35432; `f19s5-ch`, ClickHouse 26.3.20.7, ports 38123 and 39000), migrated to Alembic **0064** and ClickHouse 000039 (no new ClickHouse migration), with 0063 chained to 0060 for the run only; it now names 0061 again, for the coordinator to re-chain. 0063 and 0064 were run forward, back to 0060 and forward again. Removed afterwards. `just check` was not run, by instruction.
 
@@ -596,7 +639,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-09
+2026-11-21 (Step 5b built, awaiting commit; before that 2026-11-09)
 
 ## Founder decision, 2026-11-02: SLO work runs on `scheduler-light` (D66)
 

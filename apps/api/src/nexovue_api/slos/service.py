@@ -46,6 +46,7 @@ from nexovue_api.projects.service import require_project, require_readable_proje
 from nexovue_api.slos import queries
 from nexovue_api.slos.schemas import (
     DeletedSlo,
+    SloBudget,
     SloBurnView,
     SloChange,
     SloCreate,
@@ -148,6 +149,44 @@ async def read_target(
     days = await _days(db, reader.org_id, [target], now, zone)
     routing = await _routing(db, reader, target.project_id, now)
     return _view(row, days.get(target.id, {}), now=now, zone=zone, routing=routing)
+
+
+async def budget(
+    db: AsyncSession, *, reader: Reader, target_id: uuid.UUID, now: datetime
+) -> SloBudget:
+    """`GET /slos/{id}/budget` (Step 5b): the target's view, as how it stands alone.
+    Postgres only and no repository, so it answers while ClickHouse is down (D59)."""
+    return SloBudget.of_view(await read_target(db, reader=reader, target_id=target_id, now=now))
+
+
+async def budgets_named(
+    db: AsyncSession,
+    *,
+    reader: Reader,
+    project_id: uuid.UUID,
+    names: Sequence[str],
+    now: datetime,
+) -> dict[str, SloBudget]:
+    """Each named live target of the project, by name, for F20's panel (design, *The
+    `slo_budget` panel*). A name absent from the answer is another project's, another
+    organization's, deleted, renamed or nowhere, and its caller cannot tell which."""
+    if not names:
+        return {}
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
+    rows = await queries.live_targets_named(
+        db, org_id=reader.org_id, project_id=project_id, names=names
+    )
+    if not rows:
+        return {}
+    zone = zone_of(project)
+    days = await _days(db, reader.org_id, [row[0] for row in rows], now, zone)
+    routing = await _routing(db, reader, project_id, now)
+    return {
+        row[0].name: SloBudget.of_view(
+            _view(row, days.get(row[0].id, {}), now=now, zone=zone, routing=routing)
+        )
+        for row in rows
+    }
 
 
 # ----------------------------------------------------------------------- writes

@@ -9,46 +9,14 @@
  * `test_slo_words.py` scans this folder for words the spec forbids (AC13).
  */
 
+import { allowedNoun, lastsFor } from "@/shared/slo/words";
+
 import type { SloQualifier, SloState, SloVariant, SloView } from "./api";
 
 /** FR10: older than this, a figure is Not up to date, worked out here too (a guess). */
 export const STALE_AFTER_MS = 15 * 60_000;
 /** NFR7: the list and a target's page refetch this often (a guess, the job's own pace). */
 export const REFRESH_MS = 60_000;
-
-export const STATE_NAMES: Record<SloState, string> = {
-  disabled: "Disabled",
-  not_up_to_date: "Not up to date",
-  source_gone: "Source gone",
-  running_out: "Running out",
-  counting: "Counting",
-  not_measured: "Not measured",
-  no_recent_requests: "No recent requests",
-  building_history: "Building history",
-  nothing_left: "Nothing left",
-  too_little_traffic: "Too little traffic",
-  on_track: "On track",
-};
-
-/** The design's tone table: words always, colour only beside them (rule 6). */
-export type Tone = "critical" | "warning" | "neutral" | "none";
-
-export function toneOf(view: Pick<SloView, "state" | "severity" | "attention">): Tone {
-  if (view.state === "running_out") return view.severity === "critical" ? "critical" : "warning";
-  if (view.state === "on_track") return "none";
-  if (view.state === "no_recent_requests") return view.attention ? "warning" : "neutral";
-  const warned: SloState[] = ["nothing_left", "source_gone", "not_up_to_date", "not_measured"];
-  return warned.includes(view.state) ? "warning" : "neutral";
-}
-
-/** The badge: "Running out, act now" or "can wait", or the state's name. */
-export function badgeOf(view: Pick<SloView, "state" | "severity">): string | null {
-  if (view.state === "on_track") return null;
-  if (view.state === "running_out") {
-    return view.severity === "critical" ? "Running out, act now" : "Running out, can wait";
-  }
-  return STATE_NAMES[view.state];
-}
 
 /** NFR7, AC107: the state as this browser sees it now, whatever the last read said. */
 export function liveState(view: SloView, now: number): { state: SloState; variant: SloVariant } {
@@ -166,27 +134,8 @@ export function sentenceOf(view: SloView, zone: string, now: number = Date.now()
   }
 }
 
-// FR12: each kind's own word, so a latency target never says "failures" (AC89).
-const ALLOWED_NOUN: Record<string, string> = {
-  service_latency: "allowed slow requests",
-  check_availability: "allowed failed runs",
-};
-const HOURS_IN_TWO_DAYS = 48;
 // FR18: a burn resolves this long after no tier holds (a guess, in the register).
 const RESOLVE_AFTER_MINUTES = 10;
-
-export function allowedNoun(kind: string): string {
-  return ALLOWED_NOUN[kind] ?? "allowed failures";
-}
-
-/** How long what is left lasts, in FR10's words; null when it is not known. */
-export function lastsFor(hours: number | null): string | null {
-  if (hours === null) return null;
-  if (hours <= 0) return "Nothing is left.";
-  if (hours < 1) return "What is left lasts under an hour.";
-  if (hours < HOURS_IN_TWO_DAYS) return `What is left lasts about ${Math.floor(hours)} hours.`;
-  return `What is left lasts about ${Math.floor(hours / 24)} days.`;
-}
 
 /** FR10's Running out sentence, by variant: burning, nothing left, resolving, not judged. */
 function burnSentence(view: SloView, variant: SloVariant, zone: string, now: number): string {

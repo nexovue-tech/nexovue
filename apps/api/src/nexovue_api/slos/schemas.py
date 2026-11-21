@@ -179,6 +179,43 @@ class SloView(BaseModel):
     updated_at: datetime
 
 
+class SloBudget(BaseModel):
+    """What is left of a target's allowance and how fast it goes (Step 5b): what
+    `GET /slos/{id}/budget` returns and F20's reliability-target panel draws.
+
+    Taken from the target's own view, so its figures, state and burn are the target
+    page's, over the target's own window. It leaves out who is told (rule and channel
+    names) and the description: a panel shows how a target stands, not its routing.
+    """
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    name: str
+    label: str
+    kind: str
+    allowance_words: str
+    objective_percent: Decimal
+    window_days: int
+    state: slo.State
+    variant: slo.Variant
+    qualifiers: list[slo.Qualifier]
+    # Counted in the list's headline (FR10a); a badge's tone reads it, as the list's does.
+    attention: bool
+    severity: Literal["critical", "warning"] | None
+    hours_left: float | None
+    figures: SloFigures
+    # The burn's rate and severity as `slo_status` stored them at `evaluated_minute`.
+    burn: SloBurnView | None
+    evaluated_minute: datetime | None
+    # What a never-judged target's staleness counts from (FR10, NFR7).
+    created_at: datetime
+    zone: str
+
+    @classmethod
+    def of_view(cls, view: SloView) -> SloBudget:
+        return cls.model_validate(view.model_dump(include=set(cls.model_fields)))
+
+
 class DeletedSlo(BaseModel):
     """FR31's line on the list for 30 days after a deletion."""
 
