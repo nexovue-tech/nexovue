@@ -22,7 +22,8 @@ from nexovue_platform.ai.untrusted import Untrusted
 from nexovue_platform.assistant_records import ABSTAIN_REASONS, MAX_OUTPUT_TOKENS
 from nexovue_platform.assistant_tools import CHAT_MAX_CHARACTERS, ChatTool
 
-PROMPT_VERSION: Final = "chat-3"
+# chat-4 (F4 Step 6): the knowledge tool searches by meaning too where embeddings are set.
+PROMPT_VERSION: Final = "chat-4"
 RESULTS_IN_FULL: Final = 2
 # `bounded` has already cut a result to whole rows under CHAT_MAX_CHARACTERS, plus its
 # one-line cut note; F3's fence cap stays a net here and must never cut that JSON.

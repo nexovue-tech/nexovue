@@ -50,6 +50,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-073 — Code from a model reaches a person only through rules in a room with no model](ADR-073-model-code-reaches-a-person-only-through-rules-in-a-room-with-no-model.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 2b
 - [ADR-074 — A general suggestion is an example from the finding's facts only](ADR-074-a-general-suggestion-is-an-example-from-the-findings-facts-only.md) — the founder's D65 to D71, 2026-11-02; filed 2026-11-21 with F5 Step 2b
 - [ADR-075 — The AI rungs have their own routes, apart from rungs one and two](ADR-075-the-ai-rungs-have-their-own-routes-apart-from-rungs-one-and-two.md) — the founder's decision of 2026-11-21; filed with F5 Step 2b
+- [ADR-079 — Embedding is metered spending through F3's month, proved by a check, and never stands between chat and keyword search](ADR-079-embedding-is-metered-spending-and-never-blocks-keyword-search.md) — with F4 Step 6, 2026-11-21. Builds ADR-067's point 5
+- [ADR-080 — An organization may add a second connection for embeddings only, with its own key, agreement and check](ADR-080-a-second-connection-for-embeddings-only.md) — with F4 Step 6, 2026-11-21, building F4's D61
 
 ## Earlier decisions, 0001–0112
 

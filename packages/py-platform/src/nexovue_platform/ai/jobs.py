@@ -8,6 +8,7 @@ from typing import Final, Literal
 
 from nexovue_platform.evidence import INSIGHT_QUEUE
 from nexovue_platform.jobs import JobRequest
+from nexovue_platform.knowledge import EMBED_CHECK_TASK
 
 CHECK_AI_CONNECTION_TASK: Final = "nexovue_scheduler.insight.check"
 # What a test leaves in `job_results` (written by migration 0070's function), and how long.
@@ -56,6 +57,10 @@ CHECK_REASONS: Final[tuple[CheckReason, ...]] = (
     "invalid",
 )
 
+# F4: why an embedding check did not pass (AC85): the connection test's words, and one more
+# for a connection whose format has no embeddings (Anthropic's, D61). Frozen in migration 0078.
+EMBED_CHECK_REASONS: Final[tuple[str, ...]] = (*CHECK_REASONS, "no_embeddings")
+
 
 def check_request(*, org_id: str, request_id: str, requested_by: str | None) -> JobRequest:
     """One connection test. Ids only: the task reads the connection itself, bound by org."""
@@ -63,6 +68,21 @@ def check_request(*, org_id: str, request_id: str, requested_by: str | None) -> 
         task=CHECK_AI_CONNECTION_TASK,
         queue=INSIGHT_QUEUE,
         kwargs={"org_id": org_id, "request_id": request_id, "requested_by": requested_by},
+        org_id=org_id,
+        expires_seconds=CHECK_EXPIRES_SECONDS,
+        max_attempts=1,
+        soft_limit_seconds=CHECK_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=CHECK_HARD_LIMIT_SECONDS,
+    )
+
+
+def embedding_check_request(*, org_id: str, requested_by: str | None) -> JobRequest:
+    """F4: one embedding check (AC85), the connection test's limits. Ids only: the task reads
+    the organization's embedding setting and connection itself, bound by org."""
+    return JobRequest(
+        task=EMBED_CHECK_TASK,
+        queue=INSIGHT_QUEUE,
+        kwargs={"org_id": org_id, "requested_by": requested_by},
         org_id=org_id,
         expires_seconds=CHECK_EXPIRES_SECONDS,
         max_attempts=1,

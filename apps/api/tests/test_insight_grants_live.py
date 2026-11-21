@@ -135,7 +135,35 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "finished_at",
     },
     ("assistant_messages", "UPDATE"): {"state", "phase", "reserved_tokens", "reserved_month"},
-    ("assistant_steps", "UPDATE"): {"state", "row_count", "was_cut", "failure", "finished_at"},
+    # F4 Step 6: a phrase's own vector and model, on columns `setup`'s `provision_vector()`
+    # adds; this stack's image carries `vector`, so they are here (AC43 has the other case).
+    ("assistant_steps", "UPDATE"): {
+        "state",
+        "row_count",
+        "was_cut",
+        "failure",
+        "finished_at",
+        "query_embedding",
+        "query_embedding_model",
+    },
+    # F4 Step 6 (status, open decision 21): a chunk's text and whose it is, to embed it, and
+    # its vector written; never the vector read.
+    ("knowledge_chunks", "SELECT"): {
+        "id",
+        "org_id",
+        "project_id",
+        "content",
+        "embedded_model",
+        "embedding_due",
+    },
+    ("knowledge_chunks", "UPDATE"): {"embedding", "embedded_model", "embedding_due"},
+    # F4 Step 6: an embedding check's result (AC85).
+    ("assistant_settings", "UPDATE"): {
+        "embedding_checked_fingerprint",
+        "embedding_checked_at",
+        "embedding_checked_ok",
+        "embedding_check_reason",
+    },
     ("assistant_monthly_counts", "SELECT"): {"org_id", "month", "kind", "count"},
     ("assistant_monthly_counts", "UPDATE"): {"count"},
     ("assistant_conversations", "SELECT"): {"id", "org_id", "project_id"},
@@ -302,6 +330,32 @@ async def test_the_account_cannot_read_the_real_names_or_the_evidence(engine: As
                 {"account": INSIGHT_ACCOUNT, "column": column},
             )
             assert held is False, column
+
+
+async def test_the_account_never_reads_a_vector_nor_rewrites_a_chunk_s_text(
+    engine: AsyncEngine,
+) -> None:
+    """F4 Step 6: embedding needs a chunk's text and the vector's write, nothing more; a
+    runbook's words and source stay the runbook service's."""
+    async with engine.connect() as connection:
+        for column, privilege in (
+            ("embedding", "SELECT"),
+            ("content", "UPDATE"),
+            ("source_kind", "SELECT"),
+            ("runbook_id", "UPDATE"),
+            ("fact_service", "SELECT"),
+        ):
+            held = await connection.scalar(
+                text("SELECT has_column_privilege(:account, 'knowledge_chunks', :column, :p)"),
+                {"account": INSIGHT_ACCOUNT, "column": column, "p": privilege},
+            )
+            assert held is False, (column, privilege)
+        for privilege in ("INSERT", "DELETE"):
+            held = await connection.scalar(
+                text("SELECT has_table_privilege(:account, 'knowledge_chunks', :p)"),
+                {"account": INSIGHT_ACCOUNT, "p": privilege},
+            )
+            assert held is False, privilege
 
 
 async def test_the_account_is_a_plain_login_with_a_limit_and_timeouts(engine: AsyncEngine) -> None:

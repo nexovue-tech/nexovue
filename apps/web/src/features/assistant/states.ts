@@ -39,6 +39,8 @@ export const OPEN_RUNBOOK = "Open the runbook";
 /** What the runbook quote's Copy control names, read as "Copy this runbook text". */
 export const COPY_QUOTE = "this runbook text";
 /** FR42: knowledge search's empty answer, so absence does not read as "it never happened". */
+/** Beside a knowledge step that searched by keyword alone (FR27, AC41). */
+export const KEYWORD_ONLY_STEP = "Searched by keyword only.";
 export const noKnowledgeRecord = (days: number | null) =>
   days === null
     ? "No record of this in what is kept."

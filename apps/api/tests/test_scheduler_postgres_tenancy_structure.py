@@ -366,6 +366,13 @@ CROSS_TENANT_STATEMENTS: Final = (
         "`unavailable` and what it held is settled; row-level security shows the AI account "
         "only questions in flight or still holding tokens",
     ),
+    # F4 Step 6: the embedding sweep (design, section 6, *Embedding*).
+    _across(
+        "insight.knowledge",
+        "_ORGANIZATIONS",
+        f"{_SWEEP}: the organizations with an embedding model or an opted-out project, so each "
+        "has its due chunks embedded or its opted-out vectors nulled, by its own `org_id`",
+    ),
 )
 
 

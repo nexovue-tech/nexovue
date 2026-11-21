@@ -13,12 +13,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
+from nexovue_platform.ai.embed import EmbeddingTarget
 from nexovue_platform.assistant_records import FailureReason, Phase, Remainder, StepState
 from nexovue_platform.assistant_tools import ChatTool
 from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, generate_key, keyring_from
 
 from nexovue_scheduler.insight.api_client import ApiAnswer
 from nexovue_scheduler.insight.assistant_store import ChatConnection, Question, Scope, StepEnd
+from nexovue_scheduler.insight.knowledge import Ready
 
 NOW: Final = datetime(2026, 11, 11, 14, 30, tzinfo=UTC)
 ORG: Final = "0195f000-0000-7000-8000-000000000001"
@@ -93,6 +95,10 @@ class FakeStore:
     # The project's retention, as `project_retention` gives it (the Free plan's by default).
     raw_retention_days: int = 7
     derived_retention_days: int = 30
+    # Step 6: where a search phrase may be embedded, or None (keyword only), and each
+    # phrase's vector the loop stored on its step.
+    embedding_ready: Ready | None = None
+    query_embeddings: dict[str, tuple[tuple[float, ...], str]] = field(default_factory=dict)
 
     async def start(self, *, org_id: str, message_id: str) -> Question | None:
         return self.the_question
@@ -129,6 +135,21 @@ class FakeStore:
     ) -> str:
         self.runs.append({"prompt_version": prompt_version})
         return f"run{len(self.runs)}"
+
+    async def embedding(self, question: Question, *, keys: ConfiguredKeys) -> Ready | None:
+        return self.embedding_ready
+
+    async def start_embed_run(
+        self, question: Question, target: EmbeddingTarget, *, request_sha256: str
+    ) -> str:
+        self.runs.append({"purpose": "embed", "model": target.model})
+        return f"run{len(self.runs)}"
+
+    async def set_query_embedding(
+        self, question: Question, step_id: str, *, vector: tuple[float, ...], model: str
+    ) -> bool:
+        self.query_embeddings[step_id] = (vector, model)
+        return not self.ended
 
     async def finish_run(self, question: Question, run_id: str, **ending: Any) -> None:
         self.runs[int(run_id[3:]) - 1].update(ending)

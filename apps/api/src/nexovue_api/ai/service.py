@@ -335,6 +335,11 @@ async def _refuse_where_unavailable(session: AsyncSession, availability: Availab
         raise ConflictError(UNAVAILABLE_WORDS[reason], reason=reason)
 
 
+async def refuse_where_unavailable(session: AsyncSession, availability: Availability) -> None:
+    """F4: chat's embedding writes refuse where AI cannot be offered, by this same rule."""
+    await _refuse_where_unavailable(session, availability)
+
+
 def _box(keys: ConfiguredKeys) -> SealedBox:
     if not keys.current:
         raise DependencyUnavailableError(UNAVAILABLE_WORDS["no_key"])

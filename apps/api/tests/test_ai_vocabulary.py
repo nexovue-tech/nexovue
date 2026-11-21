@@ -13,6 +13,8 @@ from typing import Final
 
 import pytest
 from nexovue_platform import ai_records as ai
+from nexovue_platform.ai.embed import EMBED_FORMATS
+from nexovue_platform.ai.jobs import EMBED_CHECK_REASONS
 
 from nexovue_api.data.postgres.models import JOB_RESULT_KINDS
 
@@ -37,7 +39,10 @@ def _quoted(values: tuple[str, ...]) -> str:
     [
         ("0070", "_WIRE_FORMATS", ai.WIRE_FORMATS),
         ("0070", "_OFF_REASONS", ai.OFF_REASONS),
-        ("0070", "_RUN_PURPOSES", ai.RUN_PURPOSES),
+        # 0078 widened it (F4 Step 6): embedding calls.
+        ("0078", "_RUN_PURPOSES", ai.RUN_PURPOSES),
+        ("0078", "_EMBED_WIRE_FORMATS", tuple(EMBED_FORMATS)),
+        ("0078", "_EMBED_CHECK_REASONS", EMBED_CHECK_REASONS),
         # 0071 widened it (F3 Step 4): the latest copy is the one the database holds.
         ("0071", "_RUN_OUTCOMES", ai.RUN_OUTCOMES),
         ("0070", "_JOB_RESULT_KINDS", JOB_RESULT_KINDS),

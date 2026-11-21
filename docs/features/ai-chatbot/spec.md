@@ -138,14 +138,14 @@ The research has no interviews. The founder's five to eight conversations with o
 
 **It can read, and it cannot read,** generated from the catalog in T8.5. Can: findings, services and their endpoints and trends, dependencies, releases, alerts, checks, errors, logs, traces, metrics, hosts, F3's facts, notes and runbooks. Cannot: `/llm/calls`, other projects, session data, profiles, anything by writing SQL.
 
-**Providers (updated by T6.5, unverified until then).**
+**Providers (T6.5, 2026-11-21: built from documentation; no real call yet).** T6.0's one real call per format is the founder's, after Phase 2 (foundation item 31), and is **not yet run**: every embedding fixture is written from documentation, and each row stays "not yet tested" until a dated call is recorded.
 
 | Provider | Chat | Meaning search |
 |---|---|---|
-| OpenAI-style account | Tool calling to be proved in T2.7a | Yes, on the same connection, unverified until T6.5 |
-| Anthropic | As above | No embedding model of its own. Needs the second connection (FR27) |
-| Amazon Bedrock | As above | Titan Text Embeddings V2 through InvokeModel, not Converse (D81). One real call in T6.0 |
-| Ollama or another local server | As above; the model decides | Ollama documents `/v1/embeddings` (D81). One real call in T6.0 |
+| OpenAI-style account | Tool calling to be proved in T2.7a | `POST {base}/embeddings`, a list of texts, `encoding_format: float`, on the same connection. Built from OpenAI's generated library types; **not yet tested** |
+| Anthropic | As above | No embedding model of its own. Needs the second connection (FR27); the setting refuses a model on this connection alone |
+| Amazon Bedrock | As above | Titan Text Embeddings V2 through `POST {base}/model/{id}/invoke`, one text a call, not Converse (D81). Built from AWS's InvokeModel reference and Titan example; **not yet tested**, including whether a Bedrock API key works on InvokeModel |
+| Ollama or another local server | As above; the model decides | Ollama lists `/v1/embeddings` with a list of strings (D81), so the OpenAI-style format serves it. **Not yet tested** |
 
 Keyword search works on all of them. **Public text says "keyword search always; meaning search where your provider offers embeddings".**
 

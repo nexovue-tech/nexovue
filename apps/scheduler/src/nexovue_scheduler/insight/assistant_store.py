@@ -21,6 +21,7 @@ from typing import Any, Final
 
 from nexovue_platform.ai.chat import provider_label
 from nexovue_platform.ai.connection import consent_fingerprint, provider_host
+from nexovue_platform.ai.embed import EmbeddingTarget, vector_literal
 from nexovue_platform.ai.limits import chat_ceiling, month_of
 from nexovue_platform.assistant_records import (
     CHAT_DISCLOSURE_VERSION,
@@ -29,10 +30,13 @@ from nexovue_platform.assistant_records import (
     Remainder,
     StepState,
 )
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.evidence.model_facts import SCHEMA_VERSION
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler.insight import knowledge
+from nexovue_scheduler.insight.knowledge import Ready
 from nexovue_scheduler.insight.store import reserve_month
 
 _START: Final = text(
@@ -110,6 +114,29 @@ _FINISH_RUN: Final = text(
     SET outcome = :outcome, input_tokens = :input_tokens, output_tokens = :output_tokens,
         tokens_estimated = :tokens_estimated, finished_at = :finished_at
     WHERE org_id = :org_id AND id = :run_id AND outcome = 'started'
+    """
+)
+# Step 6: a search phrase's embedding call, from the question's own reservation like chat's.
+_START_EMBED_RUN: Final = text(
+    """
+    INSERT INTO ai_runs (
+        org_id, project_id, requested_by, purpose, subject_id, wire_format, model,
+        region_label, provider_host, prompt_version, request_sha256, fields_sent
+    ) VALUES (
+        :org_id, :project_id, :requested_by, 'embed', :subject_id, :wire_format, :model,
+        NULL, :provider_host, :prompt_version, :request_sha256, CAST(:fields_sent AS jsonb)
+    )
+    RETURNING id
+    """
+)
+# The phrase's own vector and model, on its step while the question runs; the finish nulls
+# both (migration 0078). Only a running step of a visible question matches (row security).
+_QUERY_EMBEDDING: Final = text(
+    """
+    UPDATE assistant_steps
+    SET query_embedding = CAST(:vector AS vector), query_embedding_model = :model
+    WHERE org_id = :org_id AND id = :id AND state = 'running'
+    RETURNING id
     """
 )
 _SPEND: Final = text("SELECT assistant_record_spend(:id, :spent, :estimated)")
@@ -393,6 +420,55 @@ class PostgresQuestionStore:
                     "finished_at": at,
                 },
             )
+
+    async def embedding(self, question: Question, *, keys: ConfiguredKeys) -> Ready | None:
+        """Where a search phrase may be embedded now, or None: no `vector` on this install,
+        or the setting not ready (Step 6). Read again for each phrase (FR25)."""
+        if not await knowledge.vector_granted(self.engine):
+            return None
+        loaded = await knowledge.load(self.engine, org_id=question.org_id, keys=keys)
+        return knowledge.ready(loaded, question.org_id)
+
+    async def start_embed_run(
+        self, question: Question, target: EmbeddingTarget, *, request_sha256: str
+    ) -> str:
+        """A phrase's embedding call's row, committed before any byte is sent."""
+        async with self.engine.begin() as db:
+            run_id: uuid.UUID = (
+                await db.execute(
+                    _START_EMBED_RUN,
+                    {
+                        "org_id": question.org_id,
+                        "project_id": question.project_id,
+                        "requested_by": question.user_id,
+                        "subject_id": question.id,
+                        "wire_format": target.wire_format,
+                        "model": target.model,
+                        "provider_host": provider_host(target.base_url),
+                        "prompt_version": knowledge.EMBED_VERSION,
+                        "request_sha256": request_sha256,
+                        "fields_sent": json.dumps([]),
+                    },
+                )
+            ).scalar_one()
+        return str(run_id)
+
+    async def set_query_embedding(
+        self, question: Question, step_id: str, *, vector: tuple[float, ...], model: str
+    ) -> bool:
+        async with self.engine.begin() as db:
+            stored = (
+                await db.execute(
+                    _QUERY_EMBEDDING,
+                    {
+                        "org_id": question.org_id,
+                        "id": step_id,
+                        "vector": vector_literal(vector),
+                        "model": model,
+                    },
+                )
+            ).first()
+        return stored is not None
 
     async def record_spend(self, question: Question, *, tokens: int, estimated: bool) -> None:
         async with self.engine.begin() as db:

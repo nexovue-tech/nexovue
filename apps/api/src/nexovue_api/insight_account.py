@@ -25,6 +25,7 @@ import os
 from collections.abc import Callable, Mapping
 from typing import Final
 
+from nexovue_platform.knowledge import VECTOR_COLUMNS
 from sqlalchemy import TextClause, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
@@ -103,6 +104,9 @@ INSIGHT_GRANTS: Final = (
     "GRANT UPDATE (count) ON assistant_monthly_counts TO nexovue_insight",
     "GRANT SELECT (id, org_id, project_id) ON assistant_conversations TO nexovue_insight",
     "GRANT SELECT ON assistant_settings TO nexovue_insight",
+    # F4 Step 6: an embedding check's result, only on the values it tested (AC85).
+    "GRANT UPDATE (embedding_checked_fingerprint, embedding_checked_at, embedding_checked_ok, "
+    "embedding_check_reason) ON assistant_settings TO nexovue_insight",
     # F4 Step 3: each windowed tool's retention, so an aged-out range is decided in code
     # (design, *The aged-out check*); `org_id` too, since every statement binds it.
     "GRANT SELECT (project_id, org_id, raw_retention_days, derived_retention_days) "
@@ -119,6 +123,30 @@ INSIGHT_GRANTS: Final = (
         f"GRANT EXECUTE ON FUNCTION {signature} TO nexovue_insight"
         for signature in INSIGHT_FUNCTIONS
     ),
+)
+
+# F4 Step 6 (design, *Grants*; status, open decision 21): only where `setup`'s
+# `provision_vector()` added the columns, since a grant on a missing column fails and an
+# install without `vector` must lose only meaning search (AC43). A chunk's text and whose it
+# is, to embed it; never its vector, which no statement of the account reads. A question's
+# own vector is written on its step, and nulled by `assistant_finish_message`.
+VECTOR_GRANTS: Final = (
+    "GRANT SELECT (id, org_id, project_id, content, embedded_model, embedding_due) "
+    "ON knowledge_chunks TO nexovue_insight",
+    "GRANT UPDATE (embedding, embedded_model, embedding_due) "
+    "ON knowledge_chunks TO nexovue_insight",
+    "GRANT UPDATE (query_embedding, query_embedding_model) ON assistant_steps TO nexovue_insight",
+)
+# Whether every column `provision_vector()` adds is there; the names are constants.
+_VECTOR_PAIRS: Final = ", ".join(f"('{table}', '{column}')" for table, column, _ in VECTOR_COLUMNS)
+VECTOR_COLUMNS_PRESENT: Final = text(
+    f"""
+    SELECT count(*) = {len(VECTOR_COLUMNS)} FROM pg_catalog.pg_attribute AS a
+    JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND NOT a.attisdropped
+      AND (c.relname::text, a.attname::text) IN ({_VECTOR_PAIRS})
+    """
 )
 
 # Built-in functions every account may call that reach past its own tables: advisory locks,
@@ -282,6 +310,14 @@ async def _apply_grants(connection: AsyncConnection) -> None:
         await connection.exec_driver_sql(revoke)
     for statement in (*_TAKE_EVERYTHING, *INSIGHT_GRANTS):
         await connection.exec_driver_sql(statement)
+    if await vector_columns_present(connection):
+        for statement in VECTOR_GRANTS:
+            await connection.exec_driver_sql(statement)
+
+
+async def vector_columns_present(connection: AsyncConnection | AsyncSession) -> bool:
+    """Whether `setup` added meaning search's columns (F4 Step 6; AC43)."""
+    return bool(await connection.scalar(VECTOR_COLUMNS_PRESENT))
 
 
 async def _revoke_shared_rights(connection: AsyncConnection) -> None:

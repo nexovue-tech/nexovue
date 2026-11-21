@@ -7,6 +7,7 @@ import type {
   Usage,
   WireFormat,
 } from "./api";
+import type { KeywordOnlyReason } from "./chat-api";
 
 /**
  * Every sentence `/settings/ai` says (F3 design, *AI settings*; spec FR26 to FR30, AC85). Pure,
@@ -232,4 +233,36 @@ export function countWord(kind: string): string {
   if (kind.startsWith("wrong_"))
     return `Marked wrong: ${kind.slice("wrong_".length).replaceAll("_", " ")}`;
   return CHAT_COUNT_WORDS[kind] ?? kind.replaceAll("_", " ");
+}
+
+// ---------------------------------------------------------------- chat's meaning search (F4 Step 6)
+
+/** Why chat searches by keyword only, said in the Chat section (FR27, AC43). */
+export const KEYWORD_ONLY_WORDS: Record<KeywordOnlyReason, string> = {
+  no_extension:
+    "Search is keyword only: this server's database has no vector extension. Whoever runs it can create the extension, then run setup again.",
+  no_model: "Search is keyword only: no embedding model is set.",
+  cannot_embed:
+    "Search is keyword only: this provider has no embedding model. Add a connection for embeddings only.",
+  no_consent:
+    "Search is keyword only: an owner has not agreed to send text to the connection for embeddings.",
+  not_tested: "Search is keyword only until a check of this embedding model passes.",
+  chat_not_ready:
+    "Search is keyword only: chat must be on at the facts and text level, with an owner's agreement.",
+};
+export const MEANING_SEARCH_ON =
+  "Search finds runbooks and fact lines by meaning as well as by keyword.";
+export const EMBEDDING_SENDS =
+  "With a model set, every runbook piece and fact line is sent once to be embedded, and each search phrase too. Masking applies first.";
+
+/** An embedding check's failure, in the connection test's words, with one of its own. */
+export function embeddingCheckLine(reason: string | null): string {
+  if (reason === "no_embeddings") return "This provider has no embedding model.";
+  if (reason !== null && reason in CHECK_WORDS) return CHECK_WORDS[reason as CheckReason];
+  return "The check did not pass.";
+}
+
+export function embeddingProgress(embedded: number, total: number): string {
+  if (total === 0) return "No runbooks or fact lines to embed yet.";
+  return `${embedded} of ${total} runbook pieces and fact lines can be found by meaning.`;
 }

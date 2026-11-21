@@ -94,3 +94,31 @@ EXPIRED: Final = (
     ("knowledge_chunks", "id", _PROJECT_GONE.format(table="knowledge_chunks")),
     ("runbooks", "id", _PROJECT_GONE.format(table="runbooks")),
 )
+
+
+# ------------------------------------------------------------------ meaning search (Step 6)
+
+# Added by `setup`'s `provision_vector()`, never a migration (design, *Extension*; D62), so an
+# install that cannot create `vector` loses only meaning search (AC43). No size: each
+# organization's model decides its own, and search compares only vectors of one model.
+VECTOR_COLUMNS: Final = (
+    ("knowledge_chunks", "embedding", "vector"),
+    ("assistant_steps", "query_embedding", "vector"),
+    ("assistant_steps", "query_embedding_model", "text"),
+)
+EMBED_SWEEP_TASK: Final = "nexovue_scheduler.insight.knowledge.embed_chunks"
+EMBED_CHECK_TASK: Final = "nexovue_scheduler.insight.knowledge.check_embedding"
+# Chunks one sweep run may send, in calls of the format's own batch (guesses; design: batches
+# of 200 for the writers' sweep). Whatever is left waits for the next run, still due.
+EMBED_SWEEP_CHUNKS: Final = 256
+# At most this many provider calls a run, so a run fits its time limit whatever the batch.
+EMBED_SWEEP_CALLS: Final = 8
+# Keyword and meaning results each, then merged by reciprocal rank (design: RRF, 60, top 5).
+SEARCH_SIDE_RESULTS: Final = 20
+RRF_OFFSET: Final = 60
+MERGED_RESULTS: Final = 5
+# How a search ran, as the result says and the step records (AC41, FR27).
+SearchKind = Literal["keyword", "hybrid"]
+SEARCH_NOTE_PREFIX: Final = "search:"
+# The search route's query parameter naming the step whose phrase the worker embedded.
+STEP_QUERY: Final = "step_id"

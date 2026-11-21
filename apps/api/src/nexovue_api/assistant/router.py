@@ -15,7 +15,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from nexovue_api.ai.service import availability_of
-from nexovue_api.assistant import service
+from nexovue_api.assistant import embedding, service
 from nexovue_api.assistant.schemas import (
     AskRequest,
     Availability,
@@ -23,11 +23,13 @@ from nexovue_api.assistant.schemas import (
     ChatSettings,
     ConversationSummary,
     ConversationView,
+    EmbeddingConsent,
     FeedbackRequest,
     MessageView,
     NewConversation,
     ReadRow,
     SaveChatSettings,
+    SaveEmbedding,
 )
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayAskAssistant, MayConsentAIDisclosure, MayManageAI
@@ -228,6 +230,39 @@ async def agree(
     return await service.consent(
         db, identity=identity, request=request, ai=availability_of(settings), now=_now()
     )
+
+
+@router.put("/settings/embedding", summary="Name the embedding model, and any connection for it")
+async def save_embedding(
+    identity: MayManageAI, db: DbSession, settings: AppSettings, request: SaveEmbedding
+) -> ChatSettings:
+    ai = availability_of(settings)
+    await embedding.save_embedding(db, identity=identity, request=request, ai=ai)
+    return await service.chat_settings(db, org_id=identity.org_id, ai=ai, now=_now())
+
+
+@router.post(
+    "/settings/embedding/consent",
+    summary="An owner agrees to send text to the connection for embeddings",
+)
+async def agree_embedding(
+    identity: MayConsentAIDisclosure,
+    db: DbSession,
+    settings: AppSettings,
+    request: EmbeddingConsent,
+) -> ChatSettings:
+    now, ai = _now(), availability_of(settings)
+    await embedding.agree_embedding(db, identity=identity, request=request, ai=ai, now=now)
+    return await service.chat_settings(db, org_id=identity.org_id, ai=ai, now=now)
+
+
+@router.post(
+    "/settings/embedding/check",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Check the embedding model with one real call, as a job on the AI container",
+)
+async def check_embedding(identity: MayManageAI, db: DbSession, settings: AppSettings) -> None:
+    await embedding.start_embedding_check(db, identity=identity, ai=availability_of(settings))
 
 
 @router.get("/reads", summary="What chat read and sent where: no filter values")

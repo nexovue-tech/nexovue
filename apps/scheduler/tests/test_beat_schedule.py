@@ -15,12 +15,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+from nexovue_platform.ai_records import CALL_SECONDS_MAX
 from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import CheckDefinition
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from nexovue_platform.fixes.records import SWEEP_GENERAL_FIXES_TASK
-from nexovue_platform.knowledge import KNOWLEDGE_SWEEP_TASK
+from nexovue_platform.knowledge import EMBED_CHECK_TASK, EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
@@ -32,6 +33,7 @@ from nexovue_scheduler.beat import (
     CONNECTIONS_SWEEP_ENTRY,
     DELIVERY_SWEEP_ENTRY,
     DETECTION_SWEEP_ENTRY,
+    EMBED_SWEEP_ENTRY,
     ERASURE_ENTRY,
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
@@ -324,6 +326,27 @@ def test_the_ai_sweep_runs_every_five_minutes_on_the_ai_role_s_own_queue() -> No
     assert sweep.request.expires_seconds == 300
     assert SWEEP_INSIGHT_TASK in registry.registered(registry.TASK_SETS["insight"])
     assert not any("insight" in module for module in registry.TASK_SETS["all"])
+
+
+def test_chunks_are_embedded_every_five_minutes_on_insight_only_while_ai_is_on() -> None:
+    """F4 T6.1: the embedding sweep calls a provider as the AI account, so it goes on
+    `insight` beside F3's sweep, only while an AI connection is on, with limits that leave
+    room for the last call at the longest a connection allows. Only that role's task set
+    can run it, with the embedding check."""
+    beat = _scheduler()
+    assert EMBED_SWEEP_ENTRY not in beat._sweep_entries()
+    beat.ai_on = True
+    sweep = beat._sweep_entries()[EMBED_SWEEP_ENTRY]
+
+    assert sweep.request.task == EMBED_SWEEP_TASK
+    assert sweep.request.queue == INSIGHT_QUEUE
+    assert sweep.interval_seconds == 300
+    assert sweep.request.hard_limit_seconds > sweep.request.soft_limit_seconds
+    assert sweep.request.soft_limit_seconds >= CALL_SECONDS_MAX
+    insight = registry.registered(registry.TASK_SETS["insight"])
+    assert {EMBED_SWEEP_TASK, EMBED_CHECK_TASK} <= set(insight)
+    assert "nexovue_scheduler.insight.knowledge" in registry.TASK_SETS["insight"]
+    assert "nexovue_scheduler.insight.knowledge" not in registry.TASK_SETS["all"]
 
 
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:

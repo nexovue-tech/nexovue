@@ -323,6 +323,11 @@ POLICY_OF: Final = {
     "nexovue_api/assistant/router.py:unmark_wrong": "MayAskAssistant",
     "nexovue_api/assistant/router.py:save_settings": "MayManageAI",
     "nexovue_api/assistant/router.py:agree": "MayConsentAIDisclosure",
+    # F4 Step 6: the embedding model and its connection are an admin's; agreeing to send
+    # text to a second connection is an owner's, as chat's own consent is.
+    "nexovue_api/assistant/router.py:save_embedding": "MayManageAI",
+    "nexovue_api/assistant/router.py:check_embedding": "MayManageAI",
+    "nexovue_api/assistant/router.py:agree_embedding": "MayConsentAIDisclosure",
     # F4 T5.2 (D48): owner, admin and member write runbooks; a viewer reads them.
     "nexovue_api/runbooks/router.py:create_runbook": "MayManageKnowledge",
     "nexovue_api/runbooks/router.py:upload_runbooks": "MayManageKnowledge",

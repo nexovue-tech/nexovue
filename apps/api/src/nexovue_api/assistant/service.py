@@ -21,7 +21,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from nexovue_platform.ai.chat import provider_label
 from nexovue_platform.ai.connection import provider_host
@@ -38,6 +38,7 @@ from nexovue_platform.assistant_records import KEPT_SINCE_PREFIX as KEPT_SINCE
 from nexovue_platform.assistant_tools import KNOWLEDGE_TOOL, SEVERITY_FILTER_IDS, TOOLS_BY_NAME
 from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.jobs import ENQUEUE, WAKE
+from nexovue_platform.knowledge import SEARCH_NOTE_PREFIX
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -47,6 +48,7 @@ from nexovue_api.ai import queries as ai_queries
 from nexovue_api.ai.service import Availability as AIAvailability
 from nexovue_api.ai.service import consent_fingerprint_of
 from nexovue_api.assistant import tickets
+from nexovue_api.assistant.embedding import embedding_state
 from nexovue_api.assistant.schemas import (
     AskContext,
     Availability,
@@ -570,7 +572,8 @@ def _step_view(
     step: AssistantStep, *, project_id: uuid.UUID, cases_kept_days: int | None = None
 ) -> StepView:
     tool = TOOLS_BY_NAME.get(step.tool)
-    kept_since, failure = _kept_since(step.failure)
+    search, note = _search_note(step.failure)
+    kept_since, failure = _kept_since(note)
     return StepView(
         key=f"s{step.position}",
         position=step.position,
@@ -587,8 +590,17 @@ def _step_view(
         failure=failure,
         kept_since=kept_since,
         cases_kept_days=cases_kept_days if step.tool == KNOWLEDGE_TOOL else None,
+        search=search if step.tool == KNOWLEDGE_TOOL else None,
         link=None if tool is None or step.state == "refused" else _link(step, project_id),
     )
+
+
+def _search_note(failure: str | None) -> tuple[Literal["keyword", "hybrid"] | None, str | None]:
+    """The worker's note of how a knowledge step searched (`search:keyword`), as a closed
+    word; any other failure as it is. An unknown word reads as keyword, the weaker claim."""
+    if failure is None or not failure.startswith(SEARCH_NOTE_PREFIX):
+        return None, failure
+    return ("hybrid" if failure.removeprefix(SEARCH_NOTE_PREFIX) == "hybrid" else "keyword"), None
 
 
 def _kept_since(failure: str | None) -> tuple[date | None, str | None]:
@@ -759,6 +771,7 @@ async def chat_settings(
         disclosure_version=CHAT_DISCLOSURE_VERSION,
         monthly_counts=counts,
         people_this_month=[PersonCount(name=name, questions=int(total)) for name, total in people],
+        embedding=await embedding_state(session, row=row, connection=connection),
     )
 
 

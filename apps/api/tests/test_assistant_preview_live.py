@@ -14,13 +14,16 @@ from typing import Any
 
 import pytest
 from assistant_live import NOW, chat_on, db, require_postgres, tenant
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.ai.service import consent_fingerprint_of
 from nexovue_api.assistant.preview import chat_preview
-from nexovue_api.data.postgres.models import Project
+from nexovue_api.auth.dependencies import Identity
+from nexovue_api.data.postgres.models import AssistantSettings, KnowledgeChunk, Project
 from nexovue_api.errors.exceptions import ConflictError
+from nexovue_api.runbooks import service as runbooks
+from nexovue_api.runbooks.schemas import NewRunbook
 
 require_postgres("chat's preview suite")
 
@@ -91,7 +94,9 @@ async def test_the_preview_shows_a_real_log_line_masked_and_fenced_as_it_would_b
     assert ("Reading logs: body", "facts_and_text") in kinds
     assert ("Your question", "facts") in kinds
     assert any(kind.startswith("Earlier questions") for kind, _ in kinds)
-    assert any(kind.startswith("Runbook and note text") for kind, _ in kinds)
+    # Step 6 (AC2): text sent for embedding is in the complete list, chunks and phrases both.
+    assert any(kind.startswith("Runbook text and fact lines, to be embedded") for kind, _ in kinds)
+    assert any(kind.startswith("Chat's search phrases, to be embedded") for kind, _ in kinds)
     assert preview.masking_rules_off == ["cookies"]
     assert preview.sent_for_embedding == 0
     assert preview.consent_fingerprint == consent_fingerprint_of(connection)
@@ -120,6 +125,44 @@ async def test_with_no_logs_the_preview_shows_labelled_samples_and_still_reads(
     assert by_kind["The service in view"].labelled_sample
     # The built-in sample is masked like a real one.
     assert "abcdefgh12345678" not in by_kind["Reading logs: a log line"].sent
+
+
+async def test_with_an_embedding_model_the_preview_counts_every_chunk_sent_at_once(
+    db: AsyncSession,
+) -> None:
+    """FR24, AC2: the bulk embedding count, the project's chunks, once a model is set."""
+    made = await tenant(db, "PreviewEmbedding")
+    await chat_on(db, made)
+    project = await _project(db, made.organization.id)
+    await runbooks.create_runbook(
+        db,
+        identity=Identity(user=made.user, organization=made.organization),
+        request=NewRunbook(
+            project_id=project.id, title="Pool", content="## One\nfirst part\n## Two\nsecond part"
+        ),
+        now=NOW,
+    )
+    chunks = await db.scalar(
+        select(func.count()).where(KnowledgeChunk.org_id == made.organization.id)
+    )
+    assert chunks
+
+    def preview() -> Any:
+        return chat_preview(
+            db,
+            _Logs([]),  # type: ignore[arg-type]
+            org_id=made.organization.id,
+            project_id=project.id,
+            now=NOW,
+        )
+
+    assert (await preview()).sent_for_embedding == 0
+    await db.execute(
+        update(AssistantSettings)
+        .where(AssistantSettings.org_id == made.organization.id)
+        .values(embedding_model="text-embed")
+    )
+    assert (await preview()).sent_for_embedding == chunks
 
 
 async def test_without_a_connection_there_is_nothing_to_preview(db: AsyncSession) -> None:

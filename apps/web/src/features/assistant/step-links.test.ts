@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { message, PROJECT_ID, step } from "./panel.test-util";
 import { STARTERS, starterPage, startersFor } from "./starters";
-import { NO_ROWS, READ_REFUSED_FOR_NOW } from "./states";
+import { KEYWORD_ONLY_STEP, NO_ROWS, READ_REFUSED_FOR_NOW } from "./states";
 import { stepHref, stepOutcome, stepsAsText, stepTarget } from "./step-links";
 
 /**
@@ -57,6 +57,29 @@ describe("what a step says it read", () => {
     expect(stepOutcome(step({ tool: "search_knowledge", row_count: 2, from_time: null }))).toBe(
       "Latest 2, no time filter.",
     );
+  });
+
+  it("says a knowledge step searched by keyword only, and says nothing more for hybrid", () => {
+    // FR27, AC41: each answer using keyword search alone says so.
+    expect(
+      stepOutcome(
+        step({ tool: "search_knowledge", row_count: 2, from_time: null, search: "keyword" }),
+      ),
+    ).toBe(`Latest 2, no time filter. ${KEYWORD_ONLY_STEP}`);
+    expect(
+      stepOutcome(
+        step({ tool: "search_knowledge", row_count: 0, cases_kept_days: 30, search: "keyword" }),
+      ),
+    ).toBe(
+      `No record of this in what is kept. Cases are kept for 30 days after they end. ${KEYWORD_ONLY_STEP}`,
+    );
+    expect(
+      stepOutcome(
+        step({ tool: "search_knowledge", row_count: 2, from_time: null, search: "hybrid" }),
+      ),
+    ).toBe("Latest 2, no time filter.");
+    // Only the knowledge tool searches; another step never says it.
+    expect(stepOutcome(step({ row_count: 2, search: "keyword" }))).not.toContain(KEYWORD_ONLY_STEP);
   });
 
   it("links a knowledge step to the runbooks list, carrying no phrase", () => {

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -27,6 +28,7 @@ from assistant_fakes import (
     question,
 )
 from nexovue_platform.ai.chat import ChatProvider, ChatRequest, ChatResponse
+from nexovue_platform.ai.embed import EmbeddingTarget, EmbedResponse
 from nexovue_platform.ai.testing import ScriptedProvider, answers, calls
 from nexovue_platform.assistant_records import MAX_STEPS, QUESTION_RESERVATION_TOKENS
 
@@ -34,6 +36,7 @@ from nexovue_scheduler.insight.api_client import ApiAnswer
 from nexovue_scheduler.insight.assistant import LoopParts, ProviderFailed, answer
 from nexovue_scheduler.insight.assistant_prompt import StepResult, build_request
 from nexovue_scheduler.insight.assistant_store import ChatConnection
+from nexovue_scheduler.insight.knowledge import EmbedFailed, Ready
 
 SERVICES_CALL = calls("list_services", {"from": WINDOW_FROM, "to": WINDOW_TO})
 GOOD_ANSWER = answers(
@@ -407,3 +410,121 @@ async def test_a_read_the_api_refused_for_now_or_could_not_serve_says_which(
 
     assert (store.steps["step1"]["state"], store.steps["step1"]["failure"]) == ("failed", failure)
     assert state == "abstained", "the question went on to answer with what it had"
+
+
+# ------------------------------------------------------------------ Step 6: meaning search
+
+ABSTAIN = answers({"sentences": [], "abstained": "not_enough_evidence"})
+EMBED_TARGET = EmbeddingTarget(
+    "chat", "openai_chat", "http://10.0.0.5:11434/v1", "fake-embed", None
+)
+READY = Ready(
+    org_id="0195f000-0000-7000-8000-000000000001",
+    target=EMBED_TARGET,
+    key=None,
+    call_seconds=CALL_SECONDS,
+    monthly_token_limit=10_000_000,
+    mask_emails=True,
+)
+
+
+@dataclass
+class _Embedder:
+    batch: int = 64
+    sent: list[tuple[str, ...]] = field(default_factory=list)
+    fail: EmbedFailed | None = None
+
+    def body_of(self, texts: tuple[str, ...]) -> bytes:
+        return json.dumps({"input": list(texts)}).encode()
+
+    def embed(self, texts: tuple[str, ...]) -> EmbedResponse:
+        self.sent.append(texts)
+        if self.fail is not None:
+            raise self.fail
+        return EmbedResponse("ok", vectors=((1.0, 0.0),), input_tokens=7)
+
+
+def _knowledge_client(search: str) -> RecordingClient:
+    body = {"chunks": [], "search": search}
+    return RecordingClient(answer_for=lambda tool: ApiAnswer(200, json.dumps(body).encode()))
+
+
+async def _search(
+    store: FakeStore, client: RecordingClient, embedder: _Embedder | None, phrase: str
+) -> str | None:
+    provider = ScriptedProvider([calls("search_knowledge", {"q": phrase}), ABSTAIN])
+    parts = _parts(store, provider, client)
+    if embedder is not None:
+        parts = replace(parts, embedder_for=lambda target, key, seconds: embedder)
+    asked = store.the_question
+    assert asked is not None
+    return await answer(asked.org_id, asked.id, parts)
+
+
+async def test_a_knowledge_search_embeds_its_phrase_and_names_its_step() -> None:
+    """T6.2: the phrase's vector goes on its step with its own model, the route is told the
+    step, never the vector, and the call is metered from the question's reservation."""
+    store, client, embedder = (
+        FakeStore(embedding_ready=READY),
+        _knowledge_client("hybrid"),
+        _Embedder(),
+    )
+
+    state = await _search(store, client, embedder, "checkout slow")
+
+    assert state == "abstained"
+    [(tool, query, _ticket)] = client.asked
+    assert tool.name == "search_knowledge"
+    assert query["step_id"] == "step1" and "vector" not in str(query)
+    assert store.query_embeddings == {"step1": ((1.0, 0.0), "fake-embed")}
+    assert embedder.sent == [("checkout slow",)]
+    [embed_run] = [run for run in store.runs if run.get("purpose") == "embed"]
+    assert (embed_run["model"], embed_run["outcome"]) == ("fake-embed", "done")
+    assert (7, False) in store.spent
+    assert store.steps["step1"]["failure"] == "search:hybrid"
+
+
+async def test_without_embeddings_the_search_goes_by_keyword_and_the_step_says_so() -> None:
+    """AC41, FR27: no model, no extension or no consent: keyword alone, and said."""
+    store, client, embedder = FakeStore(), _knowledge_client("keyword"), _Embedder()
+
+    await _search(store, client, embedder, "checkout slow")
+
+    [(_tool, query, _ticket)] = client.asked
+    assert "step_id" not in query
+    assert embedder.sent == [] and store.query_embeddings == {}
+    assert all(run.get("purpose") != "embed" for run in store.runs)
+    assert store.steps["step1"]["failure"] == "search:keyword"
+
+
+async def test_a_failed_phrase_embedding_searches_by_keyword_and_charges_what_may_be_billed() -> (
+    None
+):
+    """A failed embedding never ends the question; a call that may have reached the
+    provider is charged its estimate, flagged."""
+    embedder = _Embedder(fail=EmbedFailed("timed_out", reached=True))
+    store, client = FakeStore(embedding_ready=READY), _knowledge_client("keyword")
+
+    state = await _search(store, client, embedder, "checkout slow")
+
+    assert state == "abstained"
+    [(_tool, query, _ticket)] = client.asked
+    assert "step_id" not in query
+    estimate = -(-len(embedder.body_of(("checkout slow",))) // 3)
+    assert (estimate, True) in store.spent
+    [embed_run] = [run for run in store.runs if run.get("purpose") == "embed"]
+    assert embed_run["outcome"] == "unavailable"
+
+
+async def test_the_phrase_is_masked_before_it_is_embedded() -> None:
+    """FR40: the same send-time masks as every other text that leaves."""
+    store, client, embedder = (
+        FakeStore(embedding_ready=READY),
+        _knowledge_client("hybrid"),
+        _Embedder(),
+    )
+
+    await _search(store, client, embedder, "ops@example.com slow")
+
+    [(sent,)] = embedder.sent
+    assert "ops@example.com" not in sent and "[masked]" in sent

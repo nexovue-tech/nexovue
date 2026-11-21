@@ -3900,6 +3900,20 @@ class AssistantSettings(Base):
     consented_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
     consented_disclosure_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     consented_data_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Step 6 (migration 0078): the embedding model, proved by a check before anything is
+    # embedded (AC85), and an optional second connection for embeddings only (D61), whose
+    # key is in `keys.SEALED_COLUMNS`.
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_wire_format: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sealed_embedding_key: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    embedding_key_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    embedding_consented_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_consented_at: Mapped[OptionalTimestamp]
+    embedding_checked_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_checked_at: Mapped[OptionalTimestamp]
+    embedding_checked_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    embedding_check_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[CreatedAt]
 
     __table_args__ = (

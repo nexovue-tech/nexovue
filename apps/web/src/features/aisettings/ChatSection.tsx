@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -14,10 +14,15 @@ import {
   CHAT_NO_READS,
   chatNearCeiling,
   countWord,
+  EMBEDDING_SENDS,
+  embeddingCheckLine,
+  embeddingProgress,
+  KEYWORD_ONLY_WORDS,
+  MEANING_SEARCH_ON,
   maskingOffLine,
   SELLING_LINE,
 } from "./ai-words";
-import { useUsage } from "./api";
+import { CHECK_ANSWER_MS, useUsage } from "./api";
 import {
   type ChatSettings,
   type DataLevel,
@@ -26,7 +31,10 @@ import {
   useChatPreview,
   useChatReads,
   useChatSettings,
+  useCheckEmbedding,
+  useEmbeddingConsent,
   useSaveChatSettings,
+  useSaveEmbedding,
 } from "./chat-api";
 
 const HEADING = "font-mono text-2xs text-ink-dim uppercase tracking-caps";
@@ -188,9 +196,175 @@ function ChatSettingsView({ settings, now }: { settings: ChatSettings; now: numb
         <InlineFailure title="Chat's settings were not saved" error={save.error} />
       ) : null}
 
+      <SearchSection settings={settings} now={now} />
       <Counts settings={settings} />
       <Reads now={now} />
       <p className="max-w-prose text-ink-dim">{CHAT_MCP_LINE}</p>
+    </div>
+  );
+}
+
+/**
+ * Meaning search (F4 T6.3; FR26, FR27, AC43, AC85): which model and connection, whether its
+ * check passed, re-embedding's progress, and, whenever it is off, why search is keyword only.
+ */
+function SearchSection({ settings, now }: { settings: ChatSettings; now: number }) {
+  const embedding = settings.embedding;
+  const mayConsent = useCan("consent_ai_disclosure");
+  const save = useSaveEmbedding();
+  const agree = useEmbeddingConsent();
+  const check = useCheckEmbedding();
+  const [model, setModel] = useState(embedding.model ?? "");
+  const [own, setOwn] = useState(embedding.source === "own");
+  const [wireFormat, setWireFormat] = useState(embedding.own_wire_format ?? "openai_chat");
+  const [address, setAddress] = useState(embedding.own_base_url ?? "");
+  const [key, setKey] = useState("");
+  const [waitingSince, setWaitingSince] = useState<number | null>(null);
+  const waiting = waitingSince !== null;
+  // Read again every 2 s while a check's result is awaited; the result lands on the settings.
+  useChatSettings({ poll: waiting });
+  const checkedAt = embedding.checked_at;
+  useEffect(() => {
+    if (waitingSince === null) return;
+    if (checkedAt !== null && Date.parse(checkedAt) >= waitingSince) setWaitingSince(null);
+    const timer = setTimeout(() => setWaitingSince(null), CHECK_ANSWER_MS);
+    return () => clearTimeout(timer);
+  }, [waitingSince, checkedAt]);
+
+  const onSave = () =>
+    save.mutate({
+      model: model.trim() === "" ? null : model.trim(),
+      own: own
+        ? { wire_format: wireFormat, base_url: address.trim(), ...(key ? { key } : {}) }
+        : null,
+    });
+
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className={HEADING}>Search</h3>
+      <p role="status" className="max-w-prose text-ink">
+        {embedding.keyword_only === null
+          ? MEANING_SEARCH_ON
+          : KEYWORD_ONLY_WORDS[embedding.keyword_only]}
+      </p>
+      {embedding.model !== null ? (
+        <p className="max-w-prose text-ink-dim">
+          Embedding model {embedding.model}, through{" "}
+          {embedding.source === "own"
+            ? `the connection for embeddings, at ${embedding.own_host ?? "—"}`
+            : "the chat connection"}
+          .{" "}
+          {embedding.check === "passed" && embedding.checked_at
+            ? `Its check passed on ${formatZonedTime(embedding.checked_at, { now })}.`
+            : embedding.check === "failed"
+              ? `Its check failed: ${embeddingCheckLine(embedding.check_reason)}`
+              : "Not checked yet."}
+        </p>
+      ) : null}
+      {embedding.model !== null ? (
+        <p className="max-w-prose text-ink-dim">
+          {embeddingProgress(embedding.chunks_embedded, embedding.chunks_total)}
+        </p>
+      ) : null}
+      <p className="max-w-prose text-ink-dim">{EMBEDDING_SENDS}</p>
+
+      <label className="flex max-w-md flex-col gap-1">
+        <span className={HEADING}>Embedding model</span>
+        <input
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+          placeholder="Empty: search by keyword only"
+          className="rounded border border-line bg-page px-2 py-1 font-mono"
+        />
+      </label>
+      <label className="flex items-start gap-2">
+        <input type="checkbox" checked={own} onChange={(event) => setOwn(event.target.checked)} />
+        <span className="max-w-prose">Use a separate connection for embeddings only</span>
+      </label>
+      {own ? (
+        <div className="flex flex-col gap-2">
+          <label className="flex max-w-md flex-col gap-1">
+            <span className={HEADING}>Format</span>
+            <select
+              value={wireFormat}
+              onChange={(event) => setWireFormat(event.target.value)}
+              className="rounded border border-line bg-page px-2 py-1"
+            >
+              <option value="openai_chat">OpenAI-style (OpenAI, Ollama, gateways)</option>
+              <option value="bedrock_converse">Amazon Bedrock (Titan)</option>
+            </select>
+          </label>
+          <label className="flex max-w-md flex-col gap-1">
+            <span className={HEADING}>Address</span>
+            <input
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              className="rounded border border-line bg-page px-2 py-1 font-mono"
+            />
+          </label>
+          <label className="flex max-w-md flex-col gap-1">
+            <span className={HEADING}>Key</span>
+            <input
+              type="password"
+              value={key}
+              onChange={(event) => setKey(event.target.value)}
+              placeholder={embedding.own_has_key ? "Saved; leave empty to keep it" : "None"}
+              className="rounded border border-line bg-page px-2 py-1 font-mono"
+            />
+          </label>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button pending={save.isPending} pendingLabel="Saving…" onClick={onSave}>
+          Save search settings
+        </Button>
+        {embedding.model !== null ? (
+          <Button
+            variant="secondary"
+            pending={check.isPending || waiting}
+            pendingLabel="Checking…"
+            onClick={() =>
+              check.mutate(undefined, { onSuccess: () => setWaitingSince(Date.now()) })
+            }
+          >
+            Check this embedding model
+          </Button>
+        ) : null}
+      </div>
+      {save.isError ? (
+        <InlineFailure title="Search settings were not saved" error={save.error} />
+      ) : null}
+      {check.isError ? <InlineFailure title="The check did not start" error={check.error} /> : null}
+      {embedding.source === "own" && embedding.own_consent_fingerprint !== null ? (
+        embedding.own_consent_current ? (
+          <p className="max-w-prose text-ink-dim">
+            An owner agreed to send text to {embedding.own_host ?? "this address"} for embedding.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <p className="max-w-prose text-ink">
+              Text goes to {embedding.own_host ?? "this address"} to be embedded only once an owner
+              agrees: every runbook piece and fact line, and each search phrase, masked first.
+            </p>
+            {mayConsent ? (
+              <div>
+                <Button
+                  pending={agree.isPending}
+                  pendingLabel="Agreeing…"
+                  onClick={() =>
+                    agree.mutate({ fingerprint: embedding.own_consent_fingerprint ?? "" })
+                  }
+                >
+                  Agree to send text there for embedding
+                </Button>
+              </div>
+            ) : null}
+            {agree.isError ? (
+              <InlineFailure title="The agreement was not recorded" error={agree.error} />
+            ) : null}
+          </div>
+        )
+      ) : null}
     </div>
   );
 }
@@ -237,8 +411,8 @@ function PreviewView({ preview }: { preview: ReturnType<typeof useChatPreview> }
       <p className="max-w-prose text-ink">{maskingOffLine(data.masking_rules_off)}</p>
       <p className="max-w-prose text-ink-dim">{CHAT_MASKING_LINE}</p>
       <p className="max-w-prose text-ink-dim">
-        Email addresses are {data.mask_emails ? "masked" : "sent"}. Runbooks and notes sent at once
-        for search: {data.sent_for_embedding}.
+        Email addresses are {data.mask_emails ? "masked" : "sent"}. Runbook pieces and fact lines
+        sent at once to be embedded for search: {data.sent_for_embedding}.
       </p>
     </div>
   );

@@ -53,6 +53,8 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
         "nexovue_scheduler.insight.sweep",
         "nexovue_scheduler.insight.assistant",
         "nexovue_scheduler.insight.assistant_sweep",
+        # F4 Step 6: the embedding sweep and the embedding check (plan T6.1).
+        "nexovue_scheduler.insight.knowledge",
         # F5: rung 2b's general suggestion (plan T2b.6), on `insight-fix`.
         "nexovue_scheduler.insight.suggest_general_fix",
     ),

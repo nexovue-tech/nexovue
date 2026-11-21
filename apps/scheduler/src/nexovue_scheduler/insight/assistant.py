@@ -20,6 +20,7 @@ and the consent standing; the API rechecks the same on every read the ticket mak
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -36,6 +37,8 @@ from nexovue_platform.ai.connection import (
     key_owner,
 )
 from nexovue_platform.ai.contract import estimate_tokens
+from nexovue_platform.ai.embed import EmbeddingTarget
+from nexovue_platform.assistant_masks import mask
 from nexovue_platform.assistant_records import (
     ANSWER_QUESTION_TASK,
     KEPT_SINCE_PREFIX,
@@ -48,8 +51,15 @@ from nexovue_platform.assistant_records import (
     Remainder,
     StepState,
 )
-from nexovue_platform.assistant_tools import TOOLS_BY_NAME, ChatTool, DataLevel, tools_at
+from nexovue_platform.assistant_tools import (
+    KNOWLEDGE_TOOL,
+    TOOLS_BY_NAME,
+    ChatTool,
+    DataLevel,
+    tools_at,
+)
 from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, SealError, keyring_from
+from nexovue_platform.knowledge import SEARCH_NOTE_PREFIX, STEP_QUERY
 from nexovue_platform.telemetry.logging import get_logger
 
 from nexovue_scheduler.insight import transport
@@ -82,6 +92,12 @@ from nexovue_scheduler.insight.assistant_store import (
     Scope,
     StepEnd,
 )
+from nexovue_scheduler.insight.knowledge import (
+    EmbedderFor,
+    EmbedFailed,
+    Ready,
+    transport_embedder,
+)
 from nexovue_scheduler.jobs.registry import SoftTimeLimit, task
 from nexovue_scheduler.probes.addresses import PrivateEndpoints
 from nexovue_scheduler.process_engine import with_engine
@@ -96,6 +112,8 @@ MAX_CALLS: Final = MAX_STEPS + 2
 _REFUSED_STATUSES: Final = frozenset({401, 403})
 _NOT_FOUND: Final = 404
 PROJECT_QUERY: Final = "project_id"
+# The knowledge search's phrase, as its catalog entry sends it: what the worker embeds.
+SEARCH_QUERY: Final = TOOLS_BY_NAME[KNOWLEDGE_TOOL].arguments["q"].query
 
 
 class ProviderFailed(Exception):  # noqa: N818 — what the transport said, as a closed word
@@ -132,6 +150,13 @@ class QuestionStore(Protocol):
         at: datetime,
     ) -> None: ...
     async def record_spend(self, question: Question, *, tokens: int, estimated: bool) -> None: ...
+    async def embedding(self, question: Question, *, keys: ConfiguredKeys) -> Ready | None: ...
+    async def start_embed_run(
+        self, question: Question, target: EmbeddingTarget, *, request_sha256: str
+    ) -> str: ...
+    async def set_query_embedding(
+        self, question: Question, step_id: str, *, vector: tuple[float, ...], model: str
+    ) -> bool: ...
     async def add_step(
         self,
         question: Question,
@@ -217,6 +242,8 @@ class LoopParts:
     provider_for: ProviderFor
     keys: ConfiguredKeys
     clock: Callable[[], datetime]
+    # Step 6: how a search phrase is embedded; None searches by keyword alone.
+    embedder_for: EmbedderFor | None = None
 
 
 @dataclass
@@ -554,6 +581,11 @@ async def _step(
         if tool.project_in_query
         else dict(narrowed.query)
     )
+    if tool.name == KNOWLEDGE_TOOL and await _embed_phrase(
+        run, parts, step_id, narrowed.query.get(SEARCH_QUERY, "")
+    ):
+        # The vector stays in Postgres; the route reads it from the step (design, section 6).
+        query[STEP_QUERY] = step_id
     answer = parts.client.get(tool, query, ticket=run.ticket, path=narrowed.path)
     if answer.status in _REFUSED_STATUSES:
         await store.finish_step(
@@ -564,6 +596,9 @@ async def _step(
     end, projected = _read_end(tool, answer.status, answer.body, answer.failure, run.scope)
     if narrowed is not call and end.state == "read":
         end = replace(end, failure=kept_note)
+    if tool.name == KNOWLEDGE_TOOL and end.state == "read":
+        # How it searched, for the panel's "keyword only" (FR27, AC41).
+        end = replace(end, failure=f"{SEARCH_NOTE_PREFIX}{_search_kind(answer.body)}")
     await store.finish_step(question, step_id, end, at=parts.clock())
     await store.log_read(
         question,
@@ -581,6 +616,74 @@ async def _step(
     run.reads[key] = StepRead(key, tool, projected.rows)
     run.result_texts.append(projected.text)
     run.results.append(StepResult(key, tool.name, summary, projected.text))
+
+
+async def _embed_phrase(run: _Run, parts: LoopParts, step_id: str, phrase: str) -> bool:
+    """The search phrase's own vector on its step, metered from the question's reservation;
+    False, and keyword search alone, when it cannot be had (design, section 6). A failed call
+    never ends the question."""
+    store = parts.store
+    question = run.question
+    if parts.embedder_for is None or not phrase:
+        return False
+    allowed = await store.embedding(question, keys=parts.keys)
+    if allowed is None:
+        return False
+    embedder = parts.embedder_for(allowed.target, allowed.key, allowed.call_seconds)
+    texts = (mask(phrase, mask_emails=run.scope.mask_emails),)
+    try:
+        body = embedder.body_of(texts)
+    except EmbedFailed:
+        return False
+    estimate = estimate_tokens(len(body))
+    if estimate > run.held:
+        return False
+    run_id = await store.start_embed_run(
+        question, allowed.target, request_sha256=hashlib.sha256(body).hexdigest()
+    )
+    try:
+        response = embedder.embed(texts)
+    except EmbedFailed as failed:
+        await store.finish_run(
+            question,
+            run_id,
+            outcome="unavailable",
+            input_tokens=estimate if failed.reached else None,
+            output_tokens=0 if failed.reached else None,
+            estimated=failed.reached,
+            at=parts.clock(),
+        )
+        if failed.reached:
+            await store.record_spend(question, tokens=estimate, estimated=True)
+            run.held = max(0, run.held - estimate)
+        return False
+    usable = response.outcome == "ok" and len(response.vectors) == 1
+    await store.finish_run(
+        question,
+        run_id,
+        outcome="done" if usable else ("invalid" if response.outcome == "ok" else response.outcome),
+        input_tokens=response.input_tokens,
+        output_tokens=0,
+        estimated=response.tokens_estimated,
+        at=parts.clock(),
+    )
+    spent = response.input_tokens or 0
+    await store.record_spend(question, tokens=spent, estimated=response.tokens_estimated)
+    run.held = max(0, run.held - spent)
+    if not usable:
+        return False
+    return await store.set_query_embedding(
+        question, step_id, vector=response.vectors[0], model=allowed.target.model
+    )
+
+
+def _search_kind(body: bytes) -> str:
+    """The route's own word for how it searched, from a closed list; keyword otherwise."""
+    try:
+        said = json.loads(body).get("search")
+    except (ValueError, AttributeError):
+        return "keyword"
+    return "hybrid" if said == "hybrid" else "keyword"
 
 
 async def _aged_out(
@@ -664,6 +767,7 @@ def answer_question(*, message_id: str, org_id: str) -> None:
                 provider_for=transport_provider(settings.ai_endpoints),
                 keys=settings.ai_secret_keys,
                 clock=lambda: datetime.now(UTC),
+                embedder_for=transport_embedder(settings.ai_endpoints),
             ),
         )
     )

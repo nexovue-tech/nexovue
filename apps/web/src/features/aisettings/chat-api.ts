@@ -19,6 +19,40 @@ export interface ChatSettings {
   disclosure_version: number;
   monthly_counts: Record<string, number>;
   people_this_month: { name: string; questions: number }[];
+  embedding: EmbeddingState;
+}
+
+/** Why chat searches by keyword only (FR27, AC43); null when it searches by meaning too. */
+export type KeywordOnlyReason =
+  | "no_extension"
+  | "no_model"
+  | "cannot_embed"
+  | "no_consent"
+  | "not_tested"
+  | "chat_not_ready";
+
+/** Meaning search's state (F4 Step 6). Never a key, never an address's path. */
+export interface EmbeddingState {
+  model: string | null;
+  source: "chat" | "own" | null;
+  own_base_url: string | null;
+  own_host: string | null;
+  own_wire_format: string | null;
+  own_has_key: boolean;
+  own_consent_fingerprint: string | null;
+  own_consent_current: boolean;
+  check: "passed" | "failed" | "not_tested";
+  check_reason: string | null;
+  checked_at: string | null;
+  vector_available: boolean;
+  keyword_only: KeywordOnlyReason | null;
+  chunks_embedded: number;
+  chunks_total: number;
+}
+
+export interface SaveEmbedding {
+  model: string | null;
+  own: { wire_format: string; base_url: string; key?: string } | null;
 }
 
 export interface ChatPreview {
@@ -54,10 +88,13 @@ export interface ChatAvailability {
 }
 
 const ROOT = ["ai", "chat"] as const;
+const CHECK_POLL_MS = 2000;
 
-export function useChatSettings() {
+/** `poll` reads it again every 2 s, while an embedding check's result is awaited. */
+export function useChatSettings({ poll = false }: { poll?: boolean } = {}) {
   return useQuery({
     queryKey: [...ROOT, "settings"],
+    refetchInterval: poll ? CHECK_POLL_MS : false,
     queryFn: ({ signal }) => apiClient.get<ChatSettings>("assistant/settings", { signal }),
   });
 }
@@ -111,6 +148,27 @@ export function useSaveChatSettings() {
       mask_emails: boolean;
     }) => apiClient.put<ChatSettings>("assistant/settings", body),
   );
+}
+
+export function useSaveEmbedding() {
+  return useChatMutation((body: SaveEmbedding) =>
+    apiClient.put<ChatSettings>("assistant/settings/embedding", body),
+  );
+}
+
+export function useEmbeddingConsent() {
+  return useChatMutation((body: { fingerprint: string }) =>
+    apiClient.post<ChatSettings>("assistant/settings/embedding/consent", body),
+  );
+}
+
+/** One real call on the AI container; the result lands on the settings, read again. */
+export function useCheckEmbedding() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.post<null>("assistant/settings/embedding/check", {}),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ROOT }),
+  });
 }
 
 export function useChatConsent() {

@@ -64,6 +64,8 @@ export interface StepView {
   kept_since: string | null;
   /** How long a resolved case is kept, on a knowledge step: FR42's empty answer. */
   cases_kept_days?: number | null;
+  /** How a knowledge step searched (FR27): "keyword" is said beside it. */
+  search?: "keyword" | "hybrid" | null;
   link: StepLink | null;
 }
 

@@ -131,3 +131,49 @@ class HostileProvider:
             name, arguments = moves[position]
             return calls(name, arguments)
         return answers(hostile_answer(request))
+
+
+# ------------------------------------------------------------------- a fake embedding model
+
+# Words a fake model treats as meaning the same, one group per dimension, so a test can show
+# meaning search finding what keywords do not: "slow" finds a runbook that says "latency".
+MEANING_GROUPS: Final = (
+    frozenset({"slow", "slower", "latency", "lag", "sluggish", "delay"}),
+    frozenset({"connections", "connection", "pool", "pgbouncer"}),
+    frozenset({"disk", "storage", "volume", "full"}),
+    frozenset({"error", "errors", "failing", "fails", "exception"}),
+)
+_WORD: Final = re.compile(r"[a-z]+")
+
+
+def meaning_vector(text: str, *, dimensions: int = len(MEANING_GROUPS) + 1) -> list[float]:
+    """A fake embedding: one dimension per meaning group, and one for every other word, so no
+    text is ever the zero vector, which cosine distance cannot compare. Never a real model."""
+    vector = [0.0] * dimensions
+    for word in _WORD.findall(text.lower()):
+        group = next((place for place, words in enumerate(MEANING_GROUPS) if word in words), None)
+        vector[group if group is not None and group < dimensions - 1 else dimensions - 1] += 1.0
+    if not any(vector[:-1]):
+        vector[-1] = max(vector[-1], 1.0)
+    else:
+        vector[-1] = 0.0
+    return vector
+
+
+def openai_embeddings_reply(
+    texts: list[str], *, dimensions: int = len(MEANING_GROUPS) + 1
+) -> dict[str, Any]:
+    """What a fake OpenAI-style server answers to `POST /embeddings`, from `meaning_vector`."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "object": "embedding",
+                "index": place,
+                "embedding": meaning_vector(text, dimensions=dimensions),
+            }
+            for place, text in enumerate(texts)
+        ],
+        "model": "fake-embedding",
+        "usage": {"prompt_tokens": sum(len(text.split()) for text in texts), "total_tokens": 0},
+    }

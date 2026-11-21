@@ -17,7 +17,7 @@ from typing import Any, Final, Literal, Protocol
 
 from nexovue_platform.ai.untrusted import Untrusted
 
-Purpose = Literal["explain", "check", "chat", "fix"]
+Purpose = Literal["explain", "check", "chat", "fix", "embed"]
 
 # How a call ended, as one word (FD3). `ok` is the only success; `invalid` is a 200 whose
 # body could not be read; `not_found` a model or path the provider does not know; and

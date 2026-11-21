@@ -23,6 +23,7 @@ from nexovue_platform.ai.untrusted import Untrusted
 from nexovue_platform.assistant_masks import masked_value
 from nexovue_platform.assistant_records import CHAT_DISCLOSURE_VERSION, MAX_QUESTION_CHARACTERS
 from nexovue_platform.assistant_tools import CATALOG, FENCED_KINDS, SEARCH_LOGS, ChatTool, bounded
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.ai import queries as ai_queries
@@ -30,6 +31,7 @@ from nexovue_api.ai.service import NO_CONNECTION, consent_fingerprint_of
 from nexovue_api.assistant.schemas import ChatPreview, PreviewKind, PreviewSample
 from nexovue_api.assistant.standing import settings_of
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.data.postgres.models import AssistantSettings, KnowledgeChunk
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
 from nexovue_api.logs.search import LogFilters, search_logs
 from nexovue_api.projects.config import disabled_rules
@@ -56,8 +58,13 @@ WHAT_IS_STATED: Final = (
     PreviewKind(kind="The project's name", source="your team", level="facts"),
     PreviewKind(kind="The service in view", source="your telemetry", level="facts"),
     PreviewKind(
-        kind="Runbook and note text, for search",
-        source="your team (none exist yet; nothing is sent)",
+        kind="Runbook text and fact lines, to be embedded for search, when a model is set",
+        source="your team, and nexovue's own fact lines",
+        level="facts_and_text",
+    ),
+    PreviewKind(
+        kind="Chat's search phrases, to be embedded, when a model is set",
+        source="the model's search words",
         level="facts_and_text",
     ),
 )
@@ -76,6 +83,23 @@ def _kinds() -> list[PreviewKind]:
         if rule.kind in FENCED_KINDS
     ]
     return [*WHAT_IS_STATED, *from_catalog]
+
+
+async def _sent_for_embedding(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> int:
+    """The project's chunks, all embedded at once once a model is set; 0 with none set."""
+    model = await session.scalar(
+        select(AssistantSettings.embedding_model).where(AssistantSettings.org_id == org_id)
+    )
+    if model is None:
+        return 0
+    found = await session.scalar(
+        select(func.count()).where(
+            KnowledgeChunk.org_id == org_id, KnowledgeChunk.project_id == project_id
+        )
+    )
+    return int(found or 0)
 
 
 def _as_sent(tool: ChatTool, row: dict[str, object], *, mask_emails: bool) -> str:
@@ -156,7 +180,7 @@ async def chat_preview(
         samples=samples,
         masking_rules_off=sorted(disabled_rules(project.masking_config or {})),
         mask_emails=mask_emails,
-        sent_for_embedding=0,
+        sent_for_embedding=await _sent_for_embedding(session, org_id=org_id, project_id=project_id),
         consent_fingerprint=consent_fingerprint_of(connection),
         disclosure_version=CHAT_DISCLOSURE_VERSION,
     )

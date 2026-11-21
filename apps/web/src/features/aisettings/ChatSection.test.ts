@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { identityFor, type TestRole } from "@/shared/identity.test-util";
 import { mount, PROJECT_ID, settle, unmountAll } from "@/shared/router-harness.test-util";
 
-import { CHAT_MCP_LINE, SELLING_LINE } from "./ai-words";
+import { CHAT_MCP_LINE, KEYWORD_ONLY_WORDS, MEANING_SEARCH_ON, SELLING_LINE } from "./ai-words";
 import { ChatSection } from "./ChatSection";
-import type { ChatPreview, ChatSettings, ReadRow } from "./chat-api";
+import type { ChatPreview, ChatSettings, EmbeddingState, ReadRow } from "./chat-api";
 
 /**
  * F4 T2.12: the Chat section of `/settings/ai`. The MCP sentence (AC89); counts with no
@@ -18,6 +18,24 @@ import type { ChatPreview, ChatSettings, ReadRow } from "./chat-api";
 
 const NOW = new Date("2026-11-12T09:31:00Z");
 const API_PREFIX = "/api/v1";
+
+const EMBEDDING: EmbeddingState = {
+  model: null,
+  source: null,
+  own_base_url: null,
+  own_host: null,
+  own_wire_format: null,
+  own_has_key: false,
+  own_consent_fingerprint: null,
+  own_consent_current: false,
+  check: "not_tested",
+  check_reason: null,
+  checked_at: null,
+  vector_available: true,
+  keyword_only: "no_model",
+  chunks_embedded: 0,
+  chunks_total: 0,
+};
 
 const SETTINGS: ChatSettings = {
   enabled: true,
@@ -31,6 +49,7 @@ const SETTINGS: ChatSettings = {
   disclosure_version: 1,
   monthly_counts: { answered: 12, rejected_way_out: 2, wrong_wrong_cause: 1 },
   people_this_month: [{ name: "Ada", questions: 9 }],
+  embedding: EMBEDDING,
 };
 
 const PREVIEW: ChatPreview = {
@@ -72,7 +91,7 @@ interface Call {
   body: unknown;
 }
 
-function stub(role: TestRole, usedTokens = 0): Call[] {
+function stub(role: TestRole, usedTokens = 0, settings: ChatSettings = SETTINGS): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -88,7 +107,10 @@ function stub(role: TestRole, usedTokens = 0): Call[] {
           projects: [{ id: PROJECT_ID, slug: "p", name: "production", first_reported_on: null }],
         });
       }
-      if (path === "/assistant/settings" && method === "GET") return reply(SETTINGS);
+      if (path === "/assistant/settings" && method === "GET") return reply(settings);
+      if (path === "/assistant/settings/embedding") return reply(settings);
+      if (path === "/assistant/settings/embedding/consent") return reply(settings);
+      if (path === "/assistant/settings/embedding/check") return reply(null);
       if (path === "/assistant/settings/consent")
         return reply({ ...SETTINGS, consent_current: true });
       if (path === "/assistant/reads") return reply([READ]);
@@ -201,5 +223,109 @@ describe("the Chat section", () => {
     // The preview has loaded, so its absence is the role's doing, not the network's.
     expect(shown.textContent).toContain("a built-in sample");
     expect(shown.textContent).not.toContain("Agree to send this");
+  });
+
+  it.each([
+    "no_extension",
+    "no_model",
+    "cannot_embed",
+    "no_consent",
+    "not_tested",
+    "chat_not_ready",
+  ] as const)("says search is keyword only, and why: %s", async (reason) => {
+    stub("admin", 0, { ...SETTINGS, embedding: { ...EMBEDDING, keyword_only: reason } });
+    const shown = await mount(section);
+    expect(shown.textContent).toContain(KEYWORD_ONLY_WORDS[reason]);
+    expect(shown.textContent).not.toContain(MEANING_SEARCH_ON);
+  });
+
+  it("says when search finds by meaning, with the model, its check and the progress", async () => {
+    stub("admin", 0, {
+      ...SETTINGS,
+      embedding: {
+        ...EMBEDDING,
+        model: "nomic-embed-text",
+        source: "chat",
+        check: "passed",
+        checked_at: "2026-11-12T09:00:00Z",
+        keyword_only: null,
+        chunks_embedded: 40,
+        chunks_total: 52,
+      },
+    });
+    const shown = await mount(section);
+    expect(shown.textContent).toContain(MEANING_SEARCH_ON);
+    expect(shown.textContent).toContain(
+      "Embedding model nomic-embed-text, through the chat connection",
+    );
+    expect(shown.textContent).toContain("Its check passed on");
+    expect(shown.textContent).toContain("40 of 52 runbook pieces and fact lines");
+  });
+
+  it("saves a model and a second connection, and an owner agrees to it as read", async () => {
+    const calls = stub("owner", 0, {
+      ...SETTINGS,
+      embedding: {
+        ...EMBEDDING,
+        model: "model-e5",
+        source: "own",
+        own_base_url: "https://embed.example/v1",
+        own_host: "https://embed.example",
+        own_wire_format: "openai_chat",
+        own_has_key: true,
+        own_consent_fingerprint: "fp-own",
+        keyword_only: "no_consent",
+      },
+    });
+    const shown = await mount(section);
+    const button = (words: string) =>
+      [...shown.querySelectorAll("button")].find((each) => each.textContent?.startsWith(words));
+    await act(async () => button("Save search settings")?.click());
+    await act(async () => {});
+    const saved = calls.find((call) => call.path === "/assistant/settings/embedding");
+    // A saved key is kept by leaving it out; it is never sent back to the screen.
+    expect(saved?.body).toEqual({
+      model: "model-e5",
+      own: { wire_format: "openai_chat", base_url: "https://embed.example/v1" },
+    });
+    await act(async () => button("Agree to send text there")?.click());
+    await act(async () => {});
+    const agreed = calls.find((call) => call.path === "/assistant/settings/embedding/consent");
+    expect(agreed?.body).toEqual({ fingerprint: "fp-own" });
+  });
+
+  it("offers an admin who is not an owner no agreement to the second connection", async () => {
+    stub("admin", 0, {
+      ...SETTINGS,
+      embedding: {
+        ...EMBEDDING,
+        model: "model-e5",
+        source: "own",
+        own_host: "https://embed.example",
+        own_consent_fingerprint: "fp-own",
+        keyword_only: "no_consent",
+      },
+    });
+    const shown = await mount(section);
+    expect(shown.textContent).toContain("only once an owner agrees");
+    expect(shown.textContent).not.toContain("Agree to send text there");
+  });
+
+  it("starts a check, which runs as a job on the AI container", async () => {
+    const calls = stub("admin", 0, {
+      ...SETTINGS,
+      embedding: { ...EMBEDDING, model: "model-e5", source: "chat", keyword_only: "not_tested" },
+    });
+    const shown = await mount(section);
+    const check = [...shown.querySelectorAll("button")].find((each) =>
+      each.textContent?.startsWith("Check this embedding model"),
+    );
+    await act(async () => check?.click());
+    await act(async () => {});
+    expect(
+      calls.some(
+        (call) => call.method === "POST" && call.path === "/assistant/settings/embedding/check",
+      ),
+    ).toBe(true);
   });
 });

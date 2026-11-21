@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
+from nexovue_platform.ai.embed import EMBEDDING_KEY_PURPOSE, embedding_key_owner
 from nexovue_platform.assistant_records import TICKET_PURPOSE
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
@@ -227,6 +228,23 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
             "WHERE id = :pk AND sealed_ticket = :old"
         ),
         owner=lambda row: str(row.pk),
+    ),
+    # F4 Step 6: an embedding-only key (D61), bound to its organization and address. The
+    # settings row is keyed by `org_id`, so that is its page key.
+    SealedColumn(
+        name="assistant_settings.sealed_embedding_key",
+        purpose=EMBEDDING_KEY_PURPOSE,
+        keys=lambda keys: keys.ai,
+        page=text(
+            "SELECT org_id AS pk, embedding_base_url, sealed_embedding_key AS sealed "
+            "FROM assistant_settings WHERE sealed_embedding_key IS NOT NULL AND org_id > :after "
+            "ORDER BY org_id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE assistant_settings SET sealed_embedding_key = :new "
+            "WHERE org_id = :pk AND sealed_embedding_key = :old"
+        ),
+        owner=lambda row: embedding_key_owner(str(row.pk), row.embedding_base_url),
     ),
 )
 

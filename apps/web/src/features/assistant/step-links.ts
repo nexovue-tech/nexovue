@@ -3,6 +3,7 @@ import { formatZonedTime } from "@/shared/format/zoned";
 import type { StepLink, StepView } from "./api";
 import {
   agedOut,
+  KEYWORD_ONLY_STEP,
   KNOWLEDGE_TOOL,
   latestNoTimeFilter,
   NO_ROWS,
@@ -73,14 +74,16 @@ export function stepOutcome(step: StepView): string | null {
   }
   if (step.state === "read") {
     const rows = step.row_count ?? 0;
+    const keywordOnly =
+      step.tool === KNOWLEDGE_TOOL && step.search === "keyword" ? ` ${KEYWORD_ONLY_STEP}` : "";
     if (rows === 0 && step.tool === KNOWLEDGE_TOOL) {
-      return noKnowledgeRecord(step.cases_kept_days ?? null);
+      return `${noKnowledgeRecord(step.cases_kept_days ?? null)}${keywordOnly}`;
     }
     if (rows === 0) return `${NO_ROWS}.`;
     const read = step.from_time ? `${rows} rows read` : latestNoTimeFilter(rows);
     const cut = step.was_cut ? `. Only the first ${rows} rows were read` : "";
     const kept = step.kept_since ? ` ${agedOut(step.kept_since)}` : "";
-    return `${read}${cut}.${kept}`;
+    return `${read}${cut}.${kept}${keywordOnly}`;
   }
   if (step.state === "failed" && step.failure === "limited") return READ_REFUSED_FOR_NOW;
   if (step.state === "failed" || step.state === "refused") {

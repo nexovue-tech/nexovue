@@ -18,8 +18,8 @@ WIRE_FORMATS: Final = ("openai_chat", "anthropic_messages", "bedrock_converse")
 OFF_REASONS: Final = ("person", "consent_ended")
 
 # What a run was for: F3's explanation and connection test (A51), F4's chat, F5's fix
-# (foundation, section 2, `purpose`).
-RUN_PURPOSES: Final = ("explain", "check", "chat", "fix")
+# (foundation, section 2, `purpose`), and F4's embedding calls, joined in migration 0078.
+RUN_PURPOSES: Final = ("explain", "check", "chat", "fix", "embed")
 
 # How a run ended (design, *Failure handling*). `started` is written before the call, so a
 # killed child leaves a row the sweep turns into `died`. `not_found` (a model or path the

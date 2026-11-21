@@ -104,8 +104,11 @@ PRODUCED_AND_SHOWN: Final[dict[str, tuple[Reference | str, Reference | str]]] = 
         "Step 4 (T4.1), as above",
     ),
     "Install has no `vector` extension": (
-        "Step 6 (T6.1, AC43): the extension is not touched before Step 6",
-        "Step 6 (T6.3)",
+        (
+            f"{API}/test_setup_no_vector.py",
+            "test_the_settings_say_keyword_only_and_search_answers_by_keyword",
+        ),
+        (f"{WEB}/features/aisettings/ChatSection.test.ts", "says search is keyword only, and why"),
     ),
     "Tool refused by rate limit": (
         (

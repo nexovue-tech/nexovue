@@ -13,7 +13,9 @@ from datetime import timedelta
 
 import pytest
 from assistant_live import AVAILABLE, KEYS, NOW, chat_on, db, require_postgres, tenant
-from sqlalchemy import update
+from nexovue_platform.ai.embed import vector_literal
+from nexovue_platform.ai.testing import meaning_vector
+from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
@@ -23,6 +25,7 @@ from nexovue_api.assistant.schemas import AskContext
 from nexovue_api.auth.dependencies import Identity, Reader, get_ticket_reader
 from nexovue_api.data.postgres.models import (
     AssistantMessage,
+    AssistantStep,
     Finding,
     KnowledgeChunk,
     Project,
@@ -196,3 +199,225 @@ async def test_only_a_ticket_reaches_knowledge_search(db: AsyncSession) -> None:
             await get_ticket_reader(_request(presented), db)
     with pytest.raises(UnauthenticatedError):
         await get_ticket_reader(_request(f"Bearer {ASSISTANT_TICKET_PREFIX}x"), db)
+
+
+# ------------------------------------------------------------- Step 6: meaning search
+
+MODEL = "fake-embedding"
+LATENCY = "## Latency\nCheckout latency climbs when the payment provider lags."
+DISK = "## Disk\nThe queue host's volume fills up overnight."
+
+
+async def _embedded(
+    db: AsyncSession, made: ProvisionedTenant, content: str, *, model: str = MODEL, dims: int = 5
+) -> uuid.UUID:
+    """A runbook chunk with a vector of `model`, as the embedding sweep would write it."""
+    view = await runbooks.create_runbook(
+        db,
+        identity=Identity(user=made.user, organization=made.organization),
+        request=NewRunbook(
+            project_id=made.project.id, title=f"r {uuid.uuid4().hex[:6]}", content=content
+        ),
+        now=NOW,
+    )
+    chunk_id = await db.scalar(
+        text("SELECT id FROM knowledge_chunks WHERE runbook_id = :r ORDER BY position LIMIT 1"),
+        {"r": view.id},
+    )
+    await db.execute(
+        text(
+            "UPDATE knowledge_chunks SET embedding = CAST(:v AS vector), embedded_model = :m, "
+            "embedding_due = false WHERE runbook_id = :r"
+        ),
+        {
+            "v": vector_literal(tuple(meaning_vector(content, dimensions=dims))),
+            "m": model,
+            "r": view.id,
+        },
+    )
+    assert isinstance(chunk_id, uuid.UUID)
+    return chunk_id
+
+
+async def _step(
+    db: AsyncSession,
+    reader: Reader,
+    phrase: str | None,
+    *,
+    model: str = MODEL,
+    dims: int = 5,
+) -> uuid.UUID:
+    """A knowledge step of the reader's question, holding the phrase's vector as the worker
+    stores it; `phrase` None leaves it with none."""
+    taken = await db.scalar(
+        text("SELECT count(*) FROM assistant_steps WHERE message_id = :m"),
+        {"m": reader.message_id},
+    )
+    step = AssistantStep(
+        org_id=reader.org_id,
+        message_id=reader.message_id,
+        position=int(taken or 0) + 1,
+        tool="search_knowledge",
+        arguments={},
+    )
+    db.add(step)
+    await db.flush()
+    if phrase is not None:
+        await db.execute(
+            text(
+                "UPDATE assistant_steps SET query_embedding = CAST(:v AS vector), "
+                "query_embedding_model = :m WHERE id = :s"
+            ),
+            {
+                "v": vector_literal(tuple(meaning_vector(phrase, dimensions=dims))),
+                "m": model,
+                "s": step.id,
+            },
+        )
+    return step.id
+
+
+async def test_meaning_search_finds_the_runbook_keywords_miss_and_says_hybrid(
+    db: AsyncSession,
+) -> None:
+    """Step 6's judgeable claim: "why is it slow?" finds a runbook that says "latency" with
+    embeddings on, and not with them off (AC41, FR29)."""
+    made = await _ready(db, "Meaning")
+    latency = await _embedded(db, made, LATENCY)
+    await _embedded(db, made, DISK)
+    reader = await _reader(db, made)
+
+    assert await _search(db, reader, "why is it slow", made.project.id) == []
+    step = await _step(db, reader, "why is it slow")
+    found = await knowledge.search(
+        db, reader=reader, project_id=made.project.id, phrase="why is it slow", step_id=step
+    )
+    assert found.search == "hybrid"
+    assert found.chunks[0].id == latency and found.chunks[0].content == LATENCY
+
+
+async def test_two_models_vectors_are_never_compared(db: AsyncSession) -> None:
+    """AC41, FR31: the step's own model filters the chunks, even of another size."""
+    made = await _ready(db, "TwoModels")
+    first = await _embedded(db, made, LATENCY, model="model-a", dims=5)
+    second = await _embedded(db, made, DISK, model="model-b", dims=3)
+    reader = await _reader(db, made)
+
+    for model, dims, expected in (("model-a", 5, first), ("model-b", 3, second)):
+        step = await _step(db, reader, "slow disk", model=model, dims=dims)
+        found = await knowledge.search(
+            db, reader=reader, project_id=made.project.id, phrase="nothing matches", step_id=step
+        )
+        assert [row.id for row in found.chunks] == [expected]
+    # A step of a third model finds no vector to compare, and keyword search stands.
+    step = await _step(db, reader, "slow", model="model-c")
+    found = await knowledge.search(
+        db, reader=reader, project_id=made.project.id, phrase="volume", step_id=step
+    )
+    assert (found.search, [row.id for row in found.chunks]) == ("keyword", [second])
+
+
+async def test_another_question_s_step_is_refused(db: AsyncSession) -> None:
+    """Design, section 6: the route checks the step belongs to the ticket's message."""
+    made = await _ready(db, "OtherStep")
+    await _embedded(db, made, LATENCY)
+    reader = await _reader(db, made)
+    earlier = await _step(db, reader, "slow")
+    # The same person and organization, another question's ticket.
+    later = Reader(
+        org_id=reader.org_id, project_scope=reader.project_scope, message_id=uuid.uuid4()
+    )
+    with pytest.raises(PermissionDeniedError):
+        await knowledge.search(
+            db, reader=later, project_id=made.project.id, phrase="slow", step_id=earlier
+        )
+    with pytest.raises(PermissionDeniedError):
+        await knowledge.search(
+            db, reader=reader, project_id=made.project.id, phrase="slow", step_id=uuid.uuid4()
+        )
+
+
+async def test_a_step_with_no_vector_searches_by_keyword(db: AsyncSession) -> None:
+    made = await _ready(db, "NoVector")
+    await _embedded(db, made, LATENCY)
+    reader = await _reader(db, made)
+    step = await _step(db, reader, None)
+    found = await knowledge.search(
+        db, reader=reader, project_id=made.project.id, phrase="latency", step_id=step
+    )
+    assert (found.search, len(found.chunks)) == ("keyword", 1)
+
+
+async def test_hybrid_results_merge_by_reciprocal_rank_and_either_side_stands(
+    db: AsyncSession,
+) -> None:
+    """AC90: hybrid search merges, and stands when either side is empty."""
+    made = await _ready(db, "Merged")
+    latency = await _embedded(db, made, LATENCY)
+    disk = await _embedded(db, made, DISK)
+    reader = await _reader(db, made)
+    step = await _step(db, reader, "slow")
+
+    # Keyword finds the disk runbook, meaning ranks latency first: both stand, merged.
+    found = await knowledge.search(
+        db, reader=reader, project_id=made.project.id, phrase="volume", step_id=step
+    )
+    assert found.search == "hybrid"
+    assert [row.id for row in found.chunks] == knowledge.merged([disk], [latency, disk])
+    assert {row.id for row in found.chunks} == {latency, disk}
+
+    a, b, c, d, e, f = (uuid.uuid4() for _ in range(6))
+    assert knowledge.merged([a, b], []) == [a, b]
+    assert knowledge.merged([], [c, d]) == [c, d]
+    # In both lists beats first in one; the merge keeps the top five.
+    # c: 1/63 + 1/61; a: 1/61 + 1/65.
+    assert knowledge.merged([a, b, c], [c, d, e, f, a])[:2] == [c, a]
+    assert len(knowledge.merged([a, b, c], [d, e, f])) == 5
+
+
+async def test_a_false_alarm_s_fact_line_is_left_out_of_meaning_search_too(
+    db: AsyncSession,
+) -> None:
+    """AC84 on the meaning side: search joins the finding before the sweep deletes the line."""
+    made = await _ready(db, "MeaningFacts")
+    finding = Finding(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        scope="service",
+        service_name="checkout",
+        severity="warning",
+        state="closed",
+        closed_reason="false_alarm",
+        title="ignored",
+        signals=[{"signal": "slower"}],
+        started_at=NOW - timedelta(hours=1),
+        closed_at=NOW,
+    )
+    db.add(finding)
+    await db.flush()
+    line = "service checkout | signal slower | latency up"
+    chunk = KnowledgeChunk(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        source_kind="fact",
+        finding_id=finding.id,
+        content=line,
+        fact_service="checkout",
+        fact_signal="slower",
+        fact_day=NOW.date(),
+    )
+    db.add(chunk)
+    await db.flush()
+    await db.execute(
+        text(
+            "UPDATE knowledge_chunks SET embedding = CAST(:v AS vector), embedded_model = :m "
+            "WHERE id = :c"
+        ),
+        {"v": vector_literal(tuple(meaning_vector(line))), "m": MODEL, "c": chunk.id},
+    )
+    reader = await _reader(db, made)
+    step = await _step(db, reader, "slow")
+    found = await knowledge.search(
+        db, reader=reader, project_id=made.project.id, phrase="nothing here", step_id=step
+    )
+    assert found.chunks == []

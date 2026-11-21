@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from nexovue_platform.ai_records import CALL_SECONDS_MAX
 from nexovue_platform.alerts.tasks import (
     DELIVERIES_QUEUE,
     EVALUATE_NEW_ERRORS_TASK,
@@ -47,7 +48,7 @@ from nexovue_platform.deployment import HOSTED, ai_available
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from nexovue_platform.fixes.records import SWEEP_GENERAL_FIXES_TASK
 from nexovue_platform.jobs import JobRequest
-from nexovue_platform.knowledge import KNOWLEDGE_SWEEP_TASK
+from nexovue_platform.knowledge import EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -115,6 +116,15 @@ GENERAL_FIX_SWEEP_ENTRY: Final = "sweep:general-fixes"
 # queue with default limits; only where AI may be offered, as nothing else reads them.
 KNOWLEDGE_SWEEP_SECONDS: Final = 300
 KNOWLEDGE_SWEEP_ENTRY: Final = "sweep:knowledge"
+
+# F4 T6.1: due chunks embedded, and opted-out projects' vectors nulled, on `insight` as the
+# AI account, every 5 minutes (a guess), only while an AI connection is on, like F3's sweep.
+# A run stops starting calls after two minutes (`insight.knowledge.SWEEP_BUDGET`); its limits
+# leave room for the last call at the longest a connection allows.
+EMBED_SWEEP_SECONDS: Final = 300
+EMBED_SWEEP_ENTRY: Final = "sweep:embeddings"
+EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS: Final = 120 + CALL_SECONDS_MAX + 20
+EMBED_SWEEP_TIME_LIMIT_SECONDS: Final = EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS + 20
 
 # F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
 CASES_SWEEP_SECONDS: Final = 300
@@ -485,6 +495,7 @@ class Beat:
             )
         if self.ai_on:
             wanted[INSIGHT_SWEEP_ENTRY] = (SWEEP_INSIGHT_TASK, INSIGHT_SWEEP_SECONDS, INSIGHT_QUEUE)
+            wanted[EMBED_SWEEP_ENTRY] = (EMBED_SWEEP_TASK, EMBED_SWEEP_SECONDS, INSIGHT_QUEUE)
         if self.connections_live:
             wanted[CONNECTIONS_SWEEP_ENTRY] = (
                 SWEEP_CONNECTIONS_TASK,
@@ -495,7 +506,13 @@ class Beat:
         if self._settings.nexovue_deployment == HOSTED:
             wanted[GRACE_SWEEP_ENTRY] = (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE)
         # A sweep fits in a minute; the night's erasure does not.
-        limits = {ERASURE_ENTRY: (ERASURE_SOFT_TIME_LIMIT_SECONDS, ERASURE_TIME_LIMIT_SECONDS)}
+        limits = {
+            ERASURE_ENTRY: (ERASURE_SOFT_TIME_LIMIT_SECONDS, ERASURE_TIME_LIMIT_SECONDS),
+            EMBED_SWEEP_ENTRY: (
+                EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS,
+                EMBED_SWEEP_TIME_LIMIT_SECONDS,
+            ),
+        }
         entries: dict[str, Entry] = {}
         now = self._monotonic()
         for name, (task, seconds, queue_name) in wanted.items():

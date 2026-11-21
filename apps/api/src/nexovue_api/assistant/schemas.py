@@ -96,6 +96,8 @@ class StepView(BaseModel):
     # How long a resolved case is kept after it ends, on a knowledge step, for FR42's empty
     # answer: "No record of this in what is kept. Cases are kept for {N} days after they end".
     cases_kept_days: int | None = None
+    # How a knowledge step searched (FR27, AC41): "keyword" is said beside it on the panel.
+    search: Literal["keyword", "hybrid"] | None = None
     link: StepLink | None
 
 
@@ -152,6 +154,59 @@ class ChatSettings(BaseModel):
     disclosure_version: int
     monthly_counts: dict[str, int]
     people_this_month: list[PersonCount]
+    # Step 6: the embedding model and where vectors come from (FR26, FR27).
+    embedding: EmbeddingState
+
+
+# Why chat searches by keyword only (FR27, AC43): no extension on this server, no model set,
+# a connection that cannot embed, no owner's consent to the second connection, no passing
+# check, or chat not at *facts and text* with consent.
+KeywordOnlyReason = Literal[
+    "no_extension", "no_model", "cannot_embed", "no_consent", "not_tested", "chat_not_ready"
+]
+
+
+class EmbeddingState(BaseModel):
+    """What the Chat section shows of meaning search. Never a key or an address's path."""
+
+    model: str | None
+    # `chat`: the chat connection's provider; `own`: the second connection (D61).
+    source: Literal["chat", "own"] | None
+    # The second connection's address, to admins only, as F3's connection view is.
+    own_base_url: str | None
+    own_host: str | None
+    own_wire_format: str | None
+    own_has_key: bool
+    # What an owner agrees to for the second connection, and whether they have.
+    own_consent_fingerprint: str | None
+    own_consent_current: bool
+    check: Literal["passed", "failed", "not_tested"]
+    check_reason: str | None
+    checked_at: datetime | None
+    vector_available: bool
+    # Null when texts are embedded and searched by meaning.
+    keyword_only: KeywordOnlyReason | None
+    chunks_embedded: int
+    chunks_total: int
+
+
+class OwnEmbeddingConnection(BaseModel):
+    """A second connection, for embeddings only (D61). A key left out keeps the saved one,
+    while the address and format stay the same."""
+
+    wire_format: str = Field(max_length=64)
+    base_url: str = Field(max_length=500)
+    key: str | None = Field(default=None, max_length=4096)
+
+
+class SaveEmbedding(BaseModel):
+    # Null turns meaning search off: keyword search answers alone (FR27).
+    model: str | None = Field(default=None, max_length=200)
+    own: OwnEmbeddingConnection | None = None
+
+
+class EmbeddingConsent(BaseModel):
+    fingerprint: str = Field(max_length=128)
 
 
 class PersonCount(BaseModel):

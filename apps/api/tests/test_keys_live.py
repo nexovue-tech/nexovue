@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 import pytest
 from live import require_stack
 from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
+from nexovue_platform.ai.embed import EMBEDDING_KEY_PURPOSE, embedding_key_owner
 from nexovue_platform.assistant_records import TICKET_PURPOSE
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
@@ -71,6 +72,7 @@ ROTATED: Final = keys.Keys(
     ai=ConfiguredKeys(NEW_AI, previous=OLD_AI),
 )
 AI_BASE_URL: Final = "https://api.anthropic.example/"
+EMBEDDING_BASE_URL: Final = "https://embed.example/v1"
 # F22: each of a connection's three sealed columns, by its purpose (AC35).
 CONNECTION_COLUMNS: Final = {
     "sealed_credential": CONNECTION_CREDENTIAL_PURPOSE,
@@ -225,6 +227,23 @@ async def tenant(engine: AsyncEngine) -> AsyncIterator[_Tenant]:
                 "url": AI_BASE_URL,
                 "sealed": _box(OLD_AI, AI_CONNECTION_PURPOSE).seal(
                     PLAINTEXT, owner=key_owner(str(org), str(ai_connection), AI_BASE_URL)
+                ),
+            },
+        )
+        # F4 Step 6: an embedding-only key under the `ai` ring, bound to its organization
+        # and address (D61).
+        await connection.execute(
+            text(
+                "INSERT INTO assistant_settings (org_id, embedding_model, embedding_wire_format, "
+                "embedding_base_url, sealed_embedding_key, embedding_key_id) "
+                "VALUES (:org, 'text-embed', 'openai_chat', :url, :sealed, :key_id)"
+            ),
+            {
+                "org": org,
+                "url": EMBEDDING_BASE_URL,
+                "key_id": uuid.uuid4(),
+                "sealed": _box(OLD_AI, EMBEDDING_KEY_PURPOSE).seal(
+                    PLAINTEXT, owner=embedding_key_owner(str(org), EMBEDDING_BASE_URL)
                 ),
             },
         )
@@ -393,6 +412,30 @@ async def test_reseal_carries_an_ai_provider_key_and_it_opens_only_for_its_addre
         box.open(sealed, owner=key_owner(org, row, "https://attacker.example/"))
 
 
+async def test_reseal_carries_an_embedding_key_and_it_opens_only_for_its_address(
+    engine: AsyncEngine, tenant: _Tenant
+) -> None:
+    """F4 Step 6: a second connection's key moves with a rotation of `AI_SECRET_KEY`, and
+    will not open for another address."""
+    async with engine.connect() as connection:
+        await keys.survey(connection, ROTATED, reseal=True)
+        sealed = bytes(
+            (
+                await connection.execute(
+                    text("SELECT sealed_embedding_key FROM assistant_settings WHERE org_id = :o"),
+                    {"o": tenant.org_id},
+                )
+            ).scalar_one()
+        )
+
+    box = _box(NEW_AI, EMBEDDING_KEY_PURPOSE)
+    assert sealed_key_id(sealed) == key_id(decode_key(NEW_AI))
+    org = str(tenant.org_id)
+    assert box.open(sealed, owner=embedding_key_owner(org, EMBEDDING_BASE_URL)) == PLAINTEXT
+    with pytest.raises(SealError):
+        box.open(sealed, owner=embedding_key_owner(org, "https://attacker.example/"))
+
+
 async def test_every_sealed_column_in_the_database_is_one_reseal_knows(
     engine: AsyncEngine,
 ) -> None:
@@ -414,6 +457,7 @@ async def test_every_sealed_column_in_the_database_is_one_reseal_knows(
     listed = {column.name for column in keys.SEALED_COLUMNS}
     assert {f"connections.{column}" for column in CONNECTION_COLUMNS} <= found
     assert "ai_connections.sealed_key" in found
+    assert "assistant_settings.sealed_embedding_key" in found
     assert found - listed == set(), "sealed columns `keys reseal` would leave behind"
 
 

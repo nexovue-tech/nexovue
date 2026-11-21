@@ -128,6 +128,11 @@ cosign verify-blob nexovue-X.Y.Z.tar.gz \
   everything else works. Set `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_SENDING_DOMAIN` and
   `EMAIL_FROM_ADDRESS` in `nexovue.env`, then run `sudo ./nexovue install` again to apply them.
 - **Teammates** join by invitation from the console. Public sign-up is closed (`SIGNUP_ENABLED=false`).
+- **Chat's meaning search** needs Postgres's `vector` extension, which only a superuser can create.
+  The bundled Postgres has it. On a database of your own whose account cannot create it, `setup` says
+  `vector: Postgres refused to create the vector extension…` and carries on: everything else works,
+  and chat finds runbooks and fact lines by keyword only, which `/settings/ai` says. To add it later,
+  run `CREATE EXTENSION vector;` as a superuser, then `nexovue setup` again.
 - **Monitoring.** `NEXOVUE_MONITORING=yes` in `nexovue.env` runs Prometheus and Alertmanager beside
   nexovue with its alert rules; name where alerts go in `monitoring/alertmanager.yml`. Or point your own
   monitor at the same endpoints and rules (`monitoring/`).

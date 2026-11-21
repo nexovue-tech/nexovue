@@ -6,8 +6,9 @@ Accepted 2026-11-02 by the founder with the F4 design ([`design.md`](../features
 *ADR proposal: knowledge in Postgres with no vector index, with keyword search always available*,
 which refines decision 0004, pgvector inside Postgres). Filed 2026-11-21 with F4 plan Step 5, which
 built the table, its writers and keyword search (migration 0076). The vector half, meaning search with
-an exact scan and RRF, is Step 6's and is not built yet; this record covers it as decided, and Step 6
-amends it if its measurement (T6.4) moves anything.
+an exact scan and RRF, was built with Step 6 on 2026-11-21 as point 5 says; how it is paid for, checked
+and granted is [ADR-079](ADR-079-embedding-is-metered-spending-and-never-blocks-keyword-search.md).
+T6.4's measurement is not yet run, so no index was added.
 
 ## Context
 
