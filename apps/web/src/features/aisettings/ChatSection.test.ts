@@ -35,6 +35,7 @@ const EMBEDDING: EmbeddingState = {
   keyword_only: "no_model",
   chunks_embedded: 0,
   chunks_total: 0,
+  notes_not_searchable: 0,
 };
 
 const SETTINGS: ChatSettings = {
@@ -259,7 +260,17 @@ describe("the Chat section", () => {
       "Embedding model nomic-embed-text, through the chat connection",
     );
     expect(shown.textContent).toContain("Its check passed on");
-    expect(shown.textContent).toContain("40 of 52 runbook pieces and fact lines");
+    expect(shown.textContent).toContain("40 of 52 runbook pieces, notes and fact lines");
+  });
+
+  it("counts the notes chat cannot search, and says nothing when there are none (AC83)", async () => {
+    stub("admin", 0, { ...SETTINGS, embedding: { ...EMBEDDING, notes_not_searchable: 3 } });
+    const shown = await mount(section);
+    expect(shown.textContent).toContain("3 notes are not searchable by chat.");
+
+    stub("admin", 0, { ...SETTINGS, embedding: { ...EMBEDDING, notes_not_searchable: 0 } });
+    const none = await mount(section);
+    expect(none.textContent).not.toContain("not searchable by chat");
   });
 
   it("saves a model and a second connection, and an owner agrees to it as read", async () => {

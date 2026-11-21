@@ -31,7 +31,10 @@ from nexovue_api.data.postgres.models import (
     AIConnection,
     AssistantSettings,
     AuditLogEntry,
+    Finding,
+    FindingNote,
     KnowledgeChunk,
+    Project,
 )
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.runbooks import service as runbooks
@@ -296,3 +299,51 @@ async def test_on_the_hosted_service_every_embedding_write_is_refused(db: AsyncS
     with pytest.raises(ConflictError):
         await embedding.start_embedding_check(db, identity=identity, ai=hosted)
     assert (await _state(db, made)).model is None
+
+
+async def test_the_section_counts_the_notes_chat_cannot_search(db: AsyncSession) -> None:
+    """AC83, FR32: a note always saves, and one with no chunk (waiting for the sweep, or
+    skipped at its project's cap) is counted; a deleted project's note is not."""
+    made, _ = await _ready(db, "NotSearchable")
+    gone = Project(org_id=made.organization.id, slug="gone-notes", name="Gone", deleted_at=NOW)
+    db.add(gone)
+    await db.flush()
+    findings = [
+        Finding(
+            org_id=made.organization.id,
+            project_id=project_id,
+            scope="service",
+            service_name="checkout",
+            severity="warning",
+            state="open",
+            title="ignored",
+            signals=[{"signal": "slower"}],
+            started_at=NOW,
+        )
+        for project_id in (made.project.id, gone.id)
+    ]
+    db.add_all(findings)
+    await db.flush()
+    notes = [
+        FindingNote(org_id=made.organization.id, finding_id=finding.id, body=body)
+        for finding, body in (
+            (findings[0], "a"),
+            (findings[0], "b"),
+            (findings[0], "c"),
+            (findings[1], "d"),
+        )
+    ]
+    db.add_all(notes)
+    await db.flush()
+    db.add(
+        KnowledgeChunk(
+            org_id=made.organization.id,
+            project_id=made.project.id,
+            source_kind="note",
+            note_id=notes[0].id,
+            content="a",
+        )
+    )
+    await db.flush()
+
+    assert (await _state(db, made)).notes_not_searchable == 2

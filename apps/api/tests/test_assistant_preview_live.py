@@ -95,7 +95,10 @@ async def test_the_preview_shows_a_real_log_line_masked_and_fenced_as_it_would_b
     assert ("Your question", "facts") in kinds
     assert any(kind.startswith("Earlier questions") for kind, _ in kinds)
     # Step 6 (AC2): text sent for embedding is in the complete list, chunks and phrases both.
-    assert any(kind.startswith("Runbook text and fact lines, to be embedded") for kind, _ in kinds)
+    assert any(
+        kind.startswith("Runbook text, case notes and fact lines, to be embedded")
+        for kind, _ in kinds
+    )
     assert any(kind.startswith("Chat's search phrases, to be embedded") for kind, _ in kinds)
     assert preview.masking_rules_off == ["cookies"]
     assert preview.sent_for_embedding == 0

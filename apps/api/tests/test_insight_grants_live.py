@@ -335,8 +335,9 @@ async def test_the_account_cannot_read_the_real_names_or_the_evidence(engine: As
 async def test_the_account_never_reads_a_vector_nor_rewrites_a_chunk_s_text(
     engine: AsyncEngine,
 ) -> None:
-    """F4 Step 6: embedding needs a chunk's text and the vector's write, nothing more; a
-    runbook's words and source stay the runbook service's."""
+    """F4 Steps 6 and 7: embedding needs a chunk's text and the vector's write, nothing more;
+    a runbook's words and source stay the runbook service's, and a note's link to its case
+    stays out of the account's reach. No right on `finding_notes` at all."""
     async with engine.connect() as connection:
         for column, privilege in (
             ("embedding", "SELECT"),
@@ -344,6 +345,9 @@ async def test_the_account_never_reads_a_vector_nor_rewrites_a_chunk_s_text(
             ("source_kind", "SELECT"),
             ("runbook_id", "UPDATE"),
             ("fact_service", "SELECT"),
+            # Step 7: which note a chunk is, and so whose case, is not the account's to read.
+            ("note_id", "SELECT"),
+            ("note_id", "UPDATE"),
         ):
             held = await connection.scalar(
                 text("SELECT has_column_privilege(:account, 'knowledge_chunks', :column, :p)"),
@@ -356,6 +360,14 @@ async def test_the_account_never_reads_a_vector_nor_rewrites_a_chunk_s_text(
                 {"account": INSIGHT_ACCOUNT, "p": privilege},
             )
             assert held is False, privilege
+        held = await connection.scalar(
+            text(
+                "SELECT has_any_column_privilege(:account, 'finding_notes', "
+                "'SELECT, INSERT, UPDATE')"
+            ),
+            {"account": INSIGHT_ACCOUNT},
+        )
+        assert held is False
 
 
 async def test_the_account_is_a_plain_login_with_a_limit_and_timeouts(engine: AsyncEngine) -> None:

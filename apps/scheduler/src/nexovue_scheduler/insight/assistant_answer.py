@@ -66,6 +66,8 @@ Label = Literal["counted", "checked", "text", "team", "unchecked"]
 WRITTEN_AT: Final = "written_at"
 # The knowledge row a runbook's chunk is: the one quote that may be acted on (BR7, D8).
 _RUNBOOK_SOURCE: Final = "runbook"
+# A teammate's note: the team's words, and never a command (BR7, AC63).
+_NOTE_SOURCE: Final = "note"
 
 # ---------------------------------------------------------------- ways out (check 3)
 # F3's `URL` and `EMAIL` (validate.py), plus what chat's answers may also carry: Markdown,
@@ -426,6 +428,9 @@ class _Quote:
     # A runbook's own text: never folded, labelled as the team's, and the one quote a
     # sentence may tell the reader to run (BR7, T5.6).
     runbook: bool = False
+    # A teammate's note (Step 7): the team's words, yet inert: folded like a log's when it
+    # reads as a link or a command, and never a quote a sentence may point at to run (AC63).
+    note: bool = False
 
     def stored(self) -> dict[str, Any]:
         return {
@@ -435,6 +440,7 @@ class _Quote:
             "reference": self.reference,
             "folded": self.folded,
             "runbook": self.runbook,
+            "note": self.note,
         }
 
 
@@ -468,7 +474,8 @@ def _quotes(raw: object, steps: Mapping[str, StepRead]) -> dict[str, _Quote]:
         if name not in values or any(key not in values for key in step.tool.quote_keys):
             continue
         text = _as_text(values[name])
-        runbook = step.tool.name == KNOWLEDGE_TOOL and values.get("source_kind") == _RUNBOOK_SOURCE
+        knowledge = step.tool.name == KNOWLEDGE_TOOL
+        runbook = knowledge and values.get("source_kind") == _RUNBOOK_SOURCE
         found[quote_id] = _Quote(
             step=step.key,
             tool=step.tool.name,
@@ -476,6 +483,7 @@ def _quotes(raw: object, steps: Mapping[str, StepRead]) -> dict[str, _Quote]:
             reference={key: values[key] for key in step.tool.quote_keys},
             folded=not runbook and (way_out(text) is not None or command(text) is not None),
             runbook=runbook,
+            note=knowledge and values.get("source_kind") == _NOTE_SOURCE,
         )
     return found
 

@@ -90,6 +90,8 @@ export interface StoredQuote {
   folded: boolean;
   /** A runbook's own text: the one quote a sentence may tell the reader to run (BR7). */
   runbook?: boolean;
+  /** A teammate's note (Step 7): the team's words, inert, never a command (AC63). */
+  note?: boolean;
 }
 
 export interface Answer {
@@ -114,6 +116,9 @@ export interface QuoteView {
   runbook?: boolean;
   runbook_id?: string | null;
   written_at?: string | null;
+  /** Read again: a teammate's note, the date it was written and the case it is on. */
+  note?: boolean;
+  finding_id?: string | null;
 }
 
 export interface QuoteList {

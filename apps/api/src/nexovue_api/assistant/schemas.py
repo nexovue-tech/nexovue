@@ -188,6 +188,9 @@ class EmbeddingState(BaseModel):
     keyword_only: KeywordOnlyReason | None
     chunks_embedded: int
     chunks_total: int
+    # Notes chat cannot search yet: waiting for the next pass, or skipped at a project's cap,
+    # since a note always saves (FR32, AC83).
+    notes_not_searchable: int = 0
 
 
 class OwnEmbeddingConnection(BaseModel):

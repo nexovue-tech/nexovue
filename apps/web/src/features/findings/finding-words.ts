@@ -85,3 +85,19 @@ export function linkedBurnLine(burn: LinkedBurn, ended: boolean): string {
   }
   return said.join(" ");
 }
+
+/**
+ * F4 T7.2: the note box's sentence, shown only while chat is on for the case's project, since
+ * its notes then go to the AI provider the owner agreed to (spec, *What leaves this server*).
+ */
+export const chatSendsNotesSentence = (provider: string | null) =>
+  `With chat on, notes can be sent to ${provider ?? "your AI provider"}.`;
+/** Chat on and the project not left out: every standing but off, AI off and opted out. */
+export const CHAT_ON_STANDINGS: readonly string[] = ["ready", "no_consent", "no_data"];
+
+/** F4 FR41: a resolved case's note, copied into a runbook that outlives the finding. */
+export const SAVE_AS_RUNBOOK = "Save as runbook";
+export const SAVED_AS_RUNBOOK = "Saved as a runbook, with the case's fact line.";
+export const OPEN_SAVED_RUNBOOK = "Open the runbook";
+export const SAVE_ANYWAY = "Save anyway";
+export const NOT_SAVED_AS_RUNBOOK = "The runbook was not saved. Try again.";

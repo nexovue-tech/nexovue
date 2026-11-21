@@ -16,8 +16,14 @@ and where either list is empty the other stands whole (design, section 6). The r
 `hybrid` when meaning search found anything, else `keyword`. The step must be this question's
 own (the ticket's message), and its vector is read in SQL, never sent over HTTP. With no
 `vector` extension the route searches by keyword and nothing else changes (AC43). A fact line
-whose finding is no longer `recovered` is left out of both, before the sweep deletes it
-(AC84). Postgres only, on the default rate-limit tier, charged to the question's person.
+whose finding is no longer `recovered`, and whose case was not resolved, is left out of both,
+before the sweep deletes it (AC84). Postgres only, on the default rate-limit tier, charged to
+the question's person.
+
+**What people wrote ranks first (Step 7; FR29, AC83).** Each side orders runbooks' and notes'
+chunks before nexovue's fact lines, and the merge keeps that order, so a person's note is never
+pushed out of the answer by a hundred composed lines about the same service. A note's row
+carries its own date, never its author's name, and its finding, so the panel can open the case.
 """
 
 from __future__ import annotations
@@ -34,9 +40,11 @@ from nexovue_platform.knowledge import (
     SEARCH_SIDE_RESULTS,
     SearchKind,
 )
+from nexovue_platform.knowledge_facts import RECOVERED, RESOLVED_CASE_RESOLUTIONS, kept_sql
 from pydantic import BaseModel
-from sqlalchemy import func, literal_column, or_, select, text
+from sqlalchemy import and_, func, literal_column, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnClause
 
 from nexovue_api import insight_account
@@ -45,6 +53,7 @@ from nexovue_api.data.postgres.models import (
     AssistantMessage,
     AssistantStep,
     Finding,
+    FindingNote,
     KnowledgeChunk,
     Runbook,
 )
@@ -61,21 +70,24 @@ FACTS_ONLY: Final = "At this data level, chat reads no runbooks or notes."
 NOT_THIS_QUESTION: Final = "That step is not this question's."
 # The text-search configuration, a constant: never a request value.
 _ENGLISH: Final[ColumnClause[Any]] = literal_column("'english'::regconfig")
-_RECOVERED: Final = "recovered"
+# A note's finding: joined apart from a fact line's, since a note chunk keys its note alone.
+NoteFinding = aliased(Finding, name="note_finding")
 
 
 class KnowledgeRow(BaseModel):
     """One chunk, as the catalog sends it: the text is the team's, fenced wherever it goes."""
 
     id: uuid.UUID
-    source_kind: Literal["runbook", "fact"]
-    # A runbook's title; null for a fact line.
+    source_kind: Literal["runbook", "fact", "note"]
+    # A runbook's title; null for a fact line or a note.
     title: str | None
     content: str
     service_name: str | None
-    # A runbook's last change, or when a fact line's finding closed: the age a label shows.
+    # A runbook's last change, when a note was written, or when a fact line's finding ended:
+    # the age a label shows.
     written_at: datetime
     runbook_id: uuid.UUID | None
+    # A fact line's finding, or the case a note was written on.
     finding_id: uuid.UUID | None
 
 
@@ -111,8 +123,10 @@ _MEANING: Final = text(
       AND s.query_embedding IS NOT NULL AND c.embedding IS NOT NULL
       AND c.embedded_model = s.query_embedding_model
       AND vector_dims(c.embedding) = vector_dims(s.query_embedding)
-      AND (c.source_kind <> 'fact' OR f.closed_reason = :recovered)
-    ORDER BY c.embedding <=> s.query_embedding, c.id
+      AND (c.source_kind <> 'fact' OR """
+    + kept_sql("f")
+    + """)
+    ORDER BY c.source_kind = 'fact', c.embedding <=> s.query_embedding, c.id
     LIMIT :limit
     """
 )
@@ -135,23 +149,30 @@ async def search(
         meaning = await _meaning(session, reader=reader, project_id=project.id, step_id=step_id)
     if not meaning:
         return KnowledgeResult(chunks=[_row(*found) for found in keyword])
-    order = merged([found[0].id for found in keyword], meaning)
     rows = {found[0].id: found for found in keyword}
-    missing = [chunk_id for chunk_id in order if chunk_id not in rows]
+    missing = [chunk_id for chunk_id in meaning if chunk_id not in rows]
     if missing:
         rows |= {
             found[0].id: found
             for found in await _rows(session, reader=reader, project_id=project.id, ids=missing)
         }
+    facts = frozenset(chunk_id for chunk_id, found in rows.items() if _is_fact(found[0]))
+    order = merged([found[0].id for found in keyword], meaning, facts=facts)
     return KnowledgeResult(
         chunks=[_row(*rows[chunk_id]) for chunk_id in order if chunk_id in rows],
         search="hybrid",
     )
 
 
-def merged(keyword: list[uuid.UUID], meaning: list[uuid.UUID]) -> list[uuid.UUID]:
+def merged(
+    keyword: list[uuid.UUID],
+    meaning: list[uuid.UUID],
+    *,
+    facts: frozenset[uuid.UUID] = frozenset(),
+) -> list[uuid.UUID]:
     """Reciprocal rank fusion, `1 / (60 + rank)` from rank 1, the top `MERGED_RESULTS`; where
-    either list is empty, the other stands whole. Ties keep keyword's order, then meaning's."""
+    either list is empty, the other stands whole. What people wrote comes before `facts`, the
+    fact lines, whatever their scores (FR29); ties keep keyword's order, then meaning's."""
     if not keyword or not meaning:
         return keyword or meaning
     scores: dict[uuid.UUID, float] = {}
@@ -161,26 +182,63 @@ def merged(keyword: list[uuid.UUID], meaning: list[uuid.UUID]) -> list[uuid.UUID
     first_seen = {
         chunk_id: place for place, chunk_id in enumerate(dict.fromkeys(keyword + meaning))
     }
-    best = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], first_seen[chunk_id]))
+    best = sorted(
+        scores,
+        key=lambda chunk_id: (chunk_id in facts, -scores[chunk_id], first_seen[chunk_id]),
+    )
     return best[:MERGED_RESULTS]
 
 
+def _is_fact(chunk: KnowledgeChunk) -> bool:
+    return chunk.source_kind == "fact"
+
+
 def _joined(statement: Any) -> Any:
-    return statement.outerjoin(
-        Runbook,
-        (Runbook.org_id == KnowledgeChunk.org_id)
-        & (Runbook.project_id == KnowledgeChunk.project_id)
-        & (Runbook.id == KnowledgeChunk.runbook_id),
-    ).outerjoin(
-        Finding,
-        (Finding.org_id == KnowledgeChunk.org_id)
-        & (Finding.project_id == KnowledgeChunk.project_id)
-        & (Finding.id == KnowledgeChunk.finding_id),
+    return (
+        statement.outerjoin(
+            Runbook,
+            (Runbook.org_id == KnowledgeChunk.org_id)
+            & (Runbook.project_id == KnowledgeChunk.project_id)
+            & (Runbook.id == KnowledgeChunk.runbook_id),
+        )
+        .outerjoin(
+            Finding,
+            (Finding.org_id == KnowledgeChunk.org_id)
+            & (Finding.project_id == KnowledgeChunk.project_id)
+            & (Finding.id == KnowledgeChunk.finding_id),
+        )
+        .outerjoin(
+            FindingNote,
+            (FindingNote.org_id == KnowledgeChunk.org_id)
+            & (FindingNote.id == KnowledgeChunk.note_id),
+        )
+        .outerjoin(
+            NoteFinding,
+            (NoteFinding.org_id == FindingNote.org_id)
+            & (NoteFinding.project_id == KnowledgeChunk.project_id)
+            & (NoteFinding.id == FindingNote.finding_id),
+        )
     )
 
 
+_SELECTED: Final = (KnowledgeChunk, Runbook, Finding, FindingNote, NoteFinding)
+
+
 def _still_kept() -> Any:
-    return or_(KnowledgeChunk.source_kind != "fact", Finding.closed_reason == _RECOVERED)
+    """A fact line stays while its finding is recovered or its case resolved (AC84); a note
+    is read only within its finding's own project."""
+    resolved_case = and_(
+        Finding.case_state == "resolved",
+        Finding.case_resolution.in_(RESOLVED_CASE_RESOLUTIONS),
+    )
+    return or_(
+        KnowledgeChunk.source_kind == "runbook",
+        and_(KnowledgeChunk.source_kind == "note", NoteFinding.id.is_not(None)),
+        and_(
+            KnowledgeChunk.source_kind == "fact",
+            or_(Finding.closed_reason == RECOVERED, resolved_case),
+        ),
+    )
 
 
 async def _keyword(
@@ -189,14 +247,15 @@ async def _keyword(
     query = func.websearch_to_tsquery(_ENGLISH, phrase)
     rank = func.ts_rank(KnowledgeChunk.content_tsv, query)
     rows = await session.execute(
-        _joined(select(KnowledgeChunk, Runbook, Finding))
+        _joined(select(*_SELECTED))
         .where(
             KnowledgeChunk.org_id == reader.org_id,
             KnowledgeChunk.project_id == project_id,
             KnowledgeChunk.content_tsv.op("@@")(query),
             _still_kept(),
         )
-        .order_by(rank.desc(), KnowledgeChunk.id)
+        # People's words first (FR29): `false` sorts before `true`.
+        .order_by((KnowledgeChunk.source_kind == "fact").asc(), rank.desc(), KnowledgeChunk.id)
         .limit(MAX_RESULTS)
     )
     return list(rows.all())
@@ -207,7 +266,7 @@ async def _rows(
 ) -> list[Any]:
     """The meaning side's chunks, by id; `_MEANING` already left out a false alarm's line."""
     rows = await session.execute(
-        _joined(select(KnowledgeChunk, Runbook, Finding)).where(
+        _joined(select(*_SELECTED)).where(
             KnowledgeChunk.org_id == reader.org_id,
             KnowledgeChunk.project_id == project_id,
             KnowledgeChunk.id.in_(ids),
@@ -245,14 +304,40 @@ async def _meaning(
             "project_id": project_id,
             "step_id": step_id,
             "message_id": reader.message_id,
-            "recovered": _RECOVERED,
             "limit": MAX_RESULTS,
         },
     )
     return [uuid.UUID(str(chunk_id)) for chunk_id in found.scalars()]
 
 
-def _row(chunk: KnowledgeChunk, runbook: Runbook | None, finding: Finding | None) -> KnowledgeRow:
+def _ended(finding: Finding | None) -> datetime | None:
+    """When a fact line's finding ended: its case's resolve when that keeps the line, as the
+    sweep wrote it, else its close."""
+    if finding is None:
+        return None
+    if finding.case_state == "resolved" and finding.case_resolution in RESOLVED_CASE_RESOLUTIONS:
+        return finding.case_resolved_at
+    return finding.closed_at
+
+
+def _row(
+    chunk: KnowledgeChunk,
+    runbook: Runbook | None,
+    finding: Finding | None,
+    note: FindingNote | None = None,
+    note_finding: Finding | None = None,
+) -> KnowledgeRow:
+    if note is not None:
+        return KnowledgeRow(
+            id=chunk.id,
+            source_kind="note",
+            title=None,
+            content=chunk.content,
+            service_name=None if note_finding is None else note_finding.service_name,
+            written_at=note.created_at,
+            runbook_id=None,
+            finding_id=note.finding_id,
+        )
     if runbook is not None:
         return KnowledgeRow(
             id=chunk.id,
@@ -264,14 +349,13 @@ def _row(chunk: KnowledgeChunk, runbook: Runbook | None, finding: Finding | None
             runbook_id=runbook.id,
             finding_id=None,
         )
-    closed = finding.closed_at if finding is not None else None
     return KnowledgeRow(
         id=chunk.id,
         source_kind="fact",
         title=None,
         content=chunk.content,
         service_name=chunk.fact_service,
-        written_at=closed or chunk.created_at,
+        written_at=_ended(finding) or chunk.created_at,
         runbook_id=None,
         finding_id=chunk.finding_id,
     )

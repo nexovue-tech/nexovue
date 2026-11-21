@@ -1425,3 +1425,17 @@ async def test_every_cascade_the_inventory_relies_on_is_really_a_cascade(
         f"the deletion relies on these cascades and the database does not have them "
         f"as NOT NULL ON DELETE CASCADE: {broken}"
     )
+
+
+async def test_a_knowledge_chunk_goes_with_each_source_it_can_name(db: AsyncSession) -> None:
+    """F4 BR16, AC38 (T5.1, T7.1): a chunk's runbook, finding and note keys are nullable, one
+    set per kind, so they are not in `REMOVED_BY_CASCADE`; each must still be a cascade, or
+    deleting a runbook, a finding or a note would leave its words searchable."""
+    result = await db.execute(
+        text(
+            "SELECT c.confrelid::regclass::text FROM pg_constraint c "
+            "WHERE c.contype = 'f' AND c.conrelid = 'knowledge_chunks'::regclass "
+            "AND c.confdeltype = 'c'"
+        )
+    )
+    assert {"runbooks", "findings", "finding_notes"} <= set(result.scalars())

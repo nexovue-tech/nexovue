@@ -48,6 +48,8 @@ from nexovue_api.auth.dependencies import Identity
 from nexovue_api.data.postgres.models import (
     AssistantMessage,
     Finding,
+    FindingEvent,
+    FindingNote,
     Incident,
     Project,
     Release,
@@ -67,6 +69,7 @@ TRACE: Final = "a1" * 16
 SPAN: Final = "b2" * 8
 EXCEPTION: Final = "java.net.ConnectException"
 METRIC: Final = "http.server.duration"
+NOTE_WORDS: Final = "planted note words: restart the pool"
 # The tricks of AC10: each would move a route if it reached a path segment as it is.
 PATH_TRICKS: Final = (
     "../../audit",
@@ -270,6 +273,23 @@ async def _records(install: AsyncEngine, tenant: ProvisionedTenant) -> dict[str,
         )
         db.add_all([finding, incident, release])
         await db.flush()
+        # A case with a note: the timeline a ticket reads names neither (Step 7).
+        note = FindingNote(
+            org_id=org, finding_id=finding.id, author_id=tenant.user.id, body=NOTE_WORDS
+        )
+        db.add(note)
+        await db.flush()
+        db.add(
+            FindingEvent(
+                org_id=org,
+                finding_id=finding.id,
+                kind="note_added",
+                actor_kind="person",
+                actor_id=tenant.user.id,
+                detail={"note_id": str(note.id)},
+                at=now - timedelta(minutes=20),
+            )
+        )
         db.add(
             ReleasePeriod(
                 org_id=org,
@@ -408,6 +428,20 @@ async def test_every_tool_reads_as_the_question_s_project_and_never_another(
         assert outside[0] == never[0] == 404, (tool.name, outside, never)
         # Byte-identical but for each request's own reference.
         assert _without_request_id(outside[1]) == _without_request_id(never[1]), tool.name
+
+    # Step 7: a case's timeline reads as a token reads it: kinds and times, no person, no
+    # note's words (spec, *What chat can read*; F22 FR20).
+    status, body = _get(
+        client,
+        TOOLS_BY_NAME["get_finding_timeline"],
+        {"finding_id": ids["finding_id"]},
+        ticket=ticket,
+        project=project,
+    )
+    events = json.loads(body)["events"]
+    assert status == 200 and [event["kind"] for event in events] == ["note_added"]
+    assert {key for event in events for key in event} == {"id", "kind", "at"}
+    assert NOTE_WORDS.encode() not in body and own.user.email.encode() not in body
 
 
 async def test_path_tricks_are_refused_before_any_read_and_would_move_the_route(

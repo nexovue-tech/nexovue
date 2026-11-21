@@ -30,6 +30,7 @@ import {
   EMAIL_OFF,
   failureFix,
   NO_MAPPING,
+  NOTES_TO_CHAT,
   PUBLIC_REFUSED_UNTIL_ALLOWED,
   publicAllowedSince,
   STATUS_ONLY,
@@ -117,6 +118,7 @@ function WhatLeaves() {
           Coming in: each linked issue's status, read on a timer. A webhook, if GitHub can reach
           this server, only makes that sooner.
         </li>
+        <li>{NOTES_TO_CHAT}</li>
       </ul>
     </section>
   );

@@ -11,6 +11,7 @@ import type { TimelineEvent } from "./api";
 import { fetchEarlierTimeline, useDeleteNote, useTimeline } from "./api";
 import { eventSentence } from "./finding-page";
 import { EMPTY_TIMELINE, NOTE_DELETE_CONFIRMATION } from "./finding-words";
+import { SaveAsRunbook } from "./SaveAsRunbook";
 
 /** The newest rows shown before Show earlier: 20 wide, 5 on a phone (guesses). */
 const FIRST_WIDE = 20;
@@ -33,8 +34,17 @@ function firstPage(): number {
  * A note's words render as plain text with their line breaks: no Markdown, and
  * nothing in them is clickable (FR14, AC18). A failed read is this section's
  * failure alone — the page stands, and it never reads as "nothing happened".
+ * `saveAsRunbook` offers F4's **Save as runbook** on each note of a resolved case.
  */
-export function Timeline({ findingId, zone }: { findingId: string; zone?: string }) {
+export function Timeline({
+  findingId,
+  zone,
+  saveAsRunbook = false,
+}: {
+  findingId: string;
+  zone?: string;
+  saveAsRunbook?: boolean;
+}) {
   const timeline = useTimeline(findingId);
   const deleteNote = useDeleteNote(findingId);
   const session = useSession();
@@ -129,6 +139,9 @@ export function Timeline({ findingId, zone }: { findingId: string; zone?: string
                 <Button variant="secondary" onClick={() => setArmedDelete(noteId)}>
                   Delete note
                 </Button>
+              ) : null}
+              {saveAsRunbook && noteId != null && event.note_body != null && !inSupportView ? (
+                <SaveAsRunbook noteId={noteId} />
               ) : null}
               {armedDelete !== null && armedDelete === noteId ? (
                 <ConfirmPanel label="Delete this note">

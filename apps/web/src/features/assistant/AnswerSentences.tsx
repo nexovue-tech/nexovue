@@ -11,6 +11,10 @@ import {
   FIGURE_FLAG,
   LABEL_WORDS,
   NOT_VERIFIED,
+  NOTE_QUOTE_FOLDED,
+  NOTE_QUOTE_GONE,
+  noteQuoteLabel,
+  OPEN_CASE,
   OPEN_RUNBOOK,
   QUOTE_CUT,
   QUOTE_FOLDED,
@@ -80,6 +84,7 @@ export function AnswerSentences({
               key={id}
               tool={answer.quotes?.[id]?.tool ?? ""}
               folded={answer.quotes?.[id]?.folded ?? true}
+              storedAsNote={answer.quotes?.[id]?.note ?? false}
               read={found.get(id)}
               loading={quotes.isPending}
               failed={quotes.isError}
@@ -157,6 +162,7 @@ function SentenceText({ sentence }: { sentence: Sentence }) {
 function Quote({
   tool,
   folded,
+  storedAsNote,
   read,
   loading,
   failed,
@@ -166,6 +172,7 @@ function Quote({
 }: {
   tool: string;
   folded: boolean;
+  storedAsNote: boolean;
   read: QuoteView | undefined;
   loading: boolean;
   failed: boolean;
@@ -191,9 +198,13 @@ function Quote({
     );
   }
   if (!read || read.state === "gone" || read.value === null) {
-    return <p className="text-ink-dim text-xs">{QUOTE_GONE[tool] ?? QUOTE_GONE.search_logs}</p>;
+    const gone = storedAsNote ? NOTE_QUOTE_GONE : (QUOTE_GONE[tool] ?? QUOTE_GONE.search_logs);
+    return <p className="text-ink-dim text-xs">{gone}</p>;
   }
   if (read.runbook) return <RunbookQuote read={read} now={now} onLeave={onLeave} />;
+  if (read.note) {
+    return <NoteQuote read={read} folded={folded} now={now} onLeave={onLeave} />;
+  }
   // What nexovue read again decides, not what the stored answer claimed (T5.6).
   const isFolded = read.folded || folded;
   const shown = !isFolded || opened;
@@ -257,6 +268,59 @@ function RunbookQuote({
             className="font-medium text-brand-text underline-offset-2 hover:underline"
           >
             {OPEN_RUNBOOK}
+          </Link>
+        ) : null}
+      </p>
+    </figure>
+  );
+}
+
+/**
+ * A teammate's note (Step 7): labelled as the team's with its age, and inert like a log's
+ * text: folded under its own warning when it reads as a link or a command, never offered for
+ * copy as something to run (BR7, AC63). It opens the case it was written on.
+ */
+function NoteQuote({
+  read,
+  folded,
+  now,
+  onLeave,
+}: {
+  read: QuoteView;
+  folded: boolean;
+  now: number;
+  onLeave?: () => void;
+}) {
+  const [opened, setOpened] = useState(false);
+  const age = writtenAge(read.written_at, now);
+  const isFolded = read.folded || folded;
+  return (
+    <figure className="flex flex-col gap-1 border border-line px-2 py-1">
+      <figcaption className="text-ink-dim text-xs">{noteQuoteLabel(age.words)}</figcaption>
+      {isFolded ? <p className="text-ink-dim text-xs">{NOTE_QUOTE_FOLDED}</p> : null}
+      {!isFolded || opened ? (
+        <pre className="whitespace-pre-wrap break-words font-mono text-ink text-xs" inert>
+          {visibleEscapes(read.value ?? "")}
+        </pre>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpened(true)}
+          className="self-start text-brand-text text-xs underline-offset-2 hover:underline"
+        >
+          {SHOW_FOLDED}
+        </button>
+      )}
+      <p className="flex flex-wrap items-center gap-x-4 text-xs">
+        {read.was_cut ? <span className="text-ink-dim">{QUOTE_CUT}</span> : null}
+        {read.finding_id ? (
+          <Link
+            to="/findings/$findingId"
+            params={{ findingId: read.finding_id }}
+            onClick={onLeave}
+            className="font-medium text-brand-text underline-offset-2 hover:underline"
+          >
+            {OPEN_CASE}
           </Link>
         ) : null}
       </p>

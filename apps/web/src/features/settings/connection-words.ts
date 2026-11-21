@@ -15,6 +15,12 @@ export const EMAIL_OFF = "Failure emails cannot be sent on this install.";
 export const STATUS_ONLY = "Status only. Nothing is created without someone's click.";
 export const NEEDS_ATTENTION_BANNER = "GitHub needs attention. Open settings.";
 export const TEST_WORKS = "The connection works.";
+/**
+ * F4 T7.2, the spec's *What leaves this server* row for chat: case notes reach the AI provider
+ * only while chat is on, which is off by default.
+ */
+export const NOTES_TO_CHAT =
+  "Only with chat on: the text of case notes, as knowledge for chat, to the AI provider an owner agreed to. Deleting a note deletes nexovue's copy; a provider's own copy is out of nexovue's reach.";
 export const DISCONNECT_LEAVES =
   "This deletes the stored key and stops all sync. The App stays in your GitHub account until you delete it there. A backup may hold a sealed copy.";
 /** FR32: the step that ends it on GitHub's side (D38). */

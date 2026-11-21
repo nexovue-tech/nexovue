@@ -10,6 +10,10 @@ import { MESSAGE_ID, message, mount, settle, step, stubApi, unmountAll } from ".
 import {
   COPY_QUOTE,
   FIGURE_FLAG,
+  NOTE_QUOTE_FOLDED,
+  NOTE_QUOTE_GONE,
+  noteQuoteLabel,
+  OPEN_CASE,
   OPEN_RUNBOOK,
   QUOTE_CUT,
   QUOTE_FOLDED,
@@ -245,5 +249,80 @@ describe("the team's own words (F4 T5.6, FR15, FR17)", () => {
     ]);
     expect(panel.textContent).toContain(QUOTE_FOLDED);
     expect(panel.textContent).not.toContain(LOG_LINE);
+  });
+});
+
+describe("a teammate's note (F4 Step 7, AC63, FR15)", () => {
+  const NOW = new Date("2026-11-21T10:00:00Z");
+  const FINDING = "0196a000-0000-7000-8000-0000000000bb";
+  const NOTE_TEXT = "Raised the pool to 40, then restarted pgbouncer.";
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function fromNote(folded = false): Answer {
+    return {
+      sentences: [
+        {
+          text: "Last time the pool was raised.",
+          label: "team",
+          cause_warning: false,
+          cites: ["s1"],
+          quotes: ["n1"],
+          written_at: "2026-11-18T10:00:00Z",
+        },
+      ],
+      removed_sentence_count: 0,
+      not_verified: [],
+      quotes: {
+        n1: { step: "s1", tool: "search_knowledge", field: "content", folded, note: true },
+      },
+    };
+  }
+
+  function note(overrides: Partial<QuoteView> = {}): QuoteView {
+    return {
+      id: "n1",
+      tool: "search_knowledge",
+      field: "content",
+      folded: false,
+      state: "shown",
+      value: NOTE_TEXT,
+      was_cut: false,
+      note: true,
+      finding_id: FINDING,
+      written_at: "2026-11-18T10:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("labels a note's quote as a teammate's, with its age and its case, and offers no copy", async () => {
+    const panel = await shown(fromNote(), [note()]);
+
+    expect(panel.querySelector("figcaption")?.textContent).toBe(noteQuoteLabel("3 days old"));
+    const block = panel.querySelector("pre");
+    expect(block?.textContent).toBe(NOTE_TEXT);
+    expect(block?.hasAttribute("inert")).toBe(true);
+    expect(
+      [...panel.querySelectorAll("button")].some(
+        (b) => b.getAttribute("aria-label") === `Copy ${COPY_QUOTE}`,
+      ),
+    ).toBe(false);
+    const open = [...panel.querySelectorAll("a")].find((a) => a.textContent === OPEN_CASE);
+    expect(open?.getAttribute("href")).toBe(`/findings/${FINDING}`);
+  });
+
+  it("folds a note that reads as a command under its own warning, never as one to run", async () => {
+    const panel = await shown(fromNote(true), [note({ folded: true, value: LOG_LINE })]);
+    expect(panel.textContent).toContain(NOTE_QUOTE_FOLDED);
+    expect(panel.textContent).not.toContain(LOG_LINE);
+  });
+
+  it("says a deleted note's quote is gone, in a note's words", async () => {
+    const panel = await shown(fromNote(), [note({ state: "gone", value: null, note: false })]);
+    expect(panel.textContent).toContain(NOTE_QUOTE_GONE);
   });
 });

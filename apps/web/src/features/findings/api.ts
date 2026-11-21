@@ -1394,3 +1394,49 @@ export function useStartGitHubLink() {
       ),
   });
 }
+
+/** What `POST /runbooks/notes` answers: the runbook it wrote (F4 FR41). */
+export interface SavedRunbook {
+  id: string;
+  title: string;
+}
+
+/**
+ * Save as runbook (F4 FR41): a resolved case's note, with its case's fact line, copied into
+ * a runbook of the case's project that outlives the finding. Text that looks like a
+ * credential needs a second click, `confirmCredentials`, as a runbook's own form does.
+ */
+export function useSaveNoteAsRunbook() {
+  return useMutation({
+    mutationKey: ["runbooks", "notes"],
+    mutationFn: ({ noteId, confirmCredentials }: { noteId: string; confirmCredentials: boolean }) =>
+      apiClient.post<SavedRunbook>("runbooks/notes", {
+        note_id: noteId,
+        confirm_credentials: confirmCredentials,
+      }),
+  });
+}
+
+/** Chat's standing for a project, as `GET /assistant/availability` says it (F4). */
+export interface ChatStanding {
+  state: "ready" | "ai_off" | "chat_off" | "no_consent" | "opted_out" | "no_data";
+  provider_label: string | null;
+}
+
+/**
+ * Whether chat is on for the case's project, for the note box's sentence (F4 T7.2). A
+ * refusal, such as a viewer's, or the hosted service, reads as off: the sentence is left out.
+ */
+export function useChatStanding(projectId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["findings", "chat-standing", projectId],
+    enabled,
+    throwOnError: false,
+    retry: false,
+    queryFn: ({ signal }) =>
+      apiClient.get<ChatStanding>("assistant/availability", {
+        signal,
+        searchParams: { project_id: projectId },
+      }),
+  });
+}

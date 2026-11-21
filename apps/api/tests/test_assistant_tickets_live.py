@@ -178,8 +178,7 @@ async def test_every_catalog_route_reads_as_the_question_s_project(
     [
         "nexovue_api/llm_observability/router.py:list_llm_calls",
         "nexovue_api/findings/router.py:finding_stats",
-        # A finding's case timeline waits for Step 7; a target is not chat's at all.
-        "nexovue_api/findings/router.py:read_timeline",
+        # A reliability target is not chat's at all. (A case's timeline joined with Step 7.)
         "nexovue_api/slos/router.py:list_slos",
     ],
 )

@@ -1,4 +1,5 @@
-"""F4 plan T5.4: knowledge search, against real Postgres (AC41, AC42, AC68, AC84; FR37).
+"""F4 plan T5.4, T6.2 and T7.2: knowledge search, against real Postgres (AC38, AC41, AC42, AC68,
+AC83, AC84; FR29, FR37).
 
 The search is read as the ticket's reader, its organization and project the ticket's own;
 each test runs inside a transaction that is rolled back, so it owns its rows. Reading it over
@@ -9,13 +10,13 @@ which covers every catalog tool. Clocks are pinned (`NOW`).
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from assistant_live import AVAILABLE, KEYS, NOW, chat_on, db, require_postgres, tenant
 from nexovue_platform.ai.embed import vector_literal
 from nexovue_platform.ai.testing import meaning_vector
-from sqlalchemy import text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
@@ -27,6 +28,7 @@ from nexovue_api.data.postgres.models import (
     AssistantMessage,
     AssistantStep,
     Finding,
+    FindingNote,
     KnowledgeChunk,
     Project,
 )
@@ -421,3 +423,205 @@ async def test_a_false_alarm_s_fact_line_is_left_out_of_meaning_search_too(
         db, reader=reader, project_id=made.project.id, phrase="nothing here", step_id=step
     )
     assert found.chunks == []
+
+
+# ------------------------------------------------------------- Step 7: notes and cases
+
+NOTE = "Fixed checkout by raising the pool to 40 and restarting pgbouncer."
+
+
+def _case_finding(
+    made: ProvisionedTenant,
+    *,
+    closed_reason: str | None = "recovered",
+    resolution: str | None = None,
+    closed_at: datetime | None = NOW,
+) -> Finding:
+    """A finding, closed or open, holding a resolved case when `resolution` is given."""
+    resolved = resolution is not None
+    return Finding(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        scope="service",
+        service_name="checkout",
+        severity="warning",
+        state="closed" if closed_at is not None else "open",
+        closed_reason=closed_reason if closed_at is not None else None,
+        title="ignored",
+        signals=[{"signal": "slower"}],
+        started_at=(closed_at or NOW) - timedelta(hours=1),
+        closed_at=closed_at,
+        case_state="resolved" if resolved else None,
+        case_resolution=resolution,
+        case_opened_at=NOW - timedelta(minutes=50) if resolved else None,
+        case_activity_at=NOW if resolved else None,
+        case_resolved_at=NOW if resolved else None,
+    )
+
+
+async def _note(
+    db: AsyncSession, made: ProvisionedTenant, finding: Finding, body: str = NOTE
+) -> tuple[FindingNote, uuid.UUID]:
+    """A note on the case, and its chunk as the knowledge sweep writes it."""
+    note = FindingNote(
+        org_id=made.organization.id,
+        finding_id=finding.id,
+        author_id=made.user.id,
+        body=body,
+        created_at=NOW - timedelta(days=3),
+    )
+    db.add(note)
+    await db.flush()
+    chunk = KnowledgeChunk(
+        org_id=made.organization.id,
+        project_id=finding.project_id,
+        source_kind="note",
+        note_id=note.id,
+        content=body,
+    )
+    db.add(chunk)
+    await db.flush()
+    return note, chunk.id
+
+
+def _fact(made: ProvisionedTenant, finding: Finding, day: int) -> KnowledgeChunk:
+    return KnowledgeChunk(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        source_kind="fact",
+        finding_id=finding.id,
+        content=f"service checkout | signal slower | day {day} | checkout closed: recovered",
+        fact_service="checkout",
+        fact_signal="slower",
+        fact_day=(NOW - timedelta(days=day)).date(),
+    )
+
+
+async def test_a_note_is_found_with_its_date_and_its_case_and_never_its_author(
+    db: AsyncSession,
+) -> None:
+    """Step 7's judgeable claim (UR9, FR28): "how did we fix this last time?" finds the
+    note, labelled the team's (its row's kind), with the date it was written and its case;
+    the author's name is not in the row the model reads."""
+    made = await _ready(db, "Notes")
+    finding = _case_finding(made, resolution="resolved")
+    db.add(finding)
+    await db.flush()
+    note, chunk_id = await _note(db, made, finding)
+    reader = await _reader(db, made)
+
+    found = await knowledge.search(db, reader=reader, project_id=made.project.id, phrase="pool")
+    [row] = found.chunks
+    assert (row.id, row.source_kind, row.content, row.finding_id) == (
+        chunk_id,
+        "note",
+        NOTE,
+        finding.id,
+    )
+    assert (row.written_at, row.title, row.runbook_id) == (note.created_at, None, None)
+    assert row.service_name == "checkout"
+    assert made.user.email not in row.model_dump_json()
+
+
+async def test_deleting_a_note_takes_it_out_of_search_in_the_same_statement(
+    db: AsyncSession,
+) -> None:
+    """AC38, BR16: the chunk cascades from its note; the next search finds nothing."""
+    made = await _ready(db, "NoteGone")
+    finding = _case_finding(made, resolution="resolved")
+    db.add(finding)
+    await db.flush()
+    note, chunk_id = await _note(db, made, finding)
+    reader = await _reader(db, made)
+    assert await _search(db, reader, "pool", made.project.id) == [NOTE]
+
+    await db.execute(delete(FindingNote).where(FindingNote.id == note.id))
+    assert await _search(db, reader, "pool", made.project.id) == []
+    assert await db.scalar(select(KnowledgeChunk.id).where(KnowledgeChunk.id == chunk_id)) is None
+
+
+async def test_a_note_outranks_a_hundred_fact_lines_about_the_same_service(
+    db: AsyncSession,
+) -> None:
+    """AC83, FR29: what a person wrote ranks above nexovue's composed lines, whatever the
+    text ranking says; here every fact line says "checkout" twice and the note once."""
+    made = await _ready(db, "Outranks")
+    findings = [_case_finding(made, closed_at=NOW - timedelta(days=day)) for day in range(100)]
+    db.add_all(findings)
+    await db.flush()
+    db.add_all(_fact(made, finding, day) for day, finding in enumerate(findings))
+    noted = _case_finding(made, resolution="resolved")
+    db.add(noted)
+    await db.flush()
+    _, note_chunk = await _note(db, made, noted, "Raised the pool. checkout is fine now.")
+    reader = await _reader(db, made)
+
+    found = await knowledge.search(db, reader=reader, project_id=made.project.id, phrase="checkout")
+    assert found.chunks[0].id == note_chunk
+    assert [row.source_kind for row in found.chunks[1:]] == ["fact"] * (len(found.chunks) - 1)
+
+    # The merge keeps the order: a fact line scoring higher by rank still comes after.
+    fact_a, fact_b, person = (uuid.uuid4() for _ in range(3))
+    merged = knowledge.merged(
+        [fact_a, fact_b, person], [fact_a, fact_b, person], facts=frozenset({fact_a, fact_b})
+    )
+    assert merged == [person, fact_a, fact_b]
+
+
+async def test_a_resolved_case_s_line_stays_searchable_after_it_stops_being_recovered(
+    db: AsyncSession,
+) -> None:
+    """FR28, design section 6: a fact line is kept while its finding is recovered or a
+    person resolved its case; a case ended as a false alarm keeps none (AC84)."""
+    made = await _ready(db, "CaseLines")
+    resolved = _case_finding(made, closed_reason="service_gone", resolution="resolved")
+    tracker = _case_finding(made, closed_at=None, resolution="tracker_closed")
+    false_alarm = _case_finding(made, closed_reason="false_alarm", resolution="false_alarm")
+    idle = _case_finding(made, closed_reason="service_gone", resolution="no_activity")
+    db.add_all([resolved, tracker, false_alarm, idle])
+    await db.flush()
+    db.add_all(_fact(made, finding, day) for day, finding in enumerate([resolved, tracker]))
+    db.add_all(
+        _fact(made, finding, day) for day, finding in enumerate([false_alarm, idle], start=5)
+    )
+    await db.flush()
+    reader = await _reader(db, made)
+
+    found = await knowledge.search(db, reader=reader, project_id=made.project.id, phrase="slower")
+    assert {row.finding_id for row in found.chunks} == {resolved.id, tracker.id}
+    assert next(row for row in found.chunks if row.finding_id == resolved.id).written_at == NOW
+
+
+async def test_by_meaning_too_a_note_comes_before_fact_lines_nearer_the_phrase(
+    db: AsyncSession,
+) -> None:
+    """FR29 on the meaning side: with keywords finding nothing, the meaning list stands whole,
+    and still puts people's words first, though 25 fact lines sit nearer the phrase."""
+    made = await _ready(db, "MeaningNotes")
+    findings = [_case_finding(made, closed_at=NOW - timedelta(days=day)) for day in range(25)]
+    db.add_all(findings)
+    await db.flush()
+    facts = [_fact(made, finding, day) for day, finding in enumerate(findings)]
+    db.add_all(facts)
+    noted = _case_finding(made, resolution="resolved")
+    db.add(noted)
+    await db.flush()
+    _, note_chunk = await _note(db, made, noted, "The disk filled; we cleared the volume.")
+    for chunk_id, words in [(fact.id, "slow latency") for fact in facts] + [
+        (note_chunk, "disk volume")
+    ]:
+        await db.execute(
+            text(
+                "UPDATE knowledge_chunks SET embedding = CAST(:v AS vector), "
+                "embedded_model = :m, embedding_due = false WHERE id = :c"
+            ),
+            {"v": vector_literal(tuple(meaning_vector(words))), "m": MODEL, "c": chunk_id},
+        )
+    reader = await _reader(db, made)
+    step = await _step(db, reader, "why is it slow")
+
+    found = await knowledge.search(
+        db, reader=reader, project_id=made.project.id, phrase="nothing matches", step_id=step
+    )
+    assert found.search == "hybrid"
+    assert found.chunks[0].id == note_chunk

@@ -19,6 +19,7 @@ from nexovue_api.deps import AppSettings, DbSession
 from nexovue_api.runbooks import service
 from nexovue_api.runbooks.schemas import (
     NewRunbook,
+    NoteToRunbook,
     RunbookFields,
     RunbookList,
     RunbookUpload,
@@ -58,6 +59,18 @@ async def create_runbook(
 ) -> RunbookView:
     service.require_offered(settings.nexovue_deployment)
     return await service.create_runbook(db, identity=identity, request=request, now=_now())
+
+
+@router.post(
+    "/notes",
+    status_code=status.HTTP_201_CREATED,
+    summary="Save a resolved case's note, with its case's fact line, as a runbook",
+)
+async def save_note_as_runbook(
+    identity: MayManageKnowledge, db: DbSession, settings: AppSettings, request: NoteToRunbook
+) -> RunbookView:
+    service.require_offered(settings.nexovue_deployment)
+    return await service.save_note_as_runbook(db, identity=identity, request=request, now=_now())
 
 
 @router.post("/upload", summary="Add Markdown files as runbooks, to one or more projects")

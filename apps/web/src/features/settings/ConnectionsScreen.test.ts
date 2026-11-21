@@ -209,6 +209,10 @@ describe("with nothing connected", () => {
     const { container } = await mount(ConnectionsScreen, "/settings/connections");
 
     expect(container.textContent).toContain("What leaves this server");
+    // F4 T7.2: notes go to the AI provider only with chat on, and the row says so.
+    expect(container.textContent).toContain(
+      "Only with chat on: the text of case notes, as knowledge for chat",
+    );
     expect(container.textContent).toContain(
       "Status only. Nothing is created without someone's click.",
     );

@@ -253,7 +253,7 @@ export const KEYWORD_ONLY_WORDS: Record<KeywordOnlyReason, string> = {
 export const MEANING_SEARCH_ON =
   "Search finds runbooks and fact lines by meaning as well as by keyword.";
 export const EMBEDDING_SENDS =
-  "With a model set, every runbook piece and fact line is sent once to be embedded, and each search phrase too. Masking applies first.";
+  "With a model set, every runbook piece, case note and fact line is sent once to be embedded, and each search phrase too. Masking applies first.";
 
 /** An embedding check's failure, in the connection test's words, with one of its own. */
 export function embeddingCheckLine(reason: string | null): string {
@@ -263,6 +263,16 @@ export function embeddingCheckLine(reason: string | null): string {
 }
 
 export function embeddingProgress(embedded: number, total: number): string {
-  if (total === 0) return "No runbooks or fact lines to embed yet.";
-  return `${embedded} of ${total} runbook pieces and fact lines can be found by meaning.`;
+  if (total === 0) return "No runbooks, notes or fact lines to embed yet.";
+  return `${embedded} of ${total} runbook pieces, notes and fact lines can be found by meaning.`;
+}
+
+/**
+ * F4 FR32, AC83: notes chat cannot search. A note always saves; the index adds it within a few
+ * minutes, and skips it while its project already holds 5,000 pieces. Null when none.
+ */
+export function notesNotSearchable(count: number): string | null {
+  if (count <= 0) return null;
+  const notes = count === 1 ? "1 note is" : `${count} notes are`;
+  return `${notes} not searchable by chat. New notes are added within a few minutes; a project holding 5,000 pieces of runbooks and notes takes no more.`;
 }

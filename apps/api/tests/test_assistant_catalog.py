@@ -342,6 +342,12 @@ DESTINATIONS: Final[dict[str, tuple[str, bool, str | None]]] = {
     "list_findings": ("/", False, None),
     "get_finding": ("/findings/$findingId", False, None),
     "get_finding_explanation": ("/findings/$findingId", False, None),
+    # Step 7: a case's kinds and times, never who holds it (spec, *What chat can read*).
+    "get_finding_timeline": (
+        "/findings/$findingId",
+        False,
+        "This answer cannot show who holds the case. See the case page.",
+    ),
     "list_services": ("/services", False, RANGE_NOT_APPLIED),
     "get_service": ("/services/$name", True, None),
     "get_service_detection": ("/services/$name", True, None),

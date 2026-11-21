@@ -2,9 +2,15 @@ import { useId, useState } from "react";
 
 import { ApiError } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
+import { useIsHosted } from "@/shared/deployment";
 
-import { useAddNote } from "./api";
-import { NOTE_BOX_LABEL, NOTE_BOX_WARNING } from "./finding-words";
+import { useAddNote, useChatStanding } from "./api";
+import {
+  CHAT_ON_STANDINGS,
+  chatSendsNotesSentence,
+  NOTE_BOX_LABEL,
+  NOTE_BOX_WARNING,
+} from "./finding-words";
 
 /** FR14's cap, refused inline beside the field rather than clamped silently. */
 const NOTE_MAX_LENGTH = 4000;
@@ -12,10 +18,15 @@ const NOTE_MAX_LENGTH = 4000;
 /**
  * Write a note (FR14, AC104). Enter adds a line — a textarea's own behaviour —
  * and the button, or Ctrl or Cmd+Enter, sends. A failed send keeps the draft:
- * the field only empties on success.
+ * the field only empties on success. With F4's chat on for the case's project, it says
+ * the notes can go to the AI provider (F4 T7.2); the hosted service offers no chat.
  */
-export function NoteBox({ findingId }: { findingId: string }) {
+export function NoteBox({ findingId, projectId }: { findingId: string; projectId: string }) {
   const add = useAddNote(findingId);
+  const hosted = useIsHosted();
+  const standing = useChatStanding(projectId, !hosted);
+  const sendsNotes =
+    !hosted && standing.data !== undefined && CHAT_ON_STANDINGS.includes(standing.data.state);
   const [draft, setDraft] = useState("");
   const [refused, setRefused] = useState("");
   const describedBy = useId();
@@ -68,6 +79,7 @@ export function NoteBox({ findingId }: { findingId: string }) {
       </label>
       <p id={describedBy} className="text-2xs text-ink-dim">
         {NOTE_BOX_WARNING}
+        {sendsNotes ? ` ${chatSendsNotesSentence(standing.data?.provider_label ?? null)}` : ""}
         {draft.length > NOTE_MAX_LENGTH * 0.9
           ? ` ${draft.length} of ${NOTE_MAX_LENGTH} characters.`
           : ""}

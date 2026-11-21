@@ -94,6 +94,7 @@ from nexovue_platform.fixes.records import (
 )
 from nexovue_platform.knowledge import (
     CHUNK_SPLIT_CHARACTERS,
+    MAX_NOTE_CHUNK_CHARACTERS,
     MAX_RUNBOOK_BYTES,
     MAX_RUNBOOK_CHUNKS,
     MAX_RUNBOOK_SERVICE_CHARACTERS,
@@ -2813,6 +2814,8 @@ class FindingNote(Base):
             name="fk_finding_notes_author",
         ),
         CheckConstraint(f"length(body) <= {NOTE_MAX_LENGTH}", name="a_note_is_not_a_document"),
+        # So chat's knowledge chunk can name its note with its organization (F4, 0080).
+        UniqueConstraint("org_id", "id", name="uq_finding_notes_org_id_id"),
         Index(
             "ix_finding_notes_org_id_finding_id_created_at",
             "org_id",
@@ -4588,8 +4591,9 @@ class Runbook(Base):
 
 
 class KnowledgeChunk(Base):
-    """One piece of what chat searches: a runbook's, or a fact line nexovue composed from a
-    recovered finding. One cascading key per source, so a chunk never outlives it (BR16)."""
+    """One piece of what chat searches: a runbook's, a person's case note, or a fact line
+    nexovue composed from a recovered finding or a resolved case. One cascading key per
+    source, so a chunk never outlives it (BR16)."""
 
     __tablename__ = "knowledge_chunks"
 
@@ -4601,6 +4605,7 @@ class KnowledgeChunk(Base):
     source_kind: Mapped[str] = mapped_column(Text, nullable=False)
     runbook_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     finding_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    note_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_tsv: Mapped[str] = mapped_column(
@@ -4634,19 +4639,31 @@ class KnowledgeChunk(Base):
             ondelete="CASCADE",
             name="fk_knowledge_chunks_finding",
         ),
+        ForeignKeyConstraint(
+            ["org_id", "note_id"],
+            ["finding_notes.org_id", "finding_notes.id"],
+            ondelete="CASCADE",
+            name="fk_knowledge_chunks_note",
+        ),
         CheckConstraint(
             f"source_kind IN ({', '.join(repr(kind) for kind in SOURCE_KINDS)})",
             name="source_kind_is_known",
         ),
         CheckConstraint(
             "(source_kind = 'runbook' AND runbook_id IS NOT NULL AND finding_id IS NULL"
+            " AND note_id IS NULL"
             " AND fact_signal IS NULL AND fact_day IS NULL AND fact_service IS NULL)"
             " OR (source_kind = 'fact' AND finding_id IS NOT NULL AND runbook_id IS NULL"
-            " AND fact_signal IS NOT NULL AND fact_day IS NOT NULL)",
+            " AND note_id IS NULL AND fact_signal IS NOT NULL AND fact_day IS NOT NULL)"
+            " OR (source_kind = 'note' AND note_id IS NOT NULL AND runbook_id IS NULL"
+            " AND finding_id IS NULL"
+            " AND fact_signal IS NULL AND fact_day IS NULL AND fact_service IS NULL)",
             name="one_source",
         ),
         CheckConstraint(
-            f"char_length(content) BETWEEN 1 AND {CHUNK_SPLIT_CHARACTERS}", name="content_length"
+            "char_length(content) BETWEEN 1 AND (CASE WHEN source_kind = 'note' THEN "
+            f"{MAX_NOTE_CHUNK_CHARACTERS} ELSE {CHUNK_SPLIT_CHARACTERS} END)",
+            name="content_length",
         ),
         CheckConstraint(
             f"position BETWEEN 0 AND {MAX_RUNBOOK_CHUNKS - 1}", name="position_in_range"
@@ -4679,6 +4696,13 @@ class KnowledgeChunk(Base):
             "finding_id",
             unique=True,
             postgresql_where=text("finding_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_knowledge_chunks_note",
+            "org_id",
+            "note_id",
+            unique=True,
+            postgresql_where=text("note_id IS NOT NULL"),
         ),
         Index(
             "uq_knowledge_chunks_fact_per_day",

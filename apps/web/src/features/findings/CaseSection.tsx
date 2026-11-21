@@ -6,6 +6,7 @@ import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { useIsHosted } from "@/shared/deployment";
 import { useCan, useSession } from "@/shared/identity";
 import { AttachIssuePanel } from "./AttachIssuePanel";
 import type { EmailOutcome, FindingDetail } from "./api";
@@ -55,6 +56,10 @@ export function CaseSection({
   const inSupportView = Boolean(session.data?.support_view);
   const canOperate = useCan("operate_cases") && !inSupportView;
   const admin = useCan("manage_connections");
+  // F4 FR41: runbooks exist only where AI may be offered, and only these roles write them.
+  const mayManageKnowledge = useCan("manage_knowledge");
+  const hosted = useIsHosted();
+  const mayKeepAsRunbook = mayManageKnowledge && !hosted && !inSupportView;
   const viewerId = session.data?.user.id ?? null;
   const rootQuery = useRootCase(finding.root_finding_id);
   const change = useCaseChange(finding.id);
@@ -405,7 +410,7 @@ export function CaseSection({
       {inSupportView ? (
         <p className={`text-ink-dim text-sm ${PROSE}`}>Hidden during support view</p>
       ) : (
-        <NoteBox findingId={finding.id} />
+        <NoteBox findingId={finding.id} projectId={finding.project_id} />
       )}
 
       <LinksList
@@ -420,7 +425,11 @@ export function CaseSection({
       />
 
       <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Timeline</h3>
-      <Timeline findingId={finding.id} zone={zone} />
+      <Timeline
+        findingId={finding.id}
+        zone={zone}
+        saveAsRunbook={mayKeepAsRunbook && root.case_state === "resolved"}
+      />
     </section>
   );
 }

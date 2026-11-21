@@ -8,8 +8,9 @@ fenced by F3's `Untrusted`, exactly as the worker builds a call. A real one wher
 has one; with none, a labelled sample, and consent is still allowed (AC2).
 
 It also states the project's real masking: which default rules its owner switched off, read
-from `masking_config`, because a fixed sentence could be false. Runbooks and notes do not
-exist before plan Step 5, so nothing is sent for embedding yet, and it says so (0).
+from `masking_config`, because a fixed sentence could be false. With an embedding model set it
+counts the project's chunks (runbook pieces, case notes and fact lines), all sent at once to be
+embedded; with none set, 0.
 """
 
 from __future__ import annotations
@@ -58,7 +59,10 @@ WHAT_IS_STATED: Final = (
     PreviewKind(kind="The project's name", source="your team", level="facts"),
     PreviewKind(kind="The service in view", source="your telemetry", level="facts"),
     PreviewKind(
-        kind="Runbook text and fact lines, to be embedded for search, when a model is set",
+        kind=(
+            "Runbook text, case notes and fact lines, to be embedded for search, when a model "
+            "is set"
+        ),
         source="your team, and nexovue's own fact lines",
         level="facts_and_text",
     ),

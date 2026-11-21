@@ -48,6 +48,8 @@ export interface EmbeddingState {
   keyword_only: KeywordOnlyReason | null;
   chunks_embedded: number;
   chunks_total: number;
+  /** Notes chat cannot search yet, or at all at a project's cap (FR32, AC83). */
+  notes_not_searchable: number;
 }
 
 export interface SaveEmbedding {

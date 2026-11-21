@@ -6,7 +6,10 @@ services a screen uses, in the person's tenant and the question's project, so a 
 has aged out or been erased reads `gone`, and a failed read reads `read_failed`, never
 "gone" (AC19). Postgres finds the message; ClickHouse holds the values, and Postgres a
 knowledge chunk's (Step 5): a runbook's quote carries its runbook and its age, and one whose
-runbook was deleted reads `gone` ("Earlier answers quoting it will show it is gone").
+runbook was deleted reads `gone` ("Earlier answers quoting it will show it is gone"). A note's
+quote (Step 7) carries the date it was written and its case, never its author's name; it is
+inert, never offered as a command, and a deleted note's quote reads `gone`, since its chunk went
+with it.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import (
     AssistantMessage,
     AssistantStep,
+    FindingNote,
     KnowledgeChunk,
     Runbook,
 )
@@ -58,6 +62,10 @@ class QuoteView(BaseModel):
     runbook: bool = False
     runbook_id: uuid.UUID | None = None
     written_at: datetime | None = None
+    # A teammate's note on a case: labelled "A teammate wrote this", never a command (AC63),
+    # with the case it was written on.
+    note: bool = False
+    finding_id: uuid.UUID | None = None
 
 
 class QuoteList(BaseModel):
@@ -73,6 +81,7 @@ class _Gone(Exception):  # noqa: N818 — a record no longer kept, named for the
 class _Read:
     value: object
     runbook: Runbook | None = None
+    note: FindingNote | None = None
 
 
 def _text(value: object) -> str:
@@ -124,19 +133,24 @@ async def _group_value(
 
 async def _knowledge_value(
     session: AsyncSession, org_id: uuid.UUID, project_id: uuid.UUID, ref: Mapping[str, Any]
-) -> tuple[KnowledgeChunk, Runbook | None]:
+) -> tuple[KnowledgeChunk, Runbook | None, FindingNote | None]:
     try:
         chunk_id = uuid.UUID(str(ref.get("id", "")))
     except ValueError as malformed:
         raise _Gone from malformed
     found = (
         await session.execute(
-            select(KnowledgeChunk, Runbook)
+            select(KnowledgeChunk, Runbook, FindingNote)
             .outerjoin(
                 Runbook,
                 (Runbook.org_id == KnowledgeChunk.org_id)
                 & (Runbook.project_id == KnowledgeChunk.project_id)
                 & (Runbook.id == KnowledgeChunk.runbook_id),
+            )
+            .outerjoin(
+                FindingNote,
+                (FindingNote.org_id == KnowledgeChunk.org_id)
+                & (FindingNote.id == KnowledgeChunk.note_id),
             )
             .where(
                 KnowledgeChunk.org_id == org_id,
@@ -147,8 +161,8 @@ async def _knowledge_value(
     ).first()
     if found is None:
         raise _Gone
-    chunk, runbook = found
-    return chunk, runbook
+    chunk, runbook, note = found
+    return chunk, runbook, note
 
 
 async def _read(
@@ -172,12 +186,14 @@ async def _read(
     ):
         return _Read(await _group_value(repository, project_id, field, ref, step))
     if tool == KNOWLEDGE_TOOL and field in ("content", "title"):
-        chunk, runbook = await _knowledge_value(session, message.org_id, message.project_id, ref)
+        chunk, runbook, note = await _knowledge_value(
+            session, message.org_id, message.project_id, ref
+        )
         if field == "title":
             if runbook is None:
                 raise _Gone
             return _Read(runbook.title, runbook)
-        return _Read(chunk.content, runbook)
+        return _Read(chunk.content, runbook, note)
     raise _Gone
 
 
@@ -233,7 +249,8 @@ async def quotes(
             # A failed read is not "gone": the person may retry (AC19).
             views.append(view.model_copy(update={"state": "read_failed"}))
             continue
-        runbook = read.runbook
+        runbook, note = read.runbook, read.note
+        written_at = runbook.updated_at if runbook else (note.created_at if note else None)
         views.append(
             view.model_copy(
                 update={
@@ -244,7 +261,9 @@ async def quotes(
                     "runbook": runbook is not None,
                     "folded": False if runbook is not None else view.folded,
                     "runbook_id": None if runbook is None else runbook.id,
-                    "written_at": None if runbook is None else runbook.updated_at,
+                    "written_at": written_at,
+                    "note": note is not None,
+                    "finding_id": None if note is None else note.finding_id,
                 }
             )
         )

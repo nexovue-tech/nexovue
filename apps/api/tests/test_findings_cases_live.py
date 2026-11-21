@@ -1001,8 +1001,8 @@ async def test_a_support_view_reads_the_shape_with_note_bodies_hidden(
 
 
 def test_only_a_real_session_with_no_ticket_counts_as_a_person(acme: Team) -> None:
-    """AC69's table, over every kind of `Reader` that exists today; F4's ticket
-    adds its row when it lands."""
+    """AC69's table, over every kind of `Reader`, F4's ticket row included (F4 T7.2,
+    AC105): a ticket reads as a token reads, never as a person."""
     organization = acme.tenant.organization
     person = Reader(
         org_id=organization.id,
@@ -1023,9 +1023,11 @@ def test_only_a_real_session_with_no_ticket_counts_as_a_person(acme: Team) -> No
             ),
         ),
     )
+    ticket = Reader(org_id=organization.id, project_scope=acme.project_id, message_id=uuid.uuid4())
     assert person.is_real_person
     assert not token.is_real_person
     assert not support.is_real_person
+    assert not ticket.is_real_person and not ticket.is_person
 
 
 # -------------------------------------------------- clearing an assignee

@@ -352,6 +352,8 @@ POLICY_OF: Final = {
     # F4 T5.2 (D48): owner, admin and member write runbooks; a viewer reads them.
     "nexovue_api/runbooks/router.py:create_runbook": "MayManageKnowledge",
     "nexovue_api/runbooks/router.py:upload_runbooks": "MayManageKnowledge",
+    # F4 FR41: Save as runbook on a resolved case's note.
+    "nexovue_api/runbooks/router.py:save_note_as_runbook": "MayManageKnowledge",
     "nexovue_api/runbooks/router.py:update_runbook": "MayManageKnowledge",
     "nexovue_api/runbooks/router.py:delete_runbook": "MayManageKnowledge",
 }

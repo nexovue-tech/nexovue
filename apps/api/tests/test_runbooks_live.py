@@ -1,5 +1,5 @@
-"""F4 plan T5.1 and T5.2: runbooks and their chunks, against real Postgres (AC38, AC69, AC71,
-AC90, AC92, AC106).
+"""F4 plan T5.1, T5.2, T7.1 and T7.2: runbooks and their chunks, notes' chunks, and Save as
+runbook, against real Postgres (AC38, AC39, AC69, AC71, AC90, AC92, AC95, AC106).
 
 Each test runs inside a transaction that is rolled back (`assistant_live.db`), so it owns its
 rows and the stack's sweeps never see them. Clocks are pinned (`NOW`).
@@ -29,6 +29,7 @@ from nexovue_api.auth.sessions import Impersonation
 from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     Finding,
+    FindingNote,
     KnowledgeChunk,
     Project,
     Runbook,
@@ -37,7 +38,13 @@ from nexovue_api.data.postgres.models import (
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.runbooks import router as runbooks_router
 from nexovue_api.runbooks import service
-from nexovue_api.runbooks.schemas import NewRunbook, RunbookFields, RunbookUpload, UploadedFile
+from nexovue_api.runbooks.schemas import (
+    NewRunbook,
+    NoteToRunbook,
+    RunbookFields,
+    RunbookUpload,
+    UploadedFile,
+)
 from nexovue_api.signup.service import ProvisionedTenant
 
 require_postgres("runbooks")
@@ -371,7 +378,7 @@ async def test_runbooks_are_absent_where_ai_is_not_offered(db: AsyncSession) -> 
         for node in ast.walk(tree)
         if isinstance(node, ast.AsyncFunctionDef) and node.decorator_list
     ]
-    assert len(handlers) == 6
+    assert len(handlers) == 7
     for handler in handlers:
         first = (
             handler.body[1]
@@ -380,3 +387,154 @@ async def test_runbooks_are_absent_where_ai_is_not_offered(db: AsyncSession) -> 
             else handler.body[0]
         )
         assert "require_offered" in ast.unparse(first), handler.name
+
+
+# ------------------------------------------------------------- Step 7: notes and cases
+
+
+def _case(made: ProvisionedTenant, *, state: str = "resolved") -> Finding:
+    resolved = state == "resolved"
+    return Finding(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        scope="service",
+        service_name="checkout",
+        severity="warning",
+        state="closed",
+        closed_reason="recovered",
+        title=PLANTED,
+        signals=[{"signal": "slower"}],
+        started_at=NOW - timedelta(hours=1),
+        closed_at=NOW - timedelta(minutes=10),
+        case_state=state,
+        case_resolution="resolved" if resolved else None,
+        case_opened_at=NOW - timedelta(minutes=50),
+        case_activity_at=NOW,
+        case_resolved_at=NOW if resolved else None,
+    )
+
+
+async def _noted(
+    db: AsyncSession, made: ProvisionedTenant, body: str, *, state: str = "resolved"
+) -> tuple[Finding, FindingNote]:
+    finding = _case(made, state=state)
+    db.add(finding)
+    await db.flush()
+    note = FindingNote(
+        org_id=made.organization.id,
+        finding_id=finding.id,
+        author_id=made.user.id,
+        body=body,
+        created_at=NOW - timedelta(minutes=20),
+    )
+    db.add(note)
+    await db.flush()
+    return finding, note
+
+
+async def test_deleting_a_note_takes_its_chunk_and_a_chunk_names_its_own_organization_s(
+    db: AsyncSession,
+) -> None:
+    """AC38, BR16: a note's chunk goes with it in one statement; the database refuses a chunk
+    naming another organization's note (the composite key, D34)."""
+    made = await tenant(db, "NoteChunks")
+    stranger = await tenant(db, "NoteStranger")
+    _, note = await _noted(db, made, "raised the pool")
+    db.add(
+        KnowledgeChunk(
+            org_id=made.organization.id,
+            project_id=made.project.id,
+            source_kind="note",
+            note_id=note.id,
+            content=note.body,
+        )
+    )
+    await db.flush()
+
+    await db.execute(delete(FindingNote).where(FindingNote.id == note.id))
+    left = await db.scalar(
+        select(func.count()).select_from(KnowledgeChunk).where(KnowledgeChunk.note_id == note.id)
+    )
+    assert left == 0
+
+    _, theirs = await _noted(db, stranger, "theirs")
+    async with db.begin_nested():
+        db.add(
+            KnowledgeChunk(
+                org_id=made.organization.id,
+                project_id=made.project.id,
+                source_kind="note",
+                note_id=theirs.id,
+                content="smuggled",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await db.flush()
+
+
+async def test_save_as_runbook_copies_a_resolved_case_s_note_and_its_line_and_outlives_it(
+    db: AsyncSession,
+) -> None:
+    """AC95, FR41: a person's click copies the note and the case's fact line, composed from
+    columns alone (AC39: no finding title), into a runbook this person wrote, chunked for
+    search; it survives the finding's deletion, which the expiry sweep does at retention."""
+    made = await tenant(db, "SaveAsRunbook")
+    finding, note = await _noted(db, made, "Raised the pool to 40, then restarted pgbouncer.")
+
+    view = await service.save_note_as_runbook(
+        db, identity=_identity(made), request=NoteToRunbook(note_id=note.id), now=NOW
+    )
+
+    assert (view.project_id, view.service_name, view.author) == (
+        made.project.id,
+        "checkout",
+        made.user.name or made.user.email,
+    )
+    assert view.title == f"From a resolved case on checkout, {NOW:%Y-%m-%d}"
+    assert view.content is not None
+    assert view.content.startswith("Raised the pool to 40, then restarted pgbouncer.\n")
+    assert "Saved as a runbook by a person." in view.content
+    assert (
+        f"service checkout | signal slower | {NOW - timedelta(hours=1):%Y-%m-%d %H:%M} to "
+        f"{NOW:%Y-%m-%d %H:%M} UTC | closed: case resolved"
+    ) in view.content
+    assert PLANTED not in view.content and PLANTED not in view.title
+    assert await _chunks(db, view.id)
+
+    await db.execute(delete(Finding).where(Finding.id == finding.id))
+    kept = await db.scalar(select(Runbook).where(Runbook.id == view.id))
+    assert kept is not None and kept.created_by == made.user.id
+
+
+async def test_save_as_runbook_refuses_an_active_case_another_s_note_and_asks_twice_for_a_secret(
+    db: AsyncSession,
+) -> None:
+    """FR41 offers it on a resolved case only; another organization's note is one that does
+    not exist; a note holding a credential form needs the second click (AC69)."""
+    made = await tenant(db, "SaveRefusals")
+    stranger = await tenant(db, "SaveStranger")
+    _, active = await _noted(db, made, "still looking", state="investigating")
+    _, theirs = await _noted(db, stranger, "their fix")
+    _, secret = await _noted(db, made, "used password=hunter2 to get in")
+
+    with pytest.raises(ConflictError) as refused:
+        await service.save_note_as_runbook(
+            db, identity=_identity(made), request=NoteToRunbook(note_id=active.id), now=NOW
+        )
+    assert refused.value.extensions["code"] == "case_not_resolved"
+    with pytest.raises(NotFoundError):
+        await service.save_note_as_runbook(
+            db, identity=_identity(made), request=NoteToRunbook(note_id=theirs.id), now=NOW
+        )
+    with pytest.raises(InvalidRequestError) as warned:
+        await service.save_note_as_runbook(
+            db, identity=_identity(made), request=NoteToRunbook(note_id=secret.id), now=NOW
+        )
+    assert warned.value.extensions["code"] == "looks_like_credential"
+    saved = await service.save_note_as_runbook(
+        db,
+        identity=_identity(made),
+        request=NoteToRunbook(note_id=secret.id, confirm_credentials=True),
+        now=NOW,
+    )
+    assert saved.id is not None

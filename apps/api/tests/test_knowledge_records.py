@@ -1,5 +1,5 @@
-"""F4 plan T5.1: the knowledge records the API, the scheduler and migration 0076 share, held
-equal, and the runbook ceiling's arithmetic (AC106, D77), offline."""
+"""F4 plan T5.1 and T7.1: the knowledge records the API, the scheduler and migrations 0076 and
+0080 share, held equal, and the runbook ceiling's arithmetic (AC106, D77), offline."""
 
 from __future__ import annotations
 
@@ -11,8 +11,11 @@ from types import ModuleType
 
 import pytest
 from nexovue_platform.assistant_masks import holds_credential, mask
+from nexovue_platform.cases import NOTE_MAX_LENGTH
+from nexovue_platform.detection import CASE_RESOLUTIONS
 from nexovue_platform.knowledge import (
     CHUNK_SPLIT_CHARACTERS,
+    MAX_NOTE_CHUNK_CHARACTERS,
     MAX_RUNBOOK_BYTES,
     MAX_RUNBOOK_CHUNKS,
     MAX_RUNBOOK_SERVICE_CHARACTERS,
@@ -21,28 +24,43 @@ from nexovue_platform.knowledge import (
     STALE_RUNBOOK_DAYS,
     chunk_runbook,
 )
+from nexovue_platform.knowledge_facts import RESOLVED_CASE_RESOLUTIONS
 
 ROOT = Path(__file__).resolve().parents[3]
-MIGRATION = ROOT / "apps" / "api" / "migrations" / "versions" / "0076_knowledge.py"
+VERSIONS = ROOT / "apps" / "api" / "migrations" / "versions"
+MIGRATION = VERSIONS / "0076_knowledge.py"
+NOTES_MIGRATION = VERSIONS / "0080_knowledge_notes.py"
 RUNBOOK_AGE = ROOT / "apps" / "web" / "src" / "shared" / "runbook-age.ts"
 
 
-def _migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("revision_0076", MIGRATION)
+def _migration(path: Path = MIGRATION) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(f"revision_{path.name[:4]}", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_the_migration_s_frozen_copies_equal_the_shared_records() -> None:
+def test_the_migrations_frozen_copies_equal_the_shared_records() -> None:
+    """0080 is the newest word on the source kinds and a note chunk's size; 0076 on the rest."""
+    notes = _migration(NOTES_MIGRATION)
+    assert ", ".join(f"'{kind}'" for kind in SOURCE_KINDS) == notes._SOURCE_KINDS
+    assert notes._MAX_CHUNK == CHUNK_SPLIT_CHARACTERS
+    assert notes._MAX_NOTE_CHUNK == MAX_NOTE_CHUNK_CHARACTERS == NOTE_MAX_LENGTH
     frozen = _migration()
-    assert ", ".join(f"'{kind}'" for kind in SOURCE_KINDS) == frozen._SOURCE_KINDS
+    assert frozen._SOURCE_KINDS == "'runbook', 'fact'"
     assert frozen._MAX_RUNBOOK_BYTES == MAX_RUNBOOK_BYTES
     assert frozen._MAX_TITLE == MAX_RUNBOOK_TITLE_CHARACTERS
     assert frozen._MAX_SERVICE == MAX_RUNBOOK_SERVICE_CHARACTERS
     assert frozen._MAX_CHUNK == CHUNK_SPLIT_CHARACTERS
     assert frozen._MAX_POSITION == MAX_RUNBOOK_CHUNKS - 1
+
+
+def test_a_kept_case_is_one_f22_knows_and_never_a_false_alarm() -> None:
+    """FR28: the case resolutions that keep a fact line are F22's own, and none ends a case as
+    a false alarm (AC84)."""
+    assert set(RESOLVED_CASE_RESOLUTIONS) <= set(CASE_RESOLUTIONS)
+    assert "false_alarm" not in RESOLVED_CASE_RESOLUTIONS
 
 
 def test_the_panel_and_the_screen_warn_at_the_same_age() -> None:

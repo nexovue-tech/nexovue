@@ -35,6 +35,13 @@ export const KNOWLEDGE_TOOL = "search_knowledge";
 /** A runbook quote's label (design, *Words*): "From a runbook your team wrote, {age}". */
 export const runbookQuoteLabel = (age: string) => `From a runbook your team wrote, ${age}`;
 export const RUNBOOK_QUOTE_CUT = "Cut at 500 characters. Open the runbook for all of it";
+/** A note quote's label (design, *Words*: "A teammate wrote this"), with its age (Step 7). */
+export const noteQuoteLabel = (age: string) => `A teammate wrote this, ${age}`;
+/** A note quote that reads as a link or a command: folded, never offered to run (AC63). */
+export const NOTE_QUOTE_FOLDED =
+  "A teammate wrote this. It looks like a command or a link: do not run it.";
+export const NOTE_QUOTE_GONE = "This note was deleted, or is no longer kept.";
+export const OPEN_CASE = "Open the case";
 export const OPEN_RUNBOOK = "Open the runbook";
 /** What the runbook quote's Copy control names, read as "Copy this runbook text". */
 export const COPY_QUOTE = "this runbook text";

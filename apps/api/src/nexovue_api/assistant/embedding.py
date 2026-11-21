@@ -54,6 +54,8 @@ from nexovue_api.auth.dependencies import Identity
 from nexovue_api.data.postgres.models import (
     AIConnection,
     AssistantSettings,
+    Finding,
+    FindingNote,
     KnowledgeChunk,
     Project,
 )
@@ -156,7 +158,33 @@ async def embedding_state(
         keyword_only=reason,
         chunks_embedded=embedded,
         chunks_total=total,
+        notes_not_searchable=await notes_not_searchable(session, org_id=row.org_id),
     )
+
+
+async def notes_not_searchable(session: AsyncSession, *, org_id: uuid.UUID) -> int:
+    """Notes of the organization's live projects with no chunk: the sweep copies each within
+    a pass, and skips one at its project's cap rather than refuse it (FR32, AC83)."""
+    counted = await session.scalar(
+        select(func.count())
+        .select_from(FindingNote)
+        .join(
+            Finding,
+            (Finding.org_id == FindingNote.org_id) & (Finding.id == FindingNote.finding_id),
+        )
+        .join(Project, (Project.org_id == Finding.org_id) & (Project.id == Finding.project_id))
+        .where(
+            FindingNote.org_id == org_id,
+            Project.deleted_at.is_(None),
+            ~select(KnowledgeChunk.id)
+            .where(
+                KnowledgeChunk.org_id == FindingNote.org_id,
+                KnowledgeChunk.note_id == FindingNote.id,
+            )
+            .exists(),
+        )
+    )
+    return int(counted or 0)
 
 
 async def _chunk_counts(session: AsyncSession, row: AssistantSettings) -> tuple[int, int]:

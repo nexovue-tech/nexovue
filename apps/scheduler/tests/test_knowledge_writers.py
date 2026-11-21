@@ -17,6 +17,7 @@ import pytest
 from assistant_rows import ask, install, made, reachable, run
 from live import require_stack
 from nexovue_platform.assistant_tools import STRICT_NAME
+from nexovue_platform.knowledge_facts import fact_line
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -24,7 +25,6 @@ from nexovue_scheduler.jobs import expiry
 from nexovue_scheduler.knowledge import tasks
 from nexovue_scheduler.knowledge.tasks import (
     STRICT_NAME_SQL,
-    fact_line,
     fact_lines_kept,
     sweep,
     sweep_organization,
@@ -346,3 +346,198 @@ async def test_the_expiry_sweep_takes_old_findings_lines_and_a_deleted_project_s
     await run(install, "UPDATE projects SET deleted_at = now() WHERE id = :p", p=project_id)
     await expiry.sweep(install)
     assert await run(install, "SELECT 1 FROM runbooks WHERE id = :r", r=runbook.id) is None
+
+
+# ------------------------------------------------------------- Step 7: notes and cases
+
+
+async def _case(
+    install: AsyncEngine,
+    org_id: str,
+    project_id: str,
+    *,
+    resolution: str,
+    reason: str | None = "service_gone",
+    state: str = "closed",
+    signal: str = "slower",
+) -> str:
+    """A finding holding a case resolved with `resolution`, at `DAY` plus an hour."""
+    resolved_at = DAY + timedelta(hours=1)
+    row = await run(
+        install,
+        "INSERT INTO findings (org_id, project_id, scope, service_name, severity, state, "
+        "closed_reason, title, feedback_reason, signals, started_at, closed_at, case_state, "
+        "case_resolution, case_opened_at, case_activity_at, case_resolved_at) "
+        "VALUES (:o, :p, 'service', 'checkout', 'warning', :state, :reason, :title, :title, "
+        "CAST(:signals AS jsonb), :started, :closed, 'resolved', :resolution, :started, "
+        ":resolved, :resolved) RETURNING id",
+        o=org_id,
+        p=project_id,
+        state=state,
+        reason=reason if state == "closed" else None,
+        title=PLANTED,
+        signals=json.dumps([{"signal": signal}]),
+        started=DAY - timedelta(minutes=30),
+        closed=DAY if state == "closed" else None,
+        resolution=resolution,
+        resolved=resolved_at,
+    )
+    return str(row.id)
+
+
+async def _note(install: AsyncEngine, org_id: str, finding_id: str, body: str) -> str:
+    row = await run(
+        install,
+        "INSERT INTO finding_notes (org_id, finding_id, body) VALUES (:o, :f, :b) RETURNING id",
+        o=org_id,
+        f=finding_id,
+        b=body,
+    )
+    return str(row.id)
+
+
+async def _note_chunks(install: AsyncEngine, org_id: str) -> list[Any]:
+    async with install.connect() as db:
+        return list(
+            (
+                await db.execute(
+                    text(
+                        "SELECT note_id::text AS note_id, project_id::text AS project_id, "
+                        "content FROM knowledge_chunks "
+                        "WHERE org_id = :o AND source_kind = 'note' ORDER BY content"
+                    ),
+                    {"o": org_id},
+                )
+            ).all()
+        )
+
+
+async def test_each_note_becomes_one_chunk_of_its_whole_text_and_goes_with_it(
+    install: AsyncEngine, made: list[str]
+) -> None:
+    """FR30, D58, AC38: one note, one chunk, its words whole (a note may be 4,000
+    characters, past a runbook chunk's 2,000); a deleted project's note is not copied; the
+    chunk goes in the statement that deletes its note."""
+    org_id, project_id = await _tenant(install, made)
+    finding = await _finding(install, org_id, project_id)
+    long = "pool " * 790
+    first = await _note(install, org_id, finding, f"Raised the pool. {PLANTED}")
+    second = await _note(install, org_id, finding, long)
+    gone = await run(
+        install,
+        "INSERT INTO projects (org_id, slug, name, deleted_at) VALUES (:o, :s, 'gone', now()) "
+        "RETURNING id",
+        o=org_id,
+        s=f"gone-{uuid.uuid4().hex[:8]}",
+    )
+    await _note(install, org_id, await _finding(install, org_id, str(gone.id)), "elsewhere")
+
+    counts = await sweep_organization(install, org_id)
+    again = await sweep_organization(install, org_id)
+
+    assert (counts.notes_written, again.notes_written) == (2, 0)
+    chunks = await _note_chunks(install, org_id)
+    assert {(chunk.note_id, chunk.content) for chunk in chunks} == {
+        (first, f"Raised the pool. {PLANTED}"),
+        (second, long),
+    }
+    assert {chunk.project_id for chunk in chunks} == {project_id}
+
+    await run(install, "DELETE FROM finding_notes WHERE id = :n", n=first)
+    assert [chunk.note_id for chunk in await _note_chunks(install, org_id)] == [second]
+
+
+async def test_notes_are_copied_only_where_chat_is_on(
+    install: AsyncEngine, made: list[str]
+) -> None:
+    """Design, *Data*: note chunks only for organizations with chat on (D58)."""
+    off_org, off_project = await _tenant(install, made, chat=False)
+    await _note(install, off_org, await _finding(install, off_org, off_project), "fixed it")
+
+    await sweep(install, deployment="self-hosted")
+
+    assert await _note_chunks(install, off_org) == []
+
+
+async def test_at_the_cap_a_note_saves_fact_lines_give_way_and_the_rest_is_counted(
+    install: AsyncEngine, made: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC83, FR32: a note always saves; at the cap the oldest fact line is evicted for it,
+    and once only people's words are left the note is skipped, never refused, and counted."""
+    monkeypatch.setattr(tasks, "MAX_PROJECT_CHUNKS", 2)
+    org_id, project_id = await _tenant(install, made)
+    days = [DAY - timedelta(days=offset) for offset in (2, 1)]
+    findings = [await _finding(install, org_id, project_id, closed_at=day) for day in days]
+    await sweep_organization(install, org_id)
+    assert len(await _lines(install, org_id)) == 2
+
+    first = await _note(install, org_id, findings[0], "first fix")
+    counts = await sweep_organization(install, org_id)
+    assert (counts.notes_written, counts.evicted) == (1, 1)
+    # The newer line stays; the older gave way to the person's note.
+    assert [line.fact_day for line in await _lines(install, org_id)] == [days[1].date()]
+
+    second = await _note(install, org_id, findings[1], "second fix")
+    third = await _note(install, org_id, findings[1], "third fix")
+    counts = await sweep_organization(install, org_id)
+    assert (counts.notes_written, counts.notes_skipped) == (1, 1)
+    assert await _lines(install, org_id) == []
+    assert [chunk.note_id for chunk in await _note_chunks(install, org_id)] == [first, second]
+    # The skipped note is still there, and stays due for a later pass.
+    assert await run(install, "SELECT 1 FROM finding_notes WHERE id = :n", n=third) is not None
+
+
+async def test_a_resolved_case_writes_a_line_and_keeps_it_once_no_longer_recovered(
+    install: AsyncEngine, made: list[str]
+) -> None:
+    """FR28, design section 6: a finding whose case a person resolved writes a line, even
+    open or closed otherwise than recovered; a case ended as a false alarm, a new normal or
+    for want of activity writes none (AC84); a resolved case's line survives its finding
+    leaving `recovered`, and goes once the case is reopened."""
+    org_id, project_id = await _tenant(install, made)
+    resolved = await _case(install, org_id, project_id, resolution="resolved")
+    tracker = await _case(
+        install, org_id, project_id, resolution="tracker_closed", state="open", signal="failing"
+    )
+    for resolution in ("false_alarm", "new_normal", "no_activity", "recovered_untouched"):
+        await _case(install, org_id, project_id, resolution=resolution, signal="traffic")
+    recovered = await _finding(
+        install, org_id, project_id, service="payments", closed_at=DAY + timedelta(hours=3)
+    )
+
+    counts = await sweep_organization(install, org_id)
+
+    lines = {line.finding_id: line for line in await _lines(install, org_id)}
+    assert set(lines) == {resolved, tracker, recovered}
+    assert counts.written == 3
+    assert lines[resolved].content.endswith(
+        "| 2026-11-02 13:30 to 2026-11-02 15:00 UTC | closed: case resolved"
+    )
+    assert lines[recovered].content.endswith("| closed: recovered")
+    assert PLANTED not in " ".join(line.content for line in lines.values())
+
+    # A recovered finding whose case is then resolved keeps its line through a reason change.
+    await run(
+        install,
+        "UPDATE findings SET closed_reason = 'service_gone', case_state = 'resolved', "
+        "case_resolution = 'resolved', case_opened_at = started_at, case_activity_at = now(), "
+        "case_resolved_at = now() WHERE id = :f",
+        f=recovered,
+    )
+    assert (await sweep_organization(install, org_id)).dropped == 0
+    await run(
+        install,
+        "UPDATE findings SET case_state = 'investigating', case_resolution = NULL, "
+        "case_resolved_at = NULL WHERE id = :f",
+        f=resolved,
+    )
+    assert (await sweep_organization(install, org_id)).dropped == 1
+    assert {line.finding_id for line in await _lines(install, org_id)} == {tracker, recovered}
+    # An open finding has no closed reason at all: its case ended otherwise, its line goes too.
+    await run(
+        install,
+        "UPDATE findings SET case_resolution = 'no_activity' WHERE id = :f",
+        f=tracker,
+    )
+    assert (await sweep_organization(install, org_id)).dropped == 1
+    assert {line.finding_id for line in await _lines(install, org_id)} == {recovered}

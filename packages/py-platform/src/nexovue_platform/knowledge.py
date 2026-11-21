@@ -1,9 +1,10 @@
 """F4's knowledge: what the API, the scheduler and migration 0076 share (design, section 6).
 
-Chat searches a project's **chunks**: pieces of runbooks people wrote, and fact lines nexovue
-composes from closed findings. Only these writers exist, each held by a test: the runbook
-service on save (`chunk_runbook`, here so the cap's arithmetic sits beside the numbers it
-rests on), and the scheduler's knowledge sweep for fact lines (Step 7 adds notes).
+Chat searches a project's **chunks**: pieces of runbooks people wrote, people's case notes,
+and fact lines nexovue composes from closed findings and resolved cases. Only these writers
+exist, each held by a test: the runbook service on save (`chunk_runbook`, here so the cap's
+arithmetic sits beside the numbers it rests on), and the scheduler's knowledge sweep for notes
+and fact lines (Step 7). One note is one chunk (FR30), so a note chunk may hold a whole note.
 
 **The runbook ceiling.** A chunk closes at the first heading once it holds at least
 `len(text) / 17` characters, and is split at `CHUNK_SPLIT_CHARACTERS`. A runbook is at most
@@ -22,9 +23,9 @@ import math
 import re
 from typing import Final, Literal
 
-SourceKind = Literal["runbook", "fact"]
-# Notes join with Step 7's `note_id` (plan T7.1), in a migration of their own.
-SOURCE_KINDS: Final[tuple[SourceKind, ...]] = ("runbook", "fact")
+SourceKind = Literal["runbook", "fact", "note"]
+# Notes joined with Step 7's `note_id` (plan T7.1, migration 0080).
+SOURCE_KINDS: Final[tuple[SourceKind, ...]] = ("runbook", "fact", "note")
 
 # FR32 and D44.
 MAX_RUNBOOK_BYTES: Final = 32 * 1024
@@ -33,6 +34,8 @@ MAX_RUNBOOK_TITLE_CHARACTERS: Final = 200
 MAX_RUNBOOK_SERVICE_CHARACTERS: Final = 200
 MAX_RUNBOOK_CHUNKS: Final = 18
 CHUNK_SPLIT_CHARACTERS: Final = 2_000
+# A note chunk holds its whole note: F22's cap (`nexovue_platform.cases.NOTE_MAX_LENGTH`).
+MAX_NOTE_CHUNK_CHARACTERS: Final = 4_000
 # One upload action; each file is a runbook of its own (AC92 uploads 30).
 MAX_UPLOAD_FILES: Final = 50
 # The project's cap, and the fact lines' share of it (design, *The caps, in one place*).

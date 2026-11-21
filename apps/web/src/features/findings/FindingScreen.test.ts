@@ -716,6 +716,117 @@ describe("the back link returns to the list it came from (AC128)", () => {
   });
 });
 
+describe("chat and a case's notes (F4 T7.2)", () => {
+  const PROVIDER = "OpenAI (api.openai.com)";
+  const NOTE_EVENT = {
+    id: "e1",
+    kind: "note_added",
+    at: minutesAgo(5),
+    actor_kind: "person",
+    actor_id: "someone-else",
+    actor_name: "Asha",
+    detail: { note_id: "n1" },
+    note_body: "Raised the pool to 40.",
+  };
+  const timeline = json({ events: [NOTE_EVENT], next_before: null });
+  const resolved = () =>
+    finding({
+      case_state: "resolved",
+      case_resolution: "resolved",
+      case_opened_at: minutesAgo(60),
+      case_resolved_at: minutesAgo(10),
+    });
+
+  it("says notes can go to the provider only while chat is on for the project", async () => {
+    const api = stubApi(finding(), {
+      role: "member",
+      extra: {
+        "GET /assistant/availability": json({ state: "ready", provider_label: PROVIDER }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+    await waitFor(
+      () => readable(container).includes(`With chat on, notes can be sent to ${PROVIDER}.`),
+      "the note box's chat sentence",
+    );
+    expect(api.to("GET", "/assistant/availability")[0]?.search).toContain("project_id=");
+    unmountAll();
+
+    for (const state of ["chat_off", "ai_off", "opted_out"]) {
+      stubApi(finding(), {
+        role: "member",
+        extra: { "GET /assistant/availability": json({ state, provider_label: PROVIDER }) },
+      });
+      const off = await mountFinding();
+      await heading(off.container);
+      await settle();
+      expect(readable(off.container)).not.toContain("With chat on, notes can be sent");
+      unmountAll();
+    }
+  });
+
+  it("offers Save as runbook on a resolved case's note, with a second click for a credential", async () => {
+    let refused = true;
+    const api = stubApi(resolved(), {
+      role: "member",
+      extra: {
+        "GET /findings/f-1/timeline": timeline,
+        "POST /runbooks/notes": () =>
+          refused
+            ? new Response(
+                JSON.stringify({
+                  type: "about:blank",
+                  title: "Invalid",
+                  status: 400,
+                  detail: "This text looks like it holds a password, token or key.",
+                  code: "looks_like_credential",
+                }),
+                { status: 400, headers: { "content-type": "application/problem+json" } },
+              )
+            : new Response(JSON.stringify({ id: "rb-1", title: "From a resolved case" }), {
+                status: 201,
+                headers: { "content-type": "application/json" },
+              }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+    await waitFor(() => buttons(container).includes("Save as runbook"), "the save button");
+
+    await press(container, "Save as runbook");
+    await waitFor(() => readable(container).includes("looks like it holds"), "the refusal");
+    refused = false;
+    await press(container, "Save anyway");
+    await waitFor(() => readable(container).includes("Saved as a runbook"), "the saved line");
+
+    expect(api.to("POST", "/runbooks/notes").map((call) => call.body)).toEqual([
+      { note_id: "n1", confirm_credentials: false },
+      { note_id: "n1", confirm_credentials: true },
+    ]);
+    const open = [...container.querySelectorAll("a")].find(
+      (a) => a.textContent === "Open the runbook",
+    );
+    expect(open?.getAttribute("href")).toBe("/settings/runbooks/rb-1");
+  });
+
+  it("offers no Save as runbook on an active case, or to a viewer", async () => {
+    stubApi(finding({ case_state: "investigating", case_opened_at: minutesAgo(20) }), {
+      role: "member",
+      extra: { "GET /findings/f-1/timeline": timeline },
+    });
+    const active = await mountFinding();
+    await waitFor(() => readable(active.container).includes("Raised the pool"), "the note");
+    expect(buttons(active.container)).not.toContain("Save as runbook");
+    unmountAll();
+
+    stubApi(resolved(), { role: "viewer", extra: { "GET /findings/f-1/timeline": timeline } });
+    const viewer = await mountFinding();
+    await waitFor(() => readable(viewer.container).includes("Raised the pool"), "the note");
+    expect(buttons(viewer.container)).not.toContain("Save as runbook");
+  });
+});
+
 describe("a finding with no case names the service's earlier one (FR13, AC95)", () => {
   const ended = {
     id: "f-0",

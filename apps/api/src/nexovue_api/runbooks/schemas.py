@@ -50,6 +50,13 @@ class NewRunbook(RunbookFields):
     project_id: uuid.UUID
 
 
+class NoteToRunbook(BaseModel):
+    """Save as runbook (FR41): a resolved case's note, and the fact line of its case."""
+
+    note_id: uuid.UUID
+    confirm_credentials: bool = False
+
+
 class UploadedFile(BaseModel):
     name: str = Field(max_length=255)
     content: str

@@ -20,6 +20,7 @@ import {
   KEYWORD_ONLY_WORDS,
   MEANING_SEARCH_ON,
   maskingOffLine,
+  notesNotSearchable,
   SELLING_LINE,
 } from "./ai-words";
 import { CHECK_ANSWER_MS, useUsage } from "./api";
@@ -264,6 +265,11 @@ function SearchSection({ settings, now }: { settings: ChatSettings; now: number 
       {embedding.model !== null ? (
         <p className="max-w-prose text-ink-dim">
           {embeddingProgress(embedding.chunks_embedded, embedding.chunks_total)}
+        </p>
+      ) : null}
+      {notesNotSearchable(embedding.notes_not_searchable) ? (
+        <p className="max-w-prose text-ink-dim">
+          {notesNotSearchable(embedding.notes_not_searchable)}
         </p>
       ) : null}
       <p className="max-w-prose text-ink-dim">{EMBEDDING_SENDS}</p>

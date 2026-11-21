@@ -12,6 +12,11 @@ Refusals are sentences with their own codes: over 32 KiB, the 201st, and text th
 a credential, which a second click (`confirm_credentials`) saves anyway (AC69, AC90). The
 credential check is the one FR40's send-time mask applies, so what warns and what is masked
 before sending are the same list.
+
+**Save as runbook** (FR41, Step 7): a person's click on a resolved case copies one of its notes
+and the case's fact line (`knowledge_facts.fact_line`, the line chat indexes) into a runbook of
+the case's project, written by that person. It names no finding, so it outlives the finding's
+expiry (AC95); the note itself is untouched.
 """
 
 from __future__ import annotations
@@ -32,16 +37,31 @@ from nexovue_platform.knowledge import (
     MAX_RUNBOOKS_PER_PROJECT,
     chunk_runbook,
 )
+from nexovue_platform.knowledge_facts import (
+    CASE_RESOLVED,
+    fact_line,
+    first_signal,
+    minute,
+    strict,
+)
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
-from nexovue_api.data.postgres.models import KnowledgeChunk, Project, Runbook, User
+from nexovue_api.data.postgres.models import (
+    Finding,
+    FindingNote,
+    KnowledgeChunk,
+    Project,
+    Runbook,
+    User,
+)
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.projects.service import require_project
 from nexovue_api.runbooks.schemas import (
     NewRunbook,
+    NoteToRunbook,
     RefusedFile,
     RunbookFields,
     RunbookList,
@@ -54,6 +74,8 @@ from nexovue_api.runbooks.schemas import (
 
 NOT_HERE: Final = "Runbooks are not offered on this install."
 NO_SUCH_RUNBOOK: Final = "No such runbook."
+NO_SUCH_NOTE: Final = "No such note."
+CASE_NOT_RESOLVED: Final = "Only a note on a resolved case can be saved as a runbook."
 # The sentences of AC90 and AC69, each with its code.
 REFUSALS: Final[dict[str, str]] = {
     "runbook_too_large": f"A runbook can be at most {MAX_RUNBOOK_BYTES // 1024} KiB.",
@@ -324,6 +346,67 @@ async def delete_runbook(
     # Its chunks go by their cascading key, in this statement (BR16).
     await session.execute(
         delete(Runbook).where(Runbook.org_id == identity.org_id, Runbook.id == runbook.id)
+    )
+
+
+async def save_note_as_runbook(
+    session: AsyncSession, *, identity: Identity, request: NoteToRunbook, now: datetime
+) -> RunbookView:
+    """FR41: a resolved case's note and its fact line, as a runbook this person wrote."""
+    found = (
+        await session.execute(
+            select(FindingNote, Finding)
+            .join(
+                Finding,
+                (Finding.org_id == FindingNote.org_id) & (Finding.id == FindingNote.finding_id),
+            )
+            .where(FindingNote.org_id == identity.org_id, FindingNote.id == request.note_id)
+        )
+    ).first()
+    if found is None:
+        raise NotFoundError(NO_SUCH_NOTE)
+    note, finding = found
+    # A deleted project's case is not read meanwhile, as its runbooks are not.
+    await require_project(session, org_id=identity.org_id, project_id=finding.project_id)
+    if finding.case_state != "resolved" or finding.case_resolved_at is None:
+        raise ConflictError(CASE_NOT_RESOLVED, code="case_not_resolved")
+    try:
+        checked = _checked(
+            _case_title(finding),
+            strict(finding.service_name),
+            _case_runbook(note, finding),
+            confirmed=request.confirm_credentials,
+        )
+        runbook = await _create(session, identity, finding.project_id, checked, now=now)
+    except _Refused as refused:
+        _raise(refused)
+        raise
+    return _view(runbook, identity.user, identity=identity)
+
+
+def _case_title(finding: Finding) -> str:
+    assert finding.case_resolved_at is not None
+    who = strict(finding.service_name) or "a service"
+    return f"From a resolved case on {who}, {minute(finding.case_resolved_at)[:10]}"
+
+
+def _case_runbook(note: FindingNote, finding: Finding) -> str:
+    """The note's words as written, then where they came from and the case's fact line,
+    composed from the finding's columns alone (AC39)."""
+    assert finding.case_resolved_at is not None
+    line = fact_line(
+        scope=finding.scope,
+        fact_service=strict(finding.service_name),
+        services=finding.services,
+        signal=first_signal(finding.signals),
+        started_at=finding.started_at,
+        closed_at=finding.case_resolved_at,
+        ended=CASE_RESOLVED,
+    )
+    return (
+        f"{note.body}\n\n---\n\nA teammate wrote this note on {minute(note.created_at)} UTC, "
+        f"on a case resolved on {minute(finding.case_resolved_at)} UTC. Saved as a runbook by "
+        f"a person.\n\n{line}\n"
     )
 
 
