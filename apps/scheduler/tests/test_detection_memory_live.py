@@ -16,6 +16,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 from alert_fixtures import AlertTenant
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from detection_history import CLICKHOUSE_DSN, POSTGRES_DSN, ROLLUP
 from live import require_stack
@@ -120,7 +121,15 @@ FORGED_CALLEES: Final = 2000
 NEW_GROUPS: Final = 2500
 
 
+# What the gather's seed writes, directly or through `spans`' materialized views. The
+# `project` fixture registers only the detection tables; a tenant's rows left here make it
+# the busiest project in `spans` for every suite that picks one from shared data.
+GATHER_TABLES: Final = ("spans", "service_edges_1m", "span_trace_lookup", "endpoint_stats_1m")
+
+
 def _seed_gather_bounds(client: Client, tenant: AlertTenant, at: datetime) -> None:
+    for table in GATHER_TABLES:
+        delete_after_run(table, str(tenant.org_id))
     minute = int(at.timestamp())
     client.command(
         f"""

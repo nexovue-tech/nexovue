@@ -19,6 +19,25 @@ None.
   release.
 - `docs/engineering/testing.md` states the collection rule.
 
+## Leftover-rows defect, fixed afterwards
+
+Found while verifying: `test_detection_memory_live.py`'s gather test wrote 2,500 `spans` and 2,000
+`service_edges_1m` rows and never deleted them, so its tenant became the busiest project and all 20
+tests of `test_traces_live.py` errored (its `busiest` fixture found no failed hour), on any stack
+after one full run and within a run whenever the same worker ran the memory suite first. Two causes,
+both fixed:
+
+- The memory suite now registers every table its seed writes, `spans`' two views included, with
+  `delete_after_run`.
+- `test_traces_live.py` no longer picks a project from shared data. Each test writes 60 traces for a
+  tenant of its own (`spans` and the summary rows the worker would write), dated noon yesterday UTC
+  from the test's own clock read, and reads only those. Assertions are unchanged, and the duration
+  floor test now also asserts that some trace passes it.
+- Seen on a fresh stack: before the fix the memory suite left 2,500 spans and 2,000 edges and the
+  traces suite gave 1 passed, 20 errors; after it, the memory suite then the traces suite gave 2
+  passed and 21 passed, and no tenant but the gate seed's held rows in `spans`, `service_edges_1m`,
+  `span_trace_lookup`, `trace_summaries` or `endpoint_stats_1m`.
+
 ## Next action
 
 Founder: read the diff; then push, and watch CI's `check` finish with `-n 6`.
@@ -39,13 +58,6 @@ Nothing.
 - `fastapi_caches` reads FastAPI's private module. If FastAPI renames it the plugin does nothing,
   quietly; `test_fastapi_keeps_an_override_s_closure_after_its_app_is_gone` is what would notice a
   change in the behaviour, not in the name.
-- **Found while verifying, not fixed here:** `test_detection_memory_live.py`'s gather test writes 2,500
-  `spans` and 2,000 `service_edges_1m` rows for its tenant and never deletes them (its `project`
-  fixture registers only the detection tables). That tenant becomes the busiest project in `spans`,
-  and `test_traces_live.py`'s `busiest` fixture then finds no failed hour, so all 20 of its tests
-  error — on any stack after one full run, and within one run whenever the same worker runs the
-  memory suite first. Fixing it means choosing between deleting those rows in the test and making
-  `busiest` independent of other tenants; left for the founder.
 - `test_fix_source_pack.py` failed once in each full run, on a different test each time (`ac82`
   before the change, `ac84` after) and passed alone: an intermittent failure unrelated to memory.
 
@@ -66,7 +78,7 @@ Each curve flattens in its last half (after: 643→701 MB and 609→639 MB over 
 files); what remains is first-time imports and allocator high-water, not retention.
 
 - Full suite after: 16,049 passed, 6 skipped, 2 xfailed. Failed or errored: `test_connect_guard.py`
-  (needs internet DNS; also before), `test_traces_live.py` ×20 (the leftover tenant above; 21 passed
+  (needs internet DNS; also before), `test_traces_live.py` ×20 (the leftover tenant, fixed above; 21 passed
   once its rows were deleted), `test_tenant_isolation_live.py` ×2 (the gate seed had aged past its
   window; passed after `just gate-seed`), `test_fix_source_pack.py` ×1 (intermittent, above).
 - The changed suites: 4,281 + 2,851 + 14 passed (the same counts as before), 21 passed in the
