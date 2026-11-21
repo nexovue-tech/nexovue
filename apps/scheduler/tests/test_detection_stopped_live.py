@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from alert_fixtures import AlertTenant, future, postgres_reachable, rows
 from live import require_stack
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.detection import notify
 from nexovue_scheduler.detection.project_job import judge_project
@@ -72,29 +72,41 @@ async def _last_run(
             ),
             keys | {"at": at, "expected_since": at if sending else None},
         )
-    if sending:
-        await _sends(engine, tenant, at)
+        if sending:
+            await _sends(connection, tenant, at)
 
 
-async def _sends(engine: AsyncEngine, tenant: AlertTenant, at: datetime) -> None:
+async def _sends(connection: AsyncConnection, tenant: AlertTenant, at: datetime) -> None:
     """The usage meter saw the project's traffic at `at`."""
-    async with engine.begin() as connection:
-        await connection.execute(
-            text(
-                """
-                INSERT INTO service_last_seen (org_id, project_id, service_name, last_seen_at)
-                VALUES (:org_id, :project_id, 'checkout', :at)
-                ON CONFLICT (project_id, service_name) DO UPDATE
-                SET last_seen_at = EXCLUDED.last_seen_at
-                """
-            ),
-            {"org_id": tenant.org_id, "project_id": tenant.project_id, "at": at},
-        )
+    await connection.execute(
+        text(
+            """
+            INSERT INTO service_last_seen (org_id, project_id, service_name, last_seen_at)
+            VALUES (:org_id, :project_id, 'checkout', :at)
+            ON CONFLICT (project_id, service_name) DO UPDATE
+            SET last_seen_at = EXCLUDED.last_seen_at
+            """
+        ),
+        {"org_id": tenant.org_id, "project_id": tenant.project_id, "at": at},
+    )
 
 
 async def _report(engine: AsyncEngine, tenant: AlertTenant, now: datetime) -> int:
     """This tenant's only: the database is shared with the running stack."""
     async with engine.begin() as connection:
+        return await notify.report_stopped(connection, now=now, org_id=tenant.org_id)
+
+
+async def _report_after_sending(
+    engine: AsyncEngine, tenant: AlertTenant, *, sent_at: datetime, now: datetime
+) -> int:
+    """`_report` at `now`, committed with the traffic at `sent_at`. The stack's own stop sweep
+    runs every minute on the real clock, to which a month from now is recent traffic: given
+    the traffic alone, it would expect a run since the real now, a month before the test's
+    clock, and the test's sweep would find the project stopped from the start. Committed
+    together, the stack first sees the project already expected since the test's clock."""
+    async with engine.begin() as connection:
+        await _sends(connection, tenant, sent_at)
         return await notify.report_stopped(connection, now=now, org_id=tenant.org_id)
 
 
@@ -224,9 +236,8 @@ async def test_a_project_with_traffic_whose_detection_never_ran_is_told_after_it
     minutes count from the first sweep that expected a run, never from the
     project's creation, so its first minutes of traffic are its chance to be judged."""
     first_seen = future()
-    await _sends(engine, tenant, first_seen)
 
-    assert await _report(engine, tenant, first_seen) == 0
+    assert await _report_after_sending(engine, tenant, sent_at=first_seen, now=first_seen) == 0
     assert await _report(engine, tenant, first_seen + timedelta(minutes=14)) == 0
     assert await _report(engine, tenant, first_seen + timedelta(minutes=16)) == 1
     assert await _report(engine, tenant, first_seen + timedelta(minutes=30)) == 0
@@ -245,8 +256,7 @@ async def test_a_never_run_project_s_first_completed_run_says_running_again_once
     """D24 for D34's stop: one *running again*, after the first completed run."""
     store = connect(READER_DSN, WRITER_DSN)
     first_seen = future()
-    await _sends(engine, tenant, first_seen)
-    await _report(engine, tenant, first_seen)
+    await _report_after_sending(engine, tenant, sent_at=first_seen, now=first_seen)
     told_at = first_seen + timedelta(minutes=16)
     await _report(engine, tenant, told_at)
     settled = told_at.replace(second=0, microsecond=0) - timedelta(minutes=3)
@@ -276,10 +286,11 @@ async def test_a_project_sending_again_after_a_quiet_day_has_its_chance_before_i
     stopped: the clock starts again when the sweep next expects it to be judged."""
     now = future()
     await _last_run(engine, tenant, now - timedelta(days=2), sending=False)
-    await _sends(engine, tenant, now - timedelta(days=2))
-    assert await _report(engine, tenant, now - timedelta(hours=1)) == 0
+    quiet = await _report_after_sending(
+        engine, tenant, sent_at=now - timedelta(days=2), now=now - timedelta(hours=1)
+    )
+    assert quiet == 0
 
-    await _sends(engine, tenant, now)
-    assert await _report(engine, tenant, now) == 0
+    assert await _report_after_sending(engine, tenant, sent_at=now, now=now) == 0
     assert await _report(engine, tenant, now + timedelta(minutes=14)) == 0
     assert await _report(engine, tenant, now + timedelta(minutes=16)) == 1
