@@ -87,6 +87,11 @@ DASHBOARD_UPDATED: Final = "dashboard.updated"
 DASHBOARD_DELETED: Final = "dashboard.deleted"
 DASHBOARD_RESTORED: Final = "dashboard.restored"
 DASHBOARD_PURGED: Final = "dashboard.purged"
+# F4 (AC71). A runbook's project, size and chunk count, never its title or text: a runbook
+# may hold a pasted secret, which this table must not keep a copy of.
+RUNBOOK_CREATED: Final = "runbook.created"
+RUNBOOK_UPDATED: Final = "runbook.updated"
+RUNBOOK_DELETED: Final = "runbook.deleted"
 SLO_EXCLUDED: Final = "slo.excluded"
 SLO_EXCLUSION_REMOVED: Final = "slo.exclusion_removed"
 CHECK_CREATED: Final = "check.created"
@@ -245,6 +250,7 @@ SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
 SLO_TARGET: Final = "slo"
 DASHBOARD_TARGET: Final = "dashboard"
+RUNBOOK_TARGET: Final = "runbook"
 CHECK_SECRET_TARGET: Final = "check_secret"
 MAINTENANCE_WINDOW_TARGET: Final = "maintenance_window"
 NOTIFICATION_CHANNEL_TARGET: Final = "notification_channel"
@@ -1301,6 +1307,28 @@ def record_ai_event(
         action=action,
         target=_target(target_kind, target_id),
         detail=detail,
+    )
+
+
+def record_runbook_event(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    action: str,
+    runbook_id: uuid.UUID,
+    project_id: uuid.UUID,
+    size_bytes: int,
+    chunks: int,
+) -> None:
+    """A runbook written, rewritten or deleted (F4 AC71), without its text."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(RUNBOOK_TARGET, runbook_id),
+        detail={"project_id": str(project_id), "size_bytes": size_bytes, "chunks": chunks},
     )
 
 

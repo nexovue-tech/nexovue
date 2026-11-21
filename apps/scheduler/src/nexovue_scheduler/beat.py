@@ -43,9 +43,10 @@ from nexovue_platform.checks.task import (
     time_limits_for,
 )
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
-from nexovue_platform.deployment import HOSTED
+from nexovue_platform.deployment import HOSTED, ai_available
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from nexovue_platform.jobs import JobRequest
+from nexovue_platform.knowledge import KNOWLEDGE_SWEEP_TASK
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -104,6 +105,11 @@ EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
 # chat's own sweep on `insight` (design, *Settling*). Every minute is a guess.
 ASSISTANT_SWEEP_SECONDS: Final = 60
 ASSISTANT_SWEEP_ENTRY: Final = "sweep:assistant"
+
+# F4 T5.5: chat's fact lines from recovered findings, every 5 minutes (a guess), on the shared
+# queue with default limits; only where AI may be offered, as nothing else reads them.
+KNOWLEDGE_SWEEP_SECONDS: Final = 300
+KNOWLEDGE_SWEEP_ENTRY: Final = "sweep:knowledge"
 
 # F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
 CASES_SWEEP_SECONDS: Final = 300
@@ -461,6 +467,12 @@ class Beat:
             RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
             ASSISTANT_SWEEP_ENTRY: (ASSISTANT_SWEEP_TASK, ASSISTANT_SWEEP_SECONDS, INSIGHT_QUEUE),
         }
+        if ai_available(self._settings.nexovue_deployment):
+            wanted[KNOWLEDGE_SWEEP_ENTRY] = (
+                KNOWLEDGE_SWEEP_TASK,
+                KNOWLEDGE_SWEEP_SECONDS,
+                SHARED_QUEUE,
+            )
         if self.ai_on:
             wanted[INSIGHT_SWEEP_ENTRY] = (SWEEP_INSIGHT_TASK, INSIGHT_SWEEP_SECONDS, INSIGHT_QUEUE)
         if self.connections_live:

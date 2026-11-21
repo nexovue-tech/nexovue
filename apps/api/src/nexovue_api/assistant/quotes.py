@@ -4,7 +4,9 @@ An answer stores a quote as a reference: the step, the tool, the field and the r
 keys, never its text (D17, D28). Opening the answer reads each one again through the same
 services a screen uses, in the person's tenant and the question's project, so a record that
 has aged out or been erased reads `gone`, and a failed read reads `read_failed`, never
-"gone" (AC19). Postgres finds the message; ClickHouse holds the values.
+"gone" (AC19). Postgres finds the message; ClickHouse holds the values, and Postgres a
+knowledge chunk's (Step 5): a runbook's quote carries its runbook and its age, and one whose
+runbook was deleted reads `gone` ("Earlier answers quoting it will show it is gone").
 """
 
 from __future__ import annotations
@@ -12,16 +14,23 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, Literal
 
+from nexovue_platform.assistant_tools import KNOWLEDGE_TOOL
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.assistant.service import Asker
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import AssistantMessage, AssistantStep
+from nexovue_api.data.postgres.models import (
+    AssistantMessage,
+    AssistantStep,
+    KnowledgeChunk,
+    Runbook,
+)
 from nexovue_api.errorgroups import service as error_groups
 from nexovue_api.errors.exceptions import DomainError, NotFoundError
 from nexovue_api.logs.search import log_line_at
@@ -44,6 +53,11 @@ class QuoteView(BaseModel):
     state: QuoteState
     value: str | None = None
     was_cut: bool = False
+    # A runbook's quote: the one labelled as the team's command, offered for copy, with the
+    # runbook to open and its age (FR15, T5.6).
+    runbook: bool = False
+    runbook_id: uuid.UUID | None = None
+    written_at: datetime | None = None
 
 
 class QuoteList(BaseModel):
@@ -53,6 +67,12 @@ class QuoteList(BaseModel):
 
 class _Gone(Exception):  # noqa: N818 — a record no longer kept, named for the reader
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _Read:
+    value: object
+    runbook: Runbook | None = None
 
 
 def _text(value: object) -> str:
@@ -102,24 +122,62 @@ async def _group_value(
     return getattr(detail.group, field)
 
 
+async def _knowledge_value(
+    session: AsyncSession, org_id: uuid.UUID, project_id: uuid.UUID, ref: Mapping[str, Any]
+) -> tuple[KnowledgeChunk, Runbook | None]:
+    try:
+        chunk_id = uuid.UUID(str(ref.get("id", "")))
+    except ValueError as malformed:
+        raise _Gone from malformed
+    found = (
+        await session.execute(
+            select(KnowledgeChunk, Runbook)
+            .outerjoin(
+                Runbook,
+                (Runbook.org_id == KnowledgeChunk.org_id)
+                & (Runbook.project_id == KnowledgeChunk.project_id)
+                & (Runbook.id == KnowledgeChunk.runbook_id),
+            )
+            .where(
+                KnowledgeChunk.org_id == org_id,
+                KnowledgeChunk.project_id == project_id,
+                KnowledgeChunk.id == chunk_id,
+            )
+        )
+    ).first()
+    if found is None:
+        raise _Gone
+    chunk, runbook = found
+    return chunk, runbook
+
+
 async def _read(
+    session: AsyncSession,
     repository: TenantScopedRepository,
-    project_id: str,
+    message: AssistantMessage,
     stored: Mapping[str, Any],
     step: AssistantStep | None,
-) -> object:
+) -> _Read:
     tool = stored.get("tool")
     field = str(stored.get("field", ""))
     ref = stored.get("reference")
+    project_id = str(message.project_id)
     if not isinstance(ref, Mapping):
         raise _Gone
     if tool == "search_logs" and field in ("body", "attributes"):
-        return await _log_value(repository, project_id, field, ref)
+        return _Read(await _log_value(repository, project_id, field, ref))
     if tool in ("list_error_groups", "get_error_group") and field in (
         "message_template",
         "latest_message",
     ):
-        return await _group_value(repository, project_id, field, ref, step)
+        return _Read(await _group_value(repository, project_id, field, ref, step))
+    if tool == KNOWLEDGE_TOOL and field in ("content", "title"):
+        chunk, runbook = await _knowledge_value(session, message.org_id, message.project_id, ref)
+        if field == "title":
+            if runbook is None:
+                raise _Gone
+            return _Read(runbook.title, runbook)
+        return _Read(chunk.content, runbook)
     raise _Gone
 
 
@@ -141,7 +199,8 @@ async def quotes(
     )
     if message is None:
         raise NotFoundError(NOT_FOUND)
-    project = await require_project(session, org_id=asker.org_id, project_id=message.project_id)
+    # A deleted project's answers read nothing: 404, as for a question that does not exist.
+    await require_project(session, org_id=asker.org_id, project_id=message.project_id)
     stored = (message.answer or {}).get("quotes") or {}
     steps = {
         f"s{step.position}": step
@@ -163,9 +222,10 @@ async def quotes(
             state="gone",
         )
         try:
-            value = _text(
-                await _read(repository, str(project.id), quote, steps.get(str(quote.get("step"))))
+            read = await _read(
+                session, repository, message, quote, steps.get(str(quote.get("step")))
             )
+            value = _text(read.value)
         except _Gone:
             views.append(view)
             continue
@@ -173,12 +233,18 @@ async def quotes(
             # A failed read is not "gone": the person may retry (AC19).
             views.append(view.model_copy(update={"state": "read_failed"}))
             continue
+        runbook = read.runbook
         views.append(
             view.model_copy(
                 update={
                     "state": "shown",
                     "value": value[:MAX_QUOTE_CHARACTERS],
                     "was_cut": len(value) > MAX_QUOTE_CHARACTERS,
+                    # Re-read, not trusted from the stored answer: the chunk says what it is.
+                    "runbook": runbook is not None,
+                    "folded": False if runbook is not None else view.folded,
+                    "runbook_id": None if runbook is None else runbook.id,
+                    "written_at": None if runbook is None else runbook.updated_at,
                 }
             )
         )

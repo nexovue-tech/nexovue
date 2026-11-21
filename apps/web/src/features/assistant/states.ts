@@ -10,9 +10,12 @@ export const LABEL_WORDS: Record<Label, string> = {
   counted: "Counted from telemetry",
   checked: "nexovue's own check",
   text: "Your telemetry says this; nexovue has not measured it",
+  team: "From your team's notes",
   unchecked:
     "The model's wording: it read these steps, and this sentence was not checked against them",
 };
+/** The notes label with its age (design, *Words*): "From your team's notes, {age}". */
+export const teamLabel = (age: string) => `${LABEL_WORDS.team}, ${age}`;
 export const CAUSE_WARNING = "nexovue has not measured a cause";
 export const REMOVED_ONE = "One sentence was removed because it cited nothing it had read.";
 export const removedMany = (count: number) =>
@@ -28,8 +31,21 @@ export const removedForActing = (count: number) =>
 export const FIGURE_FLAG = "Not found in what it read. Check this number.";
 export const QUOTE_FOLDED =
   "Text from a log, written by anyone who can reach your service. Do not run it.";
+export const KNOWLEDGE_TOOL = "search_knowledge";
+/** A runbook quote's label (design, *Words*): "From a runbook your team wrote, {age}". */
+export const runbookQuoteLabel = (age: string) => `From a runbook your team wrote, ${age}`;
+export const RUNBOOK_QUOTE_CUT = "Cut at 500 characters. Open the runbook for all of it";
+export const OPEN_RUNBOOK = "Open the runbook";
+/** What the runbook quote's Copy control names, read as "Copy this runbook text". */
+export const COPY_QUOTE = "this runbook text";
+/** FR42: knowledge search's empty answer, so absence does not read as "it never happened". */
+export const noKnowledgeRecord = (days: number | null) =>
+  days === null
+    ? "No record of this in what is kept."
+    : `No record of this in what is kept. Cases are kept for ${days} ${days === 1 ? "day" : "days"} after they end.`;
 export const QUOTE_SOURCE: Record<string, string> = {
   search_logs: "From a log line",
+  search_knowledge: "From a fact nexovue recorded",
   list_error_groups: "From an error message",
   get_error_group: "From an error message",
 };
@@ -37,6 +53,7 @@ export const QUOTE_GONE: Record<string, string> = {
   search_logs: "This log line is no longer available.",
   list_error_groups: "This error message is no longer available.",
   get_error_group: "This error message is no longer available.",
+  search_knowledge: "This runbook was deleted, or is no longer kept.",
 };
 export const QUOTE_READ_FAILED = "Could not read this now";
 export const QUOTE_CUT = "Cut at 500 characters. Open what it read for all of it.";

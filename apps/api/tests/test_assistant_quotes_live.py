@@ -25,6 +25,7 @@ import pytest
 from assistant_live import AVAILABLE, KEYS, chat_on, db, require_postgres, tenant
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.assistant import quotes, service
@@ -32,9 +33,11 @@ from nexovue_api.assistant.schemas import AskContext
 from nexovue_api.assistant.service import Asker
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import AssistantMessage, User
+from nexovue_api.data.postgres.models import AssistantMessage, Finding, KnowledgeChunk, User
 from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.logs.search import LOG_LINE_AT
+from nexovue_api.runbooks import service as runbooks
+from nexovue_api.runbooks.schemas import NewRunbook
 from nexovue_api.signup.service import ProvisionedTenant
 from nexovue_api.wire import to_iso_millis
 
@@ -258,3 +261,89 @@ async def test_another_person_s_answer_is_the_ordinary_404(
     with pytest.raises(NotFoundError) as none:
         await quotes.quotes(db, repository, asker=_asker(made), message_id=uuid.uuid4())
     assert theirs.value.detail == none.value.detail
+
+
+async def test_a_runbook_quote_reads_its_chunk_with_its_runbook_and_age_until_deleted(
+    db: AsyncSession, clickhouse: AsyncClient
+) -> None:
+    """T5.6, FR15: a runbook's quote is read again from Postgres, never folded, with its
+    runbook and age; once the runbook is deleted, earlier answers show it is gone. A fact
+    line's quote is not a runbook's, whatever the stored answer says."""
+    made = await tenant(db)
+    await chat_on(db, made)
+    identity = Identity(user=made.user, organization=made.organization)
+    saved = await runbooks.create_runbook(
+        db,
+        identity=identity,
+        request=NewRunbook(
+            project_id=made.project.id,
+            title="Checkout pool",
+            content="Run `kubectl rollout restart deploy/pgbouncer`.",
+        ),
+        now=datetime(2026, 9, 1, 9, 0, tzinfo=UTC),
+    )
+    chunk_id = await db.scalar(
+        select(KnowledgeChunk.id).where(KnowledgeChunk.runbook_id == saved.id)
+    )
+    stored = {
+        "step": "s1",
+        "tool": "search_knowledge",
+        "field": "content",
+        "reference": {"id": str(chunk_id)},
+        "folded": True,
+        "runbook": True,
+    }
+    message_id = await _answered(db, made, {"r1": stored})
+    repository = TenantScopedRepository(clickhouse, tenant_id=str(made.organization.id))
+
+    [quote] = (
+        await quotes.quotes(db, repository, asker=_asker(made), message_id=message_id)
+    ).quotes
+    assert (quote.state, quote.value, quote.runbook, quote.folded) == (
+        "shown",
+        "Run `kubectl rollout restart deploy/pgbouncer`.",
+        True,
+        False,
+    )
+    assert (quote.runbook_id, quote.written_at) == (
+        saved.id,
+        datetime(2026, 9, 1, 9, 0, tzinfo=UTC),
+    )
+
+    await runbooks.delete_runbook(db, identity=identity, runbook_id=saved.id)
+    after = await quotes.quotes(db, repository, asker=_asker(made), message_id=message_id)
+    [gone] = after.quotes
+    assert (gone.state, gone.value, gone.runbook) == ("gone", None, False)
+
+    finding = Finding(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        scope="service",
+        service_name=SERVICE,
+        severity="warning",
+        state="closed",
+        closed_reason="recovered",
+        title="ignored",
+        signals=[{"signal": "slower"}],
+        started_at=datetime(2026, 9, 1, 8, 0, tzinfo=UTC),
+        closed_at=datetime(2026, 9, 1, 9, 0, tzinfo=UTC),
+    )
+    db.add(finding)
+    await db.flush()
+    fact = KnowledgeChunk(
+        org_id=made.organization.id,
+        project_id=made.project.id,
+        source_kind="fact",
+        finding_id=finding.id,
+        content=f"service {SERVICE} | signal slower",
+        fact_service=SERVICE,
+        fact_signal="slower",
+        fact_day=datetime(2026, 9, 1, tzinfo=UTC).date(),
+    )
+    db.add(fact)
+    await db.flush()
+    claimed = {**stored, "reference": {"id": str(fact.id)}}
+    fact_message = await _answered(db, made, {"f1": claimed})
+    told = await quotes.quotes(db, repository, asker=_asker(made), message_id=fact_message)
+    [line] = told.quotes
+    assert (line.state, line.runbook, line.folded, line.runbook_id) == ("shown", False, True, None)

@@ -41,6 +41,7 @@ from nexovue_platform.ai.validate import (
 )
 from nexovue_platform.assistant_records import ABSTAIN_REASONS, AbstainReason, RejectionReason
 from nexovue_platform.assistant_tools import (
+    KNOWLEDGE_TOOL,
     MAX_DISPLAYED_ARGUMENT,
     STRICT_NAME,
     Basis,
@@ -58,8 +59,13 @@ COPY_RUN_CHARACTERS: Final = 40
 MAX_QUOTES: Final = 5
 
 # `counted`: Counted from telemetry. `checked`: nexovue's own check. `text`: your telemetry
-# says this. `unchecked`: the model's wording. The panel holds the words (design, *Words*).
-Label = Literal["counted", "checked", "text", "unchecked"]
+# says this. `team`: from your team's notes, with its age (Step 5). `unchecked`: the model's
+# wording. The panel holds the words (design, *Words*).
+Label = Literal["counted", "checked", "text", "team", "unchecked"]
+# The row field a team's text carries its age in (`search_knowledge`'s `written_at`).
+WRITTEN_AT: Final = "written_at"
+# The knowledge row a runbook's chunk is: the one quote that may be acted on (BR7, D8).
+_RUNBOOK_SOURCE: Final = "runbook"
 
 # ---------------------------------------------------------------- ways out (check 3)
 # F3's `URL` and `EMAIL` (validate.py), plus what chat's answers may also carry: Markdown,
@@ -182,9 +188,11 @@ def way_out(text: str, *, allowed_names: frozenset[str] = frozenset()) -> str | 
     return None
 
 
-def command(text: str) -> str | None:
-    """Why `text` reads as telling a person to run something, or None."""
-    if opens_with_command(text, _IMPERATIVES):
+def command(text: str, *, pointing_at_a_runbook: bool = False) -> str | None:
+    """Why `text` reads as telling a person to run something, or None. A sentence pointing at
+    a runbook's own quote may tell the reader to run it (BR7); a command written in the
+    sentence itself is still refused, since commands come only by reference."""
+    if not pointing_at_a_runbook and opens_with_command(text, _IMPERATIVES):
         return "an instruction to act"
     if _COMMAND_LINE.search(text) or _PIPE_TO_SHELL.search(text) or _BACKTICK_SHELL.search(text):
         return "a command"
@@ -365,11 +373,14 @@ def _bases(cited: list[_Cited]) -> set[Basis]:
 
 
 def _label(text: str, cited: list[_Cited], flagged: list[list[int]]) -> Label:
-    """Check 7: a citation alone earns nothing (design, section 4)."""
+    """Check 7: a citation alone earns nothing (design, section 4). Telemetry text is the
+    lowest claim, so it wins over the team's own words, which win over a count."""
     kinds = {cite.step.tool.fields[name].kind for cite in cited for name in cite.fields}
     bases = _bases(cited)
-    if kinds & {"text", "team_text"} or "telemetry_text" in bases:
+    if "text" in kinds or "telemetry_text" in bases:
         return "text"
+    if "team_notes" in bases:
+        return "team"
     figures = _figures(text, _names(cited))
     named = [name for name in _names(cited) if name in text]
     if (
@@ -382,6 +393,17 @@ def _label(text: str, cited: list[_Cited], flagged: list[list[int]]) -> Label:
         return "unchecked"
     # Telemetry anywhere among the cited facts makes it "counted"; nexovue's own alone, "checked".
     return "counted" if "telemetry" in bases else "checked"
+
+
+def _team_written_at(cited: list[_Cited]) -> str | None:
+    """The oldest age among the team's cited rows, which the notes label states (FR17)."""
+    found = [
+        str(cite.step.rows[row][WRITTEN_AT])
+        for cite, row, name in _cited_fields(cited)
+        if cite.step.tool.basis_of(name, cite.step.rows[row]) == "team_notes"
+        and cite.step.rows[row].get(WRITTEN_AT) is not None
+    ]
+    return min(found) if found else None
 
 
 def _copied(text: str, results: Sequence[str]) -> bool:
@@ -401,6 +423,9 @@ class _Quote:
     field: str
     reference: dict[str, Any]
     folded: bool
+    # A runbook's own text: never folded, labelled as the team's, and the one quote a
+    # sentence may tell the reader to run (BR7, T5.6).
+    runbook: bool = False
 
     def stored(self) -> dict[str, Any]:
         return {
@@ -409,6 +434,7 @@ class _Quote:
             "field": self.field,
             "reference": self.reference,
             "folded": self.folded,
+            "runbook": self.runbook,
         }
 
 
@@ -442,12 +468,14 @@ def _quotes(raw: object, steps: Mapping[str, StepRead]) -> dict[str, _Quote]:
         if name not in values or any(key not in values for key in step.tool.quote_keys):
             continue
         text = _as_text(values[name])
+        runbook = step.tool.name == KNOWLEDGE_TOOL and values.get("source_kind") == _RUNBOOK_SOURCE
         found[quote_id] = _Quote(
             step=step.key,
             tool=step.tool.name,
             field=name,
             reference={key: values[key] for key in step.tool.quote_keys},
-            folded=way_out(text) is not None or command(text) is not None,
+            folded=not runbook and (way_out(text) is not None or command(text) is not None),
+            runbook=runbook,
         )
     return found
 
@@ -480,14 +508,15 @@ def check_answer(
             continue
         words: str = sentence["text"].strip()
         named = _named_quotes(sentence.get("quotes"), quotes)
-        if named and _ACT_ON_QUOTE.search(words):
-            # Only a runbook's quote may be acted on (Step 5); a log or note's never.
+        runbooks_only = bool(named) and all(quotes[quote_id].runbook for quote_id in named)
+        if named and _ACT_ON_QUOTE.search(words) and not runbooks_only:
+            # Only a runbook's quote may be acted on; a log's, an error's or a note's never.
             removed_for_acting += 1
             continue
         allowed = frozenset(name for name in _names(cited) if STRICT_NAME.fullmatch(name))
         if why := way_out(words, allowed_names=allowed):
             raise AnswerRejected("way_out", f"A sentence held {why}. Write none.")
-        if why := command(words):
+        if why := command(words, pointing_at_a_runbook=runbooks_only):
             raise AnswerRejected("command", f"A sentence held {why}. Tell no one to run anything.")
         if _copied(words, results):
             raise AnswerRejected(
@@ -501,14 +530,16 @@ def check_answer(
             shown[quote_id] = quotes[quote_id]
             sentence_quotes.append(quote_id)
         flagged = flagged_figures(words, cited)
+        label = _label(words, cited, flagged)
         kept.append(
             {
                 "text": words,
-                "label": _label(words, cited, flagged),
+                "label": label,
                 "cause_warning": has_any(words, _CAUSE_PHRASES),
                 "flagged_figures": flagged,
                 "cites": sorted({cite.step.key for cite in cited}),
                 "quotes": sentence_quotes,
+                **({WRITTEN_AT: _team_written_at(cited)} if label == "team" else {}),
             }
         )
     if not kept:

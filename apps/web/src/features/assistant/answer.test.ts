@@ -1,19 +1,24 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openAssistant, resetAssistant } from "@/shared/assistant-context";
 import { visibleEscapes } from "./AnswerSentences";
 import { AssistantPanel } from "./AssistantPanel";
 import type { Answer, QuoteView } from "./api";
 import { MESSAGE_ID, message, mount, settle, step, stubApi, unmountAll } from "./panel.test-util";
 import {
+  COPY_QUOTE,
   FIGURE_FLAG,
+  OPEN_RUNBOOK,
   QUOTE_CUT,
   QUOTE_FOLDED,
   QUOTE_GONE,
   QUOTE_READ_FAILED,
   REMOVED_FOR_ACTING_ONE,
+  RUNBOOK_QUOTE_CUT,
+  runbookQuoteLabel,
+  teamLabel,
 } from "./states";
 
 /**
@@ -135,5 +140,110 @@ describe("an answer's figures and quotes", () => {
     const escaped = visibleEscapes(`a${override}b${zeroWidth}c${bell}d\te\nf`);
     expect(escaped).toBe("a\\u{202E}b\\u{200B}c\\u{7}d\te\nf");
     expect(escaped).not.toContain(override);
+  });
+});
+
+describe("the team's own words (F4 T5.6, FR15, FR17)", () => {
+  const NOW = Date.parse("2026-11-21T10:00:00Z");
+  const RUNBOOK_TEXT = "Run `kubectl rollout restart deploy/pgbouncer`.";
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function fromRunbook(overrides: Partial<Answer> = {}): Answer {
+    return {
+      sentences: [
+        {
+          text: "Run the command below.",
+          label: "team",
+          cause_warning: false,
+          cites: ["s1"],
+          quotes: ["r1"],
+          written_at: "2026-11-09T10:00:00Z",
+        },
+      ],
+      removed_sentence_count: 0,
+      not_verified: [],
+      quotes: {
+        r1: {
+          step: "s1",
+          tool: "search_knowledge",
+          field: "content",
+          folded: false,
+          runbook: true,
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  function runbook(overrides: Partial<QuoteView> = {}): QuoteView {
+    return {
+      id: "r1",
+      tool: "search_knowledge",
+      field: "content",
+      folded: false,
+      state: "shown",
+      value: RUNBOOK_TEXT,
+      was_cut: false,
+      runbook: true,
+      runbook_id: "0196a000-0000-7000-8000-0000000000aa",
+      written_at: "2026-11-09T10:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("labels a sentence from a runbook as the team's, with its age", async () => {
+    const panel = await shown(fromRunbook(), [runbook()]);
+    expect(panel.textContent).toContain(teamLabel("12 days old"));
+  });
+
+  it("shows a runbook's quote unfolded, labelled with its age, with Copy and its runbook", async () => {
+    const panel = await shown(fromRunbook(), [runbook()]);
+
+    expect(panel.textContent).toContain(runbookQuoteLabel("12 days old"));
+    expect(panel.textContent).not.toContain(QUOTE_FOLDED);
+    const block = panel.querySelector("pre");
+    expect(block?.textContent).toBe(RUNBOOK_TEXT);
+    expect(block?.hasAttribute("inert")).toBe(true);
+    expect(
+      [...panel.querySelectorAll("button")].some(
+        (b) => b.getAttribute("aria-label") === `Copy ${COPY_QUOTE}`,
+      ),
+    ).toBe(true);
+    const open = [...panel.querySelectorAll("a")].find((a) => a.textContent === OPEN_RUNBOOK);
+    expect(open?.getAttribute("href")).toBe(
+      "/settings/runbooks/0196a000-0000-7000-8000-0000000000aa",
+    );
+  });
+
+  it("warns past 180 days, and a cut runbook quote offers no copy", async () => {
+    const panel = await shown(fromRunbook(), [
+      runbook({ written_at: "2026-04-01T10:00:00Z", value: "a".repeat(500), was_cut: true }),
+    ]);
+
+    const caption = panel.querySelector("figcaption");
+    expect(caption?.textContent).toBe(runbookQuoteLabel("234 days old"));
+    expect(caption?.className).toContain("text-warning-text");
+    expect(panel.textContent).toContain(RUNBOOK_QUOTE_CUT);
+    expect(
+      [...panel.querySelectorAll("button")].some(
+        (b) => b.getAttribute("aria-label") === `Copy ${COPY_QUOTE}`,
+      ),
+    ).toBe(false);
+  });
+
+  it("folds a quote the worker did not find to be a runbook's, whatever it claims", async () => {
+    const panel = await shown(fromRunbook(), [
+      runbook({ runbook: false, folded: true, value: LOG_LINE, runbook_id: null }),
+    ]);
+    expect(panel.textContent).toContain(QUOTE_FOLDED);
+    expect(panel.textContent).not.toContain(LOG_LINE);
   });
 });

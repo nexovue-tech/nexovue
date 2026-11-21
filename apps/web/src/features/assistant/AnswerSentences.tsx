@@ -1,11 +1,17 @@
+import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
+
+import { CopyButton } from "@/shared/components/CopyButton";
+import { writtenAge } from "@/shared/runbook-age";
 
 import { type Answer, type QuoteView, type Sentence, useQuotes } from "./api";
 import {
   CAUSE_WARNING,
+  COPY_QUOTE,
   FIGURE_FLAG,
   LABEL_WORDS,
   NOT_VERIFIED,
+  OPEN_RUNBOOK,
   QUOTE_CUT,
   QUOTE_FOLDED,
   QUOTE_GONE,
@@ -13,9 +19,12 @@ import {
   QUOTE_READ_FAILED,
   QUOTE_SOURCE,
   REMOVED_ONE,
+  RUNBOOK_QUOTE_CUT,
   removedForActing,
   removedMany,
+  runbookQuoteLabel,
   SHOW_FOLDED,
+  teamLabel,
 } from "./states";
 
 /**
@@ -23,16 +32,22 @@ import {
  * escaping, so Markdown and HTML reach the screen as the characters they are. Nothing here
  * sets HTML, follows a model link or draws an image. Each sentence carries its stored label
  * as text, in reading order, its flagged figures where they stand (FR16, AC77), its quotes
- * read again by nexovue, and numbered buttons that move focus to the steps it cites.
+ * read again by nexovue, and numbered buttons that move focus to the steps it cites. A
+ * runbook's quote is the one labelled as the team's own, offered for copy, never folded
+ * (BR7, FR15); `now` dates it.
  */
 export function AnswerSentences({
   answer,
   messageId,
   onCite,
+  now,
+  onLeave,
 }: {
   answer: Answer;
   messageId: string;
   onCite: (stepKey: string) => void;
+  now: number;
+  onLeave?: () => void;
 }) {
   const quoted = Object.keys(answer.quotes ?? {}).length > 0;
   const quotes = useQuotes(messageId, quoted);
@@ -56,7 +71,7 @@ export function AnswerSentences({
               </button>
             ))}
           </p>
-          <p className="max-w-prose text-ink-dim text-xs">{LABEL_WORDS[sentence.label]}</p>
+          <p className="max-w-prose text-ink-dim text-xs">{labelOf(sentence, now)}</p>
           {sentence.cause_warning ? (
             <p className="max-w-prose text-ink-dim text-xs">{CAUSE_WARNING}</p>
           ) : null}
@@ -69,6 +84,8 @@ export function AnswerSentences({
               loading={quotes.isPending}
               failed={quotes.isError}
               onRetry={() => void quotes.refetch()}
+              now={now}
+              onLeave={onLeave}
             />
           ))}
         </div>
@@ -99,6 +116,12 @@ export function AnswerSentences({
       ) : null}
     </div>
   );
+}
+
+/** A sentence's label in nexovue's words; the team's carries its age (design, *Words*). */
+function labelOf(sentence: Sentence, now: number): string {
+  if (sentence.label === "team") return teamLabel(writtenAge(sentence.written_at, now).words);
+  return LABEL_WORDS[sentence.label] ?? LABEL_WORDS.unchecked;
 }
 
 /** A sentence's words, a flag beside each figure the worker could not match, where it was
@@ -138,6 +161,8 @@ function Quote({
   loading,
   failed,
   onRetry,
+  now,
+  onLeave,
 }: {
   tool: string;
   folded: boolean;
@@ -145,8 +170,10 @@ function Quote({
   loading: boolean;
   failed: boolean;
   onRetry: () => void;
+  now: number;
+  onLeave?: () => void;
 }) {
-  const [shown, setShown] = useState(!folded);
+  const [opened, setOpened] = useState(false);
   const source = QUOTE_SOURCE[tool] ?? "From what it read";
   if (loading) return <p className="text-ink-dim text-xs">{QUOTE_LOADING}</p>;
   if (failed || read?.state === "read_failed") {
@@ -166,10 +193,14 @@ function Quote({
   if (!read || read.state === "gone" || read.value === null) {
     return <p className="text-ink-dim text-xs">{QUOTE_GONE[tool] ?? QUOTE_GONE.search_logs}</p>;
   }
+  if (read.runbook) return <RunbookQuote read={read} now={now} onLeave={onLeave} />;
+  // What nexovue read again decides, not what the stored answer claimed (T5.6).
+  const isFolded = read.folded || folded;
+  const shown = !isFolded || opened;
   return (
     <figure className="flex flex-col gap-1 border border-line px-2 py-1">
       <figcaption className="text-ink-dim text-xs">{source}</figcaption>
-      {folded ? <p className="text-ink-dim text-xs">{QUOTE_FOLDED}</p> : null}
+      {isFolded ? <p className="text-ink-dim text-xs">{QUOTE_FOLDED}</p> : null}
       {shown ? (
         <pre className="whitespace-pre-wrap break-words font-mono text-ink text-xs" inert>
           {visibleEscapes(read.value)}
@@ -177,13 +208,58 @@ function Quote({
       ) : (
         <button
           type="button"
-          onClick={() => setShown(true)}
+          onClick={() => setOpened(true)}
           className="self-start text-brand-text text-xs underline-offset-2 hover:underline"
         >
           {SHOW_FOLDED}
         </button>
       )}
       {read.was_cut ? <p className="text-ink-dim text-xs">{QUOTE_CUT}</p> : null}
+    </figure>
+  );
+}
+
+/**
+ * A runbook's own text (T5.6): labelled as the team's with its age, a warning tone past 180
+ * days, never folded, with Copy; a cut one offers no copy and opens the runbook instead
+ * (FR15). Still inert text, escaped like every other quote.
+ */
+function RunbookQuote({
+  read,
+  now,
+  onLeave,
+}: {
+  read: QuoteView;
+  now: number;
+  onLeave?: () => void;
+}) {
+  const age = writtenAge(read.written_at, now);
+  const value = read.value ?? "";
+  return (
+    <figure className="flex flex-col gap-1 border border-line px-2 py-1">
+      <figcaption className={age.stale ? "text-warning-text text-xs" : "text-ink-dim text-xs"}>
+        {runbookQuoteLabel(age.words)}
+      </figcaption>
+      <pre className="whitespace-pre-wrap break-words font-mono text-ink text-xs" inert>
+        {visibleEscapes(value)}
+      </pre>
+      <p className="flex flex-wrap items-center gap-x-4 text-xs">
+        {read.was_cut ? (
+          <span className="text-ink-dim">{RUNBOOK_QUOTE_CUT}</span>
+        ) : (
+          <CopyButton label={COPY_QUOTE} value={value} />
+        )}
+        {read.runbook_id ? (
+          <Link
+            to="/settings/runbooks/$runbookId"
+            params={{ runbookId: read.runbook_id }}
+            onClick={onLeave}
+            className="font-medium text-brand-text underline-offset-2 hover:underline"
+          >
+            {OPEN_RUNBOOK}
+          </Link>
+        ) : null}
+      </p>
     </figure>
   );
 }

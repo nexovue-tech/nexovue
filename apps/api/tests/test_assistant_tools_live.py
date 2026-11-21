@@ -326,6 +326,9 @@ def _arguments(tool: ChatTool, ids: Mapping[str, str], window: Mapping[str, str]
             given[name] = SERVICE
         elif rule.kind == "metric_name":
             given[name] = METRIC
+        elif rule.kind == "search_text" and rule.required:
+            # Knowledge search (Step 5) needs its keywords.
+            given[name] = "restart"
         elif rule.in_path:
             given[name] = ids[name]
     return given

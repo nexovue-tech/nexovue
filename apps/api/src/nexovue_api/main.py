@@ -20,6 +20,7 @@ from nexovue_api.ai.preview import router as ai_preview_router
 from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.apitokens import router as apitokens_router
+from nexovue_api.assistant import knowledge as assistant_knowledge
 from nexovue_api.assistant import router as assistant_router
 from nexovue_api.assistant import server as assistant_server
 from nexovue_api.assistant.tickets import ticket_check
@@ -68,6 +69,7 @@ from nexovue_api.projects import router as projects_router
 from nexovue_api.readsurface import router as read_spec_router
 from nexovue_api.releases import router as releases_router
 from nexovue_api.rum import router as rum_router
+from nexovue_api.runbooks import router as runbooks_router
 from nexovue_api.servicemap import router as service_map_router
 from nexovue_api.services import router as services_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
@@ -188,6 +190,8 @@ def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     versioned.include_router(ai_preview_router.router)
     versioned.include_router(assistant_router.router)
     versioned.include_router(assistant_quotes_router.router)
+    versioned.include_router(assistant_knowledge.router)
+    versioned.include_router(runbooks_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(releases_router.router)

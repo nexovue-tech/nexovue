@@ -338,6 +338,13 @@ CROSS_TENANT_STATEMENTS: Final = (
         "an audit row with no organization",
     ),
     _across("erasure.owed", "_OVERDUE", "ADR-014: how many erasures are overdue, install-wide"),
+    # F4 T5.5: the knowledge sweep finds the organizations with chat on; every statement
+    # after it binds the one organization it is writing for.
+    _across(
+        "knowledge.tasks",
+        "_CHAT_ON",
+        f"{_SWEEP}: the organizations with chat on, whose recovered findings get fact lines",
+    ),
     # F4: chat's sweep (design, *Settling*).
     _across(
         "insight.assistant_sweep",

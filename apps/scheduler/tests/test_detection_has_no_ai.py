@@ -142,3 +142,11 @@ def test_no_evidence_module_imports_the_probes_http_client() -> None:
     imported = {name for module in modules for name in imports_of(module, module_file(module))}  # type: ignore[arg-type]
     assert not any(name.startswith("nexovue_scheduler.probes") for name in imported)
     assert direct_imports_matching(modules, NETWORK_CLIENTS) == []
+
+
+def test_chat_s_knowledge_sweep_is_denied_to_detection() -> None:
+    """F4 AC82, T5.5: the knowledge sweep is on the list, or this test would prove nothing
+    about it; and detection, which feeds it findings, imports none of it."""
+    assert "nexovue_scheduler.knowledge" in REPOSITORY_AI_MODULES
+    assert denied("nexovue_scheduler.knowledge.tasks")
+    assert ai_imports_reachable_from(_modules(DETECTION)) == []

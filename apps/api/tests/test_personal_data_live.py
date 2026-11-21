@@ -47,6 +47,7 @@ from nexovue_api.data.postgres.models import (
     Finding,
     FindingNote,
     Project,
+    Runbook,
     SessionRecord,
     SloExclusion,
     SloTarget,
@@ -454,6 +455,56 @@ async def test_the_chat_questions_are_cut_at_their_own_bound_and_say_so(
 
     assert len(export.chat_questions) == 2
     assert export.chat_questions_truncated is True
+
+
+async def _runbook(db: AsyncSession, acme: ProvisionedTenant, user: User, title: str) -> Runbook:
+    project_id = (
+        await db.scalars(select(Project.id).where(Project.org_id == acme.organization.id))
+    ).first()
+    assert project_id is not None
+    runbook = Runbook(
+        org_id=acme.organization.id,
+        project_id=project_id,
+        title=title,
+        content=f"{title}: restart the pool",
+        created_by=user.id,
+    )
+    db.add(runbook)
+    await db.flush()
+    return runbook
+
+
+async def test_the_export_holds_the_runbooks_the_person_wrote_and_nobody_else_s(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F4 AC34: the runbooks they wrote, in their own words; a colleague's are not in it."""
+    priya = await _join(db, acme, "member", "Priya")
+    written = await _runbook(db, acme, priya, "Priya's pool runbook")
+    await _runbook(db, acme, acme.user, "the owner's own runbook")
+
+    export = await personal_data.export(db, user=priya, organization=acme.organization, now=_now())
+    body = export.model_dump(mode="json")
+
+    [runbook] = body["runbooks_written"]
+    assert (runbook["id"], runbook["title"]) == (str(written.id), "Priya's pool runbook")
+    assert runbook["content"] == "Priya's pool runbook: restart the pool"
+    assert body["runbooks_truncated"] is False
+    assert "the owner's own runbook" not in json.dumps(body)
+
+
+async def test_the_runbooks_are_cut_at_their_own_bound_and_say_so(
+    db: AsyncSession, acme: ProvisionedTenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(personal_data, "MAX_RUNBOOKS_EXPORTED", 2)
+    for index in range(3):
+        await _runbook(db, acme, acme.user, f"runbook {index}")
+
+    export = await personal_data.export(
+        db, user=acme.user, organization=acme.organization, now=_now()
+    )
+
+    assert len(export.runbooks_written) == 2
+    assert export.runbooks_truncated is True
 
 
 # ---- deleting your own account -------------------------------------------------------

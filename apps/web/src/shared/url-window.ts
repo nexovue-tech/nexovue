@@ -55,6 +55,8 @@ const PROJECT_ONLY_PATHS: readonly RegExp[] = [
   /^\/synthetics\/?$/,
   /^\/traces\/[^/]+\/?$/,
   /^\/releases\/[^/]+\/?$/,
+  // F4 T5.3: a chat step's link to the runbooks it searched opens on the question's project.
+  /^\/settings\/runbooks\/?$/,
 ];
 
 export function urlProjectApplies(pathname: string): boolean {

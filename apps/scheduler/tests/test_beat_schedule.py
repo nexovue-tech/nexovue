@@ -18,6 +18,7 @@ from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import CheckDefinition
 from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, SWEEP_CONNECTIONS_TASK
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
+from nexovue_platform.knowledge import KNOWLEDGE_SWEEP_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
@@ -36,6 +37,7 @@ from nexovue_scheduler.beat import (
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
     INSIGHT_SWEEP_ENTRY,
+    KNOWLEDGE_SWEEP_ENTRY,
     RELEASE_SWEEP_ENTRY,
     Beat,
     _start_offset,
@@ -206,6 +208,19 @@ def test_cases_are_swept_every_five_minutes_on_light_by_a_registered_task() -> N
     assert sweep.interval_seconds == 300
     assert sweep.request.expires_seconds == 300
     assert CASES_SWEEP_TASK in registry.registered()
+
+
+def test_chat_s_fact_lines_are_swept_every_five_minutes_on_light_where_ai_may_be_offered() -> None:
+    """F4 T5.5: the knowledge sweep runs on the shared queue, by a task every worker loads,
+    and is not scheduled on the hosted service, which offers no chat (AC92)."""
+    sweep = _scheduler("self-hosted")._sweep_entries()[KNOWLEDGE_SWEEP_ENTRY]
+
+    assert sweep.request.task == KNOWLEDGE_SWEEP_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 300
+    assert KNOWLEDGE_SWEEP_TASK in registry.registered()
+    assert "nexovue_scheduler.knowledge.tasks" in registry.TASK_MODULES
+    assert KNOWLEDGE_SWEEP_ENTRY not in _scheduler("hosted")._sweep_entries()
 
 
 def test_chat_questions_are_swept_every_minute_on_insight_by_an_insight_task() -> None:

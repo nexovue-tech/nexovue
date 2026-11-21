@@ -35,7 +35,7 @@ from nexovue_platform.assistant_records import (
     clocks,
 )
 from nexovue_platform.assistant_records import KEPT_SINCE_PREFIX as KEPT_SINCE
-from nexovue_platform.assistant_tools import SEVERITY_FILTER_IDS, TOOLS_BY_NAME
+from nexovue_platform.assistant_tools import KNOWLEDGE_TOOL, SEVERITY_FILTER_IDS, TOOLS_BY_NAME
 from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.jobs import ENQUEUE, WAKE
 from sqlalchemy import delete, func, select, text
@@ -83,6 +83,7 @@ from nexovue_api.errors.exceptions import (
     NotFoundError,
     PermissionDeniedError,
 )
+from nexovue_api.findings.queries import derived_retention_days
 from nexovue_api.projects import queries as project_queries
 from nexovue_api.projects.service import require_readable_project
 
@@ -454,11 +455,15 @@ async def conversation(
     ).all()
     page = list(reversed(messages[:PAGE_MESSAGES]))
     steps = await _steps_of(session, asker.org_id, [message.id for message in page])
+    kept = await _cases_kept_days(session, asker.org_id, steps)
     return ConversationView(
         id=found.id,
         project_id=found.project_id,
         title=found.title,
-        messages=[_view(message, steps.get(message.id, []), now=now) for message in page],
+        messages=[
+            _view(message, steps.get(message.id, []), now=now, cases_kept_days=kept)
+            for message in page
+        ],
         has_older=len(messages) > PAGE_MESSAGES,
     )
 
@@ -475,7 +480,18 @@ async def message(
     asker = asker_of(identity)
     found = await _own_message(session, asker, conversation_id, message_id)
     steps = await _steps_of(session, asker.org_id, [found.id])
-    return _view(found, steps.get(found.id, []), now=now)
+    kept = await _cases_kept_days(session, asker.org_id, steps)
+    return _view(found, steps.get(found.id, []), now=now, cases_kept_days=kept)
+
+
+async def _cases_kept_days(
+    session: AsyncSession, org_id: uuid.UUID, steps: Mapping[uuid.UUID, Sequence[AssistantStep]]
+) -> int | None:
+    """How long a resolved case is kept after it ends, for FR42's sentence on an empty
+    knowledge search; read only when a knowledge step is shown."""
+    if not any(step.tool == KNOWLEDGE_TOOL for found in steps.values() for step in found):
+        return None
+    return await derived_retention_days(session, org_id=org_id)
 
 
 async def _own_message(
@@ -522,7 +538,11 @@ def _state_now(message: AssistantMessage, now: datetime | None) -> str:
 
 
 def _view(
-    message: AssistantMessage, steps: Sequence[AssistantStep], *, now: datetime | None = None
+    message: AssistantMessage,
+    steps: Sequence[AssistantStep],
+    *,
+    now: datetime | None = None,
+    cases_kept_days: int | None = None,
 ) -> MessageView:
     return MessageView(
         id=message.id,
@@ -539,11 +559,16 @@ def _view(
         wrong_reason=message.wrong_reason,
         created_at=message.created_at,
         finished_at=message.finished_at,
-        steps=[_step_view(step, project_id=message.project_id) for step in steps],
+        steps=[
+            _step_view(step, project_id=message.project_id, cases_kept_days=cases_kept_days)
+            for step in steps
+        ],
     )
 
 
-def _step_view(step: AssistantStep, *, project_id: uuid.UUID) -> StepView:
+def _step_view(
+    step: AssistantStep, *, project_id: uuid.UUID, cases_kept_days: int | None = None
+) -> StepView:
     tool = TOOLS_BY_NAME.get(step.tool)
     kept_since, failure = _kept_since(step.failure)
     return StepView(
@@ -561,6 +586,7 @@ def _step_view(step: AssistantStep, *, project_id: uuid.UUID) -> StepView:
         state=step.state,
         failure=failure,
         kept_since=kept_since,
+        cases_kept_days=cases_kept_days if step.tool == KNOWLEDGE_TOOL else None,
         link=None if tool is None or step.state == "refused" else _link(step, project_id),
     )
 

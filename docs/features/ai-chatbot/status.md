@@ -2,10 +2,138 @@
 
 ## Lifecycle status
 
-**In development.** Step 1 (a safer MCP server) is on `feature/phase-2` (commit 5988d88, 2026-11-02). **Step 3 built 2026-11-12, committed 2026-11-12,** locally, not pushed, on top of Step 2; no migration, no new ADR; fake providers only, **real-model parts not yet run: they need the founder's key or local model.** **Step 2 built and committed 2026-11-12, committed locally on `wt/f4s2`, not pushed:** one commit on top of F3 Step 5 (`wt/f3s5`, fb9eee3). Against fake providers only; **the one real local-model call is not yet run: it needs the founder's key or local model.** The founder approved the specification, design and plan on 2026-11-02.
+**In development.** **Step 5 built 2026-11-21, awaiting commit** (worktree `wt/f4s5`, on `feature/phase-2` 301f450): runbooks, knowledge chunks, keyword search, fact lines, runbook quotes; migration 0076, ADR-067; fake providers only; **T5.7's bed re-run not yet run: it needs the founder's key or local model, and waits on Step 4.** **Step 4 (real models, in the gate) is not built: it needs real models.** Step 1 (a safer MCP server) is on `feature/phase-2` (commit 5988d88, 2026-11-02). **Step 3 built 2026-11-12, committed 2026-11-12,** locally, not pushed, on top of Step 2; no migration, no new ADR; fake providers only, **real-model parts not yet run: they need the founder's key or local model.** **Step 2 built and committed 2026-11-12, committed locally on `wt/f4s2`, not pushed:** one commit on top of F3 Step 5 (`wt/f3s5`, fb9eee3). Against fake providers only; **the one real local-model call is not yet run: it needs the founder's key or local model.** The founder approved the specification, design and plan on 2026-11-02.
 
 
 ## Current task
+
+**Step 5 built 2026-11-21, awaiting commit** (worktree `wt/f4s5`, on `feature/phase-2` 301f450, which holds F4 Steps 1 to 3 and F3 Steps 1 to 5; not committed, not pushed). Migration **0076** (`down_revision` 0075). **ADR-067** (the design's knowledge ADR; ADR-068 and ADR-069 unused). Against fake providers only.
+
+**Step 4 is not built and Step 5 does not need it,** read from the plan and the code: Step 4 builds the bed's chat seed, injection suite and cost runs (T4.1 to T4.4) against real models. Step 5's code needs none of it; only **T5.7** ("re-run the bed") does, so T5.7 is recorded as waiting on Step 4, and **not yet run: it needs the founder's key or local model.**
+
+### Step 5, what was built
+
+- **T5.1** — `apps/api/migrations/versions/0076_knowledge.py` *new*: `runbooks` (title, optional service, text at most 32 KiB checked in the database too, author `SET NULL`, times; `UNIQUE (org_id, project_id, id)`), `knowledge_chunks` (`source_kind` runbook or fact; one nullable cascading key per source, the runbook and finding keys carrying the project, so the database refuses a chunk in another project than its source; a check that exactly the key its kind names is set; generated `content_tsv` with a GIN index; `embedded_model`, `embedding_due`; a fact line's `fact_service`, `fact_signal`, `fact_day` with a unique index, nulls not distinct). No vector column (Step 6's `setup`). Roll forward only. `nexovue_platform/knowledge.py` *new*: source kinds, caps, `chunk_runbook` (closes at a heading once a chunk holds `len/17`, splits at 2,000 at the last whitespace, so at most 18 chunks), the sweep's task name, and `EXPIRED` (a deleted project's runbooks and chunks go at the next expiry sweep). Models, `organizations/tables.py` (both by their project's cascade), `jobs/expiry.py`, the migration rules' roll-forward list. ADR-067.
+- **T5.2** — `nexovue_api/runbooks/` *new* (router, schemas, service): list and read for anyone signed in (a support view gets no body), create, upload, edit and delete on `MayManageKnowledge`; chunks written and replaced in the runbook's own transaction; the 32 KiB, 200-a-project and title refusals as sentences with codes; text holding a credential form needs `confirm_credentials` (`assistant_masks.holds_credential`, the exact list FR40 masks before sending); `runbook.created`, `.updated`, `.deleted` audited with project, size and chunk count, never text; absent (404) where `ai_available` is false. Upload: several Markdown files as a JSON body, into each project named as its own copy, refused file by file, at most 50 files an action, with its own body cap (`middleware/body_limit.py`). The personal-data export gains `runbooks_written` and `runbooks_truncated` (AC34); `docs/features/personal-data/spec.md` says so.
+- **T5.3** — `features/runbooks/` *new*: `RunbooksScreen` (title, service, author or *Former member*, age with a warning tone past 180 days; loading, failure, empty, cap reached), `RunbookScreen` (read; edit; delete behind the design's sentence; a support view's "no body" sentence), `RunbookForm` (full-width text box, capped sentences, "With chat on, this text may be sent to {provider}. Do not paste secrets.", the second click, the size refusal, unsaved changes), `UploadForm` (files and projects, per-file refusals, a second click for files refused for a credential). `/settings/runbooks` and `/settings/runbooks/$runbookId` behind a new `SelfHostedOnly`; the rail's entry `selfHostedOnly`, its filter moved to `offeredSettings` so it is tested; `console-routes.json`; `/settings/runbooks` reads `?project=` like the other project-only screens. `shared/runbook-age.ts` *new* gives the panel and the screen one age and one 180-day rule.
+- **T5.4** — `assistant/knowledge.py` *new*: `GET /assistant/knowledge/search` on `AssistantTicketReader` (`auth/dependencies.get_ticket_reader`: a ticket only; the ticket check is the read surface's own); `websearch_to_tsquery('english', q)`, ranked, 20 at most, the ticket's organization and project, a false alarm's fact line left out at once (AC84), refused at data level *facts only*, and `search: keyword` (AC41). `search_knowledge` in the catalog: the one tool off the read surface (AC14), rows labelled by `source_kind` (a runbook the team's, a fact line counted), quotable by chunk id, linked to `/settings/runbooks` with "The search phrase is not carried." FR42's empty answer: `StepView.cases_kept_days` from the plan's derived retention, said by the panel ("No record of this in what is kept. Cases are kept for {N} days after they end."). The *Error cases* row "Knowledge has no match" now names its tests.
+- **T5.5** — `nexovue_scheduler/knowledge/tasks.py` *new*, in `TASK_MODULES`, on the shared queue every 5 minutes (`KNOWLEDGE_SWEEP_ENTRY`, only where AI may be offered): per organization with chat on, in one transaction, drops lines whose finding is no longer `recovered`, writes a line per `recovered` finding from columns alone (`service {name} | signal {signal} | {started} to {closed} UTC | closed: recovered`; strict names or "a service"; a project finding up to 5 strict names), at most one per service, signal and day (the newest of a day), then evicts the oldest past the project's share (1,000 lines, never past 5,000 with everything else counted first). `nexovue_scheduler.knowledge` joins `REPOSITORY_AI_MODULES`.
+- **T5.6** — `insight/assistant_answer.py`: a `team` label (telemetry text still wins, a count does not), with the oldest cited age; a runbook quote is never folded and is the one quote a sentence may point at as something to run (a command written in the sentence itself is still refused). `assistant/quotes.py` reads a knowledge quote again from Postgres, with its runbook and age, `gone` once the runbook is deleted, and decides "runbook" from the chunk, not the stored answer. The panel: the notes label with its age, the runbook quote's label, warning tone, Copy (none on a cut quote) and **Open the runbook**. The prompt names runbook quotes (`chat-3`).
+- **T5.7** — **not yet run: needs the founder's key or local model;** waits on Step 4 (T4.1 to T4.3), which builds the runs it repeats.
+- **Two real faults, found by the new tests and fixed:** the panel folded a quote by the stored answer's word, so a fact line claimed as a runbook's would show unfolded (now by what nexovue read again); and the runbook form showed a refusal's title ("Invalid") rather than the API's sentence (now the problem's own detail).
+- **Design follows the code:** the data table's `runbooks` and `knowledge_chunks` rows now name the columns as built.
+
+### Step 5, seen failing first
+
+Every new or changed test was seen failing (behaviour broken, run, restored byte-equal by a script that keeps its copy outside the repository and compares bytes afterwards). Clocks pinned throughout (`NOW` in Python; `vi.useFakeTimers({ toFake: ["Date"] })` with `vi.setSystemTime` in the new web tests). Breaks that first **passed** are said, with how the test was strengthened.
+
+- sch:test_assistant_answer.py (5 new, T5.6, AC21, AC40, AC63), each break then restored byte-equal (69 passed):
+  - the team label removed -> 1 failed (a runbook sentence read `checked`);
+  - a runbook quote folded like a log's -> 1 failed;
+  - runbook-only quotes not recognised -> 2 failed (the act-on-runbook sentence removed);
+  - the imperative allowed nowhere -> 1 failed;
+  - the newest, not the oldest, age stated -> 1 failed;
+  - `team_text` read as telemetry text (Step 3's rule) -> 2 failed (the notes label, and a fact line's count);
+  - a command line allowed in a sentence beside a runbook quote -> 1 failed.
+- An existing test changed for a real shape change: a stored quote now carries `runbook` (false for a log); test_a_quote_stores_its_reference_and_never_its_text updated.
+- test_assistant_catalog.py + test_read_surface_structure.py (T5.4, AC14), each break then restored:
+  - before the catalog test knew the exception, adding `search_knowledge` failed 6 (not on the surface, sends `title` and `team_text`, no destination row, no console route, no panel target): the real gap the step closes; the test then learned the named exception;
+  - the knowledge route reading `CurrentReader` instead of `AssistantTicketReader` -> 3 failed (the surface list, the new ticket-only test, the catalog's exception test);
+  - `team_text` declared on a log body -> 1 failed (only knowledge sends the team's words);
+  - the knowledge link's sentence dropped -> 1 failed (the design's destination table);
+  - a runbook chunk's `content` declared closed -> 1 failed (free text must be fenced).
+- api:test_runbooks_live.py (12 new; T5.1, T5.2; AC38, AC69, AC71, AC90, AC92, AC106) on f4s5-postgres, each break then restored byte-equal (12 passed):
+  - chunks never closed at a heading -> 1 failed (split by heading);
+  - a chunk closed at every heading (no minimum) -> 1 failed (AC106: more than 18 chunks);
+  - the 200-runbook cap removed -> 1 failed (the 201st saved);
+  - the 32 KiB check removed -> 2 failed (the database's own check refused it as an integrity error, not a sentence; the upload's per-file refusal);
+  - the credential warning removed -> 1 failed;
+  - the audit row given the session's titles -> 1 failed (at first a weaker break, the session's new objects, PASSED: their repr holds no text; strengthened to the titles themselves);
+  - a rewrite keeping the old text's chunks -> 1 failed;
+  - a support view given the body -> 1 failed;
+  - an upload copying into the first project only -> 1 failed;
+  - runbooks offered on the hosted service -> 1 failed;
+  - the organization filter removed from the row read -> at first PASSED: the project check after it still bound the organization; removed from both -> 1 failed;
+  - the database's own keys, each dropped inside the test's rolled-back transaction: the finding cascade -> 1 failed; the runbook cascade -> 1 failed; the runbook's composite key -> 1 failed (a chunk of another project accepted).
+- api:test_assistant_knowledge_live.py (5 new; T5.4; AC41, AC42, AC68, AC84, FR37), each break then restored (5 passed):
+  - the project filter removed from the search -> 1 failed (the sibling project's runbook returned);
+  - fact lines of a false alarm not excluded -> 1 failed (AC84);
+  - the facts-only refusal removed -> 1 failed (AC68);
+  - the ticket-only reader accepting any caller -> 1 failed;
+  - `plainto_tsquery` in place of `websearch_to_tsquery` -> 1 failed (the tool's own `OR` advice found nothing).
+- api:test_assistant_tools_live.py (AC53, AC8, now over every tool including `search_knowledge`, through real uvicorn with a ticket; it gained keywords for a required phrase):
+  - the ticket-only reader refusing every caller -> 1 failed (`search_knowledge` 403);
+  - the search proving its project by organization only, not the ticket's scope -> 2 failed (the sibling project read over HTTP, and in the knowledge suite); restored 7 passed.
+- api:test_assistant_quotes_live.py (1 new; T5.6, FR15), each break then restored (4 passed):
+  - a runbook quote folded as the stored answer said -> 1 failed;
+  - knowledge never read back -> 1 failed (read `gone`);
+  - the runbook flag taken from the stored answer, not the chunk -> at first PASSED (the deleted runbook read `gone` either way); a fact line's quote stored as a runbook's added to the test -> 1 failed.
+- api:test_personal_data_live.py (2 new, AC34), each break then restored (18 passed): every runbook of the organization exported -> 1 failed; the truncation flag forced false -> 1 failed.
+- api:test_deletion_live.py (the inventory, 34 passed), each break then restored: `knowledge_chunks` left out of `organizations/tables.py` -> 2 failed; `runbooks` named under `users` -> 1 failed (no such cascade).
+- sch:test_knowledge_writers.py (10 new; T5.5; AC39, AC82, AC83, AC84) on f4s5-postgres, each break then restored byte-equal (10 passed):
+  - any service name written, not only a strict one -> 3 failed (the planted text reached a line);
+  - six services named -> 1 failed;
+  - the writer selecting `title` -> 1 failed;
+  - "already written today" not in what is due -> 1 failed (a lost race stayed due, to fill every later batch); this assertion was added after the first version passed without it;
+  - the insert without `ON CONFLICT DO NOTHING` -> 1 failed (the unique index refused the day's second line and the organization's pass failed);
+  - any closed reason written -> 2 failed;
+  - a deleted project's findings written -> 1 failed;
+  - no drop of a line whose finding became a false alarm -> 1 failed (AC84);
+  - the newest line evicted, not the oldest -> 1 failed;
+  - runbooks not counted before fact lines -> 2 failed;
+  - the pass run on the hosted service -> 1 failed;
+  - organizations with chat off swept too -> 1 failed;
+  - `nexovue_platform.knowledge.EXPIRED` left out of the expiry sweep -> 1 failed (a deleted project's runbook stayed).
+- sch:test_beat_schedule.py and test_detection_has_no_ai.py (1 new each; T5.5, AC82), each break then restored (32 passed): the knowledge entry scheduled on the hosted service too -> 1 failed; `nexovue_scheduler.knowledge` taken off `REPOSITORY_AI_MODULES` -> 1 failed; the task left out of `TASK_MODULES` -> 1 failed.
+- api:test_knowledge_records.py (15 new; T5.1, AC69, AC106, D77; offline), each break then restored (15 passed):
+  - a hard split mid-word -> at first PASSED (the test looked for the wrong broken word); strengthened to "every piece but the last ends with a whole word" -> 1 failed;
+  - the migration's frozen chunk size drifted from the shared record -> 1 failed;
+  - the save warning using only part of the send mask's list -> 2 failed;
+  - a character lost at a split -> 2 failed (the random runbooks lost text; the heading case).
+- **A real fault, found by the new panel test and fixed:** a quote's fold came from the stored answer alone, so a quote stored as a runbook's but read again as a fact line would show unfolded. The panel now folds by what nexovue read again (`read.folded`), as the API decides it from the chunk.
+- Web, features/assistant (vitest; 4 new in answer.test.ts, 2 in step-links.test.ts, 4 rows in states.test.ts; clocks pinned with `vi.useFakeTimers({ toFake: ["Date"] })` and `vi.setSystemTime`), each break then restored (75 passed):
+  - FR42's sentence not said on an empty knowledge step -> 1 failed;
+  - `/settings/runbooks` left out of `STEP_TARGETS` -> 1 failed (and `test_assistant_catalog.py` failed the same way before the panel knew it);
+  - the notes label without its age -> 1 failed;
+  - a runbook quote shown as a log's -> 2 failed;
+  - no warning tone past 180 days -> 1 failed;
+  - Copy offered on a cut runbook quote -> 1 failed (a first version matched the "Copy" text every copy control shows, and passed; matched by its own label since);
+  - a quote folded as the stored answer said -> 1 failed (the fault above).
+- api:test_assistant_error_cases.py: the "Knowledge has no match" row now names its tests; before the web test existed it failed (named test missing) -> 1 failed; and `test_assistant_catalog.py`'s new step-view test: the days on every step -> 1 failed; never given -> 1 failed.
+- **A real fault, found by the new screen test and fixed:** the runbook form showed a refusal's title ("Invalid") rather than the API's sentence; the form, upload and delete now show the problem's own detail (`refusalSentence`).
+- Web, features/runbooks/runbooks.test.ts (10 new; T5.3; FR32, AC69, AC90, AC92; clock pinned), each break then restored (10 passed): no warning tone past 180 days; writing offered to a viewer; no cap; no "may be sent to" sentence with chat on; no second click for a credential; no local 32 KiB check (the request was sent); a support view shown an empty body; delete with no confirmation; an upload's refusals not listed; a credential resend sending every file to every project -> each 1 failed.
+- Web, app/HostedOnly.test.ts (2 new), shared/settings/settings-nav.test.ts (1 new), app/routes/route-manifest.test.ts, each break then restored: `SelfHostedOnly` showing its screen on the hosted service -> 1 failed; runbooks not marked self-hosted only -> 1 failed; the one-runbook route not listed as reached by following something -> 1 failed; `console-routes.json` missing `/settings/runbooks` -> 1 failed.
+- api:test_assistant_hostile_live.py (1 new; T5.6; AC40, AC69, AC42; the real loop as the AI account, every read over real HTTP to the real app, run alone), each break then restored (2 passed): the send-time mask off -> 1 failed (the runbook's planted password reached the provider); the notes label removed -> 1 failed (both sentences `unchecked`); a runbook quote not recognised as one -> 1 failed (the act-on-runbook sentence removed); the search reading every tenant -> 1 failed (the other organization's runbook reached the provider).
+- Web, shared/settings: the rail's filter moved out of `SettingsLayout` into `offeredSettings` so it can be tested; the self-hosted rule removed -> 1 failed (runbooks offered on the hosted service); restored 4 passed.
+
+- **Found in `/review-diff` and fixed:** a fact line printed its times in whatever zone the database connection handed back, under a "UTC" label. sch:test_knowledge_writers.py (1 new): the zone kept -> 1 failed (19:30 for a 14:00 UTC finding read in Kolkata); restored 11 passed.
+
+### Step 5, `/review-diff` (2026-11-21)
+
+Read against the design, the plan, ADR-055 and ADR-067, and the review criteria (`docs/quality/code-review.md`): every changed file is explained by T5.1 to T5.6 or by a gate the plan names; tenancy (every new Postgres statement binds `org_id`; the knowledge search's project is the ticket's, proven before it scopes the read; the scheduler's one cross-tenant read is named in its structure test); authorization (four new writes on `MayManageKnowledge`, the reads person-only and off the read surface, the search ticket-only); masking (a runbook's text passes FR40's mask before the model reads it, and the save warning is the same list); secrets (no text in an audit row; no credential in a fixture but planted test strings); migration (roll forward only, its reasoning stated); web (imports `shared → features → app`, tokens only, sentences capped and containers not, no window breakpoints, an em dash for an unreadable age). **HIGH:** none. **MEDIUM:** the fact line's zone, fixed above. **LOW, recorded, not changed:** an upload naming 50 projects could write up to 2,500 runbooks in one transaction, bounded by the 200-a-project cap; performance is the hardening pass's (T8.1).
+
+### Step 5, checks (2026-11-21, counts read from the output)
+
+Stores: `f4s5-postgres` (45432, migrated by the real `setup` step 0075 → 0076; the object store skipped, not configured) and `f4s5-clickhouse` (48123, and 49000 for the Go migration step, 42 migrations), started for this worktree on its own network `f4s5-net`; every live run through a private wrapper that refuses any other store address; both containers, their volumes and the network were removed at the end. No real provider was called.
+
+- `uv run ruff check .` clean; `uv run ruff format --check .` 1478 files formatted; `uv run mypy .` **no issues in 1095 source files.**
+- Biome on every touched web path: clean. `pnpm -r --if-present run typecheck`: clean. `verify-tokens`: clean.
+- **Whole web suite: 2571 passed (205 files).**
+- **API, gates and chat's suites, `-n 2`** (cross-service contracts, authorization coverage, read surface structure, spec and live, rate-limit coverage, callers and limiter, both tenancy structures, tenant chokepoint and isolation, migration rules, setup schema, body limit, policy, auth routes, Compose contract, deletion, keys, personal data, insight grants, MCP tools, injection and live, services, infrastructure, logs, access log, every chat suite but the hostile one, runbooks, knowledge, knowledge records): **4074 passed, 14 errors**: `test_services_live.py` (12) needs the seeded `acme/production` organization and `test_tenant_isolation_live.py` (2) the running dev stack, neither made on these stores; not this change (as in Step 3).
+- **Hostile live suite, alone: 2 passed.**
+- **Scheduler, platform and `tools/ai-eval`, `-n 2`** (chat's and F3's insight suites, knowledge writers, beat schedule, detection-has-no-AI, jobs live, the expiry suites, all platform tests, the fake provider): **1645 passed.** The expiry-related suites (detection and SLO prune, dashboards' expiry, release sync, coordinator): **43 passed serially**; under `-n 2` the dashboards' expiry suite failed twice, because its clock is pinned to 2026-11-12 while another suite's expiry sweep runs on the real clock and purges its 29-day-old dashboard: two suites racing on the install-wide sweep, not this change (open decision 28).
+- After `/review-diff`'s fix (2026-11-21): `test_knowledge_writers.py` 11 passed; ruff, format and mypy clean again (1478 files formatted, no issues in 1095 source files).
+
+### Step 5, not built or not run
+
+- **T5.7, the bed re-run** (injection in runbooks and fact lines across later questions, and a cost run): **not yet run: needs the founder's key or local model;** waits on Step 4.
+- **The founder's judging** of Step 5 (paste a runbook, ask, delete, ask again, with a provider without embeddings) against a real model: **not yet run: needs the founder's key or local model.** Its parts are each held by a test against fake providers (`test_assistant_hostile_live.py`, `test_assistant_quotes_live.py`, `test_assistant_knowledge_live.py`).
+- **Waiting for Step 7 (notes, F22's cases):** note chunks, fact lines of a resolved case and the deletion exception for one, "a note must outrank 100 fact lines" and "the settings screen counts what is not searchable" (AC83's note halves), a poisoned note (AC40's note half, T7.3).
+- **Waiting for Step 6:** meaning search, the `nexovue_insight` grant on `knowledge_chunks` (it serves embedding), "keyword only" in the Chat section.
+- **Not measured (T8.1):** that detection and expiry are not delayed with the knowledge sweep at the cap (AC82's first half).
+- **Hardening, deferred:** Playwright, browser and phone runs of the runbooks screen and the runbook quote; performance (search time, the sweep at the cap, an upload of 50 files); customer docs (`docs/product/setup/`, T8.3); design QA of the new words (open decision 23); the founder's judging.
+
+### Step 3 (committed)
 
 **Step 3 built 2026-11-12, committed 2026-11-12** (built in worktree `wt/f4s3` on Step 2's commit; committed locally, not pushed). **No migration:** nothing new is stored but JSON inside `assistant_messages.answer` and a note in `assistant_steps.failure`; the AI account's one new grant (the retention view) is `setup`'s `INSIGHT_GRANTS`, as F3's are. **No new ADR (ADR-056 to ADR-059 unused):** every decision below sits inside the approved design or is an open decision awaiting the founder. Against fake providers only; **the founder's judging with real questions is not yet run: it needs the founder's key or local model.**
 
@@ -167,6 +295,8 @@ Stores: `f4s3-postgres` (45432, migrated by the real `setup` step to 0073; its l
 
 ## Next action
 
+**Step 5 is built (2026-11-21) and awaits the founder's review of its diff and a commit** on `wt/f4s5`. Then: the founder's judging of Steps 2, 3 and 5 with one real local model; Step 4 (real models, in the gate), after which T5.7 re-runs the bed; the open decisions 19 to 28; Step 6. Earlier:
+
 Step 3 is committed (2026-11-12, locally, not pushed). Next: the founder's judging of Steps 2 and 3 with one real local model (`gpt-oss:20b`, D80, D87) on research section 2's questions; the hardening pass runs the e2e specs; then Step 4. Earlier:
 
 Step 2 is committed locally on `wt/f4s2` (not pushed), on top of F3 Step 5. Next: the coordinator merges it after F3 Step 5; then the founder's one real local-model call (`gpt-oss:20b` with `OLLAMA_CONTEXT_LENGTH` set, D80, D87) and the founder's judging of Step 2; the hardening pass runs the three Playwright specs, AC66 under `just insight-fence`, and the phone checks. Then Step 3.
@@ -196,9 +326,23 @@ The three founder decisions of 2026-11-02 stand answered. Raised while building 
 17. **The hostile live suite cannot run beside another suite** (its row diff covers every table). **Recommended:** CI runs it alone, as it does today; say so beside the workflow when Step 3 merges.
 18. **The quote route reads an error group within its step's window,** so a quote of a group whose window has aged out reads `gone`, as the log quote does. **Recommended:** accept.
 
+Raised while building Step 5 (2026-11-21), each with a recommendation; none blocks the commit:
+
+19. **A fact line's key is its strict service name, or none.** A project finding and a service whose name fails the strict pattern both key as unnamed, so they share one line a signal and day (the line itself says "services …" or "a service"). Keying by the raw name would put a name that failed the pattern into the table, which AC39 forbids. **Recommended:** accept.
+20. **Fact lines of a resolved case wait for Step 7.** The design writes them for findings "closed as `recovered`, or whose case is resolved (F22)", and keeps a resolved case's line when its finding stops being `recovered`; plan T5.5 says recovered findings, and T7.2 names "case resolved". F22 is built, so either step could. **Recommended:** keep it in T7.2 with notes, which carries the "resolved case" reading of FR28 whole.
+21. **No `nexovue_insight` grant on `knowledge_chunks` in Step 5.** The design's grant row (select some columns, update the embedding ones) serves only embedding; search runs in the API on the ticket (D31). **Recommended:** grant it with T6.1.
+22. **Upload is a JSON body of files the browser read,** not a multipart form: at most 50 files an action (a guess), each at most 32 KiB, under its own body cap of about 4.1 MiB (twice the files' bytes for JSON escaping, plus 1 MiB). A file of control characters could escape past that and be refused whole by the body limit. **Recommended:** accept; it keeps one JSON client and per-file refusals.
+23. **New words not in the design's *Words* table:** the runbooks screen ("Your team's own instructions for handling problems, for this project. Chat can quote them in its answers."; "A support view does not show what a runbook says."; "With chat on, this text may be sent to {provider}. Do not paste secrets."; "{n} runbooks added."; "Add to these projects, each as its own copy"; the form's labels) and the panel ("From a fact nexovue recorded"; "This runbook was deleted, or is no longer kept."; "Open the runbook"; the Copy control named "this runbook text"). **Recommended:** accept or replace in design QA.
+24. **The credential warning is exactly FR40's mask list** (Bearer and Basic values, URL credentials, card numbers, `password=`-style pairs), not a wider set (AWS keys, private key blocks). One list keeps the warning, the mask and the consent's sentence true together. **Recommended:** accept; widen all three together if the bed finds a gap.
+25. **A knowledge step with rows reads "Latest N, no time filter.",** Step 3's words for a windowless read. **Recommended:** "N found." in design QA.
+26. **Knowledge search refuses at data level *facts only*,** besides not being offered there (the design only says not offered). **Recommended:** accept, as defence in depth for FR39.
+27. **`websearch_to_tsquery` needs every word to match;** a question's words used as they are may find nothing. The tool tells the model to use a few keywords and `OR`. **Recommended:** measure it in T5.7's bed; a ranked any-word query would be a design change.
+28. **Two scheduler suites race on the install-wide expiry sweep under `-n 2`:** `test_dashboards_expiry_live.py` pins its clock to 2026-11-12, and another suite's sweep on the real clock purges its 29-day-old dashboard. Not F4's code. **Recommended:** run the expiry suites serially in CI, or give the dashboards suite a clock that stays inside the 30 days on the real clock too.
+
 
 ## Blocked
 
+- **Step 4 and T5.7 need real models** (the founder's key or local model). Step 5's code does not.
 - **Founder decision, 2026-11-08:** Steps 2 to 7 are built in full, not gated on the buyer round (foundation item 27). F3's provider (Step 4) is on the branch, so Step 2 was built.
 - **Step 2's real-model call** needs the founder's key or local model. Step 7 waits on F22, and one tool in Step 3 on F28.
 - ~~All steps blocked on F6 merging~~ — F6 merged 2026-11-02 (PR #24), and the founder approved these documents, so Step 1 was built.
@@ -606,7 +750,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-12 (Step 3 committed locally, not pushed; built on wt/f4s3. Step 2 committed locally, not pushed)
+2026-11-21 (Step 5 built on wt/f4s5, awaiting commit. Step 3 committed locally, not pushed; built on wt/f4s3. Step 2 committed locally, not pushed)
 
 ## Founder approval, 2026-11-02
 

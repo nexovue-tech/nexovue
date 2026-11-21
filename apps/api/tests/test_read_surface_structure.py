@@ -195,3 +195,22 @@ def test_every_dashboard_handler_names_a_person_gate(key: str) -> None:
         f"{key} names none of {DASHBOARD_GATES}, so an API token may reach it"
     )
     assert READER not in annotations, f"{key} takes a {READER}: a token would reach it"
+
+
+# F4 T5.4 (FR37, D31, AC14): chat's knowledge search is read on a question's ticket and by
+# nothing else, so no API token and no person reaches it, and it is off the surface.
+TICKET_ONLY: Final = {
+    "nexovue_api/assistant/knowledge.py:search_knowledge": "GET /assistant/knowledge/search",
+}
+TICKET_READER: Final = "AssistantTicketReader"
+
+
+@pytest.mark.parametrize("key", sorted(TICKET_ONLY))
+def test_a_ticket_only_route_takes_a_ticket_and_is_off_the_surface(key: str) -> None:
+    handlers = {found: node for found, node, _ in _handlers()}
+    assert key in handlers, f"{key} names no handler"
+    annotations = _annotations(handlers[key])
+    assert TICKET_READER in annotations
+    assert READER not in annotations, f"{key} takes a {READER}: a token would reach it"
+    assert IDENTITY not in annotations
+    assert key not in THE_SURFACE

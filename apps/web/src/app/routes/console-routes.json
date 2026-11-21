@@ -49,6 +49,8 @@
   "/settings/general",
   "/settings/members",
   "/settings/projects",
+  "/settings/runbooks",
+  "/settings/runbooks/$runbookId",
   "/settings/support",
   "/settings/usage",
   "/signup",

@@ -32,6 +32,8 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.releases.summary",
     "nexovue_scheduler.cases",
     "nexovue_scheduler.evidence.gather",
+    # F4 T5.5: chat's fact lines, on the shared queue; no AI is called or loaded by it.
+    "nexovue_scheduler.knowledge.tasks",
 )
 
 # The modules each kind of worker loads (`--tasks`), F3's mechanism. A narrow role names

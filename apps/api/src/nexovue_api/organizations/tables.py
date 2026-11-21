@@ -175,6 +175,10 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "assistant_question_counts": "users",
     "assistant_messages": "assistant_conversations",
     "assistant_steps": "assistant_messages",
+    # F4 Step 5. Runbooks and chat's knowledge chunks go with their project; a chunk also
+    # goes with its runbook or finding, by its own cascading key (BR16).
+    "runbooks": "projects",
+    "knowledge_chunks": "projects",
 }
 
 # The organization row itself, which a deletion scrubs and keeps rather than

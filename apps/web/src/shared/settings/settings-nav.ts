@@ -17,6 +17,7 @@ export type SettingsPath =
   | "/settings/support"
   | "/settings/channels"
   | "/settings/ai"
+  | "/settings/runbooks"
   | "/settings/explanations"
   | "/settings/connections"
   | "/settings/projects"
@@ -36,6 +37,11 @@ export interface SettingsItem {
    * no billing and no nexovue staff to grant support access to.
    */
   hostedOnly?: true;
+  /**
+   * Only where AI may be offered, a customer's own install (F4 `ai_available`): runbooks,
+   * which chat quotes. The hosted service offers no chat yet.
+   */
+  selfHostedOnly?: true;
   /**
    * What somebody might type looking for it, in the words they would use rather
    * than the ones on the tab. "Sessions" and "two-factor" both live under
@@ -141,6 +147,14 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         ],
       },
       {
+        // F4 T5.3 (D40): its own screen, not inside AI settings, since members write
+        // runbooks and AI settings are for those who manage AI. Everyone signed in reads.
+        path: "/settings/runbooks",
+        title: "Runbooks",
+        selfHostedOnly: true,
+        keywords: ["runbook", "playbook", "procedure", "instructions", "chat", "knowledge"],
+      },
+      {
         // F3 FR54: rating and rule counts, and stopping a rule naming causes. Not an AI
         // screen: it stands with AI off.
         path: "/settings/explanations",
@@ -174,3 +188,31 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     ],
   },
 ];
+
+/**
+ * What the rail offers this reader: what they may open, on this kind of install, matching
+ * what they typed (lower-cased). Groups left empty are dropped.
+ */
+export function offeredSettings(
+  groups: readonly SettingsGroup[],
+  {
+    permissions,
+    hosted,
+    needle,
+  }: { permissions: readonly Action[] | undefined; hosted: boolean; needle: string },
+): SettingsGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (item) =>
+          (item.requires === undefined || permissions?.includes(item.requires) === true) &&
+          (item.hostedOnly === undefined || hosted) &&
+          (item.selfHostedOnly === undefined || !hosted) &&
+          (needle === "" ||
+            item.title.toLowerCase().includes(needle) ||
+            item.keywords.some((word) => word.includes(needle))),
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
+}

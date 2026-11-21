@@ -25,7 +25,8 @@ export type MessageState =
   | "over_limit"
   | "unavailable";
 export type Phase = "waiting" | "asking" | "reading" | "checking";
-export type Label = "counted" | "checked" | "text" | "unchecked";
+/** `team`: the team's own words, with their age (F4 Step 5). */
+export type Label = "counted" | "checked" | "text" | "team" | "unchecked";
 export type WrongReason = "wrong_numbers" | "wrong_cause" | "missed_something" | "other";
 
 export interface Availability {
@@ -61,6 +62,8 @@ export interface StepView {
   failure: string | null;
   /** The first day still kept, on an aged-out step or a read narrowed to what is kept. */
   kept_since: string | null;
+  /** How long a resolved case is kept, on a knowledge step: FR42's empty answer. */
+  cases_kept_days?: number | null;
   link: StepLink | null;
 }
 
@@ -73,6 +76,8 @@ export interface Sentence {
   flagged_figures?: [number, number][];
   /** Quote ids, in the order the sentence named them. */
   quotes?: string[];
+  /** On a `team` sentence, the oldest cited text's date, for the label's age (FR17). */
+  written_at?: string | null;
 }
 
 /** What an answer stores of a quote: a reference, never the text (D28). */
@@ -81,6 +86,8 @@ export interface StoredQuote {
   tool: string;
   field: string;
   folded: boolean;
+  /** A runbook's own text: the one quote a sentence may tell the reader to run (BR7). */
+  runbook?: boolean;
 }
 
 export interface Answer {
@@ -101,6 +108,10 @@ export interface QuoteView {
   state: "shown" | "gone" | "read_failed";
   value: string | null;
   was_cut: boolean;
+  /** Read again, never taken from the stored answer: a runbook's quote, its runbook and age. */
+  runbook?: boolean;
+  runbook_id?: string | null;
+  written_at?: string | null;
 }
 
 export interface QuoteList {

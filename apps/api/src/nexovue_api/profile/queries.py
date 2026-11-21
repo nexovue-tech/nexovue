@@ -15,6 +15,7 @@ from nexovue_api.data.postgres.models import (
     AssistantStep,
     AuditLogEntry,
     FindingNote,
+    Runbook,
     SessionRecord,
     User,
 )
@@ -70,6 +71,20 @@ async def chat_questions(
         select(AssistantMessage)
         .where(AssistantMessage.org_id == org_id, AssistantMessage.user_id == user_id)
         .order_by(AssistantMessage.created_at.desc(), AssistantMessage.id.desc())
+        .limit(limit)
+    )
+    return list(await session.scalars(statement))
+
+
+async def runbooks_written(
+    session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, limit: int
+) -> list[Runbook]:
+    """The runbooks this person wrote, newest first (F4 AC34), served by
+    `ix_runbooks_org_id_created_by`."""
+    statement = (
+        select(Runbook)
+        .where(Runbook.org_id == org_id, Runbook.created_by == user_id)
+        .order_by(Runbook.created_at.desc(), Runbook.id.desc())
         .limit(limit)
     )
     return list(await session.scalars(statement))

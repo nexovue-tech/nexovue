@@ -49,6 +49,27 @@ describe("what a step says it read", () => {
     expect(stepOutcome(step({ row_count: 0 }))).toBe(`${NO_ROWS}.`);
   });
 
+  it("says an empty knowledge search is no record of what is kept, with its days", () => {
+    // FR42, word for word: absence must not read as "it never happened".
+    expect(stepOutcome(step({ tool: "search_knowledge", row_count: 0, cases_kept_days: 30 }))).toBe(
+      "No record of this in what is kept. Cases are kept for 30 days after they end.",
+    );
+    expect(stepOutcome(step({ tool: "search_knowledge", row_count: 2, from_time: null }))).toBe(
+      "Latest 2, no time filter.",
+    );
+  });
+
+  it("links a knowledge step to the runbooks list, carrying no phrase", () => {
+    const link = {
+      path: "/settings/runbooks",
+      params: {},
+      query: { project: PROJECT_ID },
+      caveat: "The search phrase is not carried.",
+    };
+    expect(stepTarget(link)).toBe("/settings/runbooks");
+    expect(stepHref(link, ORIGIN)).toBe(`${ORIGIN}/settings/runbooks?project=${PROJECT_ID}`);
+  });
+
   it("says a windowless read is the latest rows, with no time filter", () => {
     expect(stepOutcome(step({ from_time: null, to_time: null, row_count: 12 }))).toBe(
       "Latest 12, no time filter.",

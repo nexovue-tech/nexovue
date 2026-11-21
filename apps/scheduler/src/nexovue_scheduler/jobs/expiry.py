@@ -2,7 +2,8 @@
 detection keeps only for a while (`detection/retention.py`), the evidence job's hour
 (`evidence/retention.py`), AI runs and monthly usage past 13 months
 (`nexovue_platform.ai_records`), chat's questions past their project's derived retention
-and its records past 13 months (`nexovue_platform.assistant_records`), what reliability
+and its records past 13 months (`nexovue_platform.assistant_records`), runbooks and chunks of a
+deleted project or organization (`nexovue_platform.knowledge`), what reliability
 targets keep: a deleted target past restoring, and figures past 400 days
 (`slos/retention.py`), and F28's deploys and releases (`releases/retention.py`). A deleted
 dashboard past its 30 days goes with its versions (`purge_deleted_dashboards`).
@@ -26,7 +27,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Final
 
-from nexovue_platform import ai_records, assistant_records
+from nexovue_platform import ai_records, assistant_records, knowledge
 from nexovue_platform.dashboards import RESTORE_FOR
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -62,6 +63,7 @@ _EXPIRED: Final = (
     *evidence_retention.EXPIRED,
     *ai_records.EXPIRED,
     *assistant_records.EXPIRED,
+    *knowledge.EXPIRED,
     *slo_retention.EXPIRED,
     *release_retention.EXPIRED,
 )

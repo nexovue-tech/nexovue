@@ -28,6 +28,12 @@ def mask(text: str, *, mask_emails: bool) -> str:
     return _EMAIL.sub(MASKED, text) if mask_emails else text
 
 
+def holds_credential(text: str) -> bool:
+    """Whether text holds a credential form these masks hide (AC69). Saving a runbook warns on
+    exactly these, so the warning and what is masked before sending cannot drift apart."""
+    return any(pattern.search(text) for pattern in _CREDENTIALS)
+
+
 def _masked(match: re.Match[str]) -> str:
     groups = match.groups()
     if len(groups) == 2 and groups[1] is not None:  # `password = value`: keep the name

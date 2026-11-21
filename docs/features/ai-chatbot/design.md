@@ -475,8 +475,8 @@ Postgres only. Migration number is the next free when built. All are new tables.
 | `assistant_question_counts` | `org_id`, `user_id`, `day` PK, `count`. No text. Survives conversation deletion; `scrub` removes the person's; goes after 13 months (guess) | `DELETED_DIRECTLY` |
 | `assistant_monthly_counts` | `org_id`, `month`, `kind` PK (closed: answered, abstained, withheld, wrong by reason, rejection by reason), `count`. No text | `DELETED_DIRECTLY` |
 | `assistant_read_log` | `id`, `org_id`, `project_id` SET NULL, `user_id` SET NULL, `at`, `tool`, `from_time`, `to_time`, `row_count`, `provider_label`. No filter values, so a question's words cannot get in. No link to a conversation, so deleting one does not erase it. Goes after 13 months, as F3's `ai_runs`; `scrub` nulls the person | `DELETED_DIRECTLY` |
-| `runbooks` | `id`, `org_id`, `project_id` NOT NULL cascade, `service_name` NULL, `title`, `content`, `created_by` SET NULL, `updated_at` | `projects` |
-| `knowledge_chunks` | `id`, `org_id`, `project_id` NOT NULL cascade, `source_kind` CHECK, `runbook_id`, `finding_id`, `note_id` (each NULL, FK cascade), CHECK exactly one matches `source_kind`, `content`, `content_tsv` GENERATED, `embedded_model`, `embedding_due` boolean, `created_at`; `embedding` added by `setup` (below) | `projects` |
+| `runbooks` | `id`, `org_id`, `project_id` NOT NULL cascade, `service_name` NULL, `title`, `content`, `created_by` SET NULL, `created_at`, `updated_at`; `UNIQUE (org_id, project_id, id)` so a chunk's key carries its project (as built, migration 0076) | `projects` |
+| `knowledge_chunks` | `id`, `org_id`, `project_id` NOT NULL cascade, `source_kind` CHECK, `runbook_id`, `finding_id`, `note_id` (each NULL, FK cascade; the first two keyed with the project, `note_id` from Step 7), CHECK exactly one matches `source_kind`, `position` (a runbook chunk's order), `content`, `content_tsv` GENERATED, `fact_service`, `fact_signal`, `fact_day` (a fact line's key, unique per service, signal and day, nulls not distinct), `embedded_model`, `embedding_due` boolean, `created_at`; `embedding` added by `setup` (below) | `projects` |
 
 **Indexes.**
 

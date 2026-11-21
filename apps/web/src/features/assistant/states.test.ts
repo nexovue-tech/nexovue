@@ -5,11 +5,15 @@ import {
   agedOut,
   LOST_CONTACT,
   NO_ROWS,
+  noKnowledgeRecord,
   outcomeSentence,
   QUOTE_GONE,
   QUOTE_READ_FAILED,
   READ_REFUSED_FOR_NOW,
+  RUNBOOK_QUOTE_CUT,
+  runbookQuoteLabel,
   STANDING_WORDS,
+  teamLabel,
 } from "./states";
 
 /**
@@ -60,7 +64,30 @@ describe("each error case's sentence, word for word", () => {
     ["Quote's log aged out", QUOTE_GONE.search_logs, "This log line is no longer available."],
     ["Quote's read failed", QUOTE_READ_FAILED, "Could not read this now"],
     ["Panel poll failing", LOST_CONTACT, "Lost contact; this question may still be running"],
+    [
+      "Knowledge has no match",
+      noKnowledgeRecord(30),
+      "No record of this in what is kept. Cases are kept for 30 days after they end",
+    ],
   ] as const)("%s", (_, said, spec) => {
     expect(said?.toLowerCase()).toContain(spec.toLowerCase());
+  });
+});
+
+describe("the design's words for the team's own text (F4 *Words*)", () => {
+  it.each([
+    ["Notes label", teamLabel("12 days old"), "From your team's notes, 12 days old"],
+    [
+      "Runbook quote",
+      runbookQuoteLabel("12 days old"),
+      "From a runbook your team wrote, 12 days old",
+    ],
+    [
+      "Runbook quote cut",
+      RUNBOOK_QUOTE_CUT,
+      "Cut at 500 characters. Open the runbook for all of it",
+    ],
+  ] as const)("%s", (_, said, design) => {
+    expect(said).toBe(design);
   });
 });

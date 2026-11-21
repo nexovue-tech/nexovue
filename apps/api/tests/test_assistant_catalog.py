@@ -11,7 +11,9 @@ AC14, AC22).
 - each windowed tool's retention clock is the clock of the table its route reads;
 - `TICKET_HANDLERS` is the catalog's handlers, and every tool links to a console route that
   carries what the design's destination table says;
-- `findings.title`, deploy `metadata` and check `config` are never sent (U1, AC12).
+- `findings.title`, deploy `metadata` and check `config` are never sent (U1, AC12);
+- `search_knowledge` is the one named exception to the read surface: its route takes a
+  ticket and nothing else, and only it sends the team's own text (AC14, FR37; Step 5).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from fastapi.routing import APIRoute
 from nexovue_platform.assistant_tools import (
     CATALOG,
     FENCED_KINDS,
+    KNOWLEDGE_TOOL,
     PATH_SHAPES,
     RANGE_NOT_APPLIED,
     TICKET_HANDLERS,
@@ -156,12 +159,28 @@ def _slots(path: str) -> str:
     return re.sub(r"\{[^}]+\}", "{}", path)
 
 
-@pytest.mark.parametrize("tool", CATALOG, ids=lambda tool: tool.name)
+ON_THE_SURFACE: Final = tuple(tool for tool in CATALOG if tool.name != KNOWLEDGE_TOOL)
+
+
+@pytest.mark.parametrize("tool", ON_THE_SURFACE, ids=lambda tool: tool.name)
 def test_every_tool_is_a_get_on_the_read_surface(tool: ChatTool) -> None:
     assert tool.handler in THE_SURFACE
     route = ROUTES[tool.handler]
     assert route.methods == {"GET"}
     assert _slots(THE_SURFACE[tool.handler]) == f"GET {_slots(tool.route.removeprefix('/api/v1'))}"
+
+
+def test_knowledge_search_is_the_one_tool_off_the_surface_and_takes_only_a_ticket() -> None:
+    """AC14: the named exception. Its route is a GET a ticket reaches and a token cannot:
+    it asks for `AssistantTicketReader`, never `CurrentReader` (FR37, D31)."""
+    assert [tool.name for tool in CATALOG if tool.handler not in THE_SURFACE] == [KNOWLEDGE_TOOL]
+    tool = next(tool for tool in CATALOG if tool.name == KNOWLEDGE_TOOL)
+    route = ROUTES[tool.handler]
+    assert route.methods == {"GET"}
+    parameters = inspect.signature(route.endpoint).parameters.values()
+    readers = [str(parameter.annotation) for parameter in parameters]
+    assert "AssistantTicketReader" in readers
+    assert not any("CurrentReader" in annotation for annotation in readers)
 
 
 @pytest.mark.parametrize("tool", CATALOG, ids=lambda tool: tool.name)
@@ -274,8 +293,15 @@ NEVER_SENT: Final = frozenset({"title", "metadata", "config", "detail", "notific
 
 @pytest.mark.parametrize("tool", CATALOG, ids=lambda tool: tool.name)
 def test_no_tool_sends_a_title_metadata_or_a_check_s_config(tool: ChatTool) -> None:
-    assert not {part for name in tool.fields for part in name.split(".")} & NEVER_SENT
-    assert all(field.kind != "team_text" for field in tool.fields.values())
+    sent = {part for name in tool.fields for part in name.split(".")}
+    if tool.name == KNOWLEDGE_TOOL:
+        # A runbook's own title, which its team wrote: never a finding's (U1).
+        sent -= {"title"}
+        assert "findings" not in tool.route
+    assert not sent & NEVER_SENT
+    if tool.name != KNOWLEDGE_TOOL:
+        # Only knowledge sends the team's own words (FR28).
+        assert all(field.kind != "team_text" for field in tool.fields.values())
 
 
 # Rollups, counted before sampling: the tools counts come from (BR11, AC23).
@@ -341,6 +367,7 @@ DESTINATIONS: Final[dict[str, tuple[str, bool, str | None]]] = {
     "get_metric_histogram": ("/metrics", False, RANGE_NOT_APPLIED),
     "list_hosts": ("/infrastructure", True, None),
     "get_host_trend": ("/infrastructure", True, None),
+    "search_knowledge": ("/settings/runbooks", False, "The search phrase is not carried."),
 }
 
 
@@ -427,3 +454,16 @@ def test_a_kept_since_note_reads_as_a_date_and_never_as_text() -> None:
     assert (str(view.kept_since), view.failure) == ("2026-11-05", None)
     odd = _step_view(_step("search_logs", {}, failure="kept_since:<b>"), project_id=uuid.uuid4())
     assert (odd.kept_since, odd.failure) == (None, None)
+
+
+def test_an_empty_knowledge_step_carries_how_long_cases_are_kept() -> None:
+    """FR42: the panel says "Cases are kept for {N} days after they end" on an empty search;
+    only a knowledge step carries the number."""
+    project = uuid.uuid4()
+    empty = _step("search_knowledge", {"q": "connections"}, row_count=0)
+    view = _step_view(empty, project_id=project, cases_kept_days=30)
+    assert view.cases_kept_days == 30
+    assert view.link is not None and view.link.path == "/settings/runbooks"
+    assert "q" not in view.link.query
+    other = _step_view(_step("list_findings", {}), project_id=project, cases_kept_days=30)
+    assert other.cases_kept_days is None

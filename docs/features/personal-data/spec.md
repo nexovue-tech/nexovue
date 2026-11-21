@@ -51,9 +51,11 @@ platform operator, who has no customer data of their own here.
   received; the case notes they wrote, in their own words (F22 AC25), bounded on their own with a
   `notes_truncated` flag; the questions they asked chat (F4 AC34), each with its outcome, its
   checked answer as stored, its steps' arguments as stored (free-text search phrases included) and
-  their "this was wrong" mark, bounded on their own with a `chat_questions_truncated` flag. Runbooks
-  they wrote join this list when runbooks exist (F4 plan Step 5). Never another person's data, never
-  the organization's telemetry.
+  their "this was wrong" mark, bounded on their own with a `chat_questions_truncated` flag; and the
+  runbooks they wrote, in their own words, with their project, bounded on their own with a
+  `runbooks_truncated` flag (F4 AC34, Step 5). A runbook stays the organization's after its author
+  leaves, its author shown as *Former member*. Never another person's data, never the
+  organization's telemetry.
 - **Deleting an account is the member removal that already exists** (sessions ended, email freed,
   set-password state cleared), plus: their **name becomes "Former member"**, and **their email is
   replaced by their user id in every audit entry**. The audit entries stay: they are the

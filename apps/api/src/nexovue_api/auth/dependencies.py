@@ -242,6 +242,8 @@ class TicketScope:
     message_id: uuid.UUID
 
 
+ONLY_A_TICKET_READS_HERE: Final = "Only chat reads this, on a question's ticket."
+
 # F4: the ticket check is registered on the app (`main.py`), not imported here, so the
 # dependency every route reads through, reliability targets' among them, reaches no AI
 # code (`test_detection_has_no_ai.py`), as `_usage_for` reads the token counter.
@@ -274,17 +276,33 @@ async def get_current_reader(
             usage.count(token.id, now)
         return _reader_for_token(token)
     if presented is not None and looks_like_assistant_ticket(presented):
-        # Rechecked on every read: the person, the scope, and whether chat is still on.
-        check = _ticket_check_for(connection)
-        if check is None:
-            raise UnauthenticatedError(TICKETS_NOT_ACCEPTED)
-        ticket = await check(db, presented, connection)
-        return Reader(
-            org_id=ticket.org_id, project_scope=ticket.project_id, message_id=ticket.message_id
-        )
+        return await _reader_for_ticket(connection, db, presented)
     session = await get_current_session(connection, sessions)
     identity = await get_current_identity(connection, session, db)
     return Reader(org_id=identity.org_id, identity=identity)
+
+
+async def _reader_for_ticket(
+    connection: HTTPConnection, db: AsyncSession, presented: str
+) -> Reader:
+    # Rechecked on every read: the person, the scope, and whether chat is still on.
+    check = _ticket_check_for(connection)
+    if check is None:
+        raise UnauthenticatedError(TICKETS_NOT_ACCEPTED)
+    ticket = await check(db, presented, connection)
+    return Reader(
+        org_id=ticket.org_id, project_scope=ticket.project_id, message_id=ticket.message_id
+    )
+
+
+async def get_ticket_reader(connection: HTTPConnection, db: DbSession) -> Reader:
+    """F4: the caller of a route only chat's loop may read, knowledge search alone (design,
+    section 6; D31). A person or an API token is refused: knowledge is not offered to tokens
+    (FR37), and a person reads runbooks on their own screen."""
+    presented = _presented_bearer(connection)
+    if presented is None or not looks_like_assistant_ticket(presented):
+        raise PermissionDeniedError(ONLY_A_TICKET_READS_HERE)
+    return await _reader_for_ticket(connection, db, presented)
 
 
 def _reader_for_token(token: ApiToken) -> Reader:

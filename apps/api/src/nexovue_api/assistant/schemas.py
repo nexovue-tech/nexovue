@@ -93,6 +93,9 @@ class StepView(BaseModel):
     # The first day still kept, on an aged-out step or one read narrowed to what is kept:
     # "The data before {date} is no longer kept" (spec, *Error cases*).
     kept_since: date | None = None
+    # How long a resolved case is kept after it ends, on a knowledge step, for FR42's empty
+    # answer: "No record of this in what is kept. Cases are kept for {N} days after they end".
+    cases_kept_days: int | None = None
     link: StepLink | None
 
 

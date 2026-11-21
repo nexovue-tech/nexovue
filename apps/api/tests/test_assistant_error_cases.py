@@ -143,8 +143,11 @@ PRODUCED_AND_SHOWN: Final[dict[str, tuple[Reference | str, Reference | str]]] = 
         (ANSWER, "says a quote's record is gone, and a failed read can be retried"),
     ),
     "Knowledge has no match": (
-        "Step 5 (T5.4): knowledge search does not exist before Step 5",
-        "Step 5 (T5.4)",
+        (
+            f"{API}/test_assistant_knowledge_live.py",
+            "test_keyword_search_finds_a_runbook_and_says_it_searched_by_keyword",
+        ),
+        (STEPS, "says an empty knowledge search is no record of what is kept, with its days"),
     ),
     "Removed mid-question": (
         (

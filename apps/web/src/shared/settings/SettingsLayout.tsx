@@ -5,7 +5,7 @@ import { useIsHosted } from "@/shared/deployment";
 import { useSession } from "@/shared/identity";
 import { useNothingLive } from "@/shared/refresh";
 
-import { SETTINGS_GROUPS, type SettingsPath } from "./settings-nav";
+import { offeredSettings, SETTINGS_GROUPS, type SettingsPath } from "./settings-nav";
 
 /**
  * One rail, one pane, for every preference screen.
@@ -95,18 +95,7 @@ function SettingsNav() {
   const hosted = useIsHosted();
 
   const groups = useMemo(
-    () =>
-      SETTINGS_GROUPS.map((group) => ({
-        ...group,
-        items: group.items.filter(
-          (item) =>
-            (item.requires === undefined || permissions?.includes(item.requires) === true) &&
-            (item.hostedOnly === undefined || hosted) &&
-            (needle === "" ||
-              item.title.toLowerCase().includes(needle) ||
-              item.keywords.some((word) => word.includes(needle))),
-        ),
-      })).filter((group) => group.items.length > 0),
+    () => offeredSettings(SETTINGS_GROUPS, { permissions, hosted, needle }),
     [needle, permissions, hosted],
   );
 

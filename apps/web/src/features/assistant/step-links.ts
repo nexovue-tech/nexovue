@@ -1,7 +1,14 @@
 import { formatZonedTime } from "@/shared/format/zoned";
 
 import type { StepLink, StepView } from "./api";
-import { agedOut, latestNoTimeFilter, NO_ROWS, READ_REFUSED_FOR_NOW } from "./states";
+import {
+  agedOut,
+  KNOWLEDGE_TOOL,
+  latestNoTimeFilter,
+  NO_ROWS,
+  noKnowledgeRecord,
+  READ_REFUSED_FOR_NOW,
+} from "./states";
 
 /**
  * Where a step may lead: the screens the catalog's destination table names (design, *Where
@@ -25,6 +32,7 @@ export const STEP_TARGETS = [
   "/traces/$traceId",
   "/metrics",
   "/infrastructure",
+  "/settings/runbooks",
 ] as const;
 export type StepTarget = (typeof STEP_TARGETS)[number];
 
@@ -65,6 +73,9 @@ export function stepOutcome(step: StepView): string | null {
   }
   if (step.state === "read") {
     const rows = step.row_count ?? 0;
+    if (rows === 0 && step.tool === KNOWLEDGE_TOOL) {
+      return noKnowledgeRecord(step.cases_kept_days ?? null);
+    }
     if (rows === 0) return `${NO_ROWS}.`;
     const read = step.from_time ? `${rows} rows read` : latestNoTimeFilter(rows);
     const cut = step.was_cut ? `. Only the first ${rows} rows were read` : "";

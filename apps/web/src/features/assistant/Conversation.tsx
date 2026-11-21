@@ -84,7 +84,13 @@ export function MessageBlock({
       ) : (
         <>
           {message.answer && message.answer.sentences.length > 0 ? (
-            <AnswerSentences answer={message.answer} messageId={message.id} onCite={cite} />
+            <AnswerSentences
+              answer={message.answer}
+              messageId={message.id}
+              onCite={cite}
+              now={now}
+              onLeave={onLeave}
+            />
           ) : null}
           {outcome ? <p className="max-w-prose text-ink text-sm">{outcome}</p> : null}
           {offersCheckItYourself(message.state) ? (

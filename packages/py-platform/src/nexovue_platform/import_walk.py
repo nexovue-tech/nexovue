@@ -46,6 +46,8 @@ REPOSITORY_AI_MODULES: Final = frozenset(
         "nexovue_api.llm_observability",
         "nexovue_platform.assistant_tools",
         "nexovue_platform.assistant_masks",
+        # F4 T5.5 (AC82): chat's knowledge sweep. Detection imports nothing of it.
+        "nexovue_scheduler.knowledge",
     }
 )
 AI_PACKAGES: Final = frozenset(

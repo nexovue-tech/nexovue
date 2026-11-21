@@ -34,6 +34,7 @@ from nexovue_api.profile.schemas import (
     ExportedOrganization,
     ExportedProfile,
     ExportedQuestion,
+    ExportedRunbook,
     ExportedSession,
     ExportedSloChange,
     ExportedSloExclusion,
@@ -50,6 +51,8 @@ MAX_NOTES_EXPORTED: Final = 10_000
 MAX_SLO_CHANGES_EXPORTED: Final = 10_000
 # And for questions asked chat (F4 AC34), each at most 2,000 characters.
 MAX_CHAT_QUESTIONS_EXPORTED: Final = 10_000
+# And for runbooks they wrote (F4 AC34), each at most 32 KiB.
+MAX_RUNBOOKS_EXPORTED: Final = 10_000
 
 SOLE_OWNER_REFUSAL: Final = (
     "You are this organization's only owner. "
@@ -82,6 +85,9 @@ async def export(
         db, org_id=organization.id, user_id=user.id, limit=MAX_CHAT_QUESTIONS_EXPORTED + 1
     )
     kept_questions = questions[:MAX_CHAT_QUESTIONS_EXPORTED]
+    runbooks = await queries.runbooks_written(
+        db, org_id=organization.id, user_id=user.id, limit=MAX_RUNBOOKS_EXPORTED + 1
+    )
     steps_of: dict[uuid.UUID, list[ExportedStep]] = defaultdict(list)
     for step in await queries.chat_steps(
         db, org_id=organization.id, message_ids=[question.id for question in kept_questions]
@@ -193,6 +199,19 @@ async def export(
             for question in kept_questions
         ],
         chat_questions_truncated=len(questions) > MAX_CHAT_QUESTIONS_EXPORTED,
+        runbooks_written=[
+            ExportedRunbook(
+                id=runbook.id,
+                project_id=runbook.project_id,
+                title=runbook.title,
+                service_name=runbook.service_name,
+                content=runbook.content,
+                created_at=runbook.created_at,
+                updated_at=runbook.updated_at,
+            )
+            for runbook in runbooks[:MAX_RUNBOOKS_EXPORTED]
+        ],
+        runbooks_truncated=len(runbooks) > MAX_RUNBOOKS_EXPORTED,
     )
 
 

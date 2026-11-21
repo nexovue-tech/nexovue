@@ -72,11 +72,20 @@ from nexovue_platform.evidence import (
     WORDING_REASONS,
     WORDING_STATES,
 )
+from nexovue_platform.knowledge import (
+    CHUNK_SPLIT_CHARACTERS,
+    MAX_RUNBOOK_BYTES,
+    MAX_RUNBOOK_CHUNKS,
+    MAX_RUNBOOK_SERVICE_CHARACTERS,
+    MAX_RUNBOOK_TITLE_CHARACTERS,
+    SOURCE_KINDS,
+)
 from nexovue_platform.releases import DEPLOY_STATES, OTHER_VERSION, START_BASES
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     Date,
     Enum,
     Float,
@@ -92,7 +101,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nexovue_api.data.postgres.base import (
@@ -3989,3 +3998,168 @@ class AssistantReadLog(Base):
     provider_label: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (Index("ix_assistant_read_log_org_at", "org_id", text("at DESC")),)
+
+
+# ---------------------------------------------------------------------------
+# F4's knowledge (plan Step 5, migration 0076): runbooks, and the chunks chat searches.
+
+
+class Runbook(Base):
+    """A team's own instructions for one project (FR32). Goes with its project; its author
+    is nulled when the person goes."""
+
+    __tablename__ = "runbooks"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    service_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_runbooks_project",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "created_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (created_by)",
+            name="fk_runbooks_created_by",
+        ),
+        UniqueConstraint("org_id", "project_id", "id", name="uq_runbooks_org_id_project_id_id"),
+        CheckConstraint(
+            f"char_length(title) BETWEEN 1 AND {MAX_RUNBOOK_TITLE_CHARACTERS}",
+            name="title_length",
+        ),
+        CheckConstraint(
+            "service_name IS NULL OR char_length(service_name) "
+            f"BETWEEN 1 AND {MAX_RUNBOOK_SERVICE_CHARACTERS}",
+            name="service_name_length",
+        ),
+        CheckConstraint(
+            f"octet_length(content) BETWEEN 1 AND {MAX_RUNBOOK_BYTES}", name="content_size"
+        ),
+        Index(
+            "ix_runbooks_org_id_project_id_updated_at",
+            "org_id",
+            "project_id",
+            text("updated_at DESC"),
+        ),
+        Index("ix_runbooks_org_id_created_by", "org_id", "created_by"),
+    )
+
+
+class KnowledgeChunk(Base):
+    """One piece of what chat searches: a runbook's, or a fact line nexovue composed from a
+    recovered finding. One cascading key per source, so a chunk never outlives it (BR16)."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    source_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    runbook_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    finding_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_tsv: Mapped[str] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', content)", persisted=True), nullable=False
+    )
+    fact_service: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fact_signal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fact_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    embedded_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_due: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "project_id"],
+            ["projects.org_id", "projects.id"],
+            ondelete="CASCADE",
+            name="fk_knowledge_chunks_project",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "project_id", "runbook_id"],
+            ["runbooks.org_id", "runbooks.project_id", "runbooks.id"],
+            ondelete="CASCADE",
+            name="fk_knowledge_chunks_runbook",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "project_id", "finding_id"],
+            ["findings.org_id", "findings.project_id", "findings.id"],
+            ondelete="CASCADE",
+            name="fk_knowledge_chunks_finding",
+        ),
+        CheckConstraint(
+            f"source_kind IN ({', '.join(repr(kind) for kind in SOURCE_KINDS)})",
+            name="source_kind_is_known",
+        ),
+        CheckConstraint(
+            "(source_kind = 'runbook' AND runbook_id IS NOT NULL AND finding_id IS NULL"
+            " AND fact_signal IS NULL AND fact_day IS NULL AND fact_service IS NULL)"
+            " OR (source_kind = 'fact' AND finding_id IS NOT NULL AND runbook_id IS NULL"
+            " AND fact_signal IS NOT NULL AND fact_day IS NOT NULL)",
+            name="one_source",
+        ),
+        CheckConstraint(
+            f"char_length(content) BETWEEN 1 AND {CHUNK_SPLIT_CHARACTERS}", name="content_length"
+        ),
+        CheckConstraint(
+            f"position BETWEEN 0 AND {MAX_RUNBOOK_CHUNKS - 1}", name="position_in_range"
+        ),
+        Index("ix_knowledge_chunks_content_tsv", "content_tsv", postgresql_using="gin"),
+        Index(
+            "ix_knowledge_chunks_org_id_project_id_embedded_model",
+            "org_id",
+            "project_id",
+            "embedded_model",
+        ),
+        Index(
+            "ix_knowledge_chunks_embedding_due",
+            "org_id",
+            "project_id",
+            postgresql_where=text("embedding_due"),
+        ),
+        Index(
+            "ix_knowledge_chunks_runbook",
+            "org_id",
+            "project_id",
+            "runbook_id",
+            "position",
+            postgresql_where=text("runbook_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_knowledge_chunks_finding",
+            "org_id",
+            "project_id",
+            "finding_id",
+            unique=True,
+            postgresql_where=text("finding_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_knowledge_chunks_fact_per_day",
+            "org_id",
+            "project_id",
+            "fact_service",
+            "fact_signal",
+            "fact_day",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("source_kind = 'fact'"),
+        ),
+    )

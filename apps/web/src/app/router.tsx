@@ -37,7 +37,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
 import { keepUrlProject, keepUrlWindow } from "@/shared/url-window";
 
-import { HostedOnly } from "./HostedOnly";
+import { HostedOnly, SelfHostedOnly } from "./HostedOnly";
 import { AppShell } from "./layout/AppShell";
 
 // Each screen is its own chunk, fetched when its route is first opened (group 9,
@@ -63,6 +63,15 @@ const SampleExplanationScreen = lazyRouteComponent(
 const AISettingsScreen = lazyRouteComponent(
   () => import("@/features/aisettings/AISettingsScreen"),
   "AISettingsScreen",
+);
+// F4 T5.3: a project's runbooks, which chat can quote.
+const RunbooksScreen = lazyRouteComponent(
+  () => import("@/features/runbooks/RunbooksScreen"),
+  "RunbooksScreen",
+);
+const RunbookScreen = lazyRouteComponent(
+  () => import("@/features/runbooks/RunbookScreen"),
+  "RunbookScreen",
 );
 const ExplanationSettingsScreen = lazyRouteComponent(
   () => import("@/features/explanationsettings/ExplanationSettingsScreen"),
@@ -715,6 +724,34 @@ const settingsAIRoute = createRoute({
   component: AISettingsScreen,
 });
 
+// F4 T5.3 (FR32, AC92): runbooks, only where AI may be offered; a chat step links here with
+// the question's project, so the list opens on it.
+const settingsRunbooksRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/runbooks",
+  component: () => (
+    <SelfHostedOnly fallback={<NotFound />}>
+      <RunbooksScreen />
+    </SelfHostedOnly>
+  ),
+  validateSearch: (search: Record<string, unknown>) => keepUrlProject(search),
+});
+
+const settingsRunbookRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/runbooks/$runbookId",
+  component: SettingsRunbook,
+});
+
+function SettingsRunbook() {
+  const { runbookId } = settingsRunbookRoute.useParams();
+  return (
+    <SelfHostedOnly fallback={<NotFound />}>
+      <RunbookScreen runbookId={runbookId} />
+    </SelfHostedOnly>
+  );
+}
+
 // F3 FR54: rating and rule counts, and a rule stopped from naming causes.
 const settingsExplanationsRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -964,6 +1001,8 @@ const routeTree = rootRoute.addChildren([
     settingsSupportRoute,
     settingsAIRoute,
     settingsExplanationsRoute,
+    settingsRunbooksRoute,
+    settingsRunbookRoute,
     settingsChannelsRoute,
     settingsChannelRoute,
     settingsConnectionsRoute,

@@ -101,6 +101,8 @@ describe("the sidebar", () => {
       "/dashboards/new",
       "/dashboards/$dashboardId/edit",
       "/settings/channels/$channelId",
+      // F4: one runbook, reached from the runbooks list and from a chat answer's quote.
+      "/settings/runbooks/$runbookId",
       // F22: reached from the Connections screen and from GitHub's own redirects.
       "/settings/connections/github/start",
       "/settings/connections/github/return",

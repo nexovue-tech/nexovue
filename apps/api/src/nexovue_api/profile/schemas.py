@@ -264,6 +264,19 @@ class ExportedNote(BaseModel):
     created_at: datetime
 
 
+class ExportedRunbook(BaseModel):
+    """A runbook the person wrote (F4 AC34), in their own words, and its project. It stays
+    the organization's operating instructions after they leave."""
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    title: str
+    service_name: str | None
+    content: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class ExportedStep(BaseModel):
     """A tool read chat made for the person's question: the tool, and its arguments as
     stored, free-text phrases included (F4 AC34). Never what it read."""
@@ -353,7 +366,9 @@ class PersonalDataExport(BaseModel):
     slo_target_changes_truncated: bool
     slo_exclusions: list[ExportedSloExclusion]
     slo_exclusions_truncated: bool
-    # F4: the questions they asked chat, newest first, bounded the same way. Runbooks they
-    # wrote join when runbooks exist (F4 plan Step 5).
+    # F4: the questions they asked chat, and the runbooks they wrote, newest first, each
+    # bounded the same way.
     chat_questions: list[ExportedQuestion]
     chat_questions_truncated: bool
+    runbooks_written: list[ExportedRunbook]
+    runbooks_truncated: bool

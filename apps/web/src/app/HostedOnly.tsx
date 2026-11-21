@@ -14,3 +14,13 @@ export function HostedOnly({ children, fallback }: PropsWithChildren<{ fallback:
   if (info.isPending) return null;
   return info.data?.deployment === "hosted" ? children : fallback;
 }
+
+/**
+ * A screen only a customer's own install has, where AI may be offered (F4 `ai_available`):
+ * runbooks. On the hosted service the address answers as any address with no screen does.
+ */
+export function SelfHostedOnly({ children, fallback }: PropsWithChildren<{ fallback: ReactNode }>) {
+  const info = useSystemInfo();
+  if (info.isPending) return null;
+  return info.data?.deployment === "hosted" ? fallback : children;
+}

@@ -315,6 +315,11 @@ POLICY_OF: Final = {
     "nexovue_api/assistant/router.py:unmark_wrong": "MayAskAssistant",
     "nexovue_api/assistant/router.py:save_settings": "MayManageAI",
     "nexovue_api/assistant/router.py:agree": "MayConsentAIDisclosure",
+    # F4 T5.2 (D48): owner, admin and member write runbooks; a viewer reads them.
+    "nexovue_api/runbooks/router.py:create_runbook": "MayManageKnowledge",
+    "nexovue_api/runbooks/router.py:upload_runbooks": "MayManageKnowledge",
+    "nexovue_api/runbooks/router.py:update_runbook": "MayManageKnowledge",
+    "nexovue_api/runbooks/router.py:delete_runbook": "MayManageKnowledge",
 }
 
 # Reads that return a secret, and so are an action even though they change
