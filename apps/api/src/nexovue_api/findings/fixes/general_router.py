@@ -69,14 +69,6 @@ async def _refuse(
     )
 
 
-@router.post("/{finding_id}/fixes/{fix_id}/check", summary="Re-read the files of a suggestion")
-async def check_fix(
-    identity: MayRequestFix, db: DbSession, finding_id: uuid.UUID, fix_id: uuid.UUID
-) -> None:
-    """Rungs 3 and 4 (Step 4). A general row refuses: `general_has_no_code` (AC73)."""
-    await _refuse(identity, db, finding_id, fix_id)
-
-
 @router.post("/{finding_id}/fixes/{fix_id}/patch", summary="Download a suggestion as a patch")
 async def patch_fix(
     identity: MayRequestFix, db: DbSession, finding_id: uuid.UUID, fix_id: uuid.UUID

@@ -5,7 +5,8 @@ spec AC1, AC2 and AC73's last half for `insight.suggest_general_fix`).
 (`findings/fix_general.py`); beat schedules it nowhere, and no other module names the task.
 **AC1, against real Postgres:** with a finding fully eligible, reading the page's two reads
 over and over writes no suggestion and adds no job: only `POST` does. Step 4 extends both to
-rung 3's tasks (T4.9).
+rung 3's proposal and check run (T4.9): only Send builds `propose_fix`, only Check my access
+builds the check run, and reading rung 3's page, a written suggestion included, adds neither.
 
 The live half's rows are inside a rolled-back transaction; it fails rather than skips when
 Postgres is down.
@@ -19,9 +20,15 @@ from pathlib import Path
 from typing import Final
 
 import general_fix_rows as rows
+import pytest
+import source_fix_rows as source
 from general_fix_rows import POSTGRES_DSN
 from live import require_stack
-from nexovue_platform.fixes.records import SUGGEST_GENERAL_FIX_TASK
+from nexovue_platform.fixes.records import (
+    CHECK_FIX_TASK,
+    PROPOSE_FIX_TASK,
+    SUGGEST_GENERAL_FIX_TASK,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,3 +108,50 @@ async def test_ac1_reading_the_page_never_asks_for_a_suggestion(
         .where(Job.org_id == acme.organization.id, Job.task == SUGGEST_GENERAL_FIX_TASK)
     )
     assert (fixes, jobs) == (0, 0)
+
+
+# Step 4 (T4.9): rung 3's AI job and check run, built only by a person's click.
+STEP_4_JOBS: Final = (
+    (
+        "propose_fix_request",
+        "PROPOSE_FIX_TASK",
+        {"apps/api/src/nexovue_api/findings/fix_service.py"},
+        {"apps/scheduler/src/nexovue_scheduler/insight/propose_fix.py"},
+    ),
+    (
+        "check_fix_request",
+        "CHECK_FIX_TASK",
+        {"apps/api/src/nexovue_api/findings/fix_checks.py"},
+        {"apps/scheduler/src/nexovue_scheduler/connections/fix_check.py"},
+    ),
+)
+RECORDS: Final = "packages/py-platform/src/nexovue_platform/fixes/records.py"
+
+
+@pytest.mark.parametrize(("builder", "task", "built_in", "named_in"), STEP_4_JOBS)
+def test_ac2_only_a_click_builds_rung_3_s_ai_job_and_its_check_run(
+    builder: str, task: str, built_in: set[str], named_in: set[str]
+) -> None:
+    assert _modules_using(builder) - {RECORDS} == built_in
+    assert _modules_using(task) == {RECORDS, *named_in}
+
+
+async def test_ac1_reading_rung_3_s_page_never_sends_or_checks(
+    db: AsyncSession, now: datetime
+) -> None:
+    tenant, finding, _ = await source.ready(db, now)
+
+    async with source.client(db, rows.person(tenant)) as http:
+        for _ in range(READS):
+            read = await http.get(source.path(finding, "/fixes/source"))
+            assert read.status_code == 200 and read.json()["offer"] is not None
+
+    jobs = await db.scalar(
+        select(func.count())
+        .select_from(Job)
+        .where(
+            Job.org_id == tenant.organization.id,
+            Job.task.in_((PROPOSE_FIX_TASK, CHECK_FIX_TASK)),
+        )
+    )
+    assert jobs == 0

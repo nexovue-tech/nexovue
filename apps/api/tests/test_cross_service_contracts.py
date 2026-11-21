@@ -566,3 +566,57 @@ def test_f5s_rung_3_jobs_are_exactly_what_the_connections_worker_runs() -> None:
     assert "jsonb_build_object('fix_id', for_fix::text, 'org_id', for_org::text)" in migration
     beat_source = Path(beat.__file__).read_text(encoding="utf-8")
     assert "(SWEEP_FIXES_TASK, FIX_SWEEP_SECONDS, CONNECTIONS_QUEUE)" in beat_source
+
+
+def test_f5s_step_4_jobs_are_exactly_what_their_workers_run() -> None:
+    """F5 T4.4, T4.8, T4.12: the API adds `propose_fix` by name with ids only, on
+    `insight-fix`, which only the insight set registers, and the check run on
+    `connections-interactive`, which only the connections set registers; the requester's
+    emails run on `light` from `TASK_MODULES`, and `fixes/notify.py` imports nothing from
+    `connections` (design, *Where tasks live*). A task in the wrong set is claimed and
+    fails, every interval, for ever."""
+    import ast
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE
+    from nexovue_platform.fixes import records
+
+    from nexovue_scheduler.fixes import notify
+    from nexovue_scheduler.jobs.registry import TASK_MODULES, TASK_SETS, registered
+
+    for request, task_set, queue in (
+        (
+            records.propose_fix_request(fix_id="f", org_id="o", sent_by="u", call_seconds=60),
+            "insight",
+            records.FIX_QUEUE,
+        ),
+        (
+            records.check_fix_request(check_id="c", org_id="o"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
+    ):
+        tasks = registered(TASK_SETS[task_set])
+        parameters = inspect.signature(tasks[request.task]).parameters.values()
+        accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+        assert request.queue == queue, request.task
+        assert required <= set(request.kwargs) <= accepted, request.task
+    assert "nexovue_scheduler.insight.propose_fix" not in TASK_MODULES
+    assert "nexovue_scheduler.connections.fix_check" not in TASK_MODULES
+    assert records.NOTIFY_REQUESTERS_TASK in registered(TASK_MODULES)
+    tree = ast.parse(Path(notify.__file__).read_text(encoding="utf-8"))
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert not {module for module in imported if ".connections" in module}

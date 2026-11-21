@@ -249,6 +249,14 @@ const GitHubReturnScreen = lazyRouteComponent(
   () => import("@/features/settings/GitHubReturnScreen"),
   "GitHubReturnScreen",
 );
+const FixAppReturnScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubReturnScreen"),
+  "FixAppReturnScreen",
+);
+const GitHubLinkReturnScreen = lazyRouteComponent(
+  () => import("@/features/settings/GitHubLinkReturnScreen"),
+  "GitHubLinkReturnScreen",
+);
 const GitHubInstalledScreen = lazyRouteComponent(
   () => import("@/features/settings/GitHubReturnScreen"),
   "GitHubInstalledScreen",
@@ -792,6 +800,21 @@ const settingsGitHubReturnRoute = createRoute({
   component: GitHubReturnScreen,
 });
 
+/* F5 (ADR-082): GitHub returns a person to `fix-app/return` after creating the Nexovue
+   suggestions App, and to `github-link/return` after linking their own account; each posts
+   GitHub's `code` and `state` to the API, never acting on a `GET`. */
+const settingsFixAppReturnRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/connections/fix-app/return",
+  component: FixAppReturnScreen,
+});
+
+const settingsGitHubLinkReturnRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/github-link/return",
+  component: GitHubLinkReturnScreen,
+});
+
 const settingsGitHubInstalledRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/connections/github/installed",
@@ -1008,6 +1031,8 @@ const routeTree = rootRoute.addChildren([
     settingsConnectionsRoute,
     settingsGitHubStartRoute,
     settingsGitHubReturnRoute,
+    settingsFixAppReturnRoute,
+    settingsGitHubLinkReturnRoute,
     settingsGitHubInstalledRoute,
     settingsProjectsRoute,
     settingsBillingRoute,

@@ -126,3 +126,67 @@ def test_t3_14_rung_3_s_jobs_run_only_on_scheduler_connections_queues() -> None:
     assert job.queue == CONNECTIONS_INTERACTIVE_QUEUE
     assert job.queue not in light and "connections" not in light
     assert job.queue not in {DETECTION_QUEUE, EVIDENCE_QUEUE, DELIVERIES_QUEUE, INSIGHT_QUEUE}
+
+
+async def test_t4_9_a_suggestion_proposing_then_written_leaves_rungs_1_and_2_as_they_were(
+    db: AsyncSession, now: datetime
+) -> None:
+    """AC33's AI arms for Step 4: a source row sent to an AI role that is stopped or whose
+    provider fails stays `proposing`, then a written one lands; and then the provider's
+    connection is switched off. The deploy line and the brief read exactly as before at
+    every point, since rung 1 and 2's read imports no AI code (T1.5)."""
+    import source_fix_rows as source
+    from sqlalchemy import text
+
+    tenant, finding, repository = await source.ready(db, now)
+    async with rows.client(db, rows.person(tenant)) as http:
+        before = (await http.get(f"{API_PREFIX}/findings/{finding.id}/fixes")).json()
+    await db.execute(
+        text(
+            "INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state, "
+            "connection_repository_id, folder, files_read) VALUES (:org, :project, :finding, "
+            "'source', 'proposing', :repository, 'services/shop', CAST(:listing AS jsonb))"
+        ),
+        {
+            "org": tenant.organization.id,
+            "project": tenant.project.id,
+            "finding": finding.id,
+            "repository": repository.id,
+            "listing": '{"files": []}',
+        },
+    )
+    seen = []
+    for change in (
+        None,
+        "UPDATE finding_fixes SET state = 'proposed', edits = '[]' WHERE org_id = :org",
+        "UPDATE ai_connections SET enabled = false, off_reason = 'person' WHERE org_id = :org",
+    ):
+        if change is not None:
+            await db.execute(text(change), {"org": tenant.organization.id})
+        async with rows.client(db, rows.person(tenant)) as http:
+            read = await http.get(f"{API_PREFIX}/findings/{finding.id}/fixes")
+        assert read.status_code == 200
+        seen.append(read.json())
+
+    assert seen == [before, before, before]
+
+
+def test_t4_9_rung_3_s_ai_job_and_check_run_take_their_own_capped_queues() -> None:
+    """NFR4, structurally, for Step 4: the proposal on `insight-fix`, capped at 2 of the AI
+    role's slots; the check run on the interactive queue; neither is a queue detection,
+    evidence or alerts consume."""
+    from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE
+    from nexovue_platform.fixes.records import check_fix_request, propose_fix_request
+
+    from nexovue_scheduler.__main__ import worker_queues
+    from nexovue_scheduler.jobs.worker import QUEUE_CAPS
+
+    proposal = propose_fix_request(fix_id="f", org_id="o", sent_by="u", call_seconds=60)
+    check = check_fix_request(check_id="c", org_id="o")
+    light = worker_queues("", region="local")
+
+    assert proposal.queue == FIX_QUEUE and QUEUE_CAPS[FIX_QUEUE] == FIX_CONCURRENCY
+    assert check.queue == CONNECTIONS_INTERACTIVE_QUEUE
+    for queue in (proposal.queue, check.queue):
+        assert queue not in light
+        assert queue not in {DETECTION_QUEUE, EVIDENCE_QUEUE, DELIVERIES_QUEUE, INSIGHT_QUEUE}

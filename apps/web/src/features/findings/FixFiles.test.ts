@@ -58,7 +58,14 @@ const GATHERED: SourceFix = {
   neutral: false,
   requested_at: "2026-11-21T11:55:00Z",
   state_changed_at: "2026-11-21T11:55:00Z",
+  proposal: null,
+  code_withheld: null,
+  check_action: null,
+  check: null,
+  file_count: null,
+  line_count: null,
   files: {
+    asked_round: null,
     files: [
       {
         ref: "file_1",
@@ -136,7 +143,7 @@ describe("rung 3's list of files (FR13a)", () => {
     const { api, section } = await page(source({ latest: GATHERED }), {
       "POST /findings/f-1/fixes/s-1/send": problem(
         409,
-        "Sending files to the AI provider comes in a later version of Nexovue. Nothing was sent.",
+        "The file list changed. Check the new list, then send again. Nothing was sent.",
       ),
     });
 
@@ -234,5 +241,162 @@ describe("Ask (FR11)", () => {
 
     expect(readable(section as Element)).toContain("A suggested fix is being prepared.");
     expect(section?.querySelector("button")).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------- Step 4: the suggestion */
+
+const PROPOSED: SourceFix = {
+  ...GATHERED,
+  state: "proposed",
+  heading: "Suggested fix",
+  files: null,
+  proposal: {
+    lead: "Suggested fix: 1 file, 3 lines, in services/shop. Not compiled and not run.",
+    starts_from: "Starts from the likely cause above.",
+    facts_note: "Line numbers and context are from the file as read at ccccccc.",
+    flags: [
+      {
+        kind: "new_import",
+        label: "new import",
+        path: "services/shop/app/h.py",
+        line: 5,
+        side: "new",
+      },
+    ],
+    files: [
+      {
+        ref: "file_1",
+        path: "services/shop/app/h.py",
+        github_url: null,
+        added: 1,
+        removed: 2,
+        open: true,
+        context_note: null,
+        hunks: [
+          {
+            header: "@@ -4,3 +4,2 @@",
+            lines: [
+              { marker: " ", text: "    amount = order.total", old: 4, new: 4, flags: [] },
+              { marker: "-", text: "    if amount < 0:", old: 5, new: null, flags: [] },
+              {
+                marker: "+",
+                text: "    import requests",
+                old: null,
+                new: 5,
+                flags: ["new import"],
+              },
+            ],
+          },
+        ],
+        explanations: [{ segments: [{ text: "checkout fails after a deploy." }] }],
+      },
+    ],
+    explanation_label: "The model's explanation, not checked by Nexovue",
+    not_checked: ["Not compiled and not run by Nexovue. A subtle bug passes every rule."],
+    files_read: GATHERED.files?.files ?? [],
+    left_out: [],
+    written_at: "2026-11-21T11:00:00Z",
+    commit: "ccccccc",
+    tokens: 18204,
+  },
+};
+
+describe("Step 4: a written suggestion (T4.6, AC10, AC37e)", () => {
+  it("shows the lead, the flags, the diff as text, the explanation set apart, and tokens", async () => {
+    const { section } = await page(source({ latest: PROPOSED }));
+
+    const text = readable(section as Element);
+    expect(text).toContain("Suggested fix: 1 file, 3 lines, in services/shop.");
+    expect(text).toContain("new import: services/shop/app/h.py, line 5");
+    expect(section?.querySelector("ins")?.textContent).toBe("    import requests");
+    expect(section?.querySelector("del")?.textContent).toBe("    if amount < 0:");
+    expect(text).toContain("The model's explanation, not checked by Nexovue");
+    expect(text).toContain("18,204 tokens used.");
+    expect(document.title).toBe("Suggestion ready");
+    const jump = section?.querySelector<HTMLAnchorElement>("a[href^='#fix-line-new-5']");
+    expect(jump).not.toBeNull();
+    expect(section?.querySelector(`[id='${jump?.getAttribute("href")?.slice(1)}']`)).not.toBeNull();
+  });
+
+  it("a viewer reads counts and the sentence, never code", async () => {
+    const viewer: SourceFix = {
+      ...PROPOSED,
+      proposal: null,
+      sentence: "Code is shown to people who can ask for a suggested fix.",
+      file_count: 1,
+      line_count: 3,
+    };
+    const { section } = await page(source({ latest: viewer }));
+
+    expect(readable(section as Element)).toContain("Code is shown to people who can ask");
+    expect(section?.querySelector("ins")).toBeNull();
+  });
+
+  it("under the owner's requirement, Check my access posts a read check (D20)", async () => {
+    const withheld: SourceFix = {
+      ...PROPOSED,
+      proposal: null,
+      code_withheld:
+        "The owner limits quoted code to people with access to this repository on GitHub.",
+      check_action: "Check my access",
+    };
+    const { api, section } = await page(source({ latest: withheld }), {
+      "POST /findings/f-1/fixes/s-1/check": json({
+        id: "c-1",
+        purpose: "read",
+        status: "running",
+        heading: "Checking your access",
+        sentence: null,
+        passed: false,
+        expires_at: null,
+      }),
+    });
+
+    expect(section?.querySelector("ins")).toBeNull();
+    const button = [...(section?.querySelectorAll("button") ?? [])].find(
+      (each) => each.textContent === "Check my access",
+    );
+    click(button);
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const posted = api.calls.find((call) => call.path === "/findings/f-1/fixes/s-1/check");
+    expect(posted?.body).toEqual({ for: "read" });
+  });
+
+  it("after the AI asks, the round shows each file, why, and its words labelled (AC88)", async () => {
+    const files = GATHERED.files;
+    if (files === null) throw new Error("fixture");
+    const asked: SourceFix = {
+      ...GATHERED,
+      files: {
+        ...files,
+        round: 2,
+        asked_round: {
+          lead: "The AI asks for 1 more files. Send them?",
+          round_sentence: "Round 2 of at most 3.",
+          model_words_label: "The model's words, not checked by Nexovue",
+          asked: [
+            {
+              path: "services/shop/app/tax.py",
+              because: "asked because of services/shop/app/handler.py, line 41",
+              model_words: "total calls the tax rules there.",
+            },
+          ],
+          refused: [{ path: "services/shop/.env", why: "never sent: secrets and keys" }],
+          unmatched: 1,
+        },
+      },
+    };
+    const { section } = await page(source({ latest: asked }));
+
+    const text = readable(section as Element);
+    expect(text).toContain("The AI asks for 1 more files. Send them?");
+    expect(text).toContain("asked because of services/shop/app/handler.py, line 41");
+    expect(text).toContain(
+      "The model's words, not checked by Nexovue: total calls the tax rules there.",
+    );
+    expect(text).toContain("services/shop/.env: never sent: secrets and keys");
+    expect(text).toContain("Round 2 of at most 3.");
   });
 });

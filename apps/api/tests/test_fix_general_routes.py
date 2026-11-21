@@ -38,9 +38,10 @@ from nexovue_api.settings import API_PREFIX, Settings
 
 NOW: Final = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
 GENERAL: Final = "/findings/{finding_id}/fixes/general"
+# `/check` is rung 3's own route since Step 4, and refuses a general row there (T4.12).
 ON_CODE: Final = tuple(
     f"/findings/{{finding_id}}/fixes/{{fix_id}}/{action}"
-    for action in ("check", "patch", "draft-pull-request", "run-ci")
+    for action in ("patch", "draft-pull-request", "run-ci")
 )
 ALL_PATHS: Final = {GENERAL, *ON_CODE}
 

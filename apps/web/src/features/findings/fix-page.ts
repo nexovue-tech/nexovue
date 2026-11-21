@@ -188,5 +188,71 @@ export function minutesLeft(lapsesAt: string, now: number): number {
 
 /** `document.title`'s word while a person waits on a background tab (design, *UX*). */
 export function sourceTitle(state: string | undefined): string | null {
-  return state === "gathered" ? "Files ready: confirm" : null;
+  if (state === "gathered") return "Files ready: confirm";
+  if (state === "proposed") return "Suggestion ready";
+  return null;
+}
+
+/* ------------------------------------------- rung 3: the written suggestion (Step 4) */
+
+export const DIFF_WORDS = {
+  flags: "What to look at first",
+  flagAtLine: (label: string, path: string, line: number) => `${label}: ${path}, line ${line}`,
+  flagInFile: (label: string, path: string) => `${label}: ${path}`,
+  counts: (added: number, removed: number) => `+${added} −${removed}`,
+  marker: (marker: " " | "-" | "+") =>
+    marker === "+" ? "added" : marker === "-" ? "removed" : "unchanged",
+  escaped: "A character that cannot be seen, shown as its code",
+  filesRead: "Files read",
+  leftOut: "Left out",
+  notChecked: "What was not checked",
+  written: (age: string, commit: string, tokens: number) =>
+    `Written ${age}, from ${commit || "an unknown commit"}. ${tokens.toLocaleString("en")} ${plural(tokens, "token")} used.`,
+  modelWords: "The model's words, not checked by Nexovue",
+  refusedAsked: (path: string, why: string) => `${path}: ${why}`,
+} as const;
+
+/** A diff line's anchor, so a flag can jump to it. Built from Nexovue's own values. */
+export function flagAnchor(path: string, side: "new" | "old" | "file", line: number): string {
+  return `fix-line-${side}-${line}-${path.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+}
+
+export interface TextPiece {
+  text: string;
+  escaped: boolean;
+}
+
+// Control characters (but tab), bidirectional controls, zero-width marks and the tag block:
+// shown as their codes in every line, so nothing in a suggestion hides or reorders text.
+const HIDDEN_RANGES: readonly (readonly [number, number])[] = [
+  [0x0000, 0x0008],
+  [0x000b, 0x001f],
+  [0x007f, 0x009f],
+  [0x200b, 0x200f],
+  [0x2028, 0x202e],
+  [0x2060, 0x2069],
+  [0xfeff, 0xfeff],
+  [0xe0000, 0xe007f],
+];
+
+function hidden(code: number): boolean {
+  return HIDDEN_RANGES.some(([low, high]) => low <= code && code <= high);
+}
+
+/** A line as text pieces, each hidden character replaced by its visible code (AC36). */
+export function visibleEscapes(line: string): TextPiece[] {
+  const pieces: TextPiece[] = [];
+  let plain = "";
+  for (const character of line) {
+    const code = character.codePointAt(0) ?? 0;
+    if (!hidden(code)) {
+      plain += character;
+      continue;
+    }
+    if (plain) pieces.push({ text: plain, escaped: false });
+    plain = "";
+    pieces.push({ text: `\\u{${code.toString(16).toUpperCase()}}`, escaped: true });
+  }
+  if (plain) pieces.push({ text: plain, escaped: false });
+  return pieces;
 }

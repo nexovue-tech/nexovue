@@ -4,7 +4,7 @@ AC3a, AC3b, AC8's ordering through the route, AC10, AC12d, AC15, AC16, AC16b, AC
 Each test builds its own tenant inside a transaction rolled back afterwards; ClickHouse is
 replaced by `source_fix_rows.Stacks`, which answers as the service-bound group read does.
 **No provider and no GitHub is reached:** Ask and Files add a pack job with ids only, and
-Send stops at Step 3's guard.
+Send adds the AI role's job with ids only (Step 4, T4.14).
 """
 
 from __future__ import annotations
@@ -19,17 +19,27 @@ import pytest
 import source_fix_rows as source
 from general_fix_rows import POSTGRES_DSN, reachable
 from live import require_stack
-from nexovue_platform.fixes.records import BUILD_SOURCE_PACK_TASK, SUGGEST_GENERAL_FIX_TASK
+from nexovue_platform.fixes.records import (
+    BUILD_SOURCE_PACK_TASK,
+    FIX_QUEUE,
+    FIX_SENT,
+    PROPOSE_FIX_TASK,
+    SUGGEST_GENERAL_FIX_TASK,
+)
 from nexovue_platform.fixes.sentences import (
     ELIGIBILITY_SENTENCES,
     REASON_SENTENCES,
-    SEND_COMES_NEXT,
     TYPED_REFUSED,
 )
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import FindingFix, GitHubUserLink
+from nexovue_api.data.postgres.models import (
+    AuditLogEntry,
+    FindingFix,
+    FindingFixSourcePack,
+    GitHubUserLink,
+)
 
 db = rows.db
 now = rows.now
@@ -185,6 +195,19 @@ async def _gathered(db: AsyncSession, finding: Any, tenant: Any, **listing: Any)
         **listing,
     }
     row.files_digest = "d" * 64
+    db.add(
+        FindingFixSourcePack(
+            fix_id=row.id,
+            org_id=row.org_id,
+            files=[
+                {"ref": "file_1", "path": f"{source.FOLDER}/app/handler.py", "content": "x\n"},
+                {"ref": "file_2", "path": f"{source.FOLDER}/app/money.py", "content": "y\n"},
+            ],
+            frames=[{"ref": "file_1", "line": 41}],
+            bytes=4,
+            expires_at=row.state_changed_at + timedelta(minutes=20),
+        )
+    )
     await db.flush()
     return row
 
@@ -230,10 +253,11 @@ async def test_ac3b_send_with_an_old_digest_is_409_with_the_new_list(
 
     assert stale.status_code == 409 and stale.json()["code"] == "list_changed"
     assert stale.json()["fix"]["latest"]["files"]["digest"] == "d" * 64
-    assert fresh.status_code == 409 and fresh.json()["detail"] == SEND_COMES_NEXT
+    assert fresh.status_code == 200, fresh.text
+    assert fresh.json()["latest"]["state"] == "proposing"
 
 
-async def test_ac3a_send_enqueues_no_ai_job_and_removing_a_file_reads_again(
+async def test_t4_14_send_adds_one_ai_job_with_ids_only_and_audits_what_goes_where(
     db: AsyncSession, now: datetime
 ) -> None:
     tenant, finding, _ = await source.ready(db, now)
@@ -241,9 +265,76 @@ async def test_ac3a_send_enqueues_no_ai_job_and_removing_a_file_reads_again(
     row = await _gathered(db, finding, tenant)
 
     async with source.client(db, rows.person(tenant)) as http:
-        await http.post(
+        sent = await http.post(
+            source.path(finding, f"/fixes/{row.id}/send"),
+            json={"files_digest": "d" * 64, "hint": "  look at the retry  "},
+        )
+
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["latest"]["heading"] == "Writing a suggestion"
+    jobs = [job for job in await _jobs(db, tenant.organization.id) if job.queue == FIX_QUEUE]
+    assert [job.task for job in jobs] == [PROPOSE_FIX_TASK]
+    assert set(jobs[0].kwargs) == {"fix_id", "org_id", "sent_by"}
+    await db.refresh(row)
+    assert (row.state, row.sent_by, row.retry_code) == ("proposing", tenant.user.id, None)
+    pack = await db.get(FindingFixSourcePack, row.id)
+    assert pack is not None and pack.hint == "look at the retry"
+    [entry] = (
+        await db.scalars(
+            select(AuditLogEntry).where(
+                AuditLogEntry.org_id == tenant.organization.id, AuditLogEntry.action == FIX_SENT
+            )
+        )
+    ).all()
+    assert entry.detail is not None
+    assert entry.detail["files"] == [
+        {"path": f"{source.FOLDER}/app/handler.py", "blob_sha": "a" * 40},
+        {"path": f"{source.FOLDER}/app/money.py", "blob_sha": "b" * 40},
+    ]
+    assert entry.detail["provider_host"] and entry.detail["round"] == 1
+    assert "look at the retry" not in json.dumps(entry.detail)
+
+
+async def test_t4_14_send_refuses_with_ai_off_and_with_the_tries_used(
+    db: AsyncSession, now: datetime
+) -> None:
+    tenant, finding, _ = await source.ready(db, now)
+    await _ask(db, rows.person(tenant), finding)
+    row = await _gathered(db, finding, tenant)
+    for _ in range(3):
+        db.add(
+            FindingFix(
+                id=uuid.uuid4(),
+                org_id=row.org_id,
+                project_id=row.project_id,
+                finding_id=row.finding_id,
+                kind="source",
+                state="proposed",
+                state_changed_at=now,
+                requested_at=now - timedelta(minutes=5),
+                sent_at=now - timedelta(minutes=5),
+            )
+        )
+    await db.flush()
+
+    async with source.client(db, rows.person(tenant)) as http:
+        spent = await http.post(
             source.path(finding, f"/fixes/{row.id}/send"), json={"files_digest": "d" * 64}
         )
+
+    assert spent.status_code == 409 and spent.json()["code"] == "limit_reached"
+    await db.refresh(row)
+    assert row.state == "gathered"
+
+
+async def test_ac3a_removing_a_file_reads_again_with_no_ai_job(
+    db: AsyncSession, now: datetime
+) -> None:
+    tenant, finding, _ = await source.ready(db, now)
+    await _ask(db, rows.person(tenant), finding)
+    row = await _gathered(db, finding, tenant)
+
+    async with source.client(db, rows.person(tenant)) as http:
         removed = await http.post(
             source.path(finding, f"/fixes/{row.id}/files"),
             json={"remove": [f"{source.FOLDER}/app/money.py"]},
@@ -251,7 +342,7 @@ async def test_ac3a_send_enqueues_no_ai_job_and_removing_a_file_reads_again(
 
     assert removed.status_code == 202
     tasks = [job.task for job in await _jobs(db, tenant.organization.id)]
-    assert SUGGEST_GENERAL_FIX_TASK not in tasks and not any("propose" in t for t in tasks)
+    assert SUGGEST_GENERAL_FIX_TASK not in tasks and PROPOSE_FIX_TASK not in tasks
     await db.refresh(row)
     assert row.state == "gathering" and row.path_candidates is not None
     assert {"path": "app/money.py", "line": None, "from": "removed"} in row.path_candidates

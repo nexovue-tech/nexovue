@@ -198,6 +198,10 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "repository": "acme/api",
             "link": "https://app.nexovue.com/settings/connections",
         },
+        # F5 D46: a requester told about the suggested fix they asked for, by a finding link.
+        Message.FIX_FILES_READY: {"link": "https://app.nexovue.com/findings/1"},
+        Message.FIX_SUGGESTION_READY: {"link": "https://app.nexovue.com/findings/1"},
+        Message.FIX_SUGGESTION_ENDED: {"link": "https://app.nexovue.com/findings/1"},
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 

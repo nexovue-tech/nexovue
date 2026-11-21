@@ -16,6 +16,7 @@ from nexovue_platform.fixes.records import HINT_MAX_CHARACTERS, MAX_FILES, MAX_T
 from pydantic import BaseModel, Field
 
 from nexovue_api.findings.fix_schemas import FixSectionLine
+from nexovue_api.findings.schemas import ExplanationSegment
 
 PATH_MAX_CHARACTERS: Final = 200
 DIGEST_CHARACTERS: Final = 64
@@ -76,6 +77,7 @@ class TypedMiss(BaseModel):
 class SourceFiles(BaseModel):
     """The list a requester confirms (FR13a). Paths that exist in the tree only (AC12g)."""
 
+    asked_round: AskedRound | None = None
     files: list[ListedFile]
     left_out: list[LeftOutFile]
     unmatched: int
@@ -107,6 +109,102 @@ class SourceOffer(BaseModel):
     link_sentence: str | None
 
 
+class AskedFile(BaseModel):
+    """FR15b, at round 2 or 3: a file the model asked for, why, and its words, labelled."""
+
+    path: str
+    because: str
+    model_words: str | None
+
+
+class AskedRefusal(BaseModel):
+    path: str
+    why: str
+
+
+class AskedRound(BaseModel):
+    """ "The AI asks for N more files" (design, *State by role*, `gathered` after asking)."""
+
+    lead: str
+    round_sentence: str
+    model_words_label: str
+    asked: list[AskedFile]
+    refused: list[AskedRefusal]
+    unmatched: int
+
+
+class DiffLine(BaseModel):
+    """One line of a hunk: its marker, its text with no line ending, and its numbers."""
+
+    marker: Literal[" ", "-", "+"]
+    text: str
+    old: int | None
+    new: int | None
+    # FR18's labels beside this line ("new call"), Nexovue's own words.
+    flags: list[str]
+
+
+class DiffHunk(BaseModel):
+    header: str
+    lines: list[DiffLine]
+
+
+class ProposalFlag(BaseModel):
+    kind: str
+    label: str
+    path: str
+    line: int | None
+    side: Literal["new", "old", "file"]
+
+
+class ProposalExplanation(BaseModel):
+    """The model's `why`, checked again, its stand-ins restored as segments (AC56)."""
+
+    segments: list[ExplanationSegment]
+
+
+class ProposalFile(BaseModel):
+    ref: str
+    path: str
+    github_url: str | None
+    added: int
+    removed: int
+    # None when the context was too long to store: Prepare patch shows it (D53).
+    hunks: list[DiffHunk] | None
+    context_note: str | None
+    open: bool
+    explanations: list[ProposalExplanation]
+
+
+class Proposal(BaseModel):
+    """A written suggestion in the requester's shape (design, *Section parts*)."""
+
+    lead: str
+    starts_from: str | None
+    facts_note: str
+    flags: list[ProposalFlag]
+    files: list[ProposalFile]
+    explanation_label: str
+    not_checked: list[str]
+    files_read: list[ListedFile]
+    left_out: list[LeftOutFile]
+    written_at: datetime | None
+    commit: str
+    tokens: int
+
+
+class CheckView(BaseModel):
+    """This person's own check run (design, *The check run*): `running`, passed, or why not."""
+
+    id: uuid.UUID
+    purpose: str
+    status: str
+    heading: str
+    sentence: str | None
+    passed: bool
+    expires_at: datetime | None
+
+
 class SourceFix(BaseModel):
     id: uuid.UUID
     state: SourceState
@@ -118,6 +216,15 @@ class SourceFix(BaseModel):
     files: SourceFiles | None
     requested_at: datetime
     state_changed_at: datetime
+    # Step 4: the written suggestion, for a requester who may read its code.
+    proposal: Proposal | None = None
+    # The owner limits quoted code (D20) and this person has no passed check yet.
+    code_withheld: str | None = None
+    check_action: str | None = None
+    check: CheckView | None = None
+    # A viewer's counts (design, *State by role*, `proposed`).
+    file_count: int | None = None
+    line_count: int | None = None
 
 
 class EarlierSource(BaseModel):
@@ -151,3 +258,9 @@ class BriefFiles(BaseModel):
 
     pending: bool
     paths: list[BriefPath]
+
+
+class CheckRequest(BaseModel):
+    """`POST .../check`. Step 4 runs `read`, **Check my access**; T5.1 adds `patch`."""
+
+    for_: Literal["read"] = Field(alias="for")

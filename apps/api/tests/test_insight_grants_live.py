@@ -188,6 +188,10 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "state",
         "retry_code",
         "tokens_used",
+        # F5 Step 4 (T4.2): a source row's repository, folder and round.
+        "connection_repository_id",
+        "folder",
+        "round",
     },
     ("finding_fixes", "UPDATE"): {
         "state",
@@ -198,6 +202,24 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "evidence_ids",
         "tokens_used",
         "finished_at",
+        # F5 Step 4: the checked edits, a refusal's pack references, the asked-for names.
+        "edits",
+        "withheld_refs",
+        "requested_paths",
+    },
+    # F5 Step 4: the files sent, while `proposing`; deleted only through `fix_drop_pack`.
+    ("finding_fix_source_packs", "SELECT"): {"fix_id", "org_id", "files", "frames", "hint"},
+    # FR8's comparison before each call; never who consented or when.
+    ("fix_source_consents", "SELECT"): {
+        "org_id",
+        "connection_repository_id",
+        "provider_base_url",
+        "provider_format",
+        "key_id",
+        "model",
+        "folder_scope",
+        "extra_excluded_paths",
+        "withdrawn_at",
     },
 }
 EXPECTED_FUNCTIONS: Final = {
@@ -207,6 +229,9 @@ EXPECTED_FUNCTIONS: Final = {
     "insight_retry_job(uuid,text,double precision,text)",
     "insight_finish_job(uuid,text)",
     "insight_store_check_result(uuid,uuid,jsonb,double precision)",
+    # F5 Step 4 (D75, ADR-091).
+    "fix_request_more_files(uuid,uuid)",
+    "fix_drop_pack(uuid,uuid)",
 }
 
 _TABLES: Final = text(

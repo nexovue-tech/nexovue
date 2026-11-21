@@ -1262,7 +1262,18 @@ export interface ListedFile {
   github_url: string | null;
 }
 
+/** FR15b, at round 2 or 3: the files the model asked for, with its words labelled. */
+export interface AskedRound {
+  lead: string;
+  round_sentence: string;
+  model_words_label: string;
+  asked: { path: string; because: string; model_words: string | null }[];
+  refused: { path: string; why: string }[];
+  unmatched: number;
+}
+
 export interface SourceFiles {
+  asked_round: AskedRound | null;
   files: ListedFile[];
   left_out: { path: string; why: string; bytes: number | null }[];
   unmatched: number;
@@ -1292,6 +1303,67 @@ export interface SourceOffer {
   link_sentence: string | null;
 }
 
+/** One line of a hunk, built by Nexovue from stored display facts (D53). */
+export interface DiffLine {
+  marker: " " | "-" | "+";
+  text: string;
+  old: number | null;
+  new: number | null;
+  flags: string[];
+}
+
+export interface DiffHunk {
+  header: string;
+  lines: DiffLine[];
+}
+
+export interface ProposalFile {
+  ref: string;
+  path: string;
+  github_url: string | null;
+  added: number;
+  removed: number;
+  hunks: DiffHunk[] | null;
+  context_note: string | null;
+  open: boolean;
+  explanations: { segments: ExplanationSegment[] }[];
+}
+
+export interface ProposalFlag {
+  kind: string;
+  label: string;
+  path: string;
+  line: number | null;
+  side: "new" | "old" | "file";
+}
+
+/** A written suggestion in the requester's shape (Step 4). */
+export interface Proposal {
+  lead: string;
+  starts_from: string | null;
+  facts_note: string;
+  flags: ProposalFlag[];
+  files: ProposalFile[];
+  explanation_label: string;
+  not_checked: string[];
+  files_read: ListedFile[];
+  left_out: { path: string; why: string; bytes: number | null }[];
+  written_at: string | null;
+  commit: string;
+  tokens: number;
+}
+
+/** This person's own check run: running, passed, or why not (D20). */
+export interface CheckView {
+  id: string;
+  purpose: string;
+  status: string;
+  heading: string;
+  sentence: string | null;
+  passed: boolean;
+  expires_at: string | null;
+}
+
 export interface SourceFix {
   id: string;
   state: SourceState;
@@ -1302,6 +1374,12 @@ export interface SourceFix {
   files: SourceFiles | null;
   requested_at: string;
   state_changed_at: string;
+  proposal: Proposal | null;
+  code_withheld: string | null;
+  check_action: string | null;
+  check: CheckView | null;
+  file_count: number | null;
+  line_count: number | null;
 }
 
 export interface FindingSourceFix {
@@ -1323,8 +1401,12 @@ export function useSourceFix(findingId: string) {
     queryKey: sourceFixQueryKey(findingId),
     placeholderData: keepPreviousData,
     refetchInterval: (query) => {
-      const state = query.state.data?.latest?.state;
-      return state === "gathering" || state === "proposing" ? GENERAL_FIX_POLL_MS : false;
+      const latest = query.state.data?.latest;
+      const waiting =
+        latest?.state === "gathering" ||
+        latest?.state === "proposing" ||
+        latest?.check?.status === "running";
+      return waiting ? GENERAL_FIX_POLL_MS : false;
     },
     queryFn: ({ signal }) =>
       apiClient.get<FindingSourceFix>(`findings/${encodeURIComponent(findingId)}/fixes/source`, {
@@ -1381,6 +1463,22 @@ export function useCancelSourceFix(findingId: string, fixId: string) {
     "cancel",
     () => `/fixes/${encodeURIComponent(fixId)}/cancel`,
   );
+}
+
+/** Check my access (D20): one check row per person; the result comes through the read. */
+export function useCheckMyAccess(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", "check", findingId, fixId],
+    mutationFn: () =>
+      apiClient.post<CheckView>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/check`,
+        { for: "read" },
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
 }
 
 /** Starts linking the person's own GitHub account; the browser goes to GitHub next. */

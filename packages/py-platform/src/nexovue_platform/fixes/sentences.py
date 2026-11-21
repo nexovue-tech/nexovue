@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from nexovue_platform.fixes.pack import LEFT_OUT_REASONS
-from nexovue_platform.fixes.records import FIX_REASONS
+from nexovue_platform.fixes.records import FIX_CHECK_REASONS, FIX_REASONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +32,18 @@ def _withheld(what: str) -> FixSentence:
     return FixSentence(
         f"The general suggestion was withheld because it {what}.{_ASK_AGAIN}", _WITHHELD_VIEWER
     )
+
+
+# K2 and K6 to K10 can mean a file in the repository holds planted text (design).
+_PLANTED: Final = (
+    " This can mean a file in this repository holds planted text. Tell an admin before "
+    "asking again, and use the brief carefully."
+)
+
+
+def _rule_withheld(what: str, *, planted: bool, after: str = "") -> FixSentence:
+    tail = _PLANTED if planted else after
+    return FixSentence(f"The suggestion was withheld because it {what}.{tail}", _WITHHELD_VIEWER)
 
 
 # Why rung 2b is not offered, in FR9's order (the first version, plan T2b.7).
@@ -179,6 +191,43 @@ REASON_SENTENCES: Final[dict[str, FixSentence]] = {
     "edit_no_longer_applies": FixSentence(
         "Out of date: the file changed. Ask again.", "Out of date."
     ),
+    # Step 4: the model's own answer, and Nexovue's rules on it (design, *Every sentence*).
+    "not_in_these_files": FixSentence(
+        "The model said: the answer is not in these files, and it named no other file it "
+        "needed, or its extra rounds were used up. You can name other files.",
+        _NO_CHANGE,
+    ),
+    "edit_did_not_apply": FixSentence(
+        "The model's change did not match the file, even after one more try.",
+        "Could not be applied.",
+    ),
+    "withheld_K1": _rule_withheld(
+        "touched a file outside the list you agreed to", planted=False, after=_ASK_AGAIN
+    ),
+    "withheld_K2": _rule_withheld(
+        "tried to change a build, CI, dependency or agent instruction file", planted=True
+    ),
+    "withheld_K3": _rule_withheld(
+        "its change did not match the file exactly once", planted=False, after=_ASK_AGAIN
+    ),
+    "withheld_K4": _rule_withheld(
+        "tried to create or delete a file, or change a file's mode, which suggested fixes never do",
+        planted=False,
+    ),
+    "withheld_K5": _rule_withheld(
+        "was too large", planted=False, after=" Removing files may help."
+    ),
+    "withheld_K6": _rule_withheld("added an address not already in the file", planted=True),
+    "withheld_K7": _rule_withheld("added hidden or look-alike characters", planted=True),
+    "withheld_K8": _rule_withheld("added a long encoded string", planted=True),
+    "withheld_K9": _rule_withheld("added something shaped like a secret", planted=True),
+    "withheld_K10": _rule_withheld(
+        "a line was too long to read, or hid text behind spaces", planted=True
+    ),
+    "checks_refused_at_click": FixSentence(
+        "This suggestion no longer passes Nexovue's rules. Do not apply it. Tell your admin.",
+        _NOT_PREPARED,
+    ),
 }
 
 # Reasons shown neutrally, with no fix id and no failure tone (design, *State by role*).
@@ -244,10 +293,52 @@ TOP_FILE_LEFT_OUT: Final = (
     "confidently wrong. Send anyway?"
 )
 ASKED_FOR_MORE: Final = "The AI asks for {count} more files. Send them?"
-# Step 3 stops at Send (plan T3.11): the provider call is Step 4's.
-SEND_COMES_NEXT: Final = (
-    "Sending files to the AI provider comes in a later version of Nexovue. Nothing was sent."
+ASKED_ROUND: Final = "Round {round} of at most 3."
+ASKED_REFUSED: Final = "Asked for, and refused: {path}, {why}."
+MODEL_WORDS_LABEL: Final = "The model's words, not checked by Nexovue"
+
+# Step 4: writing, and the written suggestion (design, *State by role*, *Section parts*).
+PROPOSING_HEADING: Final = "Writing a suggestion"
+PROPOSING_REQUESTER: Final = (
+    "Writing a suggestion. You may leave this page. The result will be here, and on the "
+    "finding's timeline."
 )
+PROPOSED_LEAD: Final = (
+    "Suggested fix: {files} {files_word}, {lines} {lines_word}, in {folder}. Not compiled and "
+    "not run."
+)
+PROPOSED_VIEWER: Final = (
+    "Code is shown to people who can ask for a suggested fix. Ask an owner, admin or member."
+)
+FACTS_FROM_COMMIT: Final = (
+    "Line numbers and context are from the file as read at {commit}. Prepare patch or Open "
+    "draft re-reads it."
+)
+CONTEXT_TOO_LONG: Final = "Context lines too long to store; Prepare patch shows them."
+EXPLANATION_LABEL: Final = "The model's explanation, not checked by Nexovue"
+NOT_CHECKED: Final = "Not compiled and not run by Nexovue. A subtle bug passes every rule."
+NOT_COVERED: Final = (
+    "Nexovue's lists of imports, network calls and comments do not cover {path}'s language."
+)
+WRITTEN_AT: Final = "Written {age}, from {commit}. {tokens} tokens used."
+OUT_OF_DATE_HEADING: Final = "Out of date"
+NOT_AVAILABLE_HEADING: Final = "Not available"
+OWNER_LIMITS_CODE: Final = (
+    "The owner limits quoted code to people with access to this repository on GitHub."
+)
+CHECK_MY_ACCESS: Final = "Check my access"
+CHECK_RUNNING_HEADING: Final = "Checking your access"
+CHECK_RUNNING: Final = "Asking GitHub what access you have to {repository}."
+CHECK_TIMED_OUT: Final = "Re-reading the files took too long, so this stopped. Try again."
+# Each flag's label beside its line (FR18).
+FLAG_LABELS: Final[dict[str, str]] = {
+    "new_import": "new import",
+    "risky_call": "new call",
+    "comment": "comment",
+    "removed_check": "removed check",
+    "test_file": "test file",
+    "new_letters": "new letters",
+}
 NO_SUGGESTION_HEADING: Final = "No suggestion"
 COULD_NOT_FINISH_HEADING: Final = "Could not finish"
 LINK_HEADING: Final = "Connect your GitHub account"
@@ -293,6 +384,20 @@ WHOLE_REPOSITORY: Final = "the whole repository"
 COMMIT_UNKNOWN: Final = "The running version is not known, so this read the default branch."
 MOVED_ON_DEFAULT: Final = "This file has changed on the default branch since the running version."
 
+# Why a check run refused or failed (design, *The check run*): every `FIX_CHECK_REASONS`.
+CHECK_REASON_SENTENCES: Final[dict[str, str]] = {
+    "not_linked": REASON_SENTENCES["not_linked"].requester,
+    "no_github_access": REASON_SENTENCES["no_github_access"].requester,
+    "access_unknown": REASON_SENTENCES["access_unknown"].requester,
+    "github_unavailable": REASON_SENTENCES["github_unavailable"].requester,
+    "permission_missing": REASON_SENTENCES["permission_missing"].requester,
+    "consent_withdrawn": "An owner withdrew agreement, so this stopped.",
+    "nexovue_error": REASON_SENTENCES["nexovue_error"].requester,
+}
+
+assert set(CHECK_REASON_SENTENCES) == set(FIX_CHECK_REASONS), (
+    "every reason a check run may store needs its sentence here"
+)
 assert set(REASON_SENTENCES) == set(FIX_REASONS), (
     "every reason a suggestion may store needs its sentence here"
 )

@@ -465,7 +465,8 @@ async def test_ac84_hostile_asked_names_read_no_blob_and_leave_no_trace(
     # One refused by shape and one matching no file are counts; `.env` exists, so it is
     # listed with its reason, never read.
     assert row.files_read["unmatched"] == 2
-    assert {"path": f"{FOLDER}/.env", "reason": "secret_or_key", "bytes": 10} in (
+    # Listed as asked for, so the screen says the AI asked for it (T4.15).
+    assert {"path": f"{FOLDER}/.env", "reason": "secret_or_key", "bytes": 10, "asked": True} in (
         row.files_read["left_out"]
     )
     assert "etc/passwd" not in json.dumps(row.files_read)
@@ -499,7 +500,16 @@ async def test_t3_19_an_asked_name_that_passes_joins_the_pack_as_it_stands(
             ),
             {
                 "id": fix_id,
-                "asked": json.dumps([{"path": "app/tax.py", "ref": "file_2", "line": 1}]),
+                "asked": json.dumps(
+                    [
+                        {
+                            "path": "app/tax.py",
+                            "ref": "file_2",
+                            "line": 1,
+                            "reason": "It calls tax_for.",
+                        }
+                    ]
+                ),
             },
         )
 
@@ -508,7 +518,13 @@ async def test_t3_19_an_asked_name_that_passes_joins_the_pack_as_it_stands(
     row = await fix_row(engine, world, fix_id)
     asked = row.files_read["files"][-1]
     assert (asked["path"], asked["role"]) == (f"{FOLDER}/app/tax.py", "asked")
-    assert asked["why"] == {"kind": "asked", "ref": "file_2", "line": 1}
+    # The model's reason rides along only after FR16's prose checks here too (T4.13).
+    assert asked["why"] == {
+        "kind": "asked",
+        "ref": "file_2",
+        "line": 1,
+        "reason": "It calls tax_for.",
+    }
     assert _listed(row)[:3] == [
         f"{FOLDER}/app/handler.py",
         f"{FOLDER}/app/money.py",
@@ -562,3 +578,37 @@ async def test_logs_hold_no_content_or_path_of_a_secret(
 
     assert "AKIA" not in json.dumps(logs, default=str)
     assert "money.charge" not in json.dumps(logs, default=str)
+
+
+async def test_t4_13_an_asked_reason_that_fails_the_prose_checks_is_dropped(
+    engine: AsyncEngine, world: SourceWorld, now: datetime
+) -> None:
+    """D18: the AI room wrote the reason; this room checks it again before listing it."""
+    fix_id = await source_fix(engine, world, candidates=_stack(("app/handler.py", 5)), now=now)
+    await _run(engine, world, fix_id, now)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE finding_fixes SET state = 'gathering', candidates_from = 'model', "
+                "round = 2, requested_paths = CAST(:asked AS jsonb) WHERE id = :id"
+            ),
+            {
+                "id": fix_id,
+                "asked": json.dumps(
+                    [
+                        {
+                            "path": "app/tax.py",
+                            "ref": "file_2",
+                            "line": 1,
+                            "reason": "See https://evil.example/x for why.",
+                        }
+                    ]
+                ),
+            },
+        )
+
+    await _run(engine, world, fix_id, now)
+
+    row = await fix_row(engine, world, fix_id)
+    assert row.files_read["files"][-1]["why"]["reason"] is None
+    assert "evil.example" not in json.dumps(row.files_read)

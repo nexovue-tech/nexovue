@@ -355,3 +355,118 @@ for (const width of WIDTHS) {
     await expect(page).toHaveTitle("Files ready: confirm");
   });
 }
+
+// F5 Step 4 (T4.10, AC37d): the written suggestion with hostile lines, withheld, failed, and
+// the viewer's shape, at both widths. Written 2026-11-21; **not run** (hardening pass).
+const HOSTILE_LINE = `    token = lookup("${"\u202e".repeat(1)}${"x".repeat(180)}")`;
+const proposedSource = (latest: Record<string, unknown>) => ({
+  finding_id: FINDING_ID,
+  line: null,
+  offer: null,
+  earlier: [],
+  support_view_note: null,
+  latest: {
+    id: "s-2",
+    state: "proposed",
+    heading: "Suggested fix",
+    sentence: null,
+    reason: null,
+    neutral: false,
+    requested_at: STARTED,
+    state_changed_at: STARTED,
+    files: null,
+    proposal: null,
+    code_withheld: null,
+    check_action: null,
+    check: null,
+    file_count: 1,
+    line_count: 2,
+    ...latest,
+  },
+});
+const PROPOSAL = {
+  lead: `Suggested fix: 1 file, 2 lines, in ${LONG_PATH}. Not compiled and not run.`,
+  starts_from: "Starts from the likely cause above.",
+  facts_note: `Line numbers and context are from the file as read at ${"c".repeat(7)}.`,
+  flags: [{ kind: "risky_call", label: "new call", path: LONG_PATH, line: 42, side: "new" }],
+  files: [
+    {
+      ref: "file_1",
+      path: LONG_PATH,
+      github_url: null,
+      added: 1,
+      removed: 1,
+      open: true,
+      context_note: null,
+      hunks: [
+        {
+          header: "@@ -41,3 +41,3 @@",
+          lines: [
+            { marker: " ", text: "def charge(order):", old: 41, new: 41, flags: [] },
+            { marker: "-", text: "    token = None", old: 42, new: null, flags: [] },
+            { marker: "+", text: HOSTILE_LINE, old: null, new: 42, flags: ["new call"] },
+          ],
+        },
+      ],
+      explanations: [{ segments: [{ text: "The model says the token is never set." }] }],
+    },
+  ],
+  explanation_label: "The model's explanation, not checked by Nexovue",
+  not_checked: ["Not compiled and not run by Nexovue. A subtle bug passes every rule."],
+  files_read: [],
+  left_out: [],
+  written_at: STARTED,
+  commit: "ccccccc",
+  tokens: 18204,
+};
+const STEP_4_STATES: [string, Record<string, unknown>][] = [
+  ["proposed with a hostile line", { proposal: PROPOSAL }],
+  [
+    "withheld from this person",
+    {
+      code_withheld:
+        "The owner limits quoted code to people with access to this repository on GitHub.",
+      check_action: "Check my access",
+    },
+  ],
+  [
+    "refused by a rule",
+    {
+      state: "refused",
+      heading: "No suggestion",
+      reason: "withheld_K6",
+      sentence: "The suggestion was withheld because it added an address not already in the file.",
+    },
+  ],
+  [
+    "seen by a viewer",
+    {
+      sentence:
+        "Code is shown to people who can ask for a suggested fix. Ask an owner, admin or member.",
+    },
+  ],
+];
+
+for (const width of WIDTHS) {
+  for (const [name, latest] of STEP_4_STATES) {
+    test(`AC37d: rung 3 ${name} fits ${width} px with its targets`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await signUp(page, newAccount());
+      await stubFinding(page, LINE);
+      await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/source`, (route) =>
+        route.fulfill({ json: proposedSource(latest) }),
+      );
+      await page.goto(`/findings/${FINDING_ID}`);
+      await expect(
+        page.getByRole("heading", { name: String(latest.heading ?? "Suggested fix") }),
+      ).toBeVisible();
+      await fitsTheWindow(page);
+      if (latest.proposal) {
+        // AC36: the bidirectional control shows as its code, never as a reordering.
+        await expect(page.getByText("\\u{202E}")).toBeVisible();
+        const summary = page.locator("summary").first();
+        expect((await summary.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+      }
+    });
+  }
+}

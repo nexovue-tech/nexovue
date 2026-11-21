@@ -1,7 +1,7 @@
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError } from "@/shared/api-client";
+import { ApiError, apiClient } from "@/shared/api-client";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
@@ -17,6 +17,29 @@ const SETTINGS_PATH = "/settings/connections";
  * the API; writing on a POST keeps this under the support view's read-only rule.
  */
 export function GitHubReturnScreen() {
+  return <ManifestReturn complete={completeGitHub} />;
+}
+
+/**
+ * F5 (ADR-082, status decision 34): where GitHub returns a person after creating the
+ * *Nexovue suggestions* App, the same way as F22's own App, posted to the Fix App's route.
+ */
+export function FixAppReturnScreen() {
+  return <ManifestReturn complete={completeFixApp} />;
+}
+
+function completeFixApp(code: string, state: string) {
+  return apiClient.post<{ connection_id: string }>("connections/github/fix-app/manifest/complete", {
+    code,
+    state,
+  });
+}
+
+function ManifestReturn({
+  complete,
+}: {
+  complete: (code: string, state: string) => Promise<unknown>;
+}) {
   const search = useRouterState({ select: (state) => state.location.searchStr });
   const navigate = useNavigate();
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -29,7 +52,7 @@ export function GitHubReturnScreen() {
     if (sent.current) return;
     sent.current = true;
     const parameters = new URLSearchParams(search);
-    completeGitHub(parameters.get("code") ?? "", parameters.get("state") ?? "").then(
+    complete(parameters.get("code") ?? "", parameters.get("state") ?? "").then(
       () => void navigate({ to: SETTINGS_PATH }),
       (error: unknown) => {
         const reason = error instanceof ApiError ? error.problem?.reason : undefined;
@@ -38,7 +61,7 @@ export function GitHubReturnScreen() {
         else setFailure(error);
       },
     );
-  }, [search, navigate]);
+  }, [search, navigate, complete]);
 
   return (
     <SettingsLayout title="Connect GitHub" description="Finishing the setup GitHub started.">

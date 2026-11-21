@@ -187,7 +187,7 @@ async def _suggest(
         return f"{FAILED}:{reason}"
 
     connection = await store.load_connection(engine, org_id)
-    off = await _why_not_send(engine, connection, fix, deployment)
+    off = await why_not_send(engine, connection, fix, deployment)
     if off is not None:
         return await leave(off)
     assert connection is not None
@@ -303,10 +303,10 @@ def general_request(
     )
 
 
-async def _why_not_send(
+async def why_not_send(
     engine: AsyncEngine,
     connection: store.StoredConnection | None,
-    fix: fix_store.StoredFix,
+    fix: fix_store.FixOfProject,
     deployment: Deployment,
 ) -> str | None:
     """What must still hold when a call is about to spend, as F3's `word` reads it, as the
@@ -331,6 +331,78 @@ async def _why_not_send(
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class Answered:
+    """A 200 whose text the job's own rules now judge, and how its run row ends."""
+
+    text: str
+    counted: AIResponse
+    finished_at: datetime
+
+    def run_end(self, outcome: str) -> store.RunEnd:
+        return store.RunEnd(
+            outcome=outcome,
+            input_tokens=self.counted.input_tokens,
+            output_tokens=self.counted.output_tokens,
+            tokens_estimated=self.counted.tokens_estimated,
+            finished_at=self.finished_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CallFailed:
+    """No usable text: retried as a new attempt (`retry_says`), or ended with `reason`."""
+
+    run: store.RunEnd
+    reason: str | None
+    retry_says: str | None = None
+    countdown: float = RETRY_WAIT_SECONDS
+
+
+def read_answer(
+    answer: transport.Answer,
+    parse: Callable[[int, bytes], AIResponse],
+    call: HttpCall,
+    *,
+    finished_at: datetime,
+    may_retry: bool,
+) -> Answered | CallFailed:
+    """What the provider's side of one call came to (design, *Failure handling*), shared by
+    rung 2b's job and rung 3's: a refusal is read before any parse, a 5xx or a 429 is
+    retried as a new attempt while one is left, and an outage keeps its estimated tokens."""
+    if answer.status is None:
+        reached = answer.reached
+        run = store.RunEnd(
+            outcome="unavailable",
+            input_tokens=estimate_tokens(len(call.body)) if reached else 0,
+            output_tokens=0,
+            tokens_estimated=reached,
+            finished_at=finished_at,
+        )
+        if may_retry and answer.failure in _TRANSPORT_RETRIED:
+            return CallFailed(run, None, RETRY_SAYS["unavailable"])
+        return CallFailed(run, "provider_unavailable")
+    response = (
+        AIResponse("invalid")
+        if answer.failure == "too_large"
+        else parse(answer.status, answer.body)
+    )
+    counted = response.with_counts(request_body=call.body)
+    answered = Answered(response.text or "", counted, finished_at)
+    if response.outcome == "ok":
+        return answered
+    run = answered.run_end(response.outcome)
+    if response.outcome in ("unavailable", "limited") and may_retry:
+        countdown = RETRY_WAIT_SECONDS
+        if response.outcome == "limited" and answer.retry_after_seconds is not None:
+            countdown = answer.retry_after_seconds
+        return CallFailed(run, None, RETRY_SAYS[response.outcome], countdown)
+    reason = _PROVIDER_REASONS.get(response.outcome, "provider_unavailable")
+    if response.outcome == "invalid":
+        reason = "invalid_output"
+    return CallFailed(run, reason)
+
+
 def ending_of(
     answer: transport.Answer,
     parse: Callable[[int, bytes], AIResponse],
@@ -342,54 +414,16 @@ def ending_of(
     may_retry: bool,
 ) -> Ending:
     """What one call came to (design, *Failure handling*), as the run's ending and the row's."""
-    if answer.status is None:
-        reached = answer.reached
-        run = store.RunEnd(
-            outcome="unavailable",
-            input_tokens=estimate_tokens(len(call.body)) if reached else 0,
-            output_tokens=0,
-            tokens_estimated=reached,
-            finished_at=finished_at,
-        )
-        if may_retry and answer.failure in _TRANSPORT_RETRIED:
-            return Ending(run, fix_store.FixEnd(None), RETRY_SAYS["unavailable"])
-        return Ending(run, fix_store.FixEnd(FAILED, "provider_unavailable"))
-    response = (
-        AIResponse("invalid")
-        if answer.failure == "too_large"
-        else parse(answer.status, answer.body)
+    read = read_answer(answer, parse, call, finished_at=finished_at, may_retry=may_retry)
+    if isinstance(read, CallFailed):
+        if read.retry_says is not None:
+            return Ending(read.run, fix_store.FixEnd(None), read.retry_says, read.countdown)
+        return Ending(read.run, fix_store.FixEnd(FAILED, read.reason))
+    return _checked_ending(
+        check_general_text(read.text, language=language, model_input=model_input),
+        read.run_end,
+        may_retry=may_retry,
     )
-    counted = response.with_counts(request_body=call.body)
-
-    def run_end(outcome: str) -> store.RunEnd:
-        return store.RunEnd(
-            outcome=outcome,
-            input_tokens=counted.input_tokens,
-            output_tokens=counted.output_tokens,
-            tokens_estimated=counted.tokens_estimated,
-            finished_at=finished_at,
-        )
-
-    if response.outcome == "ok":
-        return _checked_ending(
-            check_general_text(response.text or "", language=language, model_input=model_input),
-            run_end,
-            may_retry=may_retry,
-        )
-    if response.outcome in ("unavailable", "limited") and may_retry:
-        countdown = RETRY_WAIT_SECONDS
-        if response.outcome == "limited" and answer.retry_after_seconds is not None:
-            countdown = answer.retry_after_seconds
-        return Ending(
-            run_end(response.outcome),
-            fix_store.FixEnd(None),
-            RETRY_SAYS[response.outcome],
-            countdown,
-        )
-    reason = _PROVIDER_REASONS.get(response.outcome, "provider_unavailable")
-    if response.outcome == "invalid":
-        reason = "invalid_output"
-    return Ending(run_end(response.outcome), fix_store.FixEnd(FAILED, reason))
 
 
 def _checked_ending(

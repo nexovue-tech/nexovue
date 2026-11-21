@@ -78,6 +78,7 @@ from nexovue_platform.fixes.records import (
     CODE_DELETED_REASONS,
     CONSENT_WITHDRAWN_REASONS,
     FIX_CHECK_PURPOSES,
+    FIX_CHECK_REASONS,
     FIX_CHECK_STATUSES,
     FIX_KINDS,
     FIX_REASONS,
@@ -2563,6 +2564,9 @@ class FindingFixCheck(Base):
         ),
         CheckConstraint(f"purpose IN ({_quoted(FIX_CHECK_PURPOSES)})", name="purpose_is_known"),
         CheckConstraint(f"status IN ({_quoted(FIX_CHECK_STATUSES)})", name="status_is_known"),
+        CheckConstraint(
+            f"reason IS NULL OR reason IN ({_quoted(FIX_CHECK_REASONS)})", name="reason_is_known"
+        ),
         Index("ix_finding_fix_checks_expires_at", "expires_at"),
     )
 

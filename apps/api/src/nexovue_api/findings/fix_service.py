@@ -1,7 +1,7 @@
 """Rung 3 on a finding: Ask, the file list, removals and typed paths, Send and Cancel, and
 the brief's paths (spec FR5c, FR9, FR11 to FR13a; design, *The flow*, steps 1, 2 and 4;
-plan T3.9, T3.11, T3.16). **Nothing goes to a provider in Step 3:** Send stops at a
-stated guard, and no AI job is ever enqueued here (AC3a).
+plan T3.9, T3.11, T3.16, T4.14). **Nothing goes to a provider from here:** Send moves the
+row to `proposing` and adds the AI role's job, with ids only.
 
 - **Ask** decides FR9 again under the finding's lock, reads this service's own stacks
   (ClickHouse, through the tenant chokepoint) or takes typed paths, and in one transaction
@@ -13,6 +13,8 @@ stated guard, and no AI job is ever enqueued here (AC3a).
   `files_read`.
 - **Send** is bound to the list by its digest: a list that changed answers 409 with the
   new list (AC3b). With the top file left out, it needs the person's confirmation (AC12f).
+  It checks AI is on, consent covers the current code location, and the limit; then in
+  one transaction `proposing`, the hint on the pack, `fix.sent`, and the job (T4.14).
 - **Cancel** is a person's choice, shown neutrally (AC46).
 
 Who sees what: a requester (`REQUEST_FIX`) reads the list; a viewer and a support view read
@@ -28,6 +30,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final, cast, get_args
 from urllib.parse import quote
 
+from nexovue_platform.fixes.prose import prose_refusal
 from nexovue_platform.fixes.records import (
     BASIS_LIKELY_CAUSE,
     BASIS_NAMED_FILES,
@@ -38,6 +41,8 @@ from nexovue_platform.fixes.records import (
     FAILED,
     FIX_CANCELLED,
     FIX_REQUESTED,
+    FIX_SENT,
+    FROM_MODEL,
     FROM_PERSON,
     FROM_STACK,
     GATHERED,
@@ -45,13 +50,18 @@ from nexovue_platform.fixes.records import (
     GATHERING,
     KIND_SOURCE,
     MAX_TYPED_PATHS,
+    PROPOSED,
     PROPOSING,
     REFUSED,
     TRIES_PER_FINDING,
     build_source_pack_request,
     match_brief_paths_request,
+    propose_fix_request,
+    proposing_lifetime,
 )
 from nexovue_platform.fixes.sentences import (
+    ASKED_FOR_MORE,
+    ASKED_ROUND,
     BEING_PREPARED_VIEWER,
     COMMIT_UNKNOWN,
     COULD_NOT_FINISH_HEADING,
@@ -65,13 +75,14 @@ from nexovue_platform.fixes.sentences import (
     GATHERING_REQUESTER,
     LEFT_OUT_WHY,
     LINK_SENTENCE,
+    MODEL_WORDS_LABEL,
     NAME_FILES_LEAD,
     NEUTRAL_REASONS,
     NO_SUGGESTION_HEADING,
+    PROPOSING_HEADING,
+    PROPOSING_REQUESTER,
     REASON_SENTENCES,
-    SECTION_HEADING,
     SECTION_HEADING_UNAVAILABLE,
-    SEND_COMES_NEXT,
     SOURCE_ACTION,
     SOURCE_READY_LABELS,
     SUPPORT_VIEW_NO_CODE,
@@ -80,7 +91,7 @@ from nexovue_platform.fixes.sentences import (
     TYPED_REFUSED,
     WHOLE_REPOSITORY,
 )
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,6 +99,7 @@ from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import (
+    AIConnection,
     ConnectionRepository,
     DeployEvent,
     FindingFix,
@@ -96,10 +108,13 @@ from nexovue_api.data.postgres.models import (
     JobResult,
 )
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
-from nexovue_api.findings import fix_access, fix_paths, fix_queries, fix_state
+from nexovue_api.findings import fix_access, fix_paths, fix_proposal, fix_queries, fix_state
 from nexovue_api.findings.fix_general import Viewer
 from nexovue_api.findings.fix_schemas import FixSectionLine
 from nexovue_api.findings.fix_source_schemas import (
+    AskedFile,
+    AskedRefusal,
+    AskedRound,
     BriefFiles,
     BriefFilesStarted,
     BriefPath,
@@ -130,7 +145,6 @@ NOT_GATHERED: Final = "This suggestion is not waiting for its file list to be se
 NOT_IN_FLIGHT: Final = "This suggestion is no longer being prepared."
 NEEDS_PATHS: Final = "Name up to 5 files, as paths inside the folder."
 CONFIRM_TOP_FILE_CODE: Final = "confirm_top_left_out"
-SEND_NOT_BUILT_CODE: Final = "send_comes_in_step_4"
 LIST_CHANGED_CODE: Final = "list_changed"
 ALREADY_RUNNING_CODE: Final = "already_running"
 NOT_LINKED_CODE: Final = "not_linked"
@@ -163,7 +177,9 @@ async def read_source(
         finding_id=finding.id,
         line=_line(state, viewer),
         offer=await _offer(db, state, viewer, identity),
-        latest=None if latest is None else await _view(db, latest, viewer, state),
+        latest=None
+        if latest is None
+        else await _view(db, latest, viewer, state, user_id=identity.user.id),
         earlier=[
             EarlierSource(id=row.id, state=_state_of(row), requested_at=row.requested_at)
             for row in rows[1:]
@@ -234,18 +250,36 @@ def _state_of(row: FindingFix) -> SourceState:
     return cast(SourceState, row.state) if row.state in SOURCE_STATES else FAILED
 
 
-async def _view(db: AsyncSession, row: FindingFix, viewer: Viewer, state: FixState) -> SourceFix:
+async def _view(
+    db: AsyncSession, row: FindingFix, viewer: Viewer, state: FixState, *, user_id: uuid.UUID
+) -> SourceFix:
     reason = row.reason
     neutral = reason in NEUTRAL_REASONS
     files = None
     sentence: str | None
-    if row.state in (GATHERING, PROPOSING):
-        heading = GATHERING_HEADING if row.state == GATHERING else SECTION_HEADING
+    shown: fix_proposal.ProposalRead | None = None
+    if row.state == GATHERING:
+        heading = GATHERING_HEADING
         sentence = GATHERING_REQUESTER if viewer.may_request else BEING_PREPARED_VIEWER
+    elif row.state == PROPOSING:
+        heading = PROPOSING_HEADING
+        sentence = PROPOSING_REQUESTER if viewer.may_request else BEING_PREPARED_VIEWER
     elif row.state == GATHERED:
         heading = GATHERED_HEADING if viewer.may_request else GATHERING_HEADING
         sentence = None if viewer.may_request else BEING_PREPARED_VIEWER
         files = await _files(db, row, state) if viewer.may_request else None
+    elif row.state == PROPOSED:
+        key = await _repository_key(db, row)
+        shown = await fix_proposal.read_proposed(
+            db,
+            row,
+            user_id=user_id,
+            may_request=viewer.may_request,
+            repository_key=key,
+            files_read=_listing(row, key) if viewer.may_request else ([], []),
+            now=state.now,
+        )
+        heading, sentence = shown.heading, shown.sentence
     else:
         heading = (
             NO_SUGGESTION_HEADING if neutral or row.state == REFUSED else COULD_NOT_FINISH_HEADING
@@ -266,6 +300,12 @@ async def _view(db: AsyncSession, row: FindingFix, viewer: Viewer, state: FixSta
         files=files,
         requested_at=row.requested_at,
         state_changed_at=row.state_changed_at,
+        proposal=None if shown is None else shown.proposal,
+        code_withheld=None if shown is None else shown.code_withheld,
+        check_action=None if shown is None else shown.check_action,
+        check=None if shown is None else shown.check,
+        file_count=None if shown is None else shown.file_count,
+        line_count=None if shown is None else shown.line_count,
     )
 
 
@@ -281,6 +321,38 @@ async def _repository_key(db: AsyncSession, row: FindingFix) -> str | None:
     return key
 
 
+def _listing(row: FindingFix, key: str | None) -> tuple[list[ListedFile], list[LeftOutFile]]:
+    """The files read and those left out, from the listing only `scheduler-connections`
+    writes, each linked to GitHub at the commit read (FR13a)."""
+    listing = row.files_read or {}
+    commit = str(listing.get("commit") or "")
+    entries = [each for each in listing.get("files") or [] if isinstance(each, dict)]
+    paths = {str(each.get("ref")): str(each.get("path")) for each in entries}
+    files = [
+        ListedFile(
+            ref=str(each.get("ref")),
+            path=str(each.get("path")),
+            role=str(each.get("role")),
+            why=_why(each.get("why"), paths),
+            bytes=int(each.get("bytes") or 0),
+            lines_sent=each.get("lines_sent"),
+            moved_on_default=bool(each.get("moved_on_default")),
+            github_url=_github_url(key, commit, str(each.get("path"))),
+        )
+        for each in entries
+    ]
+    left_out = [
+        LeftOutFile(
+            path=str(each.get("path")),
+            why=LEFT_OUT_WHY.get(str(each.get("reason")), LEFT_OUT_WHY["not_source"]),
+            bytes=each.get("bytes"),
+        )
+        for each in listing.get("left_out") or []
+        if isinstance(each, dict)
+    ]
+    return files, left_out
+
+
 async def _files(db: AsyncSession, row: FindingFix, state: FixState) -> SourceFiles | None:
     listing = row.files_read or {}
     key = await _repository_key(db, row)
@@ -291,31 +363,11 @@ async def _files(db: AsyncSession, row: FindingFix, state: FixState) -> SourceFi
         if state.connection is None
         else fix_access.host_of(state.connection.base_url)
     )
-    files = [
-        ListedFile(
-            ref=str(each.get("ref")),
-            path=str(each.get("path")),
-            role=str(each.get("role")),
-            why=_why(each.get("why")),
-            bytes=int(each.get("bytes") or 0),
-            lines_sent=each.get("lines_sent"),
-            moved_on_default=bool(each.get("moved_on_default")),
-            github_url=_github_url(key, commit, str(each.get("path"))),
-        )
-        for each in listing.get("files") or []
-        if isinstance(each, dict)
-    ]
+    files, left_out = _listing(row, key)
     return SourceFiles(
+        asked_round=_asked_round(row, files, listing),
         files=files,
-        left_out=[
-            LeftOutFile(
-                path=str(each.get("path")),
-                why=LEFT_OUT_WHY.get(str(each.get("reason")), LEFT_OUT_WHY["not_source"]),
-                bytes=each.get("bytes"),
-            )
-            for each in listing.get("left_out") or []
-            if isinstance(each, dict)
-        ],
+        left_out=left_out,
         unmatched=int(listing.get("unmatched") or 0) + int(listing.get("ambiguous") or 0),
         typed_missing=[
             TypedMiss(path=str(path), sentence=TYPED_MISS.format(path=path, folder=folder))
@@ -336,8 +388,9 @@ async def _files(db: AsyncSession, row: FindingFix, state: FixState) -> SourceFi
     )
 
 
-def _why(why: Any) -> str:
-    """A file's reason in Nexovue's words, from stored codes and numbers only."""
+def _why(why: Any, paths: dict[str, str]) -> str:
+    """A file's reason in Nexovue's words, from stored codes, numbers and the listing's own
+    paths only: an asked-for file names the listed file and line that asked (FR15b)."""
     if not isinstance(why, dict):
         return FILE_WHY["named"]
     kind, line, path = why.get("kind"), why.get("line"), why.get("path")
@@ -350,8 +403,56 @@ def _why(why: Any) -> str:
     if kind in ("imported_by", "test_for") and isinstance(path, str):
         return FILE_WHY[kind].format(path=path)
     if kind == "asked":
+        because = paths.get(str(why.get("ref")))
+        if because is not None and isinstance(line, int):
+            return FILE_WHY["asked"].format(path=because, line=line)
         return FILE_WHY["asked_no_line"]
     return FILE_WHY["named"]
+
+
+def _asked_round(
+    row: FindingFix, files: list[ListedFile], listing: dict[str, Any]
+) -> AskedRound | None:
+    """Round 2 or 3, after the model asked (FR15b, AC88's screen half): the files it
+    asked for, each with the listed line that asked and its words under their label,
+    checked again here (D18); names refused with why; names matching nothing, a count."""
+    if row.candidates_from != FROM_MODEL or row.round < 2:
+        return None
+    entries = {
+        str(each.get("path")): each for each in listing.get("files") or [] if isinstance(each, dict)
+    }
+    asked = [
+        AskedFile(
+            path=file.path,
+            because=file.why,
+            model_words=_model_words((entries.get(file.path) or {}).get("why")),
+        )
+        for file in files
+        if file.role == "asked"
+    ]
+    return AskedRound(
+        lead=ASKED_FOR_MORE.format(count=len(asked)),
+        round_sentence=ASKED_ROUND.format(round=row.round),
+        model_words_label=MODEL_WORDS_LABEL,
+        asked=asked,
+        refused=[
+            AskedRefusal(
+                path=str(each.get("path")),
+                why=LEFT_OUT_WHY.get(str(each.get("reason")), LEFT_OUT_WHY["not_source"]),
+            )
+            for each in listing.get("left_out") or []
+            if isinstance(each, dict) and each.get("asked")
+        ],
+        unmatched=int(listing.get("unmatched") or 0),
+    )
+
+
+def _model_words(why: Any) -> str | None:
+    """The model's reason for asking, shown only if it passes FR16's prose checks again."""
+    reason = why.get("reason") if isinstance(why, dict) else None
+    if not isinstance(reason, str) or prose_refusal(reason, None) is not None:
+        return None
+    return reason
 
 
 def _github_url(key: str | None, commit: str, path: str) -> str | None:
@@ -556,7 +657,7 @@ async def send(
     now: datetime,
 ) -> FindingSourceFix:
     """FR13a: the digest must match the list as it stands, else 409 with the new list
-    (AC3b). Step 3 stops here, with nothing sent and nothing enqueued (plan T3.11)."""
+    (AC3b); then the files go to the AI role's job (design, step 4)."""
     row = await _locked_fix(db, org_id=identity.org_id, finding_id=finding_id, fix_id=fix_id)
     if row.state != GATHERED:
         raise ConflictError(NOT_GATHERED, code="not_gathered")
@@ -572,11 +673,81 @@ async def send(
     finding = await find_finding(db, org_id=identity.org_id, finding_id=finding_id)
     assert finding is not None
     state = await fix_state.gather(db, finding, settings=settings, now=now)
+    connection = state.connection
+    if connection is None:
+        raise ConflictError(REASON_SENTENCES["ai_off"].requester, code="ai_off")
     if state.access.consent is None or not fix_access_covers(state, row):
         raise ConflictError(
             REASON_SENTENCES["consent_ended_in_flight"].requester, code="consent_ended_in_flight"
         )
-    raise ConflictError(SEND_COMES_NEXT, code=SEND_NOT_BUILT_CODE)
+    # D32: a later round belongs to the same try, so only the first spends one (FR15c).
+    out_of_tries = row.round == 1 and len(state.tries_used) >= TRIES_PER_FINDING
+    if state.tokens_out or out_of_tries:
+        raise ConflictError(
+            ELIGIBILITY_SENTENCES["limit_reached"].requester.format(
+                date=state.now.date().isoformat()
+            ),
+            code="limit_reached",
+        )
+    await _send_round(db, row, identity=identity, connection=connection, hint=request.hint, now=now)
+    await db.commit()
+    return await read_source(
+        db, identity=identity, finding_id=finding_id, settings=settings, now=now
+    )
+
+
+async def _send_round(
+    db: AsyncSession,
+    row: FindingFix,
+    *,
+    identity: Identity,
+    connection: AIConnection,
+    hint: str | None,
+    now: datetime,
+) -> None:
+    """FR13a, design step 4: `proposing`, the hint on the pack, the pack kept for the job,
+    `fix.sent` naming exactly what goes and where, and the job, in one transaction. Each
+    round's Send does this again (T4.14)."""
+    row.state, row.state_changed_at = PROPOSING, now
+    row.sent_by, row.sent_at = identity.user.id, row.sent_at or now
+    row.retry_code = None
+    lifetime = proposing_lifetime(connection.call_seconds)
+    kept = await db.scalar(
+        update(FindingFixSourcePack)
+        .where(FindingFixSourcePack.org_id == row.org_id, FindingFixSourcePack.fix_id == row.id)
+        .values(hint=(hint or "").strip() or None, expires_at=now + lifetime)
+        .returning(FindingFixSourcePack.fix_id)
+    )
+    if kept is None:
+        raise ConflictError(NOT_GATHERED, code="not_gathered")
+    listed = [each for each in (row.files_read or {}).get("files") or [] if isinstance(each, dict)]
+    audit.record_fix_event(
+        db,
+        org_id=row.org_id,
+        actor_user_id=identity.user.id,
+        action=FIX_SENT,
+        target_kind=audit.FINDING_TARGET,
+        target_id=row.finding_id,
+        detail={
+            "fix_id": str(row.id),
+            "round": row.round,
+            "provider_host": fix_access.host_of(connection.base_url),
+            "files": [
+                {"path": str(each.get("path")), "blob_sha": str(each.get("blob_sha"))}
+                for each in listed
+            ],
+            "hint": bool((hint or "").strip()),
+        },
+    )
+    await fix_queries.queue_suggestion(
+        db,
+        propose_fix_request(
+            fix_id=row.id,
+            org_id=row.org_id,
+            sent_by=identity.user.id,
+            call_seconds=connection.call_seconds,
+        ),
+    )
 
 
 def fix_access_covers(state: FixState, row: FindingFix) -> bool:

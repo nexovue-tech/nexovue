@@ -97,9 +97,34 @@ STALE_REASONS: Final = (
     "cause_changed",
     "edit_no_longer_applies",
 )
-FIX_REASONS: Final = tuple(
-    dict.fromkeys((*GENERAL_REASONS, *SOURCE_REFUSALS, *SOURCE_FAILURES, *STALE_REASONS))
+# Step 4's codes (design, *Every sentence*): the model's own abstention, a misquote after
+# its retry, a rule's refusal, and a stored proposal the rules refuse again (D18's tamper
+# signal). Migration 0081 widens the CHECK list with them.
+NOT_IN_THESE_FILES: Final = "not_in_these_files"
+INVALID_OUTPUT: Final = "invalid_output"
+EDIT_DID_NOT_APPLY: Final = "edit_did_not_apply"
+CHECKS_REFUSED_AT_CLICK: Final = "checks_refused_at_click"
+WITHHELD_RULES: Final = tuple(f"withheld_K{number}" for number in range(1, 11))
+SOURCE_ABSTAIN_REASONS: Final = (NOT_IN_THESE_FILES, *GENERAL_ABSTAIN_REASONS)
+PROPOSAL_REASONS: Final = (
+    NOT_IN_THESE_FILES,
+    EDIT_DID_NOT_APPLY,
+    *WITHHELD_RULES,
+    CHECKS_REFUSED_AT_CLICK,
 )
+FIX_REASONS: Final = tuple(
+    dict.fromkeys(
+        (
+            *GENERAL_REASONS,
+            *SOURCE_REFUSALS,
+            *SOURCE_FAILURES,
+            *STALE_REASONS,
+            *PROPOSAL_REASONS,
+        )
+    )
+)
+# Migration 0079's list, before Step 4's codes: its frozen copy is held to this.
+STEP_3_FIX_REASONS: Final = tuple(r for r in FIX_REASONS if r not in PROPOSAL_REASONS)
 
 # Where a source row's suggestion starts from (design, `basis`).
 BASIS_LIKELY_CAUSE: Final = "likely_cause"
@@ -129,7 +154,18 @@ CODE_DELETED_REASONS: Final = (
 # G1's wrong shape and G2's caps.
 RETRY_SHAPE: Final = "general_shape"
 RETRY_TOO_LONG: Final = "general_too_long"
-RETRY_CODES: Final = (RETRY_SHAPE, RETRY_TOO_LONG)
+GENERAL_RETRY_CODES: Final = (RETRY_SHAPE, RETRY_TOO_LONG)
+# Rung 3's one retry (D51; design, *Why edits and not a diff*): an answer that failed the
+# schema, a misquote (K3), or an edit on a never-changed file (K2).
+RETRY_SOURCE_SHAPE: Final = "source_shape"
+RETRY_SOURCE_MISQUOTE: Final = "source_misquote"
+RETRY_SOURCE_NEVER_CHANGED: Final = "source_never_changed"
+SOURCE_RETRY_CODES: Final = (
+    RETRY_SOURCE_SHAPE,
+    RETRY_SOURCE_MISQUOTE,
+    RETRY_SOURCE_NEVER_CHANGED,
+)
+RETRY_CODES: Final = (*GENERAL_RETRY_CODES, *SOURCE_RETRY_CODES)
 
 # The stored answer's cap, checked by the database too (design: 8 KiB).
 GENERAL_SUGGESTION_MAX_BYTES: Final = 8 * 1024
@@ -189,9 +225,44 @@ def suggest_general_fix_request(
     )
 
 
-# A check run's purpose and outcome (design, `finding_fix_checks`; Step 4 runs it).
-FIX_CHECK_PURPOSES: Final = ("patch", "draft", "read")
-FIX_CHECK_STATUSES: Final = ("running", "unchanged", "moved", "stale", "refused", "failed")
+# A check run's purpose and outcome (design, `finding_fix_checks`; Step 4 runs `read`).
+CHECK_FOR_READ: Final = "read"
+# Who may ask for a suggested fix, as the API's action table says for `REQUEST_FIX`; the
+# check run reads it again, so a role removed since the click refuses (design, step 1).
+# `test_fix_check_routes.py` holds it equal to the API's table.
+ROLES_WHO_ASK: Final = ("owner", "admin", "member")
+FIX_CHECK_PURPOSES: Final = ("patch", "draft", CHECK_FOR_READ)
+CHECK_RUNNING: Final = "running"
+CHECK_UNCHANGED: Final = "unchanged"
+CHECK_REFUSED: Final = "refused"
+CHECK_FAILED: Final = "failed"
+FIX_CHECK_STATUSES: Final = (
+    CHECK_RUNNING,
+    CHECK_UNCHANGED,
+    "moved",
+    "stale",
+    CHECK_REFUSED,
+    CHECK_FAILED,
+)
+# Why a check run refused or failed (design, *The check run*, step 3). Migration 0081
+# holds the list in a CHECK.
+FIX_CHECK_REASONS: Final = (
+    "not_linked",
+    "no_github_access",
+    "access_unknown",
+    "github_unavailable",
+    "permission_missing",
+    "consent_withdrawn",
+    "nexovue_error",
+)
+# D20's guess: a passed `read` check lets this person read quoted code for an hour.
+READ_CHECK_LIFETIME: Final = timedelta(hours=1)
+# A click within this long of a finished check returns that one (a guess, design).
+CHECK_REUSED_WITHIN: Final = timedelta(seconds=60)
+# With no answer in this long, the API reads a check as failed, `check_timed_out` (a guess).
+CHECK_ANSWERS_WITHIN: Final = timedelta(minutes=3)
+# A running check row lives this long before the sweep deletes it.
+CHECK_ROW_LIFETIME: Final = timedelta(minutes=15)
 # Why a consent stopped (design, `fix_source_consents`): an owner, a disconnect, lost
 # GitHub access, or a restore.
 CONSENT_WITHDRAWN_BY_OWNER: Final = "owner"
@@ -346,3 +417,68 @@ def github_link_code_owner(org_id: str, user_id: str, attempt_id: str) -> str:
     """Whom a link attempt's sealed code is bound to: its organization, person and attempt,
     so a code copied onto another row or person will not open."""
     return f"github-link:{org_id}:{user_id}:{attempt_id}"
+
+
+# ------------------------------------------------------- the suggestion (Step 4)
+
+PROPOSE_FIX_TASK: Final = "nexovue_scheduler.insight.propose_fix"
+CHECK_FIX_TASK: Final = "nexovue_scheduler.connections.check_fix_against_current_code"
+NOTIFY_REQUESTERS_TASK: Final = "nexovue_scheduler.fixes.notify_requesters"
+# Audit actions: each Send, naming the paths, blob ids and provider host (FR13a); a
+# person's first read of quoted code (design, `finding_fix_code_views`); a check's result.
+FIX_SENT: Final = "fix.sent"
+FIX_CODE_VIEWED: Final = "fix.code_viewed"
+FIX_CHECK_REFUSED: Final = "fix.check_refused"
+# D18's tamper signal: a written suggestion the sweep's re-run of the rules refused.
+FIX_CHECKS_REFUSED: Final = "fix.checks_refused"
+# What each proposal call's run row says was sent (FR15a, FR38): the files by number, the
+# frames by number, the person's hint, and F3's facts when an explanation exists.
+SOURCE_FIELDS_SENT: Final = ("model_input", "files", "frames", "hint")
+SOURCE_FIELDS_SENT_WITHOUT_FACTS: Final = ("files", "frames", "hint")
+# F3's longest call (`ai_records.CALL_SECONDS_MAX`), copied so this package reaches no AI
+# module (AC33); `test_fix_sweep_live.py` holds them equal.
+CALL_SECONDS_LONGEST: Final = 300
+# A pack sent to the AI role outlives every attempt of its job: the queue's life, the call
+# and its hard limit's extra, and a margin for the lease (design, *Jobs*).
+PROPOSING_MARGIN: Final = timedelta(minutes=2)
+CHECK_EXPIRES_SECONDS: Final = 15 * 60
+CHECK_SOFT_LIMIT_SECONDS: Final = 60
+CHECK_HARD_LIMIT_SECONDS: Final = 90
+
+
+def propose_fix_request(*, fix_id: Any, org_id: Any, sent_by: Any, call_seconds: int) -> JobRequest:
+    """One suggestion from the files sent (design, *The flow*, step 5). Ids only: the job
+    reads the pack, the frames and the hint from the store, and stops when the row has left
+    `proposing`. Two attempts, the second a new attempt reading `retry_code` (D51)."""
+    return JobRequest(
+        task=PROPOSE_FIX_TASK,
+        queue=FIX_QUEUE,
+        kwargs={"fix_id": str(fix_id), "org_id": str(org_id), "sent_by": str(sent_by)},
+        org_id=str(org_id),
+        expires_seconds=SUGGEST_EXPIRES_SECONDS,
+        max_attempts=SUGGEST_MAX_ATTEMPTS,
+        soft_limit_seconds=call_seconds + SUGGEST_SOFT_LIMIT_EXTRA_SECONDS,
+        hard_limit_seconds=call_seconds + SUGGEST_HARD_LIMIT_EXTRA_SECONDS,
+    )
+
+
+def proposing_lifetime(call_seconds: int) -> timedelta:
+    """How long a sent pack, and its `proposing` row, may wait for the AI role."""
+    return (
+        timedelta(seconds=SUGGEST_EXPIRES_SECONDS + call_seconds + SUGGEST_HARD_LIMIT_EXTRA_SECONDS)
+        + PROPOSING_MARGIN
+    )
+
+
+def check_fix_request(*, check_id: Any, org_id: Any) -> JobRequest:
+    """A person's check run (design, *The check run*). Ids only."""
+    return JobRequest(
+        task=CHECK_FIX_TASK,
+        queue=INTERACTIVE_QUEUE,
+        kwargs={"check_id": str(check_id), "org_id": str(org_id)},
+        org_id=str(org_id),
+        expires_seconds=CHECK_EXPIRES_SECONDS,
+        max_attempts=PACK_MAX_ATTEMPTS,
+        soft_limit_seconds=CHECK_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=CHECK_HARD_LIMIT_SECONDS,
+    )

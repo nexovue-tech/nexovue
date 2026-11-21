@@ -107,6 +107,9 @@ describe("the sidebar", () => {
       "/settings/connections/github/start",
       "/settings/connections/github/return",
       "/settings/connections/github/installed",
+      // F5: reached only from GitHub's own redirects (the suggestions App, an account link).
+      "/settings/connections/fix-app/return",
+      "/settings/github-link/return",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.
       "/admin/onboard",

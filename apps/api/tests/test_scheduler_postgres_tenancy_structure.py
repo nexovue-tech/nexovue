@@ -269,14 +269,22 @@ CROSS_TENANT_STATEMENTS: Final = (
     _across(
         "connections.fix_sweep",
         "_ENDED_WAITING",
-        f"{_SWEEP}: source suggestions left gathering past the pack job's life, or gathered "
-        "past 15 minutes; each row ends by its own id, and its pack goes by its own `org_id`",
+        f"{_SWEEP}: source suggestions left gathering past the pack job's life, gathered "
+        "past 15 minutes, or proposing past every attempt of the AI job (Step 4); each row "
+        "ends by its own id, and its pack goes by its own `org_id`",
     ),
     _across(
         "connections.fix_sweep",
-        "_ENDED_SHORT",
-        f"{_SWEEP}: source suggestions that ended short, whose code is cleared and marked "
-        "recorded each by its own `org_id`",
+        "_UNRECORDED",
+        f"{_SWEEP}: ended source suggestions whose result is not yet recorded (Step 4); the "
+        "rules' re-run reads, the event, the audit entry, the cleared code and the mark each "
+        "bind the row's own `org_id`",
+    ),
+    _across(
+        "fixes.notify",
+        "_DUE",
+        "F5's requester emails (T4.8): source suggestions owed an email, across every "
+        "organization; each is taken, and its person read, by its own `org_id`",
     ),
     _across(
         "connections.fix_sweep",

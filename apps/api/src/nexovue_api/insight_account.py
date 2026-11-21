@@ -53,6 +53,12 @@ INSIGHT_FUNCTIONS: Final = (
     "insight_store_check_result(uuid, uuid, jsonb, double precision)",
     "assistant_finish_message(uuid, text, jsonb, text, text, text, text)",
     "assistant_record_spend(uuid, bigint, boolean)",
+    # F5 Step 4 (D75): the only way a suggestion goes back to `gathering`, when the model asks
+    # for files. Migration 0079 created it and took `EXECUTE` from `PUBLIC`.
+    "fix_request_more_files(uuid, uuid)",
+    # ADR-091 (migration 0081): the pack deleted before the state moves, never by a table
+    # grant, which would let this account lock the table.
+    "fix_drop_pack(uuid, uuid)",
 )
 
 # What the account may do (design, *The Postgres account*). Column lists, never a table
@@ -115,10 +121,23 @@ INSIGHT_GRANTS: Final = (
     # version and retry code, and its token count, which each attempt adds to; it writes the
     # end. Row security (migration 0077) shows a row in rung 2b's states and lets one change
     # only while `proposing`. Never the requester, never the stored answer.
+    # Step 4 (T4.2): of a source row, the repository, folder and round it reads by, and the
+    # edits, withheld references and asked-for names it writes. Never `files_read`, `edits`
+    # back, a pull request column, or who asked.
     "GRANT SELECT (id, org_id, project_id, finding_id, kind, general_language, "
-    "explanation_version, state, retry_code, tokens_used) ON finding_fixes TO nexovue_insight",
+    "explanation_version, state, retry_code, tokens_used, connection_repository_id, folder, "
+    "round) ON finding_fixes TO nexovue_insight",
     "GRANT UPDATE (state, state_changed_at, reason, retry_code, general_suggestion, "
-    "evidence_ids, tokens_used, finished_at) ON finding_fixes TO nexovue_insight",
+    "evidence_ids, tokens_used, finished_at, edits, withheld_refs, requested_paths) "
+    "ON finding_fixes TO nexovue_insight",
+    # The files sent, while their suggestion is `proposing` (row security, migration 0079);
+    # deleted only through `fix_drop_pack` (ADR-091), before the state moves.
+    "GRANT SELECT (fix_id, org_id, files, frames, hint) "
+    "ON finding_fix_source_packs TO nexovue_insight",
+    # FR8, compared before each call: what an owner agreed to, never who or when.
+    "GRANT SELECT (org_id, connection_repository_id, provider_base_url, provider_format, "
+    "key_id, model, folder_scope, extra_excluded_paths, withdrawn_at) "
+    "ON fix_source_consents TO nexovue_insight",
     *(
         f"GRANT EXECUTE ON FUNCTION {signature} TO nexovue_insight"
         for signature in INSIGHT_FUNCTIONS

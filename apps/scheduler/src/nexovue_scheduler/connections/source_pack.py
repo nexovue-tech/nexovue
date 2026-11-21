@@ -51,6 +51,7 @@ from nexovue_platform.fixes.pack import (
     owner_lists_hash,
 )
 from nexovue_platform.fixes.policy import CHECKS_VERSION, OwnerLists
+from nexovue_platform.fixes.prose import prose_refusal
 from nexovue_platform.fixes.records import (
     BUILD_SOURCE_PACK_TASK,
     CONSENT_ENDED_IN_FLIGHT,
@@ -161,6 +162,7 @@ _GATHERED: Final = text(
     """
     UPDATE finding_fixes SET
         state = 'gathered', state_changed_at = :at, files_read = CAST(:files_read AS jsonb),
+        email_due = notify_requester AND (files_read IS NULL OR candidates_from = 'model'),
         files_digest = :digest, checks_version = :checks_version,
         extra_list_hash = :extra_list_hash, read_commit = :read_commit,
         read_commit_known = :read_commit_known, path_candidates = NULL,
@@ -236,7 +238,7 @@ class _Consent:
 
 
 @dataclass(slots=True)
-class _Ending(Exception):  # noqa: N818 — a way out, carried to the one place that writes it
+class Ending(Exception):  # noqa: N818 — a way out, carried to the one place that writes it
     state: str
     reason: str
 
@@ -249,6 +251,8 @@ class _Reading:
     moved: dict[str, bool] = field(default_factory=dict)
     typed_missing: list[str] = field(default_factory=list)
     top_left_out: bool = False
+    # FR15b: the asked-for names this round, so a refused one is listed as asked for.
+    asked: set[str] = field(default_factory=set)
 
 
 # ------------------------------------------------------------------ the pack job
@@ -265,13 +269,13 @@ async def build_source_pack(
 ) -> str | None:
     """Read and list one suggestion's files. Returns the state it left, or None when it
     found nothing to do."""
-    row = await _load(engine, org_id, fix_id)
+    row = await load_fix_row(engine, org_id, fix_id)
     if row is None or row.kind != "source" or row.state != GATHERING:
         return None
     try:
         consent = await _live_consent(engine, row)
         reading = _read(row, consent, await _context(engine, row), keys, endpoints)
-    except _Ending as ending:
+    except Ending as ending:
         return await _end(engine, row, ending.state, ending.reason, now=now)
     except GitHubFailure as failure:
         logger.warning(
@@ -289,7 +293,7 @@ async def build_source_pack(
     return await _store(engine, row, reading, consent, now=now)
 
 
-async def _load(engine: AsyncEngine, org_id: str, fix_id: str) -> Any | None:
+async def load_fix_row(engine: AsyncEngine, org_id: str, fix_id: str) -> Any | None:
     async with engine.connect() as connection:
         return (await connection.execute(_LOAD, {"org_id": org_id, "fix_id": fix_id})).one_or_none()
 
@@ -331,7 +335,7 @@ async def _live_consent(engine: AsyncEngine, row: Any) -> _Consent:
     """FR8 at the pack job: a consent, unwithdrawn, covering the row's folder, whose
     provider terms equal the AI connection's now. Otherwise the row ends."""
     if row.connection_repository_id is None:
-        raise _Ending(FAILED, CONSENT_ENDED_IN_FLIGHT)
+        raise Ending(FAILED, CONSENT_ENDED_IN_FLIGHT)
     ids = {"org_id": row.org_id, "repository_id": row.connection_repository_id}
     async with engine.connect() as connection:
         current = (await connection.execute(_AI_CONNECTION, {"org_id": row.org_id})).one_or_none()
@@ -361,10 +365,10 @@ async def _live_consent(engine: AsyncEngine, row: Any) -> _Consent:
                 ),
                 require_github_access=consent.require_github_access,
             )
-    raise _Ending(FAILED, CONSENT_ENDED_IN_FLIGHT)
+    raise Ending(FAILED, CONSENT_ENDED_IN_FLIGHT)
 
 
-def _client(row: Any, keys: ConfiguredKeys, endpoints: FixEndpoints) -> FixGitHub:
+def fix_client(row: Any, keys: ConfiguredKeys, endpoints: FixEndpoints) -> FixGitHub:
     """The Fix App, its key opened in memory. A missing or unreadable App is a person's
     to fix: `permission_missing`."""
     usable = (
@@ -376,14 +380,14 @@ def _client(row: Any, keys: ConfiguredKeys, endpoints: FixEndpoints) -> FixGitHu
         and row.is_reachable
     )
     if not usable:
-        raise _Ending(FAILED, "permission_missing")
+        raise Ending(FAILED, "permission_missing")
     try:
         key = box(keys, CONNECTION_CREDENTIAL_PURPOSE).open(
             bytes(row.sealed_credential),
             owner=connection_secret_owner(str(row.org_id), str(row.connection_id)),
         )
     except (SealError, ValueError) as unreadable:
-        raise _Ending(FAILED, "permission_missing") from unreadable
+        raise Ending(FAILED, "permission_missing") from unreadable
     return FixGitHub(endpoints, app_id=row.github_app_id, private_key=key)
 
 
@@ -394,30 +398,30 @@ def _read(
     keys: ConfiguredKeys,
     endpoints: FixEndpoints,
 ) -> _Reading:
-    github = _client(row, keys, endpoints)
+    github = fix_client(row, keys, endpoints)
     token = github.read_token(row.github_installation_id, int(row.external_id))
     try:
         if consent.require_github_access:
-            _check_access(github, token, row.key, context.github_user_id)
+            check_access(github, token, row.key, context.github_user_id)
         reader = _Reader(github, token, row.key, row.folder)
         return reader.read(row, consent.owner, context)
     finally:
         github.revoke(token)
 
 
-def _check_access(github: FixGitHub, token: str, key: str, github_user_id: int | None) -> None:
+def check_access(github: FixGitHub, token: str, key: str, github_user_id: int | None) -> None:
     """D20, before any blob: the person must be linked, and GitHub must say they can read."""
     if github_user_id is None:
-        raise _Ending(FAILED, "not_linked")
+        raise Ending(FAILED, "not_linked")
     try:
         login = github.login_of(token, github_user_id)
         permission = github.permission_of(token, key, login)
     except GitHubFailure as failure:
         if failure.passing:
             raise
-        raise _Ending(FAILED, "access_unknown") from failure
+        raise Ending(FAILED, "access_unknown") from failure
     if permission not in READ_LEVELS:
-        raise _Ending(FAILED, "no_github_access")
+        raise Ending(FAILED, "no_github_access")
 
 
 class _Reader:
@@ -443,7 +447,7 @@ class _Reader:
         index = TreeIndex(self._relative(file.path) for file in tree)
         reading = _Reading(builder=builder, commit=commit, commit_known=known)
         if row.candidates_from == FROM_MODEL:
-            self._asked(row, context, builder, index)
+            reading.asked = self._asked(row, context, builder, index)
         else:
             self._first_round(row, context, reading, index)
         if commit != head:
@@ -565,28 +569,38 @@ class _Reader:
 
     # ------------------------------------------------- asked-for names (FR15b)
 
-    def _asked(self, row: Any, context: _Context, builder: PackBuilder, index: TreeIndex) -> None:
+    def _asked(
+        self, row: Any, context: _Context, builder: PackBuilder, index: TreeIndex
+    ) -> set[str]:
         """T3.19: the pack as it stands, then each name the model asked for, checked like a
-        stack file. A name matching no file is counted, never kept (AC84)."""
+        stack file. A name matching no file is counted, never kept (AC84). The model's
+        reason goes on the file's `why` only if it passes FR16's prose checks here too."""
+        asked: set[str] = set()
         for stored in context.pack_files:
             path = stored.get("path")
             if isinstance(path, str) and path in builder.tree:
                 builder.keep(_kept_file(stored, builder.tree[path], row.files_read))
         refs = {file.ref for file in builder.files}
-        for asked in (row.requested_paths or [])[:MAX_ASKED_PATHS]:
-            name = asked.get("path") if isinstance(asked, dict) else None
+        for asked_for in (row.requested_paths or [])[:MAX_ASKED_PATHS]:
+            name = asked_for.get("path") if isinstance(asked_for, dict) else None
             if not isinstance(name, str) or not _plain_name(name) or name not in index:
                 builder.unmatched += 1
                 continue
-            because = asked.get("ref")
-            line = asked.get("line")
+            because = asked_for.get("ref")
+            line = asked_for.get("line")
+            reason = asked_for.get("reason")
             why = {
                 "kind": "asked",
                 "ref": because if because in refs else None,
                 "line": line if isinstance(line, int) and line > 0 else None,
+                "reason": reason
+                if isinstance(reason, str) and prose_refusal(reason, None) is None
+                else None,
             }
+            asked.add(self._prefix + name)
             if builder.consider(self._prefix + name, "asked", why):
                 self._fetch_and_admit(builder, self._prefix + name)
+        return asked
 
 
 def _plain_name(name: object) -> bool:
@@ -650,7 +664,11 @@ def files_read_of(reading: _Reading, *, round_number: int, earlier: Any) -> dict
         ],
         "left_out": [
             *earlier_left,
-            *({"path": e.path, "reason": e.reason, "bytes": e.bytes} for e in builder.left_out),
+            *(
+                {"path": e.path, "reason": e.reason, "bytes": e.bytes}
+                | ({"asked": True} if e.path in reading.asked else {})
+                for e in builder.left_out
+            ),
         ],
         "unmatched": builder.unmatched,
         "ambiguous": builder.ambiguous,
@@ -784,7 +802,7 @@ async def match_brief_paths(
     if source is not None and source.connection_state != "disconnected":
         try:
             found = _brief_matches(source, org_id, candidates, keys, endpoints)
-        except (_Ending, GitHubFailure) as failure:
+        except (Ending, GitHubFailure) as failure:
             logger.warning(
                 "the brief's paths could not be read", finding_id=finding_id, failure=str(failure)
             )
@@ -819,7 +837,7 @@ def _brief_matches(
     endpoints: FixEndpoints,
 ) -> list[dict[str, Any]]:
     row = _BriefRow(source, org_id)
-    github = _client(row, keys, endpoints)
+    github = fix_client(row, keys, endpoints)
     token = github.read_token(source.github_installation_id, int(source.external_id))
     try:
         reader = _Reader(github, token, source.key, source.folder)

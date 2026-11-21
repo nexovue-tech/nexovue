@@ -4,7 +4,10 @@ version; design, *The Postgres account*; AC6's general half).
 The AI account sees a row in rung 2b's states and may change one only while `proposing`,
 into one of them: the job's write lands, and a write to a row the sweep or the API ended
 matches nothing. It cannot insert a row, read the stored answer or the requester, or move a
-row back to `proposing`. T4.1 extends this to the source columns and the pack.
+row back to `proposing`. T4.1 extends this to the source columns and the pack, running the
+proposal job's own statements (`source_fix_store`): find the consent, read the frames,
+drop the pack first and count it, move the state; and a late write, and a late pack
+drop, match nothing once the sweep has ended the row.
 
 The tenant is this test's own, committed so the AI account's own session sees it, and
 dropped at the end.
@@ -18,6 +21,7 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -204,3 +208,150 @@ async def test_the_ai_account_holds_no_more_than_its_columns(
     with pytest.raises(DBAPIError, match="permission denied"):
         async with as_insight.begin() as db:
             await db.execute(text(statement), tenant)
+
+
+# ------------------------------------------------------------------ T4.1, rung 3
+
+
+async def _source(install: AsyncEngine, tenant: dict[str, uuid.UUID], state: str) -> uuid.UUID:
+    """A source row with a repository, a consent and a pack, as Send leaves it."""
+    connection, repository = uuid.uuid4(), uuid.uuid4()
+    reason = None if state in ("proposing", "proposed") else "timed_out"
+    async with install.begin() as db:
+        await db.execute(
+            text(
+                "INSERT INTO connections (id, org_id, kind, state) "
+                "VALUES (:id, :org, 'github_fix', 'working')"
+            ),
+            {"id": connection, "org": tenant["org"]},
+        )
+        await db.execute(
+            text(
+                "INSERT INTO connection_repositories (id, org_id, connection_id, external_id, "
+                "key, is_private) VALUES (:id, :org, :connection, '1', 'acme/shop', true)"
+            ),
+            {"id": repository, "org": tenant["org"], "connection": connection},
+        )
+        await db.execute(
+            text(
+                "INSERT INTO fix_source_consents (org_id, connection_repository_id, "
+                "provider_base_url, provider_format, model, folder_scope, "
+                "require_github_access, consented_at) VALUES (:org, :repository, "
+                "'https://p.example/v1', 'openai_chat', 'm', 'shop', false, now())"
+            ),
+            {"org": tenant["org"], "repository": repository},
+        )
+        made = await db.scalar(
+            text(
+                """
+                INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state,
+                    reason, connection_repository_id, folder, requested_by)
+                VALUES (:org, :project, :finding, 'source', :state, :reason, :repository,
+                        'shop', :user)
+                RETURNING id
+                """
+            ),
+            {**tenant, "state": state, "reason": reason, "repository": repository},
+        )
+        await db.execute(
+            text(
+                "INSERT INTO finding_fix_source_packs (fix_id, org_id, files, frames, bytes, "
+                "expires_at) VALUES (:fix, :org, CAST(:files AS jsonb), "
+                "CAST(:frames AS jsonb), 3, now() + interval '20 minutes')"
+            ),
+            {
+                "fix": made,
+                "org": tenant["org"],
+                "files": '[{"ref": "file_1", "path": "shop/a.py", "content": "x\\n"}]',
+                "frames": '[{"ref": "file_1", "line": 1}]',
+            },
+        )
+    assert isinstance(made, uuid.UUID)
+    return made
+
+
+async def test_t4_1_the_proposal_job_s_own_statements_run_as_the_ai_account(
+    install: AsyncEngine, as_insight: AsyncEngine, tenant: dict[str, uuid.UUID]
+) -> None:
+    from nexovue_scheduler.insight import source_fix_store as store
+
+    fix = await _source(install, tenant, "proposing")
+    ids = {"org_id": tenant["org"], "fix_id": fix}
+
+    async with as_insight.begin() as db:
+        row = (await db.execute(store._FIX, ids)).one()
+        consents = (
+            await db.execute(
+                store._CONSENTS,
+                {"org_id": tenant["org"], "repository_id": row.connection_repository_id},
+            )
+        ).all()
+        pack = (await db.execute(store._PACK, ids)).one()
+        dropped = await db.scalar(store._DROP_PACK, ids)
+        ended = await db.execute(
+            store._END,
+            {
+                **ids,
+                "state": "proposed",
+                "reason": None,
+                "edits": "[]",
+                "evidence_ids": "[]",
+                "withheld_refs": None,
+                "tokens": 1,
+                "at": datetime.now(UTC),
+            },
+        )
+
+    assert row.folder == "shop" and [c.folder_scope for c in consents] == ["shop"]
+    assert pack.frames == [{"ref": "file_1", "line": 1}]
+    assert dropped == 1 and ended.rowcount == 1
+    async with install.connect() as db:
+        left = await db.scalar(
+            text("SELECT count(*) FROM finding_fix_source_packs WHERE fix_id = :id"), {"id": fix}
+        )
+    assert left == 0
+
+
+async def test_t4_1_a_row_the_sweep_ended_takes_no_late_write_and_keeps_no_readable_pack(
+    install: AsyncEngine, as_insight: AsyncEngine, tenant: dict[str, uuid.UUID]
+) -> None:
+    from nexovue_scheduler.insight import source_fix_store as store
+
+    fix = await _source(install, tenant, "failed")
+    ids = {"org_id": tenant["org"], "fix_id": fix}
+
+    async with as_insight.begin() as db:
+        pack = (await db.execute(store._PACK, ids)).one_or_none()
+        dropped = await db.scalar(store._DROP_PACK, ids)
+        late = await db.execute(store._KEEP_FOR_RETRY, {**ids, "retry_code": None, "tokens": 1})
+
+    assert pack is None and dropped == 0 and late.rowcount == 0
+
+
+async def test_t4_1_only_the_function_takes_a_row_back_to_gathering(
+    install: AsyncEngine, as_insight: AsyncEngine, tenant: dict[str, uuid.UUID]
+) -> None:
+    from nexovue_scheduler.insight import source_fix_store as store
+
+    fix = await _source(install, tenant, "proposing")
+    ids = {"org_id": tenant["org"], "fix_id": fix}
+
+    with pytest.raises(DBAPIError, match="row-level security"):
+        async with as_insight.begin() as db:
+            await db.execute(
+                text(
+                    "UPDATE finding_fixes SET state = 'gathering' "
+                    "WHERE org_id = :org_id AND id = :fix_id"
+                ),
+                ids,
+            )
+    async with as_insight.begin() as db:
+        await db.execute(
+            store._ASK_FOR_FILES, {**ids, "requested": '[{"path": "a.py"}]', "tokens": 1}
+        )
+        moved = await db.scalar(store._REQUEST_MORE_FILES, ids)
+    assert moved is True
+    async with install.begin() as db:
+        state = await db.scalar(text("SELECT state FROM finding_fixes WHERE id = :id"), {"id": fix})
+        await db.execute(text("DELETE FROM jobs WHERE org_id = :org"), {"org": tenant["org"]})
+    assert state == "gathering"

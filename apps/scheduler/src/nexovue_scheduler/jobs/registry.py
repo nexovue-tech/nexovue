@@ -36,6 +36,8 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.knowledge.tasks",
     # F5: rung 2b's sweep, on `light`; it holds no key and calls nothing (plan T2b.9).
     "nexovue_scheduler.fixes.sweep",
+    # F5 Step 4: a requester's emails, on `light`, which holds the mail settings (T4.8).
+    "nexovue_scheduler.fixes.notify",
 )
 
 # The modules each kind of worker loads (`--tasks`), F3's mechanism. A narrow role names
@@ -51,6 +53,8 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
         "nexovue_scheduler.connections.fix_app",
         "nexovue_scheduler.connections.fix_link",
         "nexovue_scheduler.connections.fix_sweep",
+        # F5 Step 4: a person's check run (plan T4.12).
+        "nexovue_scheduler.connections.fix_check",
     ),
     # F3: the AI role, on its own account and network: the connection test (Step 4), the
     # wording job and its sweep (Step 5). `all` never loads these.
@@ -65,6 +69,8 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
         "nexovue_scheduler.insight.knowledge",
         # F5: rung 2b's general suggestion (plan T2b.6), on `insight-fix`.
         "nexovue_scheduler.insight.suggest_general_fix",
+        # F5: rung 3's suggestion from the files a person sent (plan T4.4), on `insight-fix`.
+        "nexovue_scheduler.insight.propose_fix",
     ),
 }
 # The module a worker's forkserver imports before any child exists, per task set.

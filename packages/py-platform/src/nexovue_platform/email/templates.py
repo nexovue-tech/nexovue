@@ -124,6 +124,24 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "AI wording is off until {until}. If you did not expect this, check who changed "
         "it in the audit log:\n\n{link}",
     ),
+    Message.FIX_FILES_READY: (
+        "The files for your suggested fix are ready to confirm",
+        "nexovue read the files for the suggested fix you asked for. Nothing is sent to the "
+        "AI provider until you confirm the list, and it waits 15 minutes:\n\n{link}\n\n"
+        "This email carries no code or file names on purpose.",
+    ),
+    Message.FIX_SUGGESTION_READY: (
+        "Your suggested fix is written",
+        "The suggested fix you asked for is written. It is not compiled and not run; read "
+        "it before using it:\n\n{link}\n\n"
+        "This email carries no code or file names on purpose.",
+    ),
+    Message.FIX_SUGGESTION_ENDED: (
+        "Your suggested fix ended without a change",
+        "The suggested fix you asked for ended without a change to show. The finding says "
+        "why, and what you can do next:\n\n{link}\n\n"
+        "This email carries no code or file names on purpose.",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

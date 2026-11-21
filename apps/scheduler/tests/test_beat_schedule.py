@@ -24,7 +24,11 @@ from nexovue_platform.connections import (
     SWEEP_CONNECTIONS_TASK,
 )
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
-from nexovue_platform.fixes.records import SWEEP_FIXES_TASK, SWEEP_GENERAL_FIXES_TASK
+from nexovue_platform.fixes.records import (
+    NOTIFY_REQUESTERS_TASK,
+    SWEEP_FIXES_TASK,
+    SWEEP_GENERAL_FIXES_TASK,
+)
 from nexovue_platform.knowledge import EMBED_CHECK_TASK, EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -42,6 +46,7 @@ from nexovue_scheduler.beat import (
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
+    FIX_NOTIFY_ENTRY,
     FIX_SWEEP_ENTRY,
     FIX_SWEEP_SECONDS,
     GENERAL_FIX_SWEEP_ENTRY,
@@ -264,6 +269,23 @@ def test_general_fixes_are_swept_every_minute_on_light_whether_ai_is_on_or_not(
     assert SWEEP_GENERAL_FIXES_TASK in registry.registered()
     assert "nexovue_scheduler.fixes.sweep" in registry.TASK_MODULES
     assert "nexovue_scheduler.fixes.sweep" not in registry.TASK_SETS["insight"]
+
+
+@pytest.mark.parametrize("ai_on", [True, False])
+def test_fix_requesters_are_emailed_every_minute_on_light(ai_on: bool) -> None:
+    """F5 T4.8 (D46, AC64): the one email per event goes from `light`, which holds the mail
+    settings and no connection key, always, so an email owed before AI or connections were
+    turned off still goes. `fixes/notify.py` is the one F5 module in `TASK_MODULES`."""
+    beat = _scheduler("self-hosted")
+    beat.ai_on = ai_on
+    notify = beat._sweep_entries()[FIX_NOTIFY_ENTRY]
+
+    assert notify.request.task == NOTIFY_REQUESTERS_TASK
+    assert notify.request.queue == "light"
+    assert notify.interval_seconds == 60
+    assert NOTIFY_REQUESTERS_TASK in registry.registered()
+    assert "nexovue_scheduler.fixes.notify" in registry.TASK_MODULES
+    assert "nexovue_scheduler.fixes.notify" not in registry.TASK_SETS["connections"]
 
 
 def test_with_no_live_connection_beat_adds_no_connection_sweep() -> None:

@@ -45,7 +45,7 @@ def _words(frozen: str) -> tuple[str, ...]:
         ("_FIX_STATES", (records.PROPOSING, records.PROPOSED, records.REFUSED, records.FAILED)),
         ("_GENERAL_LANGUAGES", records.GENERAL_LANGUAGES),
         ("_FIX_REASONS", records.GENERAL_REASONS),
-        ("_RETRY_CODES", records.RETRY_CODES),
+        ("_RETRY_CODES", records.GENERAL_RETRY_CODES),
     ],
 )
 def test_0077_froze_exactly_the_shared_words(frozen: str, shared: tuple[str, ...]) -> None:

@@ -431,6 +431,19 @@ describe("a timeline row's words come from kinds and typed detail alone", () => 
       }),
     ).toBe("A general fix suggestion was written");
   });
+
+  it("F5 Step 4: a suggestion from the service's files says so, never a bare fix (AC37)", () => {
+    expect(
+      eventSentence({
+        id: "e4",
+        kind: "fix_proposed",
+        at: "2026-11-21T12:00:00Z",
+        actor_kind: "system",
+        actor_name: null,
+        detail: { fix_id: "x-2", fix_kind: "source", step_count: 1 },
+      }),
+    ).toBe("A suggested fix was written from the service's own files");
+  });
 });
 
 // ------------------------------------------------ keeping and ending (F22 T2.7)

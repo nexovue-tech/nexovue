@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from nexovue_platform.ai.limits import month_of
 from sqlalchemy import text
@@ -62,6 +62,17 @@ _KEEP_FOR_RETRY: Final = text(
     WHERE org_id = :org_id AND id = :fix_id AND state = 'proposing'
     """
 )
+
+
+class FixOfProject(Protocol):
+    """What admitting a call and ending a row need of either kind of suggestion."""
+
+    @property
+    def id(self) -> str: ...
+    @property
+    def org_id(self) -> str: ...
+    @property
+    def project_id(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,21 +128,25 @@ async def load_fix(engine: AsyncEngine, *, org_id: str, fix_id: str) -> StoredFi
 
 
 async def load_model_input(engine: AsyncEngine, fix: StoredFix) -> dict[str, Any] | None:
+    return await model_input_of(
+        engine, org_id=fix.org_id, finding_id=fix.finding_id, version=fix.explanation_version
+    )
+
+
+async def model_input_of(
+    engine: AsyncEngine, *, org_id: str, finding_id: str, version: int
+) -> dict[str, Any] | None:
+    """`model_input` alone of one explanation version, for either kind of suggestion."""
     async with engine.connect() as connection:
         found = await connection.scalar(
-            _MODEL_INPUT,
-            {
-                "org_id": fix.org_id,
-                "finding_id": fix.finding_id,
-                "version": fix.explanation_version,
-            },
+            _MODEL_INPUT, {"org_id": org_id, "finding_id": finding_id, "version": version}
         )
     return found if isinstance(found, dict) else None
 
 
 async def admit(
     engine: AsyncEngine,
-    fix: StoredFix,
+    fix: FixOfProject,
     *,
     reserve: int,
     ceiling: int,
@@ -206,7 +221,7 @@ async def finish(
     return "written" if changed.rowcount else "not_written"
 
 
-def _end_parameters(fix: StoredFix, end: FixEnd, tokens: int, at: datetime) -> dict[str, Any]:
+def _end_parameters(fix: FixOfProject, end: FixEnd, tokens: int, at: datetime) -> dict[str, Any]:
     return {
         "org_id": fix.org_id,
         "fix_id": fix.id,

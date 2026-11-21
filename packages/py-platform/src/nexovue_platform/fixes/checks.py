@@ -399,6 +399,13 @@ def _added_line_breaks(line: str, known_addresses: frozenset[str]) -> list[tuple
     ]
     if new_addresses:
         found.append(("K6", "new_address"))
+    return found + line_breaks_without_file(line)
+
+
+def line_breaks_without_file(line: str) -> list[tuple[Rule, str]]:
+    """K7 to K10 on one added line: the rules that need nothing but the line, so a read of a
+    stored suggestion, which has no file, runs them again (design, *The flow*, step 6)."""
+    found: list[tuple[Rule, str]] = []
     if hidden_characters(line):
         found.append(("K7", "hidden_character"))
     if mixed_script_words(line):
@@ -553,22 +560,46 @@ def flags(files: Sequence[ChangedFile]) -> list[Flag]:
     """FR18's flags over passing edits. Each names its file and line."""
     found: list[Flag] = []
     for changed in files:
-        covered = flag_lists_cover(changed.path)
-        is_go = _extension(changed.path) in _GO
-        if is_test_file(changed.path):
-            found.append(Flag("test_file", changed.ref, changed.path, None, "file"))
-        for number, line in changed.added_lines():
-            if covered and (_IMPORT.search(line) or (is_go and _GO_IMPORT_LINE.match(line))):
-                found.append(Flag("new_import", changed.ref, changed.path, number, "new"))
-            if covered and _RISKY_CALL.search(_code_outside_strings(line)):
-                found.append(Flag("risky_call", changed.ref, changed.path, number, "new"))
-            if covered and _has_comment(line, changed.path):
-                found.append(Flag("comment", changed.ref, changed.path, number, "new"))
-            if any(not c.isascii() and c.isalpha() and c not in changed.old_content for c in line):
-                found.append(Flag("new_letters", changed.ref, changed.path, number, "new"))
-        for number, line in changed.removed_lines():
-            if _CHECK_WORDS.search(_code_outside_strings(line)):
-                found.append(Flag("removed_check", changed.ref, changed.path, number, "old"))
+        added = changed.added_lines()
+        letters = {
+            number
+            for number, line in added
+            if any(not c.isascii() and c.isalpha() and c not in changed.old_content for c in line)
+        }
+        found += line_flags(
+            changed.ref, changed.path, added, changed.removed_lines(), new_letter_lines=letters
+        )
+    return found
+
+
+def line_flags(
+    ref: str,
+    path: str,
+    added: Sequence[tuple[int, str]],
+    removed: Sequence[tuple[int, str]],
+    *,
+    new_letter_lines: Collection[int],
+) -> list[Flag]:
+    """FR18's flags from one file's numbered added and removed lines. `new_letter_lines`
+    are the added lines holding letters new to the file: worked out from the file by the
+    check run, or read from a stored suggestion's display facts (D53)."""
+    found: list[Flag] = []
+    covered = flag_lists_cover(path)
+    is_go = _extension(path) in _GO
+    if is_test_file(path):
+        found.append(Flag("test_file", ref, path, None, "file"))
+    for number, line in added:
+        if covered and (_IMPORT.search(line) or (is_go and _GO_IMPORT_LINE.match(line))):
+            found.append(Flag("new_import", ref, path, number, "new"))
+        if covered and _RISKY_CALL.search(_code_outside_strings(line)):
+            found.append(Flag("risky_call", ref, path, number, "new"))
+        if covered and _has_comment(line, path):
+            found.append(Flag("comment", ref, path, number, "new"))
+        if number in new_letter_lines:
+            found.append(Flag("new_letters", ref, path, number, "new"))
+    for number, line in removed:
+        if _CHECK_WORDS.search(_code_outside_strings(line)):
+            found.append(Flag("removed_check", ref, path, number, "old"))
     return found
 
 

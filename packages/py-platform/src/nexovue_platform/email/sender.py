@@ -72,6 +72,12 @@ class Message(Enum):
     # F3 (AC102, A67). An organization's AI connection changed in a way an owner must
     # know: its model, or a change that ended their consent. Old and new host, never a key.
     AI_CONNECTION_CHANGED = "ai_connection_changed"
+    # F5 (D46): one email per event a requester must hear about a suggested fix they asked
+    # for: the files are ready to confirm, or the suggestion is written, or it ended
+    # without one. A fixed sentence and a finding link: no code, no path, no model text.
+    FIX_FILES_READY = "fix_files_ready"
+    FIX_SUGGESTION_READY = "fix_suggestion_ready"
+    FIX_SUGGESTION_ENDED = "fix_suggestion_ended"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
     # The processor gave up collecting a subscription's payments; the paid plan

@@ -50,7 +50,11 @@ from nexovue_platform.connections import (
 )
 from nexovue_platform.deployment import HOSTED, ai_available
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
-from nexovue_platform.fixes.records import SWEEP_FIXES_TASK, SWEEP_GENERAL_FIXES_TASK
+from nexovue_platform.fixes.records import (
+    NOTIFY_REQUESTERS_TASK,
+    SWEEP_FIXES_TASK,
+    SWEEP_GENERAL_FIXES_TASK,
+)
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.knowledge import EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from nexovue_platform.telemetry.logging import get_logger
@@ -120,6 +124,11 @@ GENERAL_FIX_SWEEP_ENTRY: Final = "sweep:general-fixes"
 # while connections are on, so no job waits for a `scheduler-connections` not running.
 FIX_SWEEP_SECONDS: Final = 60
 FIX_SWEEP_ENTRY: Final = "sweep:fixes"
+# F5 Step 4: a requester's one email per event, on `light`, which holds the mail settings,
+# always, so an email owed before connections were turned off still goes (every minute, a
+# guess).
+FIX_NOTIFY_SECONDS: Final = 60
+FIX_NOTIFY_ENTRY: Final = "sweep:fix-requesters"
 
 # F4 T5.5: chat's fact lines from recovered findings, every 5 minutes (a guess), on the shared
 # queue with default limits; only where AI may be offered, as nothing else reads them.
@@ -499,6 +508,7 @@ class Beat:
                 GENERAL_FIX_SWEEP_SECONDS,
                 SHARED_QUEUE,
             ),
+            FIX_NOTIFY_ENTRY: (NOTIFY_REQUESTERS_TASK, FIX_NOTIFY_SECONDS, SHARED_QUEUE),
         }
         if ai_available(self._settings.nexovue_deployment):
             wanted[KNOWLEDGE_SWEEP_ENTRY] = (

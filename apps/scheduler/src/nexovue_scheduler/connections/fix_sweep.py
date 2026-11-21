@@ -18,7 +18,14 @@ every organization, each row written by its own `org_id`:
 4. **Short-lived rows** past `expires_at`: packs, check runs, GitHub link attempts.
 5. **The Fix App's hourly refresh** of its repositories and grant, as a job each.
 
-Step 4 adds `proposing` source rows and recording a proposal; Step 7 the pull request rows.
+Step 4 (T4.8) adds a `proposing` row past every attempt of its job (`failed`,
+`timed_out`), and records each new result once, in the transaction that marks it recorded:
+a `proposed` row has the pure rules run again first (D18's tamper signal: a refusal there
+is `failed`, `checks_refused_at_click`, audited), then the timeline's `fix_proposed`; a
+rule's refusal writes `fix.withheld` with the rule and the files it named, resolved
+through `files_read`; and every row the requester must hear about owes one email
+(`email_due`, D46), which `fixes.notify_requesters` sends from `light`. Step 7 adds the
+pull request rows.
 """
 
 from __future__ import annotations
@@ -26,21 +33,42 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
+from nexovue_platform.cases import (
+    RECORD_CASE_AUDIT_SQL,
+    RECORD_FINDING_EVENT_SQL,
+    case_audit_parameters,
+    finding_event_parameters,
+)
 from nexovue_platform.connections import REPOSITORY_REFRESH
+from nexovue_platform.detection import FINDING_AUDIT_TARGET
+from nexovue_platform.evidence.aliases import AliasBook
+from nexovue_platform.fixes.consent import folder_covered
+from nexovue_platform.fixes.policy import CHECKS_VERSION, OwnerLists
 from nexovue_platform.fixes.records import (
+    CALL_SECONDS_LONGEST,
+    CANCELLED,
+    CHECKS_REFUSED_AT_CLICK,
+    FAILED,
+    FIX_CHECKS_REFUSED,
+    FIX_WITHHELD,
     GATHERED_LAPSES_AFTER,
     GATHERING_STUCK_AFTER,
     INTERACTIVE_QUEUE,
+    LAPSED,
+    PROPOSED,
     REFRESH_FIX_APP_TASK,
     SWEEP_FIXES_TASK,
+    WITHHELD_RULES,
+    proposing_lifetime,
 )
 from nexovue_platform.fixes.statements import CLEAR_STORED_CODE
+from nexovue_platform.fixes.stored import StoredRefusal, read_stored
 from nexovue_platform.jobs import ENQUEUE_UNLESS_WAITING, JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
@@ -51,6 +79,11 @@ BATCH: Final = 200
 # BR9: written code lasts at most this long (a guess).
 CODE_KEPT_FOR: Final = timedelta(days=30)
 REFRESH_EXPIRES_SECONDS: Final = 60
+# A sent row past every attempt of its job, at F3's longest call, with the lease's grace:
+# no attempt can still write (design, *The sweep*, step 1).
+PROPOSING_STUCK_AFTER: Final = proposing_lifetime(CALL_SECONDS_LONGEST)
+# Reasons a requester chose, or never confirmed: no email (D46).
+NEUTRAL: Final = frozenset({CANCELLED, LAPSED})
 
 # Across every organization: rows nothing will write any more. Each carries its `org_id`.
 _ENDED_WAITING: Final = text(
@@ -73,21 +106,46 @@ _ENDED_WAITING: Final = text(
 _DROP_PACK: Final = text(
     "DELETE FROM finding_fix_source_packs WHERE org_id = :org_id AND fix_id = :fix_id"
 )
-# Across every organization: source rows that ended short, whose code is not yet cleared.
-_ENDED_SHORT: Final = text(
+# Across every organization: source rows that ended, whose result is not yet recorded.
+_UNRECORDED: Final = text(
     """
-    SELECT id, org_id FROM finding_fixes
-    WHERE kind = 'source' AND state IN ('refused', 'failed') AND result_recorded_at IS NULL
+    SELECT id, org_id, finding_id, state, reason, edits, files_read, folder, withheld_refs,
+           explanation_version, connection_repository_id, checks_version, notify_requester,
+           sent_at, finished_at
+    FROM finding_fixes
+    WHERE kind = 'source' AND state IN ('proposed', 'refused', 'failed')
+      AND result_recorded_at IS NULL
       AND (CAST(:only_org AS uuid) IS NULL OR org_id = CAST(:only_org AS uuid))
     ORDER BY state_changed_at
     LIMIT :batch
     FOR UPDATE SKIP LOCKED
     """
 )
+# The row's result marked recorded, and whether its requester is owed an email (D46).
 _RECORDED: Final = text(
     """
-    UPDATE finding_fixes SET result_recorded_at = :at
+    UPDATE finding_fixes SET result_recorded_at = :at, email_due = :email_due
     WHERE org_id = :org_id AND id = :fix_id AND result_recorded_at IS NULL
+    """
+)
+_REFUSED_AT_RECORD: Final = text(
+    """
+    UPDATE finding_fixes
+    SET state = 'failed', reason = 'checks_refused_at_click', state_changed_at = :at
+    WHERE org_id = :org_id AND id = :fix_id AND state = 'proposed'
+    """
+)
+_EXPLANATION: Final = text(
+    """
+    SELECT model_input, aliases FROM finding_explanations
+    WHERE org_id = :org_id AND finding_id = :finding_id AND version = :version
+    """
+)
+_UNWITHDRAWN: Final = text(
+    """
+    SELECT folder_scope, extra_excluded_paths FROM fix_source_consents
+    WHERE org_id = :org_id AND connection_repository_id = :repository_id
+      AND withdrawn_at IS NULL
     """
 )
 # Across every organization: code kept where AI was switched off by a person or removed,
@@ -152,6 +210,7 @@ async def sweep(
     for state, after, reason in (
         ("gathering", GATHERING_STUCK_AFTER, "timed_out"),
         ("gathered", GATHERED_LAPSES_AFTER, "lapsed"),
+        ("proposing", PROPOSING_STUCK_AFTER, "timed_out"),
     ):
         async with engine.begin() as connection:
             rows = (
@@ -170,7 +229,7 @@ async def sweep(
             for row in rows:
                 await connection.execute(_DROP_PACK, {"org_id": row.org_id, "fix_id": row.id})
         ended += len(rows)
-    cleared = await _clear_ended_short(engine, now=now, only_org=only_org)
+    cleared = await _record_results(engine, now=now, only_org=only_org)
     cleared += await _clear_due(engine, now=now, only_org=only_org)
     async with engine.begin() as connection:
         expired = 0
@@ -182,16 +241,138 @@ async def sweep(
     return SweptFixes(ended=ended, cleared=cleared, expired=expired, refreshes=refreshes)
 
 
-async def _clear_ended_short(engine: AsyncEngine, *, now: datetime, only_org: str | None) -> int:
+async def _record_results(engine: AsyncEngine, *, now: datetime, only_org: str | None) -> int:
+    """Each ended source row's result, once (design, *The sweep*, step 3). Returns how many
+    rows had their stored code deleted: every row that did not end with a suggestion."""
+    cleared = 0
     async with engine.begin() as connection:
-        rows = (
-            await connection.execute(_ENDED_SHORT, {"batch": BATCH, "only_org": only_org})
-        ).all()
+        rows = (await connection.execute(_UNRECORDED, {"batch": BATCH, "only_org": only_org})).all()
         for row in rows:
             ids = {"org_id": row.org_id, "fix_id": row.id}
-            await connection.execute(text(CLEAR_STORED_CODE), {**ids, "reason": "ended_short"})
-            await connection.execute(_RECORDED, {**ids, "at": now})
-    return len(rows)
+            state, reason = row.state, row.reason
+            if state == PROPOSED and await _refused_again(connection, row):
+                await connection.execute(_REFUSED_AT_RECORD, {**ids, "at": now})
+                await _audit(connection, row, FIX_CHECKS_REFUSED, {"fix_id": str(row.id)})
+                state, reason = FAILED, CHECKS_REFUSED_AT_CLICK
+            if state == PROPOSED:
+                await connection.execute(
+                    text(RECORD_FINDING_EVENT_SQL),
+                    finding_event_parameters(
+                        "fix_proposed",
+                        org_id=row.org_id,
+                        finding_id=row.finding_id,
+                        actor_kind="system",
+                        at=row.finished_at or now,
+                        fix_id=row.id,
+                        fix_kind="source",
+                        step_count=len(_changed_refs(row.edits)),
+                    ),
+                )
+            else:
+                if reason in WITHHELD_RULES:
+                    await _audit(connection, row, FIX_WITHHELD, _withheld_detail(row, reason))
+                await connection.execute(text(CLEAR_STORED_CODE), {**ids, "reason": "ended_short"})
+                cleared += 1
+            await connection.execute(
+                _RECORDED, {**ids, "at": now, "email_due": _owes_email(row, reason)}
+            )
+    return cleared
+
+
+async def _refused_again(connection: AsyncConnection, row: Any) -> bool:
+    """D18: the pure rules run again on what the AI room stored, before anyone is told. A
+    row at an older `checks_version` is only ever "Out of date", never refused here."""
+    if row.checks_version != CHECKS_VERSION:
+        return False
+    model_input, book = None, None
+    if row.explanation_version is not None:
+        found = (
+            await connection.execute(
+                _EXPLANATION,
+                {
+                    "org_id": row.org_id,
+                    "finding_id": row.finding_id,
+                    "version": row.explanation_version,
+                },
+            )
+        ).one_or_none()
+        if found is not None:
+            model_input, book = found.model_input, AliasBook(found.aliases)
+    extra: list[str] = []
+    if row.connection_repository_id is not None:
+        consents = await connection.execute(
+            _UNWITHDRAWN, {"org_id": row.org_id, "repository_id": row.connection_repository_id}
+        )
+        extra = [
+            path
+            for consent in consents
+            if folder_covered(consent.folder_scope, row.folder)
+            for path in consent.extra_excluded_paths or []
+        ]
+    checked = read_stored(
+        row.edits,
+        row.files_read,
+        folder=row.folder,
+        owner=OwnerLists(extra_excluded_paths=tuple(extra)),
+        allowed_evidence=_allowed_evidence(model_input, row.files_read),
+        aliases=book,
+    )
+    return isinstance(checked, StoredRefusal)
+
+
+def _allowed_evidence(model_input: Any, files_read: Any) -> set[str]:
+    if isinstance(model_input, dict):
+        return {
+            str(fact["id"])
+            for fact in model_input.get("facts") or []
+            if isinstance(fact, dict) and "id" in fact
+        }
+    return {
+        str(each.get("ref"))
+        for each in (files_read or {}).get("files") or []
+        if isinstance(each, dict)
+    }
+
+
+def _changed_refs(edits: Any) -> set[str]:
+    return {str(each.get("file_ref")) for each in edits or [] if isinstance(each, dict)}
+
+
+def _withheld_detail(row: Any, reason: str) -> dict[str, Any]:
+    """The rule and the files it named, resolved through `files_read`, which only this
+    room writes: the AI room's references alone are never trusted to name a path."""
+    paths = {
+        str(each.get("ref")): str(each.get("path"))
+        for each in (row.files_read or {}).get("files") or []
+        if isinstance(each, dict)
+    }
+    refs = [str(ref) for ref in row.withheld_refs or [] if isinstance(ref, str)]
+    return {
+        "fix_id": str(row.id),
+        "rule": reason.removeprefix("withheld_"),
+        "files": [paths[ref] for ref in refs if ref in paths],
+    }
+
+
+def _owes_email(row: Any, reason: str | None) -> bool:
+    """D46: the requester hears the result of what they sent, unless they cleared the box.
+    A cancel, a lapse or a row that never sent anything owes nothing."""
+    return bool(row.notify_requester) and row.sent_at is not None and reason not in NEUTRAL
+
+
+async def _audit(
+    connection: AsyncConnection, row: Any, action: str, detail: dict[str, Any]
+) -> None:
+    await connection.execute(
+        text(RECORD_CASE_AUDIT_SQL),
+        case_audit_parameters(
+            org_id=row.org_id,
+            actor_user_id=None,
+            action=action,
+            target=f"{FINDING_AUDIT_TARGET}:{row.finding_id}",
+            detail=detail,
+        ),
+    )
 
 
 async def _clear_due(engine: AsyncEngine, *, now: datetime, only_org: str | None) -> int:

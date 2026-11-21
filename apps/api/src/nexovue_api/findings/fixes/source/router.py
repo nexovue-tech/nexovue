@@ -6,24 +6,27 @@ AI connection and F3's limits to decide FR9. A person's routes only, so a token 
 below each and none is on the read surface (AC3); every write is `MayRequestFix`, and a
 support view is refused by method. Ask and the brief's paths read this service's stacks
 through the tenant chokepoint (`TenantRepository`), so `/findings` keeps the telemetry
-tier. **Nothing here calls GitHub or a provider**: each step adds a job, and Send stops at
-Step 3's guard.
+tier. **Nothing here calls GitHub or a provider**: each step adds a job; Send's goes to
+the AI role, and the check run's to `scheduler-connections`.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Body, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.auth.policy import MayRequestFix
 from nexovue_api.deps import AppSettings, DbSession
-from nexovue_api.findings import fix_service
+from nexovue_api.findings import fix_checks, fix_service
 from nexovue_api.findings.fix_source_schemas import (
     BriefFiles,
     BriefFilesStarted,
+    CheckRequest,
+    CheckView,
     FindingSourceFix,
     SourceFilesRequest,
     SourceFixRequest,
@@ -107,7 +110,7 @@ async def send_source_files(
     fix_id: uuid.UUID,
     request: SourceSendRequest,
 ) -> FindingSourceFix:
-    """FR13a: 409 with the new list when the digest is old (AC3b). Step 3 sends nothing."""
+    """FR13a: 409 with the new list when the digest is old (AC3b); else the AI role's job."""
     return await fix_service.send(
         db,
         identity=identity,
@@ -137,6 +140,27 @@ async def cancel_source_fix(
         fix_id=fix_id,
         settings=settings,
         now=datetime.now(UTC),
+    )
+
+
+@router.post(
+    "/{finding_id}/fixes/{fix_id}/check",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Check my access: ask GitHub whether you may read this suggestion's code",
+)
+async def check_source_fix(
+    identity: MayRequestFix,
+    db: DbSession,
+    finding_id: uuid.UUID,
+    fix_id: uuid.UUID,
+    request: Annotated[CheckRequest | None, Body()] = None,
+) -> CheckView:
+    """D20: under the owner's requirement, quoted code shows only after this person's own
+    `read` check passes. Adds one job; the result is polled through the suggestion's read.
+    One route for both kinds: a general row refuses, `general_has_no_code` (AC73)."""
+    del request  # `read` only, until T5.1 adds `patch`
+    return await fix_checks.ask_check(
+        db, identity=identity, finding_id=finding_id, fix_id=fix_id, now=datetime.now(UTC)
     )
 
 

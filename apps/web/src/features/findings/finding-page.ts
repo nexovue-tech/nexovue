@@ -499,7 +499,9 @@ export function eventSentence(event: TimelineEvent): string {
     case "explained":
       return "The explanation joined this finding";
     case "fix_proposed":
-      return "A general fix suggestion was written";
+      return detail.fix_kind === "source"
+        ? "A suggested fix was written from the service's own files"
+        : "A general fix suggestion was written";
     default:
       return issueEventSentence(event) ?? event.kind.replaceAll("_", " ");
   }

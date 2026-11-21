@@ -153,3 +153,81 @@ async def test_the_ai_account_reads_model_input_and_never_the_evidence_or_the_na
             with pytest.raises(DBAPIError, match="permission denied"):
                 async with db.begin_nested():
                     await db.execute(text(f"SELECT {column} FROM finding_explanations LIMIT 1"))
+
+
+# Step 4 (T4.2, AC6): what the proposal job reads and writes of a source row, and no more.
+SOURCE_READS: Final = (
+    ("finding_fixes", "connection_repository_id, folder, round, retry_code"),
+    ("finding_fix_source_packs", "fix_id, org_id, files, frames, hint"),
+    (
+        "fix_source_consents",
+        "provider_base_url, provider_format, key_id, model, folder_scope, "
+        "extra_excluded_paths, withdrawn_at",
+    ),
+)
+SOURCE_NEVER_READ: Final = (
+    ("finding_fixes", "files_read"),
+    ("finding_fixes", "edits"),
+    ("finding_fixes", "requested_by"),
+    ("finding_fixes", "path_candidates"),
+    ("finding_fixes", "files_digest"),
+    ("fix_source_consents", "consented_by"),
+    ("fix_source_consents", "allowed_config_paths"),
+    ("finding_fix_checks", "patch"),
+    ("service_code_locations", "folder"),
+    ("github_user_links", "github_login"),
+)
+
+
+@pytest.mark.parametrize(("table", "columns"), SOURCE_READS)
+async def test_ac6_the_ai_account_reads_what_the_proposal_needs(
+    as_insight: AsyncEngine, table: str, columns: str
+) -> None:
+    async with as_insight.connect() as db:
+        await db.execute(text(f"SELECT {columns} FROM {table} LIMIT 1"))
+
+
+@pytest.mark.parametrize(("table", "column"), SOURCE_NEVER_READ)
+async def test_ac6_the_ai_account_never_reads_the_listing_the_edits_or_a_person(
+    as_insight: AsyncEngine, table: str, column: str
+) -> None:
+    async with as_insight.connect() as db:
+        with pytest.raises(DBAPIError, match="permission denied"):
+            await db.execute(text(f"SELECT {column} FROM {table} LIMIT 1"))
+
+
+async def test_ac88_the_ai_account_may_execute_the_more_files_function_only(
+    install: AsyncEngine, as_insight: AsyncEngine
+) -> None:
+    async with install.connect() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT has_function_privilege(:account,
+                               'fix_request_more_files(uuid, uuid)', 'EXECUTE') AS insight,
+                           has_function_privilege('public',
+                               'fix_request_more_files(uuid, uuid)', 'EXECUTE') AS anyone
+                    """
+                ),
+                {"account": insight_account.INSIGHT_ACCOUNT},
+            )
+        ).one()
+    assert rows.insight and not rows.anyone
+    async with as_insight.connect() as db:
+        # A row that does not exist moves nothing, and the call itself is allowed.
+        moved = await db.scalar(
+            text("SELECT fix_request_more_files(CAST(:id AS uuid), CAST(:id AS uuid))"),
+            {"id": str(uuid.uuid4())},
+        )
+    assert moved is False
+
+
+async def test_ac6_the_ai_account_writes_no_source_column_but_its_own(
+    as_insight: AsyncEngine,
+) -> None:
+    async with as_insight.connect() as db:
+        for column in ("files_read", "files_digest", "folder", "round", "candidates_from"):
+            with pytest.raises(DBAPIError, match="permission denied"):
+                async with db.begin_nested():
+                    await db.execute(text(f"UPDATE finding_fixes SET {column} = NULL WHERE false"))

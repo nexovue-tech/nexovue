@@ -4,16 +4,18 @@ import { ApiError, isConflict, problemCode } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { TextField } from "@/shared/components/TextField";
-
-import type { FindingSourceFix, SourceFiles, SourceFix } from "./api";
+import { rememberLinkReturn } from "@/shared/github-link-return";
+import type { AskedRound, FindingSourceFix, Proposal, SourceFiles, SourceFix } from "./api";
 import {
   useAskSourceFix,
   useCancelSourceFix,
   useChangeSourceFiles,
+  useCheckMyAccess,
   useSendSourceFiles,
   useStartGitHubLink,
 } from "./api";
-import { minutesLeft, SOURCE_WORDS, sourceTitle } from "./fix-page";
+import { FixDiff } from "./FixDiff";
+import { askedAgo, DIFF_WORDS, minutesLeft, SOURCE_WORDS, sourceTitle } from "./fix-page";
 
 const MAX_TYPED = 5;
 const LINK = "text-brand-text underline-offset-2 hover:underline [overflow-wrap:anywhere]";
@@ -21,7 +23,8 @@ const LINK = "text-brand-text underline-offset-2 hover:underline [overflow-wrap:
 /**
  * Rung 3 (F5 Step 3): Ask, then the list of files that would be sent, then Send or Cancel.
  * Every sentence comes from the API in this person's shape; a viewer's read holds no path
- * (AC10). **Nothing goes to a provider in Step 3:** Send answers with the stated guard.
+ * (AC10). Send hands the list to the AI role; the written suggestion (Step 4) reads back
+ * here, with its diff, for a person who may read its code.
  */
 export function SourceSection({
   findingId,
@@ -77,7 +80,10 @@ function LinkStep({ sentence }: { sentence: string | null }) {
           pending={start.isPending}
           onClick={() =>
             start.mutate(undefined, {
-              onSuccess: (answer) => window.location.assign(answer.authorize_url),
+              onSuccess: (answer) => {
+                rememberLinkReturn(window.location.pathname, answer.attempt_id);
+                window.location.assign(answer.authorize_url);
+              },
             })
           }
         >
@@ -161,6 +167,135 @@ function SourceState({ findingId, fix, now }: { findingId: string; fix: SourceFi
       <h3 className="font-medium text-ink text-sm">{fix.heading}</h3>
       {fix.sentence ? <p className="max-w-prose text-ink text-sm">{fix.sentence}</p> : null}
       {fix.files ? <FileList findingId={findingId} fix={fix} files={fix.files} now={now} /> : null}
+      {fix.proposal ? <Written proposal={fix.proposal} now={now} /> : null}
+      {fix.code_withheld ? <CheckMyAccess findingId={findingId} fix={fix} /> : null}
+    </div>
+  );
+}
+
+/** The written suggestion (Step 4): lead, starts-from, the diff, files read, not checked,
+    and tokens with age. Everything is the API's checked text in this person's shape. */
+function Written({ proposal, now }: { proposal: Proposal; now: number }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-3" data-testid="source-proposal">
+      <p className="max-w-prose text-ink text-sm [overflow-wrap:anywhere]">{proposal.lead}</p>
+      {proposal.starts_from ? (
+        <p className="max-w-prose text-ink-dim text-sm">{proposal.starts_from}</p>
+      ) : null}
+      <FixDiff proposal={proposal} />
+      <div className="flex flex-col gap-1 text-sm">
+        <h4 className="text-ink-dim">{DIFF_WORDS.filesRead}</h4>
+        <ul className="flex flex-col gap-1">
+          {proposal.files_read.map((file) => (
+            <li key={file.path} className="min-w-0 text-ink-dim">
+              {file.github_url ? (
+                <a
+                  className={`font-mono ${LINK}`}
+                  href={file.github_url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {file.path}
+                </a>
+              ) : (
+                <span className="font-mono [overflow-wrap:anywhere]">{file.path}</span>
+              )}{" "}
+              · {file.why}
+            </li>
+          ))}
+        </ul>
+      </div>
+      {proposal.left_out.length > 0 ? (
+        <div className="flex flex-col gap-1 text-sm">
+          <h4 className="text-ink-dim">{DIFF_WORDS.leftOut}</h4>
+          <ul className="flex flex-col gap-1">
+            {proposal.left_out.map((left) => (
+              <li key={left.path} className="text-ink-dim [overflow-wrap:anywhere]">
+                <span className="font-mono">{left.path}</span>: {left.why}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="flex flex-col gap-1 text-sm">
+        <h4 className="text-ink-dim">{DIFF_WORDS.notChecked}</h4>
+        <ul className="flex flex-col gap-1">
+          {proposal.not_checked.map((line) => (
+            <li key={line} className="max-w-prose text-ink-dim [overflow-wrap:anywhere]">
+              {line}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <p className="text-ink-dim text-xs">
+        {DIFF_WORDS.written(
+          proposal.written_at ? askedAgo(proposal.written_at, now) : "—",
+          proposal.commit,
+          proposal.tokens,
+        )}
+      </p>
+    </div>
+  );
+}
+
+/** D20: the owner limits quoted code; this person's own check opens it for an hour. */
+function CheckMyAccess({ findingId, fix }: { findingId: string; fix: SourceFix }) {
+  const check = useCheckMyAccess(findingId, fix.id);
+  const running = fix.check?.status === "running";
+  return (
+    <div className="flex min-w-0 flex-col gap-2" data-testid="check-my-access">
+      <p className="max-w-prose text-ink text-sm">{fix.code_withheld}</p>
+      {fix.check && !fix.check.passed && fix.check.sentence ? (
+        <p className="max-w-prose text-ink text-sm">{fix.check.sentence}</p>
+      ) : null}
+      {fix.check_action ? (
+        <div>
+          <Button
+            variant="secondary"
+            pending={check.isPending || running}
+            onClick={() => check.mutate()}
+          >
+            {fix.check_action}
+          </Button>
+        </div>
+      ) : null}
+      {check.error ? (
+        <p role="alert" className="max-w-prose text-ink text-sm">
+          {errorDetail(check.error)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** FR15b at round 2 or 3: what the AI asked for, why, and its own words, labelled. */
+function AskedFiles({ asked }: { asked: AskedRound }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 text-sm" data-testid="asked-round">
+      <p className="text-ink">{asked.lead}</p>
+      <ul className="flex flex-col gap-2">
+        {asked.asked.map((file) => (
+          <li key={file.path} className="flex min-w-0 flex-col gap-0.5">
+            <span className="font-mono [overflow-wrap:anywhere]">{file.path}</span>
+            <span className="text-ink-dim [overflow-wrap:anywhere]">{file.because}</span>
+            {file.model_words ? (
+              <span className="text-ink-dim">
+                {asked.model_words_label}:{" "}
+                <span className="text-ink [overflow-wrap:anywhere]">{file.model_words}</span>
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {asked.refused.map((refused) => (
+        <p key={refused.path} className="text-ink-dim [overflow-wrap:anywhere]">
+          {DIFF_WORDS.refusedAsked(refused.path, refused.why)}
+        </p>
+      ))}
+      {asked.unmatched > 0 ? (
+        <p className="text-ink-dim">{SOURCE_WORDS.unmatched(asked.unmatched)}</p>
+      ) : null}
+      <p className="text-ink-dim">{asked.round_sentence}</p>
     </div>
   );
 }
@@ -186,6 +321,7 @@ function FileList({
   const changed = removed.length > 0 || added.trim() !== "";
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {files.asked_round ? <AskedFiles asked={files.asked_round} /> : null}
       {files.commit_sentence ? (
         <p className="text-ink-dim text-sm">{files.commit_sentence}</p>
       ) : null}

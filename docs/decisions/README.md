@@ -55,6 +55,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-082 — F5 has its own GitHub App, read-only until the founder's go](ADR-082-f5-has-its-own-github-app-read-only-until-the-founders-go.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
 - [ADR-083 — A service's code location is its own row, for the organization with a project's override](ADR-083-a-services-code-location-is-its-own-row-with-a-projects-override.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
 - [ADR-084 — Source consent is per repository and folder, and worked out at each use](ADR-084-source-consent-is-per-repository-and-folder-worked-out-at-each-use.md) — with the F5 design, 2026-11-02; filed 2026-11-21 with F5 Step 3
+- [ADR-091 — The AI account deletes a sent pack only through a function, never a table grant](ADR-091-the-ai-account-deletes-a-sent-pack-only-through-a-function.md) — with F5 Step 4, 2026-11-21. Refines the F5 design's grants
 - [ADR-088 — A case note is chat's knowledge by copy, gone with its note, inert, and ranked above nexovue's own lines](ADR-088-a-note-is-chat-knowledge-by-copy-and-ranks-above-composed-lines.md) — with F4 Step 7, 2026-11-21. Extends ADR-067 to F22's notes
 
 ## Earlier decisions, 0001–0112
