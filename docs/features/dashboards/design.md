@@ -319,6 +319,7 @@ Same grid, in place, so a person edits what they will see.
 - **Below `lg`:** moves read Up and Down, and Width is hidden, since it has no visible effect there.
 - **Reached a cap:** "A dashboard holds 30 panels, because each one reads the database. Split it into two." Same for reads: "This dashboard would need 44 reads, and one page may make 40. Remove panels or use the picker." It never mentions a plan.
 - **Below `md`:** editing still works, since buttons need no precision. Drag is not offered on touch.
+- **Drag (Step 10)** is a second way to reorder, never the only one: a handle on each panel starts it with a precise pointer only, the other panels hold still until the drop, the panel it would take the place of is marked, the dragged panel cannot leave the grid sideways, a drop writes the same order the buttons write and is said in the live region, and there is no keyboard sensor, since the toolbar is the keyboard's way (WCAG 2.5.7). It reorders a list and never places a panel on a grid.
 - **States owned:** validation inline and in a summary; unsaved changes (`useUnsavedChanges`); dangerous, for delete, through the shared inline `ConfirmPanel` (`shared/components/ConfirmPanel.tsx`); conflict.
 - **Versions** lists the kept versions with who and when. "Restore this version" opens it as a draft, and saving makes a new version. An owner or admin also sees "Remove at once" (FR68).
 
@@ -913,7 +914,7 @@ permission here, and AI stays off until the customer turns it on. So there is **
 | Native select plus typed field | `<datalist>` | Cannot show an escape and hold the raw value | One more field |
 | Second package | Both routers in one `router.py` | `test_ratelimit_coverage.py:56-60` judges by file | One more package |
 | Ordered list, width of 12 | `react-grid-layout`, `gridstack` | Dependencies, and weak keyboard support reported; free placement isn't needed. Details in [research](research.md) section 5 | Less free than rivals |
-| Ordered list, buttons | Drag only | Fails WCAG 2.5.7 | Drag arrives later |
+| Ordered list, buttons | Drag only | Fails WCAG 2.5.7 | Drag arrived in Step 10, beside the buttons |
 | JSON document | Child table per panel | Layout change touches many rows; export reassembles | A validator must enforce what Postgres can't |
 | Organization | Per project | The same dashboard for staging and production means a copy | `not_in_project` state |
 | One service picker | General variables | Moves towards a query language; no evidence | Likely the first request from buyers |

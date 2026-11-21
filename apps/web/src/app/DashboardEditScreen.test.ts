@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { type DragEndEvent, KeyboardSensor, PointerSensor } from "@dnd-kit/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -50,6 +51,29 @@ import { createQueryClient } from "./query-client";
  * writes nothing until Save), T3.5's validation summary and links editor, T3.6 mounted,
  * T3.8 (below `lg`: Up and Down, no width, one menu per panel, 44 px controls).
  */
+
+// The library's context, passed through as it is, with the props the builder gave it
+// kept: jsdom has no layout to drag across, so a drop is handed to the handler the page
+// gave the library (T10.1).
+const drag = vi.hoisted(() => ({
+  props: undefined as
+    | {
+        onDragEnd: (event: DragEndEvent) => void;
+        onDragCancel: () => void;
+        sensors: { sensor: unknown }[];
+      }
+    | undefined,
+}));
+vi.mock("@dnd-kit/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    DndContext: (props: NonNullable<typeof drag.props>) => {
+      drag.props = props;
+      return createElement(actual.DndContext, props as never);
+    },
+  };
+});
 
 const API_PREFIX = "/api/v1";
 const PROJECT_ID = "6a1d0c2e-3b4f-4a5d-9e8f-7c6b5a4d3e2f";
@@ -849,5 +873,119 @@ describe("below lg (T3.8, AC108)", () => {
       expect(control.className).toContain("min-h-11");
       expect(control.className).toContain("min-w-11");
     }
+  });
+});
+
+describe("drag to reorder, beside the buttons (T10.1, FR22, AC144)", () => {
+  // The test setup's `matchMedia` matches nothing, as a touch screen would.
+  function pointer(fine: boolean) {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: fine && query === "(pointer: fine)",
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }));
+  }
+
+  function drop(active: string, over: string | null) {
+    act(() =>
+      drag.props?.onDragEnd({
+        active: { id: active },
+        over: over === null ? null : { id: over },
+      } as DragEndEvent),
+    );
+  }
+
+  it("moves a panel to the one it is dropped on, says so, and writes nothing until Save", async () => {
+    const { container, calls } = await openEditor({
+      [`PUT /dashboards/${DASHBOARD_ID}`]: json(dashboard(undefined, 5)),
+    });
+    await ready(container);
+
+    drop("p_rate", "p_note");
+
+    expect(order(container)).toEqual(["p_checkout", "p_note", "p_rate"]);
+    expect(live(container)).toBe("Rate moved to position 3 of 3");
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+
+    await act(async () => button(container, "Save")?.click());
+    await waitFor(() => calls.some((call) => call.method === "PUT"), "the save");
+    const [put] = calls.filter((call) => call.method === "PUT");
+    const saved = (put.body as { definition: { panels: { id: string }[] } }).definition.panels;
+    expect(saved.map((each) => each.id)).toEqual(["p_checkout", "p_note", "p_rate"]);
+  });
+
+  it("changes nothing for a drop on itself, and says a cancelled drag was cancelled", async () => {
+    const { container } = await openEditor();
+    await ready(container);
+
+    drop("p_checkout", "p_checkout");
+    expect(order(container)).toEqual(["p_rate", "p_checkout", "p_note"]);
+    expect(live(container)).toBe("checkout · Latency stays at position 2 of 3");
+
+    drop("p_checkout", null);
+    expect(order(container)).toEqual(["p_rate", "p_checkout", "p_note"]);
+    expect(live(container)).toBe("Move cancelled");
+
+    act(() => drag.props?.onDragCancel());
+    expect(live(container)).toBe("Move cancelled");
+  });
+
+  it("leaves the keyboard's way as it was: one tab stop a toolbar, and the buttons still move", async () => {
+    const { container } = await openEditor();
+    await ready(container);
+    drop("p_rate", "p_checkout");
+    expect(order(container)).toEqual(["p_checkout", "p_rate", "p_note"]);
+
+    for (const toolbar of container.querySelectorAll('[role="toolbar"]')) {
+      expect(toolbar.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+    }
+    act(() => named(container, "Move Rate later")?.click());
+    expect(order(container)).toEqual(["p_checkout", "p_note", "p_rate"]);
+    expect(live(container)).toBe("Rate moved to position 3 of 3");
+    expect(named(container, "Move Rate earlier")).not.toBeNull();
+  });
+
+  it("starts a drag only from a handle that is no tab stop, and from a pointer alone", async () => {
+    pointer(true);
+    const { container } = await openEditor();
+    await ready(container);
+
+    const handles = container.querySelectorAll("[data-drag-handle]");
+    expect(handles).toHaveLength(3);
+    for (const handle of handles) {
+      expect(handle.getAttribute("aria-hidden")).toBe("true");
+      expect(handle.hasAttribute("tabindex")).toBe(false);
+      expect(handle.closest("section")?.querySelector("[data-drag-handle]")).toBe(handle);
+    }
+    const sensors = drag.props?.sensors.map((each) => each.sensor);
+    expect(sensors).toEqual([PointerSensor]);
+    expect(sensors).not.toContain(KeyboardSensor);
+  });
+
+  it("keeps the library's own live region and instruction off the page (AC143)", async () => {
+    const { container } = await openEditor();
+    await ready(container);
+    await waitFor(() => container.querySelector('[role="img"]'), "the previewed charts");
+
+    // The whole document, since the library puts its own where it is told.
+    expect(
+      document.querySelectorAll('[aria-live], [role="status"], [role="log"], [role="alert"]'),
+    ).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("To pick up a draggable item");
+  });
+
+  it("offers no handle to a touch screen, and every button still works there", async () => {
+    pointer(false);
+    const { container } = await openEditor();
+    await ready(container);
+
+    expect(container.querySelector("[data-drag-handle]")).toBeNull();
+    act(() => named(container, "Move Rate later")?.click());
+    expect(order(container)).toEqual(["p_checkout", "p_rate", "p_note"]);
   });
 });

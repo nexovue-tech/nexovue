@@ -279,8 +279,8 @@ Built only if founder decision 1 chooses templates only. The full plan skips the
 
 *Judgeable:* the founder drags a panel, the same order saves, and buttons still work with the mouse unplugged.
 
-- [ ] **T10.1** — **Only if T3.7 passed.** `apps/web/package.json`, `features/dashboards/DashboardEditScreen.tsx` · reorder over the same stored order · proved by `tools/e2e/tests/dashboards-drag.spec.ts`, and AC37 unchanged (AC144). It must not grow into a grid
-- [ ] **T10.2** — `dashboards/definition.py`, `dashboards/compile.py` · `slo_budget`, if F19 has merged · proved by the validator test and F19's own read
+- [x] **T10.1** — **Only if T3.7 passed.** `apps/web/package.json`, `features/dashboards/DashboardEditScreen.tsx` · reorder over the same stored order · proved by `tools/e2e/tests/dashboards-drag.spec.ts`, and AC37 unchanged (AC144). It must not grow into a grid **Done 2026-11-21 (built on the trial's three conditions; the founder's confirmation of decision 2 is still open):** `@dnd-kit/core` 6.3.1 only (no `sortable`); new `PanelDrag.tsx` (pointer sensor, a handle, other panels held still, the drop target marked, sideways clamp); `draft.ts` gains `move-to`; tests in `DashboardEditScreen.test.ts`, `draft.test.ts`, `PanelDrag.test.ts`. The Playwright spec is written and **not run**. See `status.md`, *Step 10*.
+- [ ] **T10.2** — `dashboards/definition.py`, `dashboards/compile.py` · `slo_budget`, if F19 has merged · proved by the validator test and F19's own read **Not built, 2026-11-21:** F19's panel reader (the Postgres-only budget function and `SloBudget`) does not exist on the branch and no F19 task builds it. `status.md`, open decision 35.
 
 ### Step 11 — Documentation, the demo gate and readiness
 

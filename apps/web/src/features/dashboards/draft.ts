@@ -39,6 +39,8 @@ export type DraftAction =
   | { type: "add"; panel: StoredPanel }
   | { type: "replace"; panel: StoredPanel }
   | { type: "move"; id: string; by: Step }
+  // A drag's drop: the panel takes the place of the one it was dropped on (T10.1).
+  | { type: "move-to"; id: string; over: string }
   | { type: "resize"; id: string; by: Step }
   | { type: "height"; id: string; by: Step }
   | { type: "duplicate"; id: string }
@@ -130,6 +132,14 @@ export function reduceDraft(draft: Draft, action: DraftAction): Draft {
       const next = [...panels];
       next.splice(index, 1);
       next.splice(index + action.by, 0, target);
+      return withPanels(next);
+    }
+    case "move-to": {
+      const to = panels.findIndex((panel) => panel.id === action.over);
+      if (!target || to === -1 || to === index) return draft;
+      const next = [...panels];
+      next.splice(index, 1);
+      next.splice(to, 0, target);
       return withPanels(next);
     }
     case "resize": {
@@ -296,6 +306,9 @@ export function announce(action: DraftAction, before: Draft, after: Draft): stri
       if (after === before) {
         return `${nameOf(action.id)} is already ${action.by < 0 ? "first" : "last"}`;
       }
+      return `${nameOf(action.id)} moved to ${position(action.id)}`;
+    case "move-to":
+      if (after === before) return `${nameOf(action.id)} stays at ${position(action.id)}`;
       return `${nameOf(action.id)} moved to ${position(action.id)}`;
     case "resize": {
       const panel = afterPanels.find((each) => each.id === action.id);

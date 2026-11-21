@@ -64,6 +64,39 @@ describe("the draft reducer", () => {
     expect(canMove(first.document.definition.panels, "p_1", 1)).toBe(true);
   });
 
+  it("drops a panel onto another and takes its place, over the same stored order (T10.1)", () => {
+    const forward = reduceDraft(start(), { type: "move-to", id: "p_1", over: "p_3" });
+    expect(ids(forward)).toEqual(["p_2", "p_3", "p_1"]);
+
+    const backward = reduceDraft(start(), { type: "move-to", id: "p_3", over: "p_1" });
+    expect(ids(backward)).toEqual(["p_3", "p_1", "p_2"]);
+
+    // The same list as the buttons make, one place at a time.
+    const byButton = reduceDraft(start(), { type: "move", id: "p_2", by: -1 });
+    expect(ids(reduceDraft(start(), { type: "move-to", id: "p_2", over: "p_1" }))).toEqual(
+      ids(byButton),
+    );
+  });
+
+  it("changes nothing when dropped on itself, on nothing known, or for a panel not there", () => {
+    const before = start();
+    expect(reduceDraft(before, { type: "move-to", id: "p_2", over: "p_2" })).toBe(before);
+    expect(reduceDraft(before, { type: "move-to", id: "p_2", over: "p_9" })).toBe(before);
+    expect(reduceDraft(before, { type: "move-to", id: "p_9", over: "p_1" })).toBe(before);
+  });
+
+  it("keeps every panel's size and settings through a drop, and forgets the undo", () => {
+    const wide = { ...RATE, width: 12 as const };
+    const removed = reduceDraft(draftOf(documentWith(wide, ERRORS, NOTE)), {
+      type: "remove",
+      id: "p_3",
+    });
+    expect(removed.removed).toBeDefined();
+    const dropped = reduceDraft(removed, { type: "move-to", id: "p_1", over: "p_2" });
+    expect(dropped.document.definition.panels).toEqual([ERRORS, wide]);
+    expect(dropped.removed).toBeUndefined();
+  });
+
   it("steps width through the allowed shares, 3, 4, 6, 8 and 12, and stops at each end", () => {
     let draft = start();
     const widths: number[] = [];
@@ -241,6 +274,18 @@ describe("what the live region says (AC37)", () => {
     expect(
       announce({ type: "undo-remove" }, removed, reduceDraft(removed, { type: "undo-remove" })),
     ).toBe("checkout · Errors restored at position 2 of 3");
+  });
+
+  it("says where a drop put the panel, and that a drop on itself changed nothing", () => {
+    const before = start();
+    const drop = { type: "move-to", id: "p_1", over: "p_3" } as const;
+    expect(announce(drop, before, reduceDraft(before, drop))).toBe(
+      "checkout · Rate moved to position 3 of 3",
+    );
+    const self = { type: "move-to", id: "p_1", over: "p_1" } as const;
+    expect(announce(self, before, reduceDraft(before, self))).toBe(
+      "checkout · Rate stays at position 1 of 3",
+    );
   });
 
   it("says nothing changed at an end, rather than staying silent", () => {

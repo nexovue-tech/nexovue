@@ -43,6 +43,7 @@ import { ImportFile } from "./FileTransfer";
 import { gridSpans } from "./grid-spans";
 import { LinksEditor } from "./LinksEditor";
 import { NotePanel } from "./NotePanel";
+import { DraggablePanel, PanelDragArea } from "./PanelDrag";
 import { PanelWords } from "./PanelFrame";
 import { PanelPicker } from "./PanelPicker";
 import { PanelReading } from "./PanelReading";
@@ -77,6 +78,7 @@ const NARROW_QUERY = "(max-width: 63.98rem)";
 const COLUMNS = 12;
 const COPY_SUFFIX = " (copy)";
 const IMPORTED = "Imported, not yet saved.";
+const MOVE_CANCELLED = "Move cancelled";
 const NOT_SAVED = "Could not save this dashboard. Try again.";
 const IMPORTED_OVER =
   "Imported, not yet saved. Saving replaces this dashboard, and keeps the version it replaces.";
@@ -506,39 +508,52 @@ function Builder({
         </p>
       ) : null}
 
-      <div ref={grid} className="grid grid-cols-12 gap-3">
-        {panels.map((panel) => (
-          <section
-            key={panel.id}
-            data-panel-id={panel.id}
-            aria-labelledby={`edit-panel-${panel.id}-title`}
-            className={`col-span-12 flex flex-col gap-2 rounded-sm border border-line p-3 ${spans[panel.id] ?? ""}`}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <h2
-                id={`edit-panel-${panel.id}-title`}
-                className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
-              >
-                {panelName(panel)}
-              </h2>
-              <PanelToolbar
-                panel={panel}
-                panels={panels}
-                narrow={narrow}
-                onChange={onPanelChange}
-                onEdit={() => openSheet(panel)}
-              />
-            </div>
-            <BuilderPanelBody
-              panel={panel}
-              reading={readings[panel.id]}
-              readingPending={page.isFetching}
-              projectName={projectName}
-              zone={zone}
-            />
-          </section>
-        ))}
-      </div>
+      <PanelDragArea
+        grid={() => grid.current}
+        onDrop={(id, over) => change({ type: "move-to", id, over }, null)}
+        onCancel={() => setMessage(MOVE_CANCELLED)}
+      >
+        <div ref={grid} className="grid grid-cols-12 gap-3">
+          {panels.map((panel) => (
+            <DraggablePanel
+              key={panel.id}
+              id={panel.id}
+              labelledBy={`edit-panel-${panel.id}-title`}
+              className={`col-span-12 flex flex-col gap-2 rounded-sm border border-line p-3 ${spans[panel.id] ?? ""}`}
+            >
+              {(handle) => (
+                <>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex items-center gap-1">
+                      {handle}
+                      <h2
+                        id={`edit-panel-${panel.id}-title`}
+                        className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
+                      >
+                        {panelName(panel)}
+                      </h2>
+                    </div>
+                    <PanelToolbar
+                      panel={panel}
+                      panels={panels}
+                      narrow={narrow}
+                      onChange={onPanelChange}
+                      onEdit={() => openSheet(panel)}
+                    />
+                  </div>
+                  <BuilderPanelBody
+                    panel={panel}
+                    reading={readings[panel.id]}
+                    readingPending={page.isFetching}
+                    projectName={projectName}
+                    zone={zone}
+                  />
+                </>
+              )}
+            </DraggablePanel>
+          ))}
+        </div>
+      </PanelDragArea>
 
       {draft.removed ? (
         <p className="text-ink-dim text-sm">
