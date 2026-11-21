@@ -75,6 +75,10 @@ jobs:
           just stack
 
       - name: just check
+        # Below the job's 60 minutes: a run that hangs fails this step, so its log is kept and the
+        # memory and service-log steps below run, instead of the job being cancelled with no log
+        # (three runs on 2026-11-21 were). The suite takes about 25 minutes.
+        timeout-minutes: 45
         run: just check
 
       - name: Memory and disk the stack used
