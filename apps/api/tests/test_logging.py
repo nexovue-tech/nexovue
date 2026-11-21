@@ -98,6 +98,41 @@ def test_a_known_secret_never_reaches_a_log_line(log_format: str, field: str, va
     assert PLACEHOLDER in line
 
 
+def _configure(stream: io.StringIO, *, service: str) -> None:
+    configure_logging(
+        level="debug", log_format=FORMAT_JSON, service=service, env="test", stream=stream
+    )
+
+
+def test_a_logger_used_before_a_reconfigure_writes_with_the_new_configuration() -> None:
+    """A module logger is cached on first use; configuring again must still reach it,
+    or it keeps the service and environment of the configuration it first saw."""
+    first, second = io.StringIO(), io.StringIO()
+    _configure(first, service="first")
+    module_logger = structlog.stdlib.get_logger("used-early")
+    module_logger.info("before")
+
+    _configure(second, service="second")
+    module_logger.info("after")
+
+    assert "after" not in first.getvalue()
+    assert json.loads(second.getvalue())[FIELD_SERVICE] == "second"
+
+
+def test_capture_logs_sees_a_logger_used_before_a_reconfigure() -> None:
+    """The order a whole test run produces: one test uses a module's logger, a later one
+    configures again, and a third captures that module's lines."""
+    _configure(io.StringIO(), service="first")
+    module_logger = structlog.stdlib.get_logger("used-early")
+    module_logger.info("before")
+    _configure(io.StringIO(), service="second")
+
+    with structlog.testing.capture_logs() as captured:
+        module_logger.error("watched")
+
+    assert [line["event"] for line in captured] == ["watched"]
+
+
 def test_redaction_keeps_the_host_an_operator_needs() -> None:
     redacted = redact_credentials(f"postgresql://nexovue:{KNOWN_SECRET}@db:5432/nexovue")
 
