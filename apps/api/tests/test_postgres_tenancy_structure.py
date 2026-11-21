@@ -17,6 +17,8 @@ which is the mistake that actually happens.
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Final
 
@@ -112,15 +114,45 @@ def _tenant_scoped_models() -> set[str]:
 SCOPED_MODELS: Final = _tenant_scoped_models()
 
 
-def _query_functions() -> list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]]:
-    """Every function in the API that builds a statement."""
+@dataclass(frozen=True, slots=True)
+class QueryFunction:
+    """A function in the API, named by where it is rather than held as its parsed tree."""
+
+    path: Path
+    name: str
+    line: int
+
+    def __str__(self) -> str:
+        return self.name
+
+
+def _query_functions() -> list[QueryFunction]:
+    """Every function in the API that builds a statement.
+
+    Parameters name a function rather than hold its node: every xdist worker collects
+    every test and keeps the parameters all run, and the API's parsed trees were 75 MB.
+    """
     found = []
     for path in sorted(API_SOURCE.rglob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
+        for node in ast.walk(_parsed(path)):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                found.append((path, node))
+                found.append(QueryFunction(path, node.name, node.lineno))
     return found
+
+
+# One file at a time: the cases run in collection order, so a file's functions run together.
+@lru_cache(maxsize=1)
+def _parsed(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(), filename=str(path))
+
+
+def _function_node(function: QueryFunction) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    return next(
+        node
+        for node in ast.walk(_parsed(function.path))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and (node.name, node.lineno) == (function.name, function.line)
+    )
 
 
 # The three ways a statement against a table is built. `insert` is absent on
@@ -211,11 +243,9 @@ def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
     assert (API_SOURCE / "nexovue_api" / "main.py").is_file(), f"no API source at {API_SOURCE}"
 
 
-@pytest.mark.parametrize(
-    "path,function", _query_functions(), ids=lambda value: getattr(value, "name", "")
-)
+@pytest.mark.parametrize("query_function", _query_functions(), ids=str)
 def test_a_query_against_a_tenant_scoped_model_binds_the_tenant(
-    path: Path, function: ast.FunctionDef | ast.AsyncFunctionDef
+    query_function: QueryFunction,
 ) -> None:
     """A function that names a tenant-scoped model must also name org_id.
 
@@ -223,6 +253,7 @@ def test_a_query_against_a_tenant_scoped_model_binds_the_tenant(
     mistake that happens is a query with no tenant predicate at all — and that
     is exactly what this catches.
     """
+    function = _function_node(query_function)
     used = _models_queried_in(function)
     if not used or function.name in EXEMPT:
         return
@@ -233,7 +264,7 @@ def test_a_query_against_a_tenant_scoped_model_binds_the_tenant(
     # negative control caught it doing exactly that.
     mentions_tenant = TENANT_COLUMN in _tenant_attributes_in_statements(function)
     assert mentions_tenant, (
-        f"{path.name}:{function.name} builds a statement against {sorted(used)} "
+        f"{query_function.path.name}:{function.name} builds a statement against {sorted(used)} "
         f"without naming {TENANT_COLUMN}. Another tenant's rows would be returned. "
         f"If it is genuinely unscoped, add it to EXEMPT with the reason."
     )

@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from nexovue_api.data.postgres import models
 from nexovue_api.data.postgres.base import Base
 
@@ -514,11 +516,6 @@ def _modules_under(source: Path, package: str) -> list[SourceModule]:
     return modules
 
 
-SCHEDULER_MODULES: Final = _modules_under(SCHEDULER_SOURCE, "nexovue_scheduler") + _modules_under(
-    PLATFORM_SOURCE, "nexovue_platform"
-)
-
-
 def _docstrings(tree: ast.AST) -> set[int]:
     """Docstrings are prose: they name tables they are about, and are no statement."""
     holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -619,7 +616,15 @@ def statements_in(modules: Iterable[SourceModule]) -> list[Statement]:
     return found
 
 
-SCHEDULER_STATEMENTS: Final = statements_in(SCHEDULER_MODULES)
+# A fixture, not a module constant: every xdist worker imports every test module and keeps
+# it for the whole run, so source parsed at import cost each worker 70 MB; a module-scoped
+# fixture parses it only where this file runs and releases it when it ends.
+@pytest.fixture(scope="module")
+def scheduler_statements() -> list[Statement]:
+    return statements_in(
+        _modules_under(SCHEDULER_SOURCE, "nexovue_scheduler")
+        + _modules_under(PLATFORM_SOURCE, "nexovue_platform")
+    )
 
 
 def _exempt(statement: Statement) -> bool:
@@ -632,11 +637,13 @@ def _exempt(statement: Statement) -> bool:
 # ------------------------------------------------------------------ the checks
 
 
-def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
+def test_the_source_this_check_walks_is_the_one_that_ships(
+    scheduler_statements: list[Statement],
+) -> None:
     """A check that walks nothing passes everything."""
     assert SCHEDULER_SOURCE.is_dir(), f"no scheduler source at {SCHEDULER_SOURCE}"
     assert PLATFORM_SOURCE.is_dir(), f"no platform source at {PLATFORM_SOURCE}"
-    modules = {statement.module for statement in SCHEDULER_STATEMENTS}
+    modules = {statement.module for statement in scheduler_statements}
     assert "nexovue_scheduler.detection.project_job" in modules
     assert "nexovue_platform.detection" in modules
     # F22 T2.2: the case writers are walked, so their statements are held too.
@@ -661,10 +668,12 @@ def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None
     assert {"intake_refusals", "detection_events"} <= TENANTLESS_RELATIONS
 
 
-def test_no_scheduler_statement_on_a_tenant_s_table_omits_the_tenant() -> None:
+def test_no_scheduler_statement_on_a_tenant_s_table_omits_the_tenant(
+    scheduler_statements: list[Statement],
+) -> None:
     found = [
         problem
-        for statement in SCHEDULER_STATEMENTS
+        for statement in scheduler_statements
         if not _exempt(statement)
         for problem in violations(statement)
     ]
@@ -674,14 +683,16 @@ def test_no_scheduler_statement_on_a_tenant_s_table_omits_the_tenant() -> None:
     )
 
 
-def test_every_table_without_a_tenant_the_scheduler_names_is_install_wide_on_purpose() -> None:
+def test_every_table_without_a_tenant_the_scheduler_names_is_install_wide_on_purpose(
+    scheduler_statements: list[Statement],
+) -> None:
     """A table the scheduler names with no `org_id` is either nexovue's own, by a
     decision recorded here, or a tenant's table that forgot its column."""
     declared = {each.name for each in INSTALL_WIDE_TABLES}
     undeclared = sorted(
         {
             f"{name} ({statement})"
-            for statement in SCHEDULER_STATEMENTS
+            for statement in scheduler_statements
             for name in statement.names & TENANTLESS_RELATIONS
             if name not in declared
         }
@@ -700,9 +711,11 @@ def test_every_install_wide_table_is_a_real_table_without_a_tenant_and_gives_its
         assert each.reason.strip(), f"{each.name} is install-wide without a recorded reason"
 
 
-def test_every_install_wide_table_is_one_the_scheduler_names() -> None:
+def test_every_install_wide_table_is_one_the_scheduler_names(
+    scheduler_statements: list[Statement],
+) -> None:
     """An exemption nothing uses would cover the next statement that forgets."""
-    named = {name for statement in SCHEDULER_STATEMENTS for name in statement.names}
+    named = {name for statement in scheduler_statements for name in statement.names}
     unused = sorted(each.name for each in INSTALL_WIDE_TABLES if each.name not in named)
     assert not unused, f"no scheduler statement names these install-wide tables: {unused}"
 
@@ -717,14 +730,16 @@ def test_every_view_is_created_by_a_migration() -> None:
         )
 
 
-def test_every_cross_tenant_exemption_still_names_an_unbound_statement() -> None:
+def test_every_cross_tenant_exemption_still_names_an_unbound_statement(
+    scheduler_statements: list[Statement],
+) -> None:
     """An exemption whose statement moved, or now binds the tenant, must be removed,
     or it would silently cover the next statement written under its name."""
     for each in CROSS_TENANT_STATEMENTS:
         assert each.reason.strip(), f"{each.module}.{each.owner} is exempt without a reason"
         held = [
             statement
-            for statement in SCHEDULER_STATEMENTS
+            for statement in scheduler_statements
             if (statement.module, statement.owner) == (each.module, each.owner)
         ]
         assert held, f"{each.module}.{each.owner} holds no statement any more"

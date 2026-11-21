@@ -6,6 +6,7 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 
 ## Records
 
+- [Test workers hold memory](test-workers-hold-memory/bug.md) — each pytest worker reached 2 GB and six froze CI's 16 GB runner: a parametrized suite copied its data per case, three structural suites kept parsed source for the whole run, and FastAPI's caches kept every test's session and engine alive; a worker now peaks at about 700 MB.
 - [Backup manifest counts](backup-manifest-counts/bug.md) — `backup.sh` counted Postgres rows live after `pg_dump`, so a job the running scheduler queued in between made the fence's restore fail `jobs expected 2, got 1` with nothing lost; the counts are now read from the dump itself.
 - [Insight-fence settings](insight-fence-settings/bug.md) — the fence harness hand-wrote the install's settings with `--settings`, which generates nothing, so the first CI run stopped at "pulling" on a missing `S3_BUCKET`; it now installs through the installer's own path.
 - [Metrics histogram subtracts across instances](metrics-histogram-subtracts-across-instances/bug.md) — two instances of one service with equal attributes are read as one series, so the histogram and the latency heatmap subtract one instance's running total from another's; recorded by F20 Step 8 (T8.1), not yet fixed.

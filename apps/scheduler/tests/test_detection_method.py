@@ -182,15 +182,20 @@ def _signal_minutes(case: dict[str, Any]) -> dict[int, Minute]:
 
 
 def _signal_cases(signal: str) -> list[Any]:
-    return [
-        pytest.param(
-            _signal_minutes(case),
-            judged,
-            id=f"{case['service']}-{judged['sensitivity']}-{judged['minute']}",
+    # A case's minutes are built once and shared by its judgements: every xdist worker
+    # collects every parameter and holds it all run, and a copy per judgement was 1.2 GB.
+    cases: list[Any] = []
+    for case in PARITY["signals"]:
+        minutes = _signal_minutes(case)
+        cases.extend(
+            pytest.param(
+                minutes,
+                judged,
+                id=f"{case['service']}-{judged['sensitivity']}-{judged['minute']}",
+            )
+            for judged in case[signal]
         )
-        for case in PARITY["signals"]
-        for judged in case[signal]
-    ]
+    return cases
 
 
 def _window(minutes: dict[int, Minute], end: int, sensitivity: Sensitivity) -> Window:
