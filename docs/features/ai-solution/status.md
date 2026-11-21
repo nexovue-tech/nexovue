@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Step 5 built 2026-11-21, awaiting commit.** Steps 1 to 4 are on `feature/phase-2` (Step 4 at 1183abf). Step 5 (patch, verdict, and taking it all back, T5.1 to T5.5) is built in `wt/f5s5`, on that commit, with **no write access**, fake providers only and against the simulated GitHub only. T5.5's Docker release check is written and not run (by hand per release). Steps 6 onward are not started.
+**Step 5 built 2026-11-21, committed.** Steps 1 to 4 are on `feature/phase-2` (Step 4 at 1183abf). Step 5 (patch, verdict, and taking it all back, T5.1 to T5.5) is built in `wt/f5s5`, on that commit, with **no write access**, fake providers only and against the simulated GitHub only. T5.5's Docker release check is written and not run (by hand per release). Steps 6 onward are not started.
 
 
 ## Current task
