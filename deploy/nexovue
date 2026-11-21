@@ -19,8 +19,9 @@
 #                        BACKUP_S3_BUCKET is set
 #
 # Answers come from the environment when set (NEXOVUE_APP_HOST, NEXOVUE_INGEST_HOST,
-# NEXOVUE_TLS_EMAIL, FIRST_OWNER_EMAIL, FIRST_OWNER_PASSWORD, FIRST_ORGANIZATION_NAME), otherwise
-# from prompts; with no terminal a missing answer is an error naming the variable.
+# NEXOVUE_TLS_EMAIL, FIRST_OWNER_EMAIL, FIRST_OWNER_PASSWORD, FIRST_ORGANIZATION_NAME, and the
+# optional NEXOVUE_LAYOUT and NEXOVUE_PROJECT), otherwise from prompts; with no terminal a missing
+# answer is an error naming the variable.
 set -euo pipefail
 # Runs on a Mac's bash 3.2 too (the quickstart), where `set -e` does not reach inside "$(…)": every
 # step of a function called that way checks its own failure. Without that, a backup whose upload
@@ -390,6 +391,8 @@ cmd_install() {
             self-hosted | hosted) set_setting "$draft" NEXOVUE_LAYOUT "${NEXOVUE_LAYOUT:-self-hosted}" ;;
             *) die "NEXOVUE_LAYOUT is self-hosted or hosted." ;;
         esac
+        # A second install on one host (and the insight fence's harness) names its own project.
+        [ -z "${NEXOVUE_PROJECT:-}" ] || set_setting "$draft" NEXOVUE_PROJECT "$NEXOVUE_PROJECT"
         set_setting "$draft" NEXOVUE_APP_HOST "$app_host"
         set_setting "$draft" NEXOVUE_INGEST_HOST "$ingest_host"
         set_setting "$draft" NEXOVUE_TLS_EMAIL "$tls_email"

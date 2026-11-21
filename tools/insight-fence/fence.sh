@@ -11,8 +11,8 @@
 #      then the AI account suites against the restored database (AC46: setup grants again,
 #      onto a server that never had the account).
 #
-# **Not yet run** (status, *Validation*): written 2026-11-11 without a machine that could build
-# both images. Its first run is by hand; fix it there. AC46's older snapshot (images built at
+# First run: CI run 44899530725 (docs/changes/insight-fence-settings). Everything after the install
+# is still unrun. AC46's older snapshot (images built at
 # the merge base with main) is not here yet. Needs Docker with 12 GiB (`nexovue` preflight).
 set -euo pipefail
 
@@ -42,23 +42,17 @@ tar -C "$work" -xzf "$work/kit/nexovue-$version.tar.gz"
 kit="$work/nexovue-$version"
 
 step "installing under project $project"
-settings="$work/settings.env"
-cat > "$settings" <<SETTINGS
-NEXOVUE_PROJECT='$project'
-NEXOVUE_LAYOUT='self-hosted'
-NEXOVUE_APP_HOST='fence.nexovue.invalid'
-NEXOVUE_INGEST_HOST='ingest.fence.nexovue.invalid'
-NEXOVUE_TLS_EMAIL='fence@nexovue.invalid'
-FIRST_ORGANIZATION_NAME='Fence'
-FIRST_OWNER_EMAIL='owner@fence.nexovue.invalid'
-FIRST_OWNER_PASSWORD='fence-owner-password'
-NEXOVUE_KAFKA_BROKERS='1'
-NEXOVUE_MONITORING='no'
-NEXOVUE_CONNECTIONS='no'
-NEXOVUE_PULL_POLICY='never'
-SETTINGS
-# The images exist only here; write_secrets fills in every secret.
-NEXOVUE_SKIP_PORT_CHECK=1 NEXOVUE_PULL_POLICY=never "$kit/nexovue" install --settings "$settings"
+# The installer's own path, not --settings (which takes a file whole, for a machine replacing
+# another): answers come from the environment, as for any install, and `nexovue` writes every
+# secret and default itself, so a variable the release Compose file newly demands cannot be
+# missing here. The images exist only here, hence the pull policy.
+export NEXOVUE_PULL_POLICY=never NEXOVUE_SKIP_PORT_CHECK=1
+export NEXOVUE_PROJECT="$project" NEXOVUE_LAYOUT=self-hosted
+export NEXOVUE_APP_HOST='fence.nexovue.invalid' NEXOVUE_INGEST_HOST='ingest.fence.nexovue.invalid'
+export NEXOVUE_TLS_EMAIL='fence@nexovue.invalid' FIRST_ORGANIZATION_NAME='Fence'
+export FIRST_OWNER_EMAIL='owner@fence.nexovue.invalid' FIRST_OWNER_PASSWORD='fence-owner-password'
+export NEXOVUE_KAFKA_BROKERS=1 NEXOVUE_MONITORING=no NEXOVUE_CONNECTIONS=no
+"$kit/nexovue" install
 
 postgres_dsn() {
     local password
@@ -76,8 +70,11 @@ NEXOVUE_FENCE_PROJECT="$project" uv run pytest -m insight_fence -p no:cacheprovi
 
 step "AC46: backup, an empty Postgres volume, restore"
 "$NEXOVUE_HOME/current/nexovue" backup
-snapshot=$("$NEXOVUE_HOME/current/nexovue" backups | grep -E '^20.*Z$' | tail -n 1)
+snapshot=$(find "$NEXOVUE_HOME/backups" -mindepth 1 -maxdepth 1 -type d -name '20*Z' \
+    -exec basename {} \; | sort | tail -n 1)
 "$NEXOVUE_HOME/current/nexovue" stop
+# `stop` leaves the containers, and Docker refuses to remove a volume a container still names.
+docker compose -p "$project" down
 docker volume rm "${project}_postgres-data"
 "$NEXOVUE_HOME/current/nexovue" restore "$snapshot" --yes
 
