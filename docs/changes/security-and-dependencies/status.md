@@ -67,6 +67,13 @@ after 2026-11-09, reachable from the receiver's HTTP server (govulncheck traced 
 on the receiver at 1.27.3 reported the vulnerability; at 1.27.4, `just audit` reports none in the
 receiver, workers or contracts, and pip-audit and pnpm audit pass.
 
+**dnspython 2.9.0 → 2.9.2 and opentelemetry-api/-proto 1.45.1 → 1.45.2, 2026-11-21.** The local `just
+audit` before pushing failed in pip-audit with no code change: CVE-2026-128089 (dnspython, the
+scheduler's resolver for the connect-time address guard) and CVE-2026-126360 (opentelemetry-api, pulled
+in with `opentelemetry-proto`), both published after 2026-11-11. Changed: `uv.lock` only
+(`uv lock --upgrade-package` for the three packages; the `pyproject.toml` floors already allow them).
+After the change pip-audit and pnpm audit report none, and govulncheck reports none reachable.
+
 ## Next action
 
 The pull request; it closes #10-#12 when it merges.
@@ -107,4 +114,4 @@ None beyond this record.
 
 ## Last updated
 
-2026-11-11
+2026-11-21
