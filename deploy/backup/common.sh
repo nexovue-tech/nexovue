@@ -79,6 +79,30 @@ ch_row_count() {
     esac
 }
 
+# What a Postgres dump holds, read from the dump itself: one `rows<TAB>table<TAB>n`
+# line per public table it carries data for, sorted, and `first_row<TAB>alembic_version<TAB>rev`.
+#
+# COPY's text format writes one line per row (a newline inside a value is
+# escaped as \n), and every table's data ends with a line holding `\.`. A
+# partitioned table's rows are under its partitions, so only those are named.
+pg_dump_rows() {
+    docker exec -i "$POSTGRES_CONTAINER" pg_restore --data-only --file=- < "$1" | awk '
+        BEGIN { FS = "\n" }
+        !copying && /^COPY public\.[^ ]+ .* FROM stdin;$/ {
+            split($0, words, " ")
+            table = substr(words[2], length("public.") + 1)
+            gsub(/"/, "", table)
+            copying = 1; rows = 0
+            next
+        }
+        copying && $0 == "\\." { print "rows\t" table "\t" rows; copying = 0; next }
+        copying {
+            rows++
+            if (table == "alembic_version" && rows == 1) { print "first_row\talembic_version\t" $0 }
+        }
+    ' | LC_ALL=C sort
+}
+
 kafka_end_offsets() {
     docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh \
         --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$1"

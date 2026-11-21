@@ -7,7 +7,10 @@ The customer-facing guide is [`docs/self-hosting/backup.md`](../self-hosting/bac
 `nexovue backup` (daily by `nexovue-backup.timer`, and before every upgrade):
 
 1. `deploy/backup/backup.sh` — `pg_dump` (custom format, zstd), ClickHouse `BACKUP DATABASE`, a manifest
-   of row counts, schema versions and ingest watermarks;
+   of row counts, schema versions and ingest watermarks. The Postgres counts and revision are read
+   out of `postgres.dump` itself, so they are exact while the stack runs; the ClickHouse counts are
+   read live after the backup and are exact only without ingest
+   ([backup-manifest-counts](../changes/backup-manifest-counts/bug.md));
 2. the bundled object store's bucket as `bucket.tar` (`nexovue backup bucket-export`);
 3. `SHA256SUMS` over all of it;
 4. off the host when `BACKUP_S3_*` is set (`nexovue backup ship`): each file checked against

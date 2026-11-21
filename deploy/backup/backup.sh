@@ -48,19 +48,33 @@ ch --query "BACKUP DATABASE $CLICKHOUSE_DB TO Disk('$CLICKHOUSE_BACKUP_DISK', '$
 docker cp "$CLICKHOUSE_CONTAINER:$staged" "$snapshot/clickhouse.zip"
 docker exec "$CLICKHOUSE_CONTAINER" rm -f "$staged"
 
+# ---------- what the dump holds ----------
+# Postgres's facts are read out of postgres.dump itself, never from the live
+# database afterwards: the stack keeps running during a backup, so a table read
+# a moment after the dump can already differ from it. The insight-fence run
+# recorded jobs=2 beside a dump holding one, a job the scheduler queued in
+# between, and the restore then failed verification with nothing lost
+# (docs/changes/backup-manifest-counts). Reading the dump back also proves it
+# is readable before anyone needs it.
+echo "postgres: counting the dump"
+pg_dump_facts=$(pg_dump_rows "$snapshot/postgres.dump") \
+    || die "postgres.dump could not be read back; this snapshot is not usable"
+dump_fact() { printf '%s\n' "$pg_dump_facts" | awk -F'\t' -v k="$1" -v t="$2" '$1 == k && $2 == t { print $3 }'; }
+
 # ---------- manifest ----------
 # Not decoration. This is what `just backup-verify` compares a restored system
 # against; without it "the restore worked" means only that a command exited 0.
 echo "manifest: measuring"
 {
     echo "# nexovue backup manifest"
-    echo "# Row counts are read after the backup completes. They are exact only if"
-    echo "# ingest was stopped for the duration; under live ingest a restored table"
+    echo "# Postgres counts are the rows postgres.dump holds, exact under any load."
+    echo "# ClickHouse counts are read after the backup completes. They are exact only"
+    echo "# if ingest was stopped for the duration; under live ingest a restored table"
     echo "# can legitimately hold fewer rows than the count recorded here."
     echo "taken_at=$taken_at"
     echo "clickhouse_image=$(docker inspect -f '{{.Config.Image}}' "$CLICKHOUSE_CONTAINER")"
     echo "postgres_image=$(docker inspect -f '{{.Config.Image}}' "$POSTGRES_CONTAINER")"
-    echo "alembic_revision=$(pg_scalar 'SELECT version_num FROM alembic_version')"
+    echo "alembic_revision=$(dump_fact first_row alembic_version)"
     echo "clickhouse_schema_version=$(ch --query 'SELECT max(version) FROM schema_migrations')"
 
     # Data-bearing tables only. A materialized view with a TO clause stores
@@ -78,13 +92,8 @@ echo "manifest: measuring"
     # The meter's watermark is recorded below rather than here: it is deliberately
     # not restored, so comparing its row count after a restore would fail by
     # design and teach an operator to ignore this check.
-    pg_tables=$(pg_scalar "
-        SELECT tablename FROM pg_tables
-        WHERE schemaname = 'public' AND tablename <> '$POSTGRES_WATERMARK_TABLE'
-        ORDER BY tablename")
-    for table in $pg_tables; do
-        echo "pg.$table=$(pg_scalar "SELECT count(*) FROM \"$table\"")"
-    done
+    printf '%s\n' "$pg_dump_facts" \
+        | awk -F'\t' -v skip="$POSTGRES_WATERMARK_TABLE" '$1 == "rows" && $2 != skip { print "pg." $2 "=" $3 }'
 
     # Recorded and never restored, in either store. Here so an operator can see
     # what the pipeline had reached, and so a cold-start rebuild has a number to
@@ -92,7 +101,7 @@ echo "manifest: measuring"
     for table in "${KEEPERMAP_TABLES[@]}"; do
         echo "watermark.ch.$table=$(ch --query "SELECT count() FROM \`$table\`")"
     done
-    echo "watermark.pg.$POSTGRES_WATERMARK_TABLE=$(pg_scalar "SELECT count(*) FROM $POSTGRES_WATERMARK_TABLE")"
+    echo "watermark.pg.$POSTGRES_WATERMARK_TABLE=$(dump_fact rows "$POSTGRES_WATERMARK_TABLE")"
 
     # Which Kafka the watermarks above referred to. A restore into a broker whose
     # end offsets are below these is a restore into a different Kafka, and the
