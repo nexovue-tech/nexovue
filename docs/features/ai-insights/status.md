@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Steps 2c and 6 (code) built 2026-11-21, awaiting commit** (worktree `wt/f3s6`, on `feature/phase-2` 96cbd81): the scoring tooling for the rules (T2.15, T2.16), the bed's harness and report generator against fake providers (T6.1, T6.2, the harness of T6.3). No migration, no ADR, no AI call. **Waiting, with what each needs:** T2.17's tune and report runs and the rules-only report (a machine that stays on for about 11.5 days, foundation item 9); T2.18 (the founder's bar); T6.3's real-model runs and the report with real numbers (the founder's, after Phase 2, foundation item 31); `--run forged` against the real receiver (the dev stack); T6.5 (nothing has passed AC63). See *Steps 2c and 6* under *Completed*.
+**Steps 2c and 6 (code) built 2026-11-21, committed** (worktree `wt/f3s6`, on `feature/phase-2` 96cbd81): the scoring tooling for the rules (T2.15, T2.16), the bed's harness and report generator against fake providers (T6.1, T6.2, the harness of T6.3). No migration, no ADR, no AI call. **Waiting, with what each needs:** T2.17's tune and report runs and the rules-only report (a machine that stays on for about 11.5 days, foundation item 9); T2.18 (the founder's bar); T6.3's real-model runs and the report with real numbers (the founder's, after Phase 2, foundation item 31); `--run forged` against the real receiver (the dev stack); T6.5 (nothing has passed AC63). See *Steps 2c and 6* under *Completed*.
 **Fix 2026-11-21, awaiting review** (worktree `wt/f3fix`): a wording run is settled once, and the wording suites read a clock per test. See [wording settles once](../../changes/wording-settles-once/bug.md) (T5.3 to T5.5; no migration).
 **Step 5 built 2026-11-11, committed** (worktree `wt/f3s5`, on `feature/phase-2` 9ad0188): wording, checked by code, with a limit that stops new runs (plan T5.1 to T5.11). Built and tested against fake providers only. T5.8 waits for its Playwright check (hardening pass); T5.9 is not built (it needs `just insight-fence` and Playwright). Migration 0072, after 0071 (re-chained at commit). No ADR.
 **Step 4 built and committed 2026-11-11** (on `feature/phase-2`): connect a provider, test it, set a limit, see the bytes, consent (plan T4.1 to T4.10). Built and tested against fake providers only. T4.7 (Playwright), T4.8 (customer doc), T4.9 (Bedrock signing) and T4.10 (the dated real calls) stay unticked. Migration 0071, after 0070.
@@ -876,7 +876,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-21 (Steps 2c and 6 code built, awaiting commit); 2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
+2026-11-21 (Steps 2c and 6 code built, committed); 2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Step 3 built 2026-11-21, awaiting commit.** Steps 1, 2 and 2b are on `feature/phase-2`. Step 3 (consent, permission and reading the files, with no model, T3.1 to T3.19) is built in `wt/f5s3`, on `feature/phase-2` 96cbd81, against the simulated GitHub only. T1.6's Playwright spec, with its Step 2b and Step 3 states, is written and not run (deferred to the hardening pass). Steps 4 onward are not started.
+**Step 3 built 2026-11-21, committed.** Steps 1, 2 and 2b are on `feature/phase-2`. Step 3 (consent, permission and reading the files, with no model, T3.1 to T3.19) is built in `wt/f5s3`, on `feature/phase-2` 96cbd81, against the simulated GitHub only. T1.6's Playwright spec, with its Step 2b and Step 3 states, is written and not run (deferred to the hardening pass). Steps 4 onward are not started.
 
 
 ## Current task
