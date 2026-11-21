@@ -571,6 +571,7 @@ WHERE org_id = :org_id AND month = :month
 
 - A finished run moves its actual tokens to `used`, and returns the rest. **If actual passes the reservation,** the actual is still counted, so usage can pass the limit by that one overshoot, bounded by `MAX_OUTPUT_TOKENS` and the input estimate's error, and the next run is refused. The figure is reported, not hidden (AC53 allows only this).
 - **A run that dies keeps its reservation** (the foundation's "return what it did not use" applies only to runs that finish). `insight.sweep`, on `insight`, every 5 minutes through `beat.py:412`, turns a `started` run older than its hard limit plus grace into `died`, and moves its reservation to `used`, flagged estimated. Overstating is the safe side.
+- **A run is settled once.** Its finish and the sweep each act only on a run still `started`, in the transaction that moves its tokens, so a finish arriving after the sweep called the run `died` changes nothing: the sweep's charge stands and its words never land ([wording settles once](../../changes/wording-settles-once/bug.md), 2026-11-21).
 - The month is the first of the month, UTC. The row is created by `INSERT ... ON CONFLICT DO NOTHING`, by the insight role.
 - A local model has limits too, since tokens bound its CPU time.
 

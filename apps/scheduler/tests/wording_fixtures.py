@@ -7,8 +7,13 @@ listed as an operator lists a local model (`AI_PRIVATE_ENDPOINTS`), that records
 it is sent. **No real provider is ever called.** Every `word` and `sweep` here runs as
 `nexovue_insight`, so a statement its grants do not allow fails here and not in production.
 
-The clock is pinned once per run, close to the database's, so the stack's own AI sweep, which
-reads the real clock, never takes these rows before a test does.
+Each test pins its own clock, `now`, read when that test starts, and every row it writes
+carries that time. The stack's own AI sweep reads the real clock and calls a run `died` once it
+is `DIED_AFTER` (about six minutes) old, and wording `expired` after an hour, so a clock read
+once at import would, twenty minutes into a suite, hand the stack's sweep every run a test
+leaves `started`. A test that runs the sweep itself starts its run a few minutes back (still
+well inside `DIED_AFTER`) and sweeps just past that run, so its sweep, which reads every
+organization's rows, never reaches another test's run in flight.
 """
 
 from __future__ import annotations
@@ -48,7 +53,6 @@ KEYS: Final = ConfiguredKeys(KEY_RING)
 PROVIDER_KEY: Final = "sk-test-wording-key"
 MODEL: Final = "llama3.1:8b"
 CHAT_PATH: Final = "/v1/chat/completions"
-NOW: Final = datetime.now(UTC).replace(microsecond=0)
 GOOD: Final = "service_1 was deployed as version_1 4 minutes before it slowed."
 # The sample input's names, as the gather would have stored them apart from it.
 ALIASES: Final = {
@@ -95,6 +99,12 @@ def openai_reply(
 
 
 @pytest.fixture
+def now() -> datetime:
+    """This test's clock, read when it starts."""
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+@pytest.fixture
 def provider_site() -> Iterator[RecordingSite]:
     with serve_recording_site() as served:
         yield served
@@ -132,6 +142,8 @@ class Connected:
     connection_id: str
     base_url: str
     endpoints: PrivateEndpoints
+    # The test's clock: a run's `at` unless the test names another.
+    now: datetime
 
 
 async def connect(
@@ -139,6 +151,7 @@ async def connect(
     tenant: AlertTenant,
     site: RecordingSite,
     *,
+    now: datetime,
     limit: int = 1_000_000,
     enabled: bool = True,
     sealed_for: str | None = None,
@@ -178,24 +191,29 @@ async def connect(
                 "sealed": sealed,
                 "limit": limit,
                 "enabled": enabled,
-                "at": NOW,
+                "at": now,
                 "fingerprint": fingerprint if consented else "0" * 64,
                 "schema": SCHEMA_VERSION,
             },
         )
     return Connected(
-        tenant, connection_id, base_url, PrivateEndpoints.parse(f"{site.host}:{site.port}")
+        tenant, connection_id, base_url, PrivateEndpoints.parse(f"{site.host}:{site.port}"), now
     )
 
 
 async def finding(
-    install: AsyncEngine, tenant: AlertTenant, *, severity: str = "warning", **changes: Any
+    install: AsyncEngine,
+    tenant: AlertTenant,
+    *,
+    now: datetime,
+    severity: str = "warning",
+    **changes: Any,
 ) -> uuid.UUID:
     """An open finding on a service of its own: a service holds one open finding at a time."""
     changes.setdefault("service", f"service-{uuid.uuid4().hex[:8]}")
     async with install.begin() as connection:
         made: uuid.UUID = await add_finding(
-            connection, tenant, severity=severity, started_at=NOW - timedelta(minutes=20), **changes
+            connection, tenant, severity=severity, started_at=now - timedelta(minutes=20), **changes
         )
         return made
 
@@ -205,14 +223,16 @@ async def version(
     tenant: AlertTenant,
     finding_id: uuid.UUID,
     *,
+    now: datetime,
     number: int = 1,
     model_input: dict[str, Any] | None = None,
     state: str = "pending",
     generation: int = 1,
-    changed_at: datetime = NOW,
+    changed_at: datetime | None = None,
     severity: str = "warning",
 ) -> str:
-    """A version as gather leaves one waiting for words."""
+    """A version as gather leaves one waiting for words, read and changed at `now` unless
+    `changed_at` says otherwise."""
     sent = dict(model_input or SAMPLE_MODEL_INPUT)
     sent["finding"] = dict(sent["finding"], severity=severity)
     async with install.begin() as connection:
@@ -236,13 +256,13 @@ async def version(
                 "project": tenant.project_id,
                 "finding": finding_id,
                 "number": number,
-                "at": NOW,
+                "at": now,
                 "fingerprint": f"{number:064d}",
                 "aliases": json.dumps(ALIASES),
                 "input": json.dumps(sent),
                 "state": state,
                 "generation": generation,
-                "changed_at": changed_at,
+                "changed_at": now if changed_at is None else changed_at,
             },
         )
     return str(made)
@@ -255,10 +275,12 @@ async def run_word(
     *,
     generation: int = 1,
     attempt: int = 1,
-    at: datetime = NOW,
+    at: datetime | None = None,
     send: transport.Send = transport.send,
     requested_by: str | None = None,
 ) -> str:
+    """One `word` job, on `at` or else the test's clock."""
+    clock = connected.now if at is None else at
     return await word.word(
         as_insight,
         explanation_id=explanation_id,
@@ -268,7 +290,7 @@ async def run_word(
         keys=KEYS,
         endpoints=connected.endpoints,
         deployment="self-hosted",
-        clock=lambda: at,
+        clock=lambda: clock,
         send=send,
         attempt=attempt,
     )

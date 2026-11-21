@@ -2,8 +2,8 @@
 `nexovue_insight` (F3 plan T5.4, T5.5; AC36's bytes, AC39, AC52, AC54, AC56, AC57's spend,
 AC58, AC59, AC60, AC81, AC82, AC94's spending, AC96).
 
-No real provider is called: the provider is `recording_site` (see `wording_fixtures`). The
-clock is pinned. This suite fails rather than skips when Postgres is down.
+No real provider is called: the provider is `recording_site` (see `wording_fixtures`). Each
+test pins its own clock, `now`. This suite fails rather than skips when Postgres is down.
 """
 
 from __future__ import annotations
@@ -11,13 +11,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import timedelta
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from typing import Any, Final
 
 import pytest
 import structlog
 from alert_fixtures import AlertTenant, postgres_reachable
 from live import require_stack
+from nexovue_platform.ai.contract import HttpCall
 from nexovue_platform.ai.explain_prompt import PROMPT_VERSION, SAMPLE_MODEL_INPUT, explain_request
 from nexovue_platform.ai.formats import wire_format
 from nexovue_platform.evidence import (
@@ -27,12 +29,13 @@ from nexovue_platform.evidence import (
 )
 from recording_site import RecordingSite, Reply
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
 from wording_fixtures import (
     CHAT_PATH,
     GOOD,
+    INSIGHT_ASYNC_DSN,
     MODEL,
-    NOW,
     PROVIDER_KEY,
     answer,
     connect,
@@ -49,6 +52,7 @@ from nexovue_scheduler.insight import sweep, transport
 from nexovue_scheduler.insight.word import RETRY_SAYS, WordingFailed
 from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.jobs.registry import Retry
+from nexovue_scheduler.probes.addresses import PrivateEndpoints
 
 require_stack(
     reachable=postgres_reachable(),
@@ -57,6 +61,8 @@ require_stack(
 )
 
 MARKER = "PROVIDER-MARKER-9c41"
+# What `word` logs when a run it called finishes after the sweep ended it.
+LATE_FINISH = "a wording run finished after the sweep had ended it"
 
 
 async def _usage(ai_install: AsyncEngine, ai_tenant: AlertTenant) -> tuple[int, int]:
@@ -84,12 +90,15 @@ async def test_a_run_writes_checked_words_and_records_and_meters_the_call(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC36: the bytes the provider receives are `WireFormat.build` over the stored input;
     the run row holds their hash and the prompt version and no content; the tokens move from
     reserved to used (BR13)."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = openai_reply(answer(picks=["c2", "c9"]))
 
     did = await run_word(ai_engine, connected, explanation)
@@ -111,7 +120,7 @@ async def test_a_run_writes_checked_words_and_records_and_meters_the_call(
     }
     [run] = await _runs(ai_install, ai_tenant)
     assert (run.purpose, run.outcome, run.attempt, run.generation) == ("explain", "done", 1, 1)
-    assert str(run.explanation_id) == explanation and run.started_at == NOW
+    assert str(run.explanation_id) == explanation and run.started_at == now
     assert (run.input_tokens, run.output_tokens, run.tokens_estimated) == (400, 60, False)
     assert run.request_sha256 == hashlib.sha256(sent.body).hexdigest()
     assert run.prompt_version == PROMPT_VERSION
@@ -149,9 +158,12 @@ async def test_an_abstention_is_stored_with_no_words(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = openai_reply(answer(abstain=True))
 
     assert await run_word(ai_engine, connected, explanation) == "abstained"
@@ -209,14 +221,17 @@ async def test_a_queued_run_that_is_no_longer_wanted_sends_nothing_and_spends_no
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
     change: str,
     left: str,
 ) -> None:
     """AC39, AC81: an opt-out, a deleted project, AI turned off, a mute, or a click since:
     the fake provider receives nothing, no run row is written and nothing is reserved; the
     older job of a newer click stops without overwriting it."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     async with ai_install.begin() as connection:
         await connection.execute(
             text(change), {"org": ai_tenant.org_id, "project": ai_tenant.project_id}
@@ -237,13 +252,18 @@ async def test_only_absences_abstain_without_a_call(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """FR33: with only absences, no model is called."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
     only_absences = dict(SAMPLE_MODEL_INPUT, likely_cause=None)
     only_absences["facts"] = [f for f in SAMPLE_MODEL_INPUT["facts"] if f["kind"] == "absence"]
     explanation = await version(
-        ai_install, ai_tenant, await finding(ai_install, ai_tenant), model_input=only_absences
+        ai_install,
+        ai_tenant,
+        await finding(ai_install, ai_tenant, now=now),
+        model_input=only_absences,
+        now=now,
     )
 
     assert await run_word(ai_engine, connected, explanation) == "abstained"
@@ -255,13 +275,14 @@ async def test_a_superseded_version_s_job_stops_without_spending(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC56: a non-material version over a pending one gets its own job; the older one sees
     the newer version and stops."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    found = await finding(ai_install, ai_tenant)
-    older = await version(ai_install, ai_tenant, found)
-    newer = await version(ai_install, ai_tenant, found, number=2)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    found = await finding(ai_install, ai_tenant, now=now)
+    older = await version(ai_install, ai_tenant, found, now=now)
+    newer = await version(ai_install, ai_tenant, found, number=2, now=now)
     provider_site.replies[CHAT_PATH] = openai_reply(answer())
 
     assert await run_word(ai_engine, connected, older) == "stale"
@@ -274,13 +295,16 @@ async def test_a_key_that_will_not_open_for_this_address_fails_without_a_call(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """Spec, *Error cases*: a key sealed for another address, or missed by a rotation, is
     `bad_key`, and nothing is sent."""
     connected = await connect(
-        ai_install, ai_tenant, provider_site, sealed_for="https://elsewhere.example/v1"
+        ai_install, ai_tenant, provider_site, sealed_for="https://elsewhere.example/v1", now=now
     )
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
 
     assert await run_word(ai_engine, connected, explanation) == "failed:bad_key"
     assert provider_site.requests == []
@@ -291,15 +315,20 @@ async def test_an_input_over_the_limit_ends_too_long_before_it_reserves(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC94: a run over `MAX_INPUT_TOKENS` ends `too_long` and reserves nothing."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
     huge = dict(SAMPLE_MODEL_INPUT)
     huge["facts"] = [
         dict(SAMPLE_MODEL_INPUT["facts"][1], id=f"e{number}") for number in range(1, 400)
     ]
     explanation = await version(
-        ai_install, ai_tenant, await finding(ai_install, ai_tenant), model_input=huge
+        ai_install,
+        ai_tenant,
+        await finding(ai_install, ai_tenant, now=now),
+        model_input=huge,
+        now=now,
     )
 
     assert await run_word(ai_engine, connected, explanation) == "refused:too_long"
@@ -312,7 +341,7 @@ async def test_an_input_over_the_limit_ends_too_long_before_it_reserves(
 
 
 async def _decided(
-    ai_install: AsyncEngine, ai_tenant: AlertTenant, finding_id: Any, count: int
+    ai_install: AsyncEngine, ai_tenant: AlertTenant, finding_id: Any, count: int, *, now: datetime
 ) -> None:
     async with ai_install.begin() as connection:
         for hours in range(count):
@@ -325,7 +354,7 @@ async def _decided(
                 {
                     "org": ai_tenant.org_id,
                     "finding": finding_id,
-                    "at": NOW - timedelta(hours=hours),
+                    "at": now - timedelta(hours=hours),
                 },
             )
 
@@ -335,12 +364,13 @@ async def test_an_automatic_run_over_the_cap_shows_its_reason_and_spends_nothing
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC58: three decided runs in 24 hours, and a fourth is `failed`, reason `run_cap`."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    found = await finding(ai_install, ai_tenant)
-    await _decided(ai_install, ai_tenant, found, 3)
-    explanation = await version(ai_install, ai_tenant, found)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    found = await finding(ai_install, ai_tenant, now=now)
+    await _decided(ai_install, ai_tenant, found, 3, now=now)
+    explanation = await version(ai_install, ai_tenant, found, now=now)
 
     assert await run_word(ai_engine, connected, explanation) == "refused:run_cap"
     assert provider_site.requests == [] and len(await _runs(ai_install, ai_tenant)) == 3
@@ -353,13 +383,14 @@ async def test_four_parallel_jobs_of_one_version_make_one_call_and_one_result(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC56, AC58: a job run twice (or four times at once) under the cap's row lock: one call,
     one stored result, and the cap not passed."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    found = await finding(ai_install, ai_tenant)
-    await _decided(ai_install, ai_tenant, found, 2)
-    explanation = await version(ai_install, ai_tenant, found)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    found = await finding(ai_install, ai_tenant, now=now)
+    await _decided(ai_install, ai_tenant, found, 2, now=now)
+    explanation = await version(ai_install, ai_tenant, found, now=now)
     provider_site.replies[CHAT_PATH] = openai_reply(answer(), delay=0.5)
 
     outcomes = await asyncio.gather(
@@ -376,13 +407,14 @@ async def test_an_invalid_answer_and_its_retry_are_one_decided_run(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC58, FR38: invalid output asks for one more attempt, with its own run row and
     reservation; the cap counts the first attempt only."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    found = await finding(ai_install, ai_tenant)
-    await _decided(ai_install, ai_tenant, found, 2)
-    explanation = await version(ai_install, ai_tenant, found)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    found = await finding(ai_install, ai_tenant, now=now)
+    await _decided(ai_install, ai_tenant, found, 2, now=now)
+    explanation = await version(ai_install, ai_tenant, found, now=now)
     provider_site.replies[CHAT_PATH] = openai_reply(
         answer({"type": "timing", "text": "x", "evidence_ids": []})
     )
@@ -404,10 +436,13 @@ async def test_an_invalid_answer_on_the_last_attempt_fails_and_keeps_the_facts(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC52: no claim left and no abstention: `failed`, reason `invalid`."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = openai_reply(
         answer({"type": "timing", "text": GOOD, "evidence_ids": []})
     )
@@ -435,13 +470,16 @@ async def test_a_5xx_and_a_429_get_one_more_attempt_then_fail(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
     reply: Reply,
     outcome: str,
     countdown: float,
 ) -> None:
     """AC82: one further attempt, waiting `Retry-After` for a 429, then `failed`."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = reply
 
     with pytest.raises(Retry) as asked:
@@ -456,9 +494,12 @@ async def test_a_429_asking_past_the_job_s_life_fails_now(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = Reply(
         status=429, body=b"{}", headers={"Retry-After": "7200"}
     )
@@ -481,13 +522,16 @@ async def test_an_answer_no_retry_can_change_fails_at_once_with_its_reason(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
     reply: Reply,
     reason: str,
 ) -> None:
     """Design, *Failure handling*: a refusal (a 200 read before parsing, AC51), a bad key, a
     missing model, a bad request or a cut-off answer is not retried."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = reply
 
     assert await run_word(ai_engine, connected, explanation) == f"failed:{reason}"
@@ -506,24 +550,64 @@ def _killed(*_: Any, **__: Any) -> transport.Answer:
     raise _Killed
 
 
+# A run this suite sweeps starts this far back: well inside `DIED_AFTER`, so the stack's own
+# sweep cannot take it first, and far enough that a sweep just past it reaches no other test's
+# run in flight (`wording_fixtures`).
+_SWEPT_RUN_AGE: Final = timedelta(minutes=3)
+
+
+def _just_past(started: datetime) -> datetime:
+    """The first sweep that calls a run started at `started` dead."""
+    return started + sweep.DIED_AFTER + timedelta(seconds=1)
+
+
+def _sweep_apart(at: datetime) -> None:
+    """The sweep as beat runs it, in a process of its own: here a thread with its own event
+    loop and connection, while the run it ends waits on its provider."""
+
+    async def run() -> None:
+        engine = create_async_engine(INSIGHT_ASYNC_DSN, poolclass=NullPool)
+        try:
+            await sweep.sweep(engine, clock=lambda: at)
+        finally:
+            await engine.dispose()
+
+    with ThreadPoolExecutor(max_workers=1) as apart:
+        apart.submit(lambda: asyncio.run(run())).result()
+
+
+async def _month_totals(ai_install: AsyncEngine, ai_tenant: AlertTenant) -> tuple[int, int]:
+    """Used and reserved over every month row, so a run near a month's end is still seen."""
+    row = await one(
+        ai_install,
+        "SELECT COALESCE(sum(used_tokens), 0) AS used, COALESCE(sum(reserved_tokens), 0) "
+        "AS reserved FROM ai_usage_monthly WHERE org_id = :org",
+        org=ai_tenant.org_id,
+    )
+    return (int(row.used), int(row.reserved))
+
+
 async def test_a_killed_run_keeps_its_reservation_and_the_sweep_marks_it_died(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC54: recorded as started before the call; the sweep, as `nexovue_insight`, marks it
     `died`, moves its reservation to used, flagged estimated, and fails the explanation."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    started = now - _SWEPT_RUN_AGE
+    found = await finding(ai_install, ai_tenant, now=started)
+    explanation = await version(ai_install, ai_tenant, found, now=started)
 
     with pytest.raises(_Killed):
-        await run_word(ai_engine, connected, explanation, send=_killed)
+        await run_word(ai_engine, connected, explanation, at=started, send=_killed)
     [run] = await _runs(ai_install, ai_tenant)
     assert run.outcome == "started" and run.reserved_tokens > 0
     assert await _usage(ai_install, ai_tenant) == (0, run.reserved_tokens)
 
-    await sweep.sweep(ai_engine, clock=lambda: NOW + sweep.DIED_AFTER + timedelta(minutes=1))
+    await sweep.sweep(ai_engine, clock=lambda: _just_past(started))
 
     [died] = await _runs(ai_install, ai_tenant)
     assert (died.outcome, died.tokens_estimated, died.input_tokens) == (
@@ -541,25 +625,81 @@ async def test_a_click_after_a_killed_run_is_not_overwritten_by_the_sweep(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC81: the sweep acts only on a matching generation."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    started = now - _SWEPT_RUN_AGE
+    found = await finding(ai_install, ai_tenant, now=started)
+    explanation = await version(ai_install, ai_tenant, found, now=started)
     with pytest.raises(_Killed):
-        await run_word(ai_engine, connected, explanation, send=_killed)
+        await run_word(ai_engine, connected, explanation, at=started, send=_killed)
     async with ai_install.begin() as connection:
         await connection.execute(
             text(
                 "UPDATE finding_explanations SET wording_generation = 2, wording_changed_at = "
                 ":at WHERE id = :id"
             ),
-            {"id": explanation, "at": NOW + sweep.DIED_AFTER},
+            {"id": explanation, "at": now},
         )
 
-    await sweep.sweep(ai_engine, clock=lambda: NOW + sweep.DIED_AFTER + timedelta(minutes=1))
+    await sweep.sweep(ai_engine, clock=lambda: _just_past(started))
 
     stored = await wording_of(ai_install, explanation)
     assert (stored.wording_state, stored.wording_generation) == ("pending", 2)
+
+
+async def test_a_run_finishing_after_the_sweep_ended_it_changes_nothing(
+    ai_install: AsyncEngine,
+    ai_engine: AsyncEngine,
+    provider_site: RecordingSite,
+    ai_tenant: AlertTenant,
+    now: datetime,
+) -> None:
+    """Design, *Limits*: a child that outlives its hard limit answers after the sweep called
+    its run `died`. The sweep's charge stands, its reservation is not subtracted again, so
+    another run's reservation survives, and no words land: used plus reserved stays as the
+    sweep left it."""
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    holding = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
+    with pytest.raises(_Killed):
+        await run_word(ai_engine, connected, holding, send=_killed)
+    started = now - _SWEPT_RUN_AGE
+    late = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=started), now=started
+    )
+    provider_site.replies[CHAT_PATH] = openai_reply(answer())
+
+    def swept_during_the_call(
+        call: HttpCall, *, timeout_seconds: int, private_endpoints: PrivateEndpoints
+    ) -> transport.Answer:
+        _sweep_apart(_just_past(started))
+        return transport.send(
+            call, timeout_seconds=timeout_seconds, private_endpoints=private_endpoints
+        )
+
+    with structlog.testing.capture_logs() as logs:
+        did = await run_word(ai_engine, connected, late, at=started, send=swept_during_the_call)
+
+    runs = {str(run.explanation_id): run for run in await _runs(ai_install, ai_tenant)}
+    died, held = runs[late], runs[holding]
+    assert (died.outcome, died.input_tokens, died.output_tokens, died.tokens_estimated) == (
+        "died",
+        died.reserved_tokens,
+        0,
+        True,
+    )
+    assert held.outcome == "started" and held.reserved_tokens > 0
+    assert await _month_totals(ai_install, ai_tenant) == (
+        died.reserved_tokens,
+        held.reserved_tokens,
+    )
+    stored = await wording_of(ai_install, late)
+    assert (stored.wording_state, stored.wording_reason, stored.wording) == ("failed", "died", None)
+    assert did == "stale" and len(provider_site.requests) == 1
+    assert [log["log_level"] for log in logs if log["event"] == LATE_FINISH] == ["warning"]
 
 
 async def test_wording_left_pending_past_its_job_s_life_is_failed_expired_by_the_sweep(
@@ -567,15 +707,18 @@ async def test_wording_left_pending_past_its_job_s_life_is_failed_expired_by_the
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC81: the container was stopped and the job expired: once the sweep runs, as
     `nexovue_insight`, the row is `failed`, reason `expired`; a fresh one is left alone."""
-    await connect(ai_install, ai_tenant, provider_site)
-    found = await finding(ai_install, ai_tenant)
-    stuck = await version(ai_install, ai_tenant, found, changed_at=NOW - timedelta(hours=2))
-    fresh = await version(ai_install, ai_tenant, found, number=2)
+    await connect(ai_install, ai_tenant, provider_site, now=now)
+    found = await finding(ai_install, ai_tenant, now=now)
+    stuck = await version(
+        ai_install, ai_tenant, found, changed_at=now - timedelta(hours=2), now=now
+    )
+    fresh = await version(ai_install, ai_tenant, found, number=2, now=now)
 
-    swept = await sweep.sweep(ai_engine, clock=lambda: NOW)
+    swept = await sweep.sweep(ai_engine, clock=lambda: now)
 
     assert swept.expired >= 1
     stored = await wording_of(ai_install, stuck)
@@ -588,10 +731,13 @@ async def test_an_uncaught_error_writes_failed_before_it_is_raised_with_no_body(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC54, AC59: the worker logs what is raised, so it holds one closed word."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
 
     def broken(*_: Any, **__: Any) -> transport.Answer:
         raise RuntimeError(f"the provider said {MARKER}")
@@ -632,13 +778,16 @@ async def test_no_table_or_log_holds_what_the_provider_said(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
     reply: Reply,
 ) -> None:
     """AC59, AC96: a marker in every kind of answer reaches no row outside the wording the
     checks passed, no job's error, no result and no log; the label is the configured model
     (FR19, AC51)."""
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    explanation = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    explanation = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = reply
 
     with structlog.testing.capture_logs() as logs:

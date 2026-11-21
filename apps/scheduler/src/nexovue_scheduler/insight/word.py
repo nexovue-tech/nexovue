@@ -17,8 +17,9 @@ without spending (AC81).
 6. Invalid output, a 5xx or a 429 asks for one more attempt while one is left, as a new
    attempt with its own limits, reservation and run row (FR38); a 429's `Retry-After` is its
    wait, up to the job's life.
-7. One transaction: the words over `pending` of this generation, the tokens moved from
-   reserved to used, the run finished.
+7. One transaction, only while the run is still `started`: the run finished, the tokens
+   moved from reserved to used, and the words over `pending` of this generation. A run the
+   sweep already called `died` keeps the sweep's charge and writes nothing.
 8. Anything else writes `failed`, reason `error`, before it is raised, and what is raised
    holds no body, since the worker logs it (AC54, AC59).
 
@@ -259,7 +260,7 @@ async def _word(
         may_retry=attempt < max_attempts,
         life_left=_life_left(version, clock()),
     )
-    took = await store.finish_wording(
+    finished = await store.finish_wording(
         engine,
         org_id=org_id,
         explanation_id=explanation_id,
@@ -281,8 +282,18 @@ async def _word(
         input_tokens=ending.run.input_tokens,
         output_tokens=ending.run.output_tokens,
         attempt=attempt,
-        written=took,
+        written=finished == "written",
     )
+    if finished == "already_ended":
+        # Only a child that outlived its hard limit gets here: the sweep's charge stands, and
+        # there is nothing to retry.
+        logger.warning(
+            "a wording run finished after the sweep had ended it",
+            explanation_id=explanation_id,
+            org_id=org_id,
+            run_id=admission.run_id,
+        )
+        return "stale"
     if ending.retry:
         raise Retry(ending.countdown, RETRY_SAYS[ending.run.outcome])
     return ending.state if ending.reason is None else f"{ending.state}:{ending.reason}"

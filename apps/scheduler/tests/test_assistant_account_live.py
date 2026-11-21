@@ -208,6 +208,26 @@ async def test_the_sweep_settles_a_dead_question_and_charges_what_it_held(
     # A second sweep finds nothing left to move.
     await assistant_sweep.sweep(as_insight)
     assert (await message(install, asked.message_id)).used_tokens == RESERVE
+    # Nor does a call that outlived the clock, spending and ending late: the sweep's charge
+    # stands, as F3's wording run is settled once (`docs/changes/wording-settles-once`).
+    async with as_insight.begin() as db:
+        await db.execute(
+            text("SELECT assistant_record_spend(:id, 500, false)"), {"id": asked.message_id}
+        )
+        await db.execute(
+            text(
+                "SELECT assistant_finish_message(:id, 'answered', NULL, NULL, NULL, NULL, 'return')"
+            ),
+            {"id": asked.message_id},
+        )
+    late = await message(install, asked.message_id)
+    assert (late.state, late.reserved_tokens, late.used_tokens) == ("unavailable", 0, RESERVE)
+    usage = await run(
+        install,
+        "SELECT used_tokens, reserved_tokens FROM ai_usage_monthly WHERE org_id = :o",
+        o=asked.org_id,
+    )
+    assert tuple(usage) == (RESERVE, 0)
 
 
 async def test_a_stopped_question_keeps_its_state_while_its_tokens_settle(

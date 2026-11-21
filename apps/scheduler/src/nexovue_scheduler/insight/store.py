@@ -13,6 +13,10 @@ row lock on the finding's first explanation that also holds the run cap (A58: th
 has no advisory locks). A finished run moves what it used to `used_tokens` and returns the
 rest; a run that dies keeps it all, moved to used by the sweep. A connection test takes none
 (A51, AC53).
+
+**A run is settled once.** Its finish and the sweep each act only on a run still `started`,
+and its reservation moves only in the transaction that ends it, so a finish arriving after
+the sweep called the run `died` changes nothing: no tokens, no state, no words.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from nexovue_platform.ai.limits import RUN_CAP_WINDOW, RUNS_PER_FINDING, month_of
 from sqlalchemy import text
@@ -156,7 +160,8 @@ _RESERVE: Final = text(
     """
 )
 # What a run used is counted even past its reservation; usage may pass the limit by that one
-# overshoot, and the next run is refused (BR13).
+# overshoot, and the next run is refused (BR13). Only after `_FINISH_RUN` or `_RUN_DIED` ended
+# the run in the same transaction, so no run's reservation is subtracted twice.
 _SETTLE: Final = text(
     """
     UPDATE ai_usage_monthly
@@ -596,6 +601,12 @@ async def set_state(
     return bool(changed.rowcount)
 
 
+# How a run's ending landed: its words or state taken, ended with the explanation already
+# moved on (a click, a mute, or a retry still to come), or too late, after the sweep had
+# called the run `died`.
+Finished = Literal["written", "not_written", "already_ended"]
+
+
 async def finish_wording(
     engine: AsyncEngine,
     *,
@@ -609,16 +620,17 @@ async def finish_wording(
     words: dict[str, Any] | None,
     state: str | None,
     reason: str | None,
-) -> bool:
-    """A run's ending in one transaction: its tokens moved from reserved to used, its row
-    finished, and, unless it will be tried again (`state` None), the explanation's words or
-    state over `pending` of its generation. True when the explanation took it."""
+) -> Finished:
+    """A run's ending in one transaction: its row finished, its tokens moved from reserved to
+    used, and, unless it will be tried again (`state` None), the explanation's words or state
+    over `pending` of its generation.
+
+    Only while the run is still `started`: the row lock this takes first is the one the sweep
+    holds, so one of the two ends the run and the other finds it ended. A run the sweep has
+    ended keeps the sweep's charge, and its words never land."""
     key = {"org_id": org_id, "explanation_id": explanation_id, "generation": generation}
     async with engine.begin() as connection:
-        await connection.execute(
-            _SETTLE, {"org_id": org_id, "month": month, "used": end.tokens, "reserved": reserved}
-        )
-        await connection.execute(
+        ended = await connection.execute(
             _FINISH_RUN,
             {
                 "org_id": org_id,
@@ -630,8 +642,13 @@ async def finish_wording(
                 "finished_at": end.finished_at,
             },
         )
+        if not ended.rowcount:
+            return "already_ended"
+        await connection.execute(
+            _SETTLE, {"org_id": org_id, "month": month, "used": end.tokens, "reserved": reserved}
+        )
         if state is None:
-            return False
+            return "not_written"
         if words is not None:
             changed = await connection.execute(
                 _SET_WORDS,
@@ -641,7 +658,7 @@ async def finish_wording(
             changed = await connection.execute(
                 _SET_STATE, key | {"state": state, "reason": reason, "at": end.finished_at}
             )
-    return bool(changed.rowcount)
+    return "written" if changed.rowcount else "not_written"
 
 
 # ------------------------------------------------------------------ the sweep

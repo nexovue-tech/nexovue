@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import datetime
 from functools import partial
 from typing import Final
 
@@ -137,6 +137,7 @@ async def test_parallel_runs_past_the_limit_leave_used_and_reserved_under_it(
     ai_install: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC53: eight runs at once against a limit that admits two reservations: two call, the
     rest are `over_limit` and spend nothing, and used plus reserved never passes the limit.
@@ -145,23 +146,23 @@ async def test_parallel_runs_past_the_limit_leave_used_and_reserved_under_it(
     clock is this test's own, so the stack's AI sweep never takes a run as died."""
     per_run = _reserved_per_run(provider_site.url("/v1"))
     limit = int((2 * per_run + per_run // 2) / 0.8)
-    connected = await connect(ai_install, ai_tenant, provider_site, limit=limit)
+    connected = await connect(ai_install, ai_tenant, provider_site, limit=limit, now=now)
     versions = [
-        await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant)) for _ in range(8)
+        await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now)
+        for _ in range(8)
     ]
     provider_site.replies[CHAT_PATH] = openai_reply(
         answer(), prompt_tokens=per_run // 2, completion_tokens=10, delay=0.5
     )
     start = threading.Barrier(len(versions))
     hold = _ProviderHold(len(versions))
-    at = datetime.now(UTC).replace(microsecond=0)
 
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=len(versions)) as threads:
         runs = asyncio.gather(
             *(
                 loop.run_in_executor(
-                    threads, partial(_run_apart, connected, each, start=start, hold=hold, at=at)
+                    threads, partial(_run_apart, connected, each, start=start, hold=hold, at=now)
                 )
                 for each in versions
             )
@@ -187,14 +188,19 @@ async def test_a_run_past_its_reservation_is_counted_and_the_next_is_refused(
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC53, BR13: the provider reports more than was reserved; the actual is counted, usage
     passes the limit by that one run, and the next run is refused `over_limit`."""
     per_run = _reserved_per_run(provider_site.url("/v1"))
     limit = int(per_run * 1.5 / 0.8)
-    connected = await connect(ai_install, ai_tenant, provider_site, limit=limit)
-    first = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
-    second = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, limit=limit, now=now)
+    first = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
+    second = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = openai_reply(
         answer(), prompt_tokens=limit, completion_tokens=500
     )
@@ -211,22 +217,27 @@ async def test_warning_findings_stop_at_80_percent_and_a_critical_one_still_runs
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     """AC55, FR40: with 85% of the limit used, a warning finding's run is refused and a
     critical finding's runs, from the 20% kept for it."""
     per_run = _reserved_per_run(provider_site.url("/v1"))
     limit = per_run * 10
-    connected = await connect(ai_install, ai_tenant, provider_site, limit=limit)
-    spent = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
+    connected = await connect(ai_install, ai_tenant, provider_site, limit=limit, now=now)
+    spent = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
     provider_site.replies[CHAT_PATH] = openai_reply(
         answer(), prompt_tokens=int(limit * 0.85) - 10, completion_tokens=10
     )
     assert await run_word(ai_engine, connected, spent) == "done"
     provider_site.replies[CHAT_PATH] = openai_reply(answer())
 
-    warning = await version(ai_install, ai_tenant, await finding(ai_install, ai_tenant))
-    critical_finding = await finding(ai_install, ai_tenant, severity="critical")
-    critical = await version(ai_install, ai_tenant, critical_finding, severity="critical")
+    warning = await version(
+        ai_install, ai_tenant, await finding(ai_install, ai_tenant, now=now), now=now
+    )
+    critical_finding = await finding(ai_install, ai_tenant, severity="critical", now=now)
+    critical = await version(ai_install, ai_tenant, critical_finding, severity="critical", now=now)
 
     assert await run_word(ai_engine, connected, warning) == "refused:over_limit"
     assert await run_word(ai_engine, connected, critical) == "done"

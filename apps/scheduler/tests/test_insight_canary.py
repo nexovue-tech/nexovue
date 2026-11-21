@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 import clickhouse_connect
@@ -29,7 +29,7 @@ from live import require_stack
 from recording_site import RecordingSite
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wording_fixtures import CHAT_PATH, NOW, answer, connect, openai_reply, run_word
+from wording_fixtures import CHAT_PATH, answer, connect, openai_reply, run_word
 
 from nexovue_scheduler.evidence.gather import gather
 from nexovue_scheduler.evidence.store import connect_store
@@ -40,7 +40,8 @@ require_stack(
     remedy="Postgres and ClickHouse are not reachable — run `just up`",
 )
 
-START: Final = NOW - timedelta(minutes=6)
+# The finding opened this long before the test's clock, with telemetry around it.
+OPENED_BEFORE: Final = timedelta(minutes=6)
 # Names the record keeps, as names: each must reach `aliases` or `evidence`, and no further.
 SERVICE: Final = "canary-service-a41"
 CALLEE: Final = "canary-callee-b52"
@@ -71,11 +72,11 @@ NAMES: Final = {
 }
 
 
-def _at(minutes: float) -> Any:
-    return (START + timedelta(minutes=minutes)).replace(tzinfo=None)
+def _at(start: datetime, minutes: float) -> Any:
+    return (start + timedelta(minutes=minutes)).replace(tzinfo=None)
 
 
-def _plant_telemetry(tenant: AlertTenant) -> None:
+def _plant_telemetry(tenant: AlertTenant, start: datetime) -> None:
     for table in ("service_edges_1m", "spans", "logs"):
         delete_after_run(table, str(tenant.org_id))
     client = clickhouse_connect.get_client(dsn=CLICKHOUSE_DSN)
@@ -88,7 +89,7 @@ def _plant_telemetry(tenant: AlertTenant) -> None:
             "%(service)s, %(callee)s, 'postgresql', 'peer.service', 'server', 'call', "
             "%(minute)s, 100, %(errors)s, "
             "arrayReduce('quantilesState(0.5, 0.95, 0.99)', [toFloat64(5)]))",
-            parameters=bound | {"callee": CALLEE, "minute": _at(minute), "errors": errors},
+            parameters=bound | {"callee": CALLEE, "minute": _at(start, minute), "errors": errors},
         )
     client.command(
         "INSERT INTO spans (tenant_id, project_id, service_name, span_name, timestamp, "
@@ -98,7 +99,7 @@ def _plant_telemetry(tenant: AlertTenant) -> None:
         parameters=bound
         | {
             "endpoint": NEVER_KEPT["endpoint"],
-            "at": _at(1),
+            "at": _at(start, 1),
             "type": EXCEPTION_TYPE,
             "message": NEVER_KEPT["message"],
             "attrs": json.dumps({"note": NEVER_KEPT["span attribute"]}),
@@ -112,7 +113,7 @@ def _plant_telemetry(tenant: AlertTenant) -> None:
         "%(at)s, %(at)s, 'ERROR', %(body)s, %(attrs)s, %(type)s)",
         parameters=bound
         | {
-            "at": _at(1),
+            "at": _at(start, 1),
             "body": NEVER_KEPT["log body"],
             "attrs": json.dumps({"note": NEVER_KEPT["log attribute"]}),
             "type": EXCEPTION_TYPE,
@@ -121,7 +122,7 @@ def _plant_telemetry(tenant: AlertTenant) -> None:
     client.close()
 
 
-async def _plant_records(engine: AsyncEngine, tenant: AlertTenant) -> uuid.UUID:
+async def _plant_records(engine: AsyncEngine, tenant: AlertTenant, start: datetime) -> uuid.UUID:
     async with engine.begin() as connection:
         bound = {"org": tenant.org_id, "project": tenant.project_id}
         await connection.execute(
@@ -139,8 +140,8 @@ async def _plant_records(engine: AsyncEngine, tenant: AlertTenant) -> uuid.UUID:
             | {
                 "service": SERVICE,
                 "version": VERSION,
-                "first": START - timedelta(days=20),
-                "at": START - timedelta(minutes=4),
+                "first": start - timedelta(days=20),
+                "at": start - timedelta(minutes=4),
             },
         )
         await connection.execute(
@@ -154,7 +155,7 @@ async def _plant_records(engine: AsyncEngine, tenant: AlertTenant) -> uuid.UUID:
             | {
                 "version": VERSION,
                 "service": SERVICE,
-                "at": START - timedelta(minutes=4),
+                "at": start - timedelta(minutes=4),
                 "delivery": str(uuid.uuid4()),
                 "metadata": json.dumps({"note": NEVER_KEPT["deploy metadata"]}),
                 "release": release,
@@ -175,10 +176,10 @@ async def _plant_records(engine: AsyncEngine, tenant: AlertTenant) -> uuid.UUID:
                 "to_state, changed_at, reason) VALUES (:org, :project, :check, 'up', 'down', "
                 ":at, 'x')"
             ),
-            bound | {"check": check_id, "at": START + timedelta(minutes=1)},
+            bound | {"check": check_id, "at": start + timedelta(minutes=1)},
         )
         finding_id: uuid.UUID = await add_finding(
-            connection, tenant, service=SERVICE, started_at=START
+            connection, tenant, service=SERVICE, started_at=start
         )
         await connection.execute(
             text(
@@ -211,7 +212,7 @@ async def _plant_records(engine: AsyncEngine, tenant: AlertTenant) -> uuid.UUID:
             | {
                 "rule": RULE_NAME,
                 "service": SERVICE,
-                "at": START + timedelta(minutes=1),
+                "at": start + timedelta(minutes=1),
             },
         )
         await connection.execute(
@@ -239,11 +240,12 @@ async def _stored(engine: AsyncEngine, finding_id: uuid.UUID) -> Any:
 
 @pytest.fixture
 async def planted(
-    ai_install: AsyncEngine, ai_tenant: AlertTenant, provider_site: RecordingSite
+    ai_install: AsyncEngine, ai_tenant: AlertTenant, provider_site: RecordingSite, now: datetime
 ) -> tuple[Any, Any]:
-    connected = await connect(ai_install, ai_tenant, provider_site)
-    _plant_telemetry(ai_tenant)
-    finding_id = await _plant_records(ai_install, ai_tenant)
+    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+    start = now - OPENED_BEFORE
+    _plant_telemetry(ai_tenant, start)
+    finding_id = await _plant_records(ai_install, ai_tenant, start)
     store = connect_store(READER_DSN)
     await gather(
         ai_install,
@@ -252,7 +254,7 @@ async def planted(
         org_id=ai_tenant.org_id,
         reason="opened",
         deployment="self-hosted",
-        now=NOW,
+        now=now,
         show_held_causes=True,
     )
     return connected, await _stored(ai_install, finding_id)

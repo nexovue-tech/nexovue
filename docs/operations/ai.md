@@ -102,7 +102,10 @@ job expired. Check `up{job="scheduler-insight"}` and the `insight` queue's oldes
 (`nexovue_scheduler_oldest_ready_job_seconds{queue="insight"}`). A person may ask again at once.
 Once the container runs, the AI sweep (every 5 minutes) marks what was left `failed`, reason
 `expired`, and a run whose child was killed `died`, with its reservation counted as used
-(overstated on purpose).
+(overstated on purpose). If that child was not in fact dead and its call later returns, the
+`scheduler-insight` log says "a wording run finished after the sweep had ended it" (a warning):
+the sweep's charge stands and its words are dropped. It means a child outlived its hard limit,
+which the worker's kill should prevent, so look at that container's memory and kills.
 
 ## Alerts
 
