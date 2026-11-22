@@ -130,6 +130,17 @@ describe("full screen", () => {
     expect(first?.className).toContain("focus:not-sr-only");
   });
 
+  it("starts the keyboard at the top, so one Tab reaches it after the button that opened it (AC76)", async () => {
+    declareStream(declaration);
+    const { container } = await mountAt("/dashboards/d1?display=1");
+    // Without this, focus is lost to the page's start where the pressed button used to be, and
+    // Tab begins in the middle of the dashboard (seen in Chromium, 2026-11-22).
+    const bar = container.querySelector("header");
+    expect(document.activeElement).toBe(bar);
+    expect(bar?.contains(container.querySelector("button"))).toBe(true);
+    expect(bar?.getAttribute("tabindex")).toBe("-1");
+  });
+
   it("shows it when the pointer moves", async () => {
     declareStream(declaration);
     const { container } = await mountAt("/dashboards/d1?display=1");

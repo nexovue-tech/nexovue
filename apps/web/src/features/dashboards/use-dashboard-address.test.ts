@@ -9,7 +9,7 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -158,7 +158,7 @@ function Probe() {
   return null;
 }
 
-async function mountAt(initial: string, projects: string[] = [A, B]) {
+async function mountAt(initial: string, projects: string[] = [A, B], strict = false) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.stubGlobal(
     "fetch",
@@ -189,14 +189,13 @@ async function mountAt(initial: string, projects: string[] = [A, B]) {
   });
   router = created;
   root = createRoot(document.createElement("div"));
+  const app = createElement(
+    QueryClientProvider,
+    { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+    createElement(RouterProvider, { router: created }),
+  );
   await act(async () => {
-    root?.render(
-      createElement(
-        QueryClientProvider,
-        { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-        createElement(RouterProvider, { router: created }),
-      ),
-    );
+    root?.render(strict ? createElement(StrictMode, null, app) : app);
   });
   await settle();
 }
@@ -225,6 +224,15 @@ describe("the address wins for this page (T6.2)", () => {
     expect(readSelection().window).toEqual({ kind: "relative", rangeId: "6h" });
     expect(address?.ready).toBe(true);
     expect(address?.fromLink).toBe(true);
+  });
+
+  // The dev server mounts every effect twice (React's StrictMode): the first cleanup clears the
+  // override, and a link's window was then read as the reader changing it in the top bar, so the
+  // address was rewritten to their own (seen in Chromium, 2026-11-22: ?range=6h became ?range=1h).
+  it("keeps a link's window when every effect runs twice (AC27, AC103)", async () => {
+    await mountAt(`/dashboards/d1?range=6h`, [A, B], true);
+    expect(readSelection().window).toEqual({ kind: "relative", rangeId: "6h" });
+    expect(router?.history.location.search).toContain("range=6h");
   });
 
   it("is not ready, and has changed nothing, while the project list has not answered", async () => {

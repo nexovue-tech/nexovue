@@ -1,5 +1,5 @@
 import { Outlet, useLocation, useNavigate, useRouter, useSearch } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssistantPanel } from "@/features/assistant/AssistantPanel";
 import { VerifyEmailBanner } from "@/features/auth/VerifyEmailBanner";
@@ -25,6 +25,10 @@ const DISPLAY_BAR_AWAKE_MS = 3_000;
  */
 function DisplayBar({ onLeave }: { onLeave: () => void }) {
   const [awake, setAwake] = useState(false);
+  const bar = useRef<HTMLElement>(null);
+  // The button that opened full screen is gone, and the browser would start Tab where it was, in
+  // the middle of the page. Starting at the bar makes the first Tab reach "Leave full screen".
+  useEffect(() => bar.current?.focus({ preventScroll: true }), []);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const wake = () => {
@@ -40,7 +44,11 @@ function DisplayBar({ onLeave }: { onLeave: () => void }) {
   }, []);
 
   return (
-    <header className="flex min-h-10 shrink-0 items-center justify-between gap-4 border-line border-b bg-surface px-4 py-1.5">
+    <header
+      ref={bar}
+      tabIndex={-1}
+      className="flex min-h-10 shrink-0 items-center justify-between gap-4 border-line border-b bg-surface px-4 py-1.5 outline-none"
+    >
       <button
         type="button"
         onClick={onLeave}

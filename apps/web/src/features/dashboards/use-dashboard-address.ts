@@ -166,7 +166,15 @@ export function useDashboardAddress(options: {
   ]);
 
   // The screen's project, window and clock end with it: the reader's own show again (AC69).
-  useEffect(() => clearScreenOverride, []);
+  // What was held goes too, or a remount (StrictMode runs every effect twice) would read the
+  // cleared override as the reader changing it in the top bar, and overwrite the link's window.
+  useEffect(
+    () => () => {
+      held.current = {};
+      clearScreenOverride();
+    },
+    [],
+  );
 
   const projectAgrees =
     project.state === "none" || (project.state === "ready" && shown.projectId === project.id);
