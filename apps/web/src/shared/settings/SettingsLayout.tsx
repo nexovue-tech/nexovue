@@ -40,12 +40,14 @@ export function SettingsLayout({
   return (
     // **The rail stays; the setting scrolls.** One scroll container held both, so
     // reading to the bottom of the audit log took the list of settings off screen
-    // with it and coming back meant scrolling up past a page of rows. At `md` and
+    // with it and coming back meant scrolling up past a page of rows. From `@lg`
     // up the row is the height of the pane and each column scrolls on its own,
-    // which is what a fixed rail means. Below `md` the rail is a collapsed
+    // which is what a fixed rail means. Below it the rail is a collapsed
     // disclosure rather than a column, so the page stays one scroller there —
     // two nested ones on a phone is how a list stops scrolling under a thumb.
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto md:overflow-hidden">
+    // `@lg` (32rem) is the width the pane is given, what a 768px window leaves it,
+    // not the window's own: chat's panel narrows the pane (F4 T2.10b).
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto @lg:overflow-hidden">
       {/* **The page uses the window; the prose inside it does not.**
           Left-aligned like the rest of the console — it used to be centred, which
           made the page's left edge jump every time somebody moved between Alerts
@@ -55,13 +57,13 @@ export function SettingsLayout({
           as it is a form. The cap that matters is inward, on the sentences: a line
           of explanation carries `max-w-3xl`, roughly 90 characters, past which a
           reader loses the start of the next line. A table does not have to. */}
-      <div className="flex w-full flex-col gap-8 px-4 py-6 md:h-full md:min-h-0 md:flex-row md:gap-10 md:py-0">
+      <div className="flex w-full flex-col gap-8 px-4 py-6 @lg:h-full @lg:min-h-0 @lg:flex-row @lg:gap-10 @lg:py-0">
         <SettingsNav />
 
         {/* A column inside the shell's main landmark, not a second landmark. Two of
             them is invalid HTML and gives a screen reader's landmark list a duplicate
             to choose between; `AppShell` owns the page's one. */}
-        <div className="min-w-0 flex-1 pb-10 md:h-full md:min-h-0 md:overflow-y-auto md:pt-6">
+        <div className="min-w-0 flex-1 pb-10 @lg:h-full @lg:min-h-0 @lg:overflow-y-auto @lg:pt-6">
           <header>
             <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
             {description ? (
@@ -100,17 +102,20 @@ function SettingsNav() {
   );
 
   return (
-    // Scrolls on its own at `md`, so a rail longer than the window is still
-    // reachable without moving the setting beside it.
+    // Scrolls on its own from `@lg`, so a rail longer than the window is still
+    // reachable without moving the setting beside it. A link's hover reaches 0.5rem
+    // past the text on each side, so the rail is that much wider with that much padding,
+    // pulled back by the same: the bleed stays inside the scroller, which would otherwise
+    // scroll sideways by it.
     <nav
       aria-label="Settings"
-      className="w-full shrink-0 md:h-full md:w-52 md:overflow-y-auto md:py-6"
+      className="w-full shrink-0 @lg:-mx-2 @lg:h-full @lg:w-56 @lg:overflow-y-auto @lg:px-2 @lg:py-6"
     >
       <button
         type="button"
         onClick={() => setOpen((shown) => !shown)}
         aria-expanded={open}
-        className="-mx-2 flex min-h-11 w-[calc(100%+1rem)] items-center justify-between rounded px-2 text-ink text-sm hover:bg-hover md:hidden"
+        className="-mx-2 flex min-h-11 w-[calc(100%+1rem)] items-center justify-between rounded px-2 text-ink text-sm hover:bg-hover @lg:hidden"
       >
         <span className="font-medium">All settings</span>
         <span aria-hidden="true" className="text-ink-dim">
@@ -118,7 +123,7 @@ function SettingsNav() {
         </span>
       </button>
 
-      <div className={`${open ? "block" : "hidden"} md:block`}>
+      <div className={`${open ? "block" : "hidden"} @lg:block`}>
         <input
           type="search"
           value={typed}
@@ -176,7 +181,7 @@ function NavItem({
       onClick={onNavigate}
       // `min-h-11` rather than padding alone: on a phone these are the tap
       // targets, and 28px is below what a finger reliably hits.
-      className="-mx-2 flex min-h-11 items-center rounded px-2 text-ink-dim text-sm hover:bg-hover hover:text-ink md:min-h-0 md:py-1"
+      className="-mx-2 flex min-h-11 items-center rounded px-2 text-ink-dim text-sm hover:bg-hover hover:text-ink @lg:min-h-0 @lg:py-1"
       activeProps={{ className: "bg-raised font-medium text-ink" }}
     >
       {title}
