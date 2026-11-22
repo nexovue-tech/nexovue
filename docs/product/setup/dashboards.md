@@ -4,8 +4,8 @@ A dashboard is a page of panels you choose, kept for your whole organization to 
 screen; a dashboard is for the numbers a team wants side by side, or on a wall.
 
 **Every limit below is the build's value and has not yet been measured on a customer-sized install.** They are
-stated as protection for the system, not as a reason to upgrade. They may change after the measurement
-(`docs/research/f20-measurement-2026-11-22.md`).
+stated as protection for the system, not as a reason to upgrade. They may change once they are measured on a
+customer-sized install.
 
 ## What a dashboard holds
 
