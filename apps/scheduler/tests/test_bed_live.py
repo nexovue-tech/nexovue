@@ -38,6 +38,7 @@ from alert_fixtures import (
     postgres_reachable,
 )
 from at_once import render, summarize
+from child_env import children_read_this_tests_environment  # noqa: F401  fixture
 from clickhouse_cleanup import delete_after_run
 from detection_history import READER_DSN
 from forged import Observed, Spec
@@ -248,6 +249,7 @@ async def _explained_at(engine: AsyncEngine, tenant: AlertTenant) -> dict[uuid.U
         return {row.finding_id: row.read_at for row in rows}
 
 
+@pytest.mark.usefixtures("children_read_this_tests_environment")
 async def test_one_hundred_findings_at_once_clear_and_a_due_probe_does_not_wait_behind_them(
     engine: AsyncEngine,
     own: AlertTenant,
