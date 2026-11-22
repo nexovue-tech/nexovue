@@ -39,6 +39,9 @@ targets. A change that relaxes one of them is a design decision, not a detail.
   by request input is a memory exhaustion path.
 - Pools are explicit and small: Postgres 10 with 5 overflow, ClickHouse 8 in the API and 4 per
   worker. Raising a pool to fix latency usually moves the queue rather than shortening it.
+- An API request holds a Postgres connection only while it runs Postgres statements: the caller's
+  lookup ends its own transaction, and code holding the request's connection never waits for a
+  second one (ADR-102). A full pool answers 503 `service-busy` with `Retry-After`, never a 500.
 - The console virtualizes long lists rather than rendering them, caches reads for 30 seconds, and
   abandons a request after 20. A screen that renders thousands of rows uses the virtualizer the
   traces, logs, and database screens already use.

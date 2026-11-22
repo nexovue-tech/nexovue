@@ -63,6 +63,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-098 — F5's evaluation runs the product's own code at every step](ADR-098-f5s-evaluation-runs-the-products-own-code-at-every-step.md) — with F5 Step 6 (code), 2026-11-22
 - [ADR-100 — A draft is written in an order a crash cannot turn into two, and only as checked](ADR-100-a-draft-is-written-in-an-order-a-crash-cannot-turn-into-two.md) — with F5 Step 7, 2026-11-22
 - [ADR-101 — Write routes exist only behind the founder's go, and every Step 7 path asks first](ADR-101-write-routes-exist-only-behind-the-founders-go.md) — with F5 Step 7, 2026-11-22. Builds on ADR-097
+- [ADR-102 — A request gives back its Postgres connection once its caller is known, and a full pool answers busy](ADR-102-a-request-gives-back-its-postgres-connection-once-its-caller-is-known.md) — with the change *request holds one connection*, 2026-11-22. Settles F20 open decision 40
 - [ADR-088 — A case note is chat's knowledge by copy, gone with its note, inert, and ranked above nexovue's own lines](ADR-088-a-note-is-chat-knowledge-by-copy-and-ranks-above-composed-lines.md) — with F4 Step 7, 2026-11-21. Extends ADR-067 to F22's notes
 
 ## Earlier decisions, 0001–0112

@@ -122,6 +122,13 @@ DEPENDENCY_UNAVAILABLE: Final = register(
     "A dependency this request needs is not available",
     HTTPStatus.SERVICE_UNAVAILABLE,
 )
+# Every pooled Postgres connection is in use: we are at capacity, not broken, and a retry
+# shortly will be served. Separate from `dependency-unavailable`, which says a store is down.
+SERVICE_BUSY: Final = register(
+    "service-busy",
+    "The service is busy",
+    HTTPStatus.SERVICE_UNAVAILABLE,
+)
 INTERNAL_ERROR: Final = register(
     "internal-error",
     "The request could not be completed",

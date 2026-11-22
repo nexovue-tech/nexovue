@@ -108,7 +108,21 @@ async def get_current_identity(
         raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
     if session.impersonation is not None:
         await _hold_support_view(connection, session.impersonation, user, organization, db)
+    await _release_connection(db)
     return Identity(user=user, organization=organization, impersonation=session.impersonation)
+
+
+async def _release_connection(db: AsyncSession) -> None:
+    """End the caller lookup's transaction, so the request holds no pooled connection.
+
+    Otherwise it stayed `idle in transaction` to the request's end, and a route needing a
+    second connection (the reader's session lookup) deadlocked a full pool (ADR-102).
+
+    A commit, not a rollback (which expires the person and organization just loaded) nor a
+    close (which detaches them, losing a route's change to `identity.user`). Nothing here
+    writes but the support view's audit line, committed already.
+    """
+    await db.commit()
 
 
 async def _hold_support_view(
@@ -271,6 +285,7 @@ async def get_current_reader(
     if presented is not None and looks_like_api_token(presented):
         now = datetime.now(UTC)
         token = await api_tokens.token_for(db, presented, now=now)
+        await _release_connection(db)
         usage = _usage_for(connection)
         if usage is not None:
             usage.count(token.id, now)
@@ -290,6 +305,7 @@ async def _reader_for_ticket(
     if check is None:
         raise UnauthenticatedError(TICKETS_NOT_ACCEPTED)
     ticket = await check(db, presented, connection)
+    await _release_connection(db)
     return Reader(
         org_id=ticket.org_id, project_scope=ticket.project_id, message_id=ticket.message_id
     )
