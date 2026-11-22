@@ -13,6 +13,7 @@ import { CHART_HEIGHT } from "@/shared/components/TrendChart";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { visibleEscapes } from "@/shared/format/visible-escapes";
 import { useProjects } from "@/shared/projects";
+import { useNothingLive } from "@/shared/refresh";
 import { useSelection } from "@/shared/selection";
 
 import type { Dashboard, DashboardDocument, PanelResult, PreviewAsk, StoredPanel } from "./api";
@@ -52,6 +53,7 @@ import { PanelToolbar } from "./PanelToolbar";
 import { KNOWN_KINDS, stateWords } from "./panel-words";
 import { SideSheet } from "./SideSheet";
 import { refusalWords } from "./transfer";
+import { useOpeningWindow } from "./use-opening-window";
 
 /**
  * The builder (F20, Step 3): `/dashboards/new` and `/dashboards/$dashboardId/edit`.
@@ -247,8 +249,14 @@ function Builder({
 }) {
   const navigate = useNavigate();
   const { projectId, window: choice } = useSelection();
+  // The preview is read once (AC135): the console's interval would promise a refresh that never comes.
+  useNothingLive();
+  const windowSettled = useOpeningWindow(stored.definition.default_range);
   const projects = useProjects();
-  const context = useDashboardContext(saved, projectId, choice);
+  const context = useDashboardContext(saved, projectId, choice, {
+    intervalMs: false,
+    enabled: windowSettled,
+  });
   const create = useCreateDashboard();
   const replace = useReplaceDashboard(saved?.id ?? "");
   const narrow = useNarrow();
@@ -281,10 +289,10 @@ function Builder({
   // Read once on opening, as opening the dashboard would be; never per change (AC135).
   const opening = useMemo<PreviewAsk | undefined>(
     () =>
-      stored.definition.panels.some((panel) => panel.kind !== "note")
+      windowSettled && stored.definition.panels.some((panel) => panel.kind !== "note")
         ? { definition: stored.definition, panelIds: undefined, applied: 0 }
         : undefined,
-    [stored],
+    [stored, windowSettled],
   );
   const page = usePanelPreview(opening, projectId, choice, service);
   useEffect(() => {

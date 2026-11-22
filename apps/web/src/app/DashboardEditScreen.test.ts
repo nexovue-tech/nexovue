@@ -31,7 +31,13 @@ import { MAX_LINKS, MAX_PANELS, MAX_SCANS_PER_READ } from "@/features/dashboards
 import type { DetectionStatus } from "@/shared/detection/headline";
 import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
-import { setSelectedProjectId, setSelectedRangeId } from "@/shared/selection";
+import { NOTHING_LIVE, readLiveStream } from "@/shared/refresh";
+import {
+  readRememberedSelection,
+  readSelection,
+  setSelectedProjectId,
+  setSelectedRangeId,
+} from "@/shared/selection";
 import { dismissToast, getToasts } from "@/shared/toast/toast-store";
 
 // The API's own caps, read as text: this package compiles without node types.
@@ -510,6 +516,75 @@ describe("the draft reads once on opening, then only on Apply", () => {
     expect(live(container)).toBe("checkout · Rate added at position 4 of 4");
     expect(document.activeElement?.closest("section")?.getAttribute("data-panel-id")).toBe("p_1");
     expect(text(container)).toContain("4 of 30 panels · 2 of 40 reads");
+  });
+});
+
+describe("the dashboard's own window drives the top bar and the preview (FR52)", () => {
+  const sevenDays = (panels: StoredPanel[] = [RATE, CHECKOUT, NOTE]) => {
+    const saved = dashboard(panels);
+    return { ...saved, definition: { ...saved.definition, default_range: "7d" } };
+  };
+  const previewRange = (calls: Call[]) =>
+    (
+      calls.find((call) => call.path === "/dashboard-panels/preview")?.body as
+        | { range?: string }
+        | undefined
+    )?.range;
+
+  it("shows the saved dashboard's range, not the reader's last hour, and previews with it", async () => {
+    const { container, calls } = await openEditor({
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(sevenDays()),
+    });
+    await ready(container);
+    await waitFor(() => container.querySelector('[role="img"]'), "the previewed charts");
+
+    expect(readSelection().window).toEqual({ kind: "relative", rangeId: "7d" });
+    expect(previewRange(calls)).toBe("7d");
+    // Only the screen's say: what the reader remembered is untouched.
+    expect(readRememberedSelection().window).toEqual({ kind: "relative", rangeId: "1h" });
+  });
+
+  it("gives the reader's own back on leaving", async () => {
+    const { container } = await openEditor({
+      [`GET /dashboards/${DASHBOARD_ID}`]: json(sevenDays()),
+    });
+    await ready(container);
+    for (const root of mounted.splice(0)) act(() => root.unmount());
+
+    expect(readSelection().window).toEqual({ kind: "relative", rangeId: "1h" });
+  });
+
+  it("opens a template draft on the template's range too", async () => {
+    const template = sevenDays([RATE]);
+    stubApi({
+      "GET /dashboards/templates": json({
+        templates: [
+          {
+            id: "start_from_overview",
+            name: "Start from Overview",
+            document: { title: "Overview", description: "", definition: template.definition },
+          },
+        ],
+      }),
+    });
+    const { container } = await mountAt("/dashboards/new?template=start_from_overview");
+    await ready(container);
+
+    expect(readSelection().window).toEqual({ kind: "relative", rangeId: "7d" });
+  });
+
+  it("shows no refresh interval, since a draft polls nothing", async () => {
+    const { container } = await openEditor();
+    await ready(container);
+
+    expect(readLiveStream()).toBe(NOTHING_LIVE);
+  });
+
+  it("follows the reader's own range when the dashboard names none", async () => {
+    const { container } = await openEditor();
+    await ready(container);
+
+    expect(readSelection().window).toEqual({ kind: "relative", rangeId: "1h" });
   });
 });
 
