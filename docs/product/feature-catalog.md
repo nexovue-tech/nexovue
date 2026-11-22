@@ -82,7 +82,7 @@
 | **F17** | Continuous profiling | ✅ Preview | ✅ | **1** | **Built 2026-09-19 as a preview** to the approved [spec](../features/profiling/spec.md) — see [status](../features/profiling/status.md); storage restated per busy core (D6) and met at ~73 MB a day. Before it: moved into Phase 1 Track 1, 2026-09-19, by founder decision. The OTel profiles signal entered public alpha in March 2026; its OTLP format is still *Development* (sent to `/v1development/profiles`) and will change, so the design must confine that format to the intake. Nothing collects profiles today |
 | **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Committed 2026-09-18 (`75b5424`) — see [status](../features/synthetic-checks/status.md) |
 | **F19** | SLO tracking | 🔴 No | ✅ | 2 | [Approved](../features/slo-tracking/spec.md), not built. After the chain ([plan](phase-2-plan.md)) |
-| **F20** | Dashboards | 🟡 Partly | ✅ | 2 | [Approved](../features/dashboards/spec.md), and what it specifies is not built. The composed Overview is built and holds `/`; the **builder** is not. After the chain ([plan](phase-2-plan.md)) |
+| **F20** | Dashboards | 🟡 Partly | ✅ | 2 | [Approved](../features/dashboards/spec.md); **built through plan Step 10, awaiting Step 11's demo gate, measurement gate and the founder's screen-reader pass** ([status](../features/dashboards/status.md)). The Findings feed holds `/` and Overview is at `/overview` |
 | **F21** | Alerts & notification connectors | ✅ Yes | ✅ | **1** | **Built 2026-09-19** to the approved [spec](../features/alerts/spec.md) — see [status](../features/alerts/status.md). Before it: The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
 | **F22** | Case management | 🔴 No | ✅ | 2 | [Approved](../features/case-management/spec.md), not built. Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
@@ -316,8 +316,8 @@ checks, screenshots and customer scripts are out of scope by founder decision (s
 
 Define targets on services/endpoints; error-budget status; budget-burn alerts into findings feed.
 
-### F20 — Dashboards ✅ SPECIFIED, NOT BUILT
-**Approved by the founder 2026-11-02, not built:** [spec](../features/dashboards/spec.md), [design](../features/dashboards/design.md), [plan](../features/dashboards/plan.md). Where this older text differs, the spec is what was approved.
+### F20 — Dashboards ✅ BUILT THROUGH STEP 10; RELEASE GATES OPEN
+**Approved by the founder 2026-11-02; built through plan Step 10 (2026-11-21), with the demo gate, the measurement gate and the screen-reader pass open (status):** [spec](../features/dashboards/spec.md), [design](../features/dashboards/design.md), [plan](../features/dashboards/plan.md). Where this older text differs, the spec is what was approved.
 
 **Amended 2026-09-12: insights and dashboards are both first-class.** The earlier entry called this
 an "optional mode" and a builder that is "never the front door", which read as *a dashboard is
@@ -331,9 +331,8 @@ Two halves, at different stages:
   Step 1 (2026-11-02) moved `/` to the Findings feed, with Overview at `/overview`. Specified in
   [`../features/console-redesign/`](../features/console-redesign/) (OD2 and
   `wireframes-dashboard.md`) and shipped as T30–T34 of that feature's task plan.
-- **The builder — still to specify.** Not foreclosed by the above: an auto-composed dashboard is a
-  fixed instance of what a builder would produce, so the composed overview is the first step toward
-  one rather than a substitute for it.
+- **The builder — built 2026-11 (plan Steps 2 to 10),** to the approved spec: a fixed list of panels, no query
+  language, no public links. An auto-composed dashboard is a fixed instance of what the builder produces.
 
 **The front door is unchanged**: the Findings feed (F1) is what a person lands on — served at `/`
 since F20 Step 1 (2026-11-02). What changed is that the other surface stopped being a lesser one.

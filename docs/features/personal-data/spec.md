@@ -31,6 +31,14 @@ platform operator, who has no customer data of their own here.
 - Deletion of a person's own account.
 - On removal by an admin, the same scrubbing a self-deletion does.
 
+## Dashboards (F20)
+
+A dashboard belongs to the organization, not a person, so **a person's export does not include dashboards** and a
+person's deletion does not remove them. *Unverified:* what a removed person's dashboards show as their owner was not read from the code for this note. A dashboard's **notes and titles are free text that people may paste personal data
+into**, and nothing masks them. The way to remove such text is the owner-or-admin **purge** of a dashboard or one
+version (hard delete; the title becomes `[removed]` in its audit entries). Purge does not reach backups. Service,
+endpoint and metric labels a dashboard shows are the customer's own telemetry and are not copied into it.
+
 ## Out of scope
 
 - Exporting the organization's telemetry — that is the organization's data, not the person's, and the

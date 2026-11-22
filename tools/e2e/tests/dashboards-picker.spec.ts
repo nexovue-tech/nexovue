@@ -49,7 +49,7 @@ test("the picker shows a hostile service name escaped, and the panel reads the r
   await expect(sheet).toBeVisible();
 
   // The list fills once the service has arrived; reopen until it has.
-  const service = sheet.getByLabel("Service");
+  const service = sheet.getByLabel("Service", { exact: true });
   await expect(async () => {
     await page.reload();
     await page.getByRole("button", { name: "Add a panel" }).click();

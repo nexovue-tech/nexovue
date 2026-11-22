@@ -609,6 +609,7 @@ to the feed, with Overview at `/overview`, because the founder's decision stands
 | Signed deploy records, and "before, not because" wording in the code. F28 hardens the signature, which today covers the body only | `deploys/signatures.py`, `errorgroups/schemas.py:15-26` |
 | Alerts to email, Slack, Teams, Discord, PagerDuty and webhooks | `channels.py:34-35` |
 | Pricing that never rises with people | `vision.md:152` |
+| Deploys and findings are drawn on a dashboard's charts, as marks, and a dashboard's panels come from a fixed list (parity with what rivals show on charts, **not** a difference). Wording for public use is the founder's to approve (F20 spec, founder decision 4) | F20 `status.md`; `docs/product/setup/dashboards.md` |
 
 ### True once built, only if these designs hold
 

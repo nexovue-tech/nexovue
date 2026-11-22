@@ -13,8 +13,10 @@
 import { expect, test } from "@playwright/test";
 
 import { newAccount, signUp } from "./support/accounts";
-import { saveDashboard } from "./support/dashboard-fixture";
+import { exportHistory, saveDashboard, waitForService } from "./support/dashboard-fixture";
+import { readExportSettings } from "./support/onboarding";
 
+const ARRIVAL_TIMEOUT_MS = 90_000;
 const NO_SUCH_PROJECT = "00000000-0000-4000-8000-000000000000";
 
 test("a link opens its own project and window, and leaves the reader's choice alone", async ({
@@ -33,7 +35,7 @@ test("a link opens its own project and window, and leaves the reader's choice al
 
   await page.goto(`/dashboards/${id}?project=${project.id}&range=6h`);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  await expect(page.getByText(project.name).first()).toBeVisible();
+  await expect(page.getByText(`${project.name} · times in`)).toBeVisible();
 
   // Copy link: both choices, and which was copied.
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -63,15 +65,35 @@ test("a link to a project the reader cannot open is refused and kept (AC69, AC75
 
 test("a drag adds one history entry and Back restores the link's window (AC103)", async ({
   page,
+  request,
 }) => {
+  test.setTimeout(ARRIVAL_TIMEOUT_MS + 60_000);
   await signUp(page, newAccount());
+  const { endpoint, apiKey } = await readExportSettings(page);
+  await exportHistory(
+    request,
+    { endpoint, apiKey },
+    {
+      service: "e2e-link",
+      endpoint: "GET /orders",
+      minutes: [
+        { minutesAgo: 6, count: 10 },
+        { minutesAgo: 4, count: 20 },
+      ],
+    },
+  );
+  await waitForService(page.request, "e2e-link");
   const id = await saveDashboard(page.request, {
     title: `Drag ${Date.now()}`,
     service: "e2e-link",
   });
-  await page.goto(`/dashboards/${id}?range=6h`);
+  // One visit, then reloads: each `goto` would add a history entry for Back to return to.
   const chart = page.locator("#panel-p_rate canvas").first();
-  await expect(chart).toBeVisible({ timeout: 30_000 });
+  await page.goto(`/dashboards/${id}?range=6h`);
+  await expect(async () => {
+    await page.reload();
+    await expect(chart).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: ARRIVAL_TIMEOUT_MS });
   const box = await chart.boundingBox();
   if (!box) throw new Error("the chart has no box");
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);

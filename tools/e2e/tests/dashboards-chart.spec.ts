@@ -15,13 +15,19 @@
 import { expect, type Page, test } from "@playwright/test";
 
 import { newAccount, signUp } from "./support/accounts";
+import { exportHistory, waitForService } from "./support/dashboard-fixture";
 import { readExportSettings } from "./support/onboarding";
-import { endpointTraffic, exportTrace } from "./support/otlp";
 
 const SERVICE = "e2e-dashboards-chart";
 const ARRIVAL_TIMEOUT_MS = 90_000;
 const CHARTS = 30;
-const TRAFFIC = { count: 40, durationMs: 120 };
+/** Four finished minutes with different counts, so the cursor has places to be and values to differ. */
+const HISTORY = [
+  { minutesAgo: 6, count: 10 },
+  { minutesAgo: 5, count: 20 },
+  { minutesAgo: 4, count: 30 },
+  { minutesAgo: 3, count: 40 },
+];
 
 /** Thirty charts of one service: one scan, thirty canvases. */
 function thirtyCharts(): Record<string, unknown> {
@@ -55,16 +61,12 @@ test("one cursor across thirty charts, and one drag reads once", async ({ page, 
   test.setTimeout(ARRIVAL_TIMEOUT_MS + 120_000);
   await signUp(page, newAccount());
   const { endpoint, apiKey } = await readExportSettings(page);
-  await exportTrace(request, {
-    endpoint,
-    apiKey,
-    batch: endpointTraffic({
-      service: SERVICE,
-      endpoint: "GET /orders",
-      succeeded: TRAFFIC,
-      failed: { count: 2, durationMs: 300 },
-    }),
-  });
+  await exportHistory(
+    request,
+    { endpoint, apiKey },
+    { service: SERVICE, endpoint: "GET /orders", minutes: HISTORY },
+  );
+  await waitForService(page.request, SERVICE);
 
   const created = await page.request.post("/api/v1/dashboards", { data: thirtyCharts() });
   expect(created.ok()).toBe(true);
@@ -85,7 +87,9 @@ test("one cursor across thirty charts, and one drag reads once", async ({ page, 
   const box = await first.boundingBox();
   if (!box) throw new Error("the first chart has no plot");
   const resting = await readoutOf(page, "p_4");
-  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+  // At the left edge the nearest point is the first one on every chart, with no pixel of
+  // rounding between two charts' plots able to tip it to its neighbour.
+  await page.mouse.move(box.x + box.width * 0.02, box.y + box.height / 2);
   await expect.poll(() => readoutOf(page, "p_4")).not.toBe(resting);
   const [timeOnFirst] = (await readoutOf(page, "p_1")).split(" · ");
   const [timeOnFourth] = (await readoutOf(page, "p_4")).split(" · ");

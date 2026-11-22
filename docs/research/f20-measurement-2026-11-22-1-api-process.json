@@ -1,0 +1,140 @@
+{
+  "ran_at": "2026-11-22T08:08:22+00:00",
+  "api_processes": 1,
+  "services": 16,
+  "panels_per_dashboard": 30,
+  "window_minutes": 60,
+  "baseline": {
+    "consumer_lag_records": 0.0,
+    "dead_letter_records": 0.0,
+    "clickhouse_resident_mib": 973.0
+  },
+  "levels": [
+    {
+      "dashboards": 0,
+      "api_processes": 1,
+      "reads": 0,
+      "batch_ms_p50": null,
+      "batch_ms_p95": null,
+      "batch_ms_max": null,
+      "panel_states": {},
+      "http_errors": {},
+      "worker_lag_peak": 17800.0,
+      "worker_lag_samples": 18,
+      "dead_letters_delta": 0.0,
+      "clickhouse_resident_mib": 1015.5,
+      "api_account": {
+        "queries": 0,
+        "failed": 0,
+        "peak_query_memory_mib": 0.0,
+        "p95_query_ms": null,
+        "error_codes": "[]"
+      },
+      "api_peak_rss_mib": [323.8]
+    },
+    {
+      "dashboards": 1,
+      "api_processes": 1,
+      "reads": 3,
+      "batch_ms_p50": 198.7,
+      "batch_ms_p95": 229.3,
+      "batch_ms_max": 229.28644700004952,
+      "panel_states": {
+        "ok": 84
+      },
+      "http_errors": {},
+      "worker_lag_peak": 18600.0,
+      "worker_lag_samples": 3,
+      "dead_letters_delta": 0.0,
+      "clickhouse_resident_mib": 1032.5,
+      "api_account": {
+        "queries": 57,
+        "failed": 0,
+        "peak_query_memory_mib": 7.4,
+        "p95_query_ms": 44.0,
+        "error_codes": "[]"
+      },
+      "api_peak_rss_mib": [323.8]
+    },
+    {
+      "dashboards": 5,
+      "api_processes": 1,
+      "reads": 15,
+      "batch_ms_p50": 829.2,
+      "batch_ms_p95": 1047.9,
+      "batch_ms_max": 1047.8658620049828,
+      "panel_states": {
+        "ok": 406,
+        "empty": 14
+      },
+      "http_errors": {},
+      "worker_lag_peak": 21800.0,
+      "worker_lag_samples": 4,
+      "dead_letters_delta": 0.0,
+      "clickhouse_resident_mib": 1126.6,
+      "api_account": {
+        "queries": 228,
+        "failed": 0,
+        "peak_query_memory_mib": 10.7,
+        "p95_query_ms": 56.3,
+        "error_codes": "[]"
+      },
+      "api_peak_rss_mib": [323.8]
+    },
+    {
+      "dashboards": 20,
+      "api_processes": 1,
+      "reads": 60,
+      "batch_ms_p50": 886.2,
+      "batch_ms_p95": 11661.6,
+      "batch_ms_max": 11662.548761996732,
+      "panel_states": {
+        "ok": 798,
+        "empty": 46,
+        "refused": 80
+      },
+      "http_errors": {
+        "500": 7,
+        "429": 20
+      },
+      "worker_lag_peak": 14400.0,
+      "worker_lag_samples": 10,
+      "dead_letters_delta": 0.0,
+      "clickhouse_resident_mib": 1022.9,
+      "api_account": {
+        "queries": 290,
+        "failed": 0,
+        "peak_query_memory_mib": 10.7,
+        "p95_query_ms": 49.1,
+        "error_codes": "[]"
+      },
+      "api_peak_rss_mib": [323.8]
+    },
+    {
+      "dashboards": 0,
+      "api_processes": 1,
+      "reads": 0,
+      "batch_ms_p50": null,
+      "batch_ms_p95": null,
+      "batch_ms_max": null,
+      "panel_states": {},
+      "http_errors": {},
+      "worker_lag_peak": 31000.0,
+      "worker_lag_samples": 18,
+      "dead_letters_delta": 0.0,
+      "clickhouse_resident_mib": 1049.8,
+      "api_account": {
+        "queries": 0,
+        "failed": 0,
+        "peak_query_memory_mib": 0.0,
+        "p95_query_ms": null,
+        "error_codes": "[]"
+      },
+      "api_peak_rss_mib": [323.8]
+    }
+  ],
+  "ingest_batches_by_status": {
+    "200": 209
+  },
+  "wall_time_median_s": 198.7
+}

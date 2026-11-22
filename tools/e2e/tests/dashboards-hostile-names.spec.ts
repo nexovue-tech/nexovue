@@ -66,6 +66,18 @@ test("a hostile service name shows as literal text everywhere, and nothing runs"
       failed: { count: 2, durationMs: 200 },
     }),
   });
+  // A top-N chart with one line names nothing (its legend is for several); a second service
+  // gives it the legend this spec is about.
+  await exportTrace(request, {
+    endpoint,
+    apiKey,
+    batch: endpointTraffic({
+      service: "e2e-hostile-companion",
+      endpoint: "GET /orders",
+      succeeded: { count: 10, durationMs: 80 },
+      failed: { count: 1, durationMs: 200 },
+    }),
+  });
   const created = await page.request.post("/api/v1/dashboards", { data: document() });
   expect(created.ok()).toBe(true);
   const { id } = (await created.json()) as { id: string };
@@ -78,7 +90,7 @@ test("a hostile service name shows as literal text everywhere, and nothing runs"
   for (const panelId of ["p_chart", "p_table", "p_endpoints"]) {
     await expect(page.locator(`#panel-${panelId}`)).toContainText(ESCAPED);
   }
-  await page.locator("#panel-p_top canvas").hover();
+  await page.locator("#panel-p_top .u-over").hover();
   await expect(page.locator("#panel-p_top")).toContainText(ESCAPED);
   await expect(page.locator("main img[src='x']")).toHaveCount(0);
   expect(await page.evaluate(() => (window as { __ran?: number }).__ran)).toBeUndefined();

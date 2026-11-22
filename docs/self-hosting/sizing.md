@@ -32,6 +32,34 @@ worker's garbage collector needs to know its ceiling:
 
 Raising one without the other leaves the extra memory unused, or lets the process be killed.
 
+## Dashboards
+
+Dashboards read ClickHouse through their own account, `nexovue_api_reader`, which every API screen uses. Two
+server-side bounds keep API reads from starving the workers' inserts and the alert reads, which use another
+account:
+
+| Bound | Value | Where |
+|---|---|---|
+| Memory for all of the account's running reads | 2.4 GiB, a guess | `max_memory_usage_for_user` in `deploy/clickhouse/users.d/api-reader.xml` |
+| Reads of the account at once | 12, a guess | `max_concurrent_queries_for_user`, same file |
+| One read's memory | 1 GiB | `max_memory_usage`, same file |
+
+Over the first, a panel reads "failed"; over the second, "refused". Both are **guesses**: the measurement of
+2026-11-22 ([report](../research/f20-measurement-2026-11-22.md)) never came near either (the API account's
+largest read held 10.7 MiB), on demo data of 15 services over 7 days. It says nothing about customer volume.
+
+A self-hosted install may tune the limits on the **API** with `DASHBOARD_MAX_PANELS` (only lower than 30),
+`DASHBOARD_MAX_SCANS_PER_READ`, `DASHBOARD_REFRESH_FLOOR_SECONDS` (30, 60 or 300), `DASHBOARD_SCANS_AT_ONCE`,
+`DASHBOARD_RAW_WINDOW_DAYS` and `DASHBOARD_SINGLE_SERIES_RAW_WINDOW_DAYS`, and switch dashboards' reads off with
+`DASHBOARD_SCANS_ENABLED=false`. The API refuses to start on a set that breaks the per-person read quota.
+Hosted installs refuse them: the hosted limits are product policy. These names are not listed in
+`deploy/compose/.env.example` today.
+
+**Not yet established:** how many people can read dashboards at once. In the measurement, 20 people each reading
+their own 30-panel dashboard at once on **one** API process gave HTTP 500 for 7 of 60 reads, because each read held
+a Postgres connection while it waited (pool of 15); on two processes there were none, and 383 of 1,064 panels were
+refused instead. Size for fewer than about 15 simultaneous dashboard readers per API process until that is resolved.
+
 ## A larger server
 
 On 32 GB, for example:

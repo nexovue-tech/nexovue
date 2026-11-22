@@ -103,6 +103,7 @@ test("a panel is dragged by its handle, the others hold still, and the same orde
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page).toHaveURL(/\/dashboards\/[0-9a-f-]{36}$/);
   await page.reload();
+  await expect(panels(page).first()).toBeVisible();
   const saved = await page
     .locator("section[data-panel-id]")
     .evaluateAll((sections) =>

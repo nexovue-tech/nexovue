@@ -271,6 +271,21 @@ day, but that is a later decision.
 5. **Grafana's advice on refresh** is "avoid unnecessary dashboard refreshing". Rollups change by the minute (`rollup.py:42`),
    so a 10-second refresh on a rollup panel mostly re-reads the same data.
 
+### Re-read for T11.5, 2026-11-22 (incomplete)
+
+Plan T11.5: every competitor fact re-read against the vendor's own page, dated. **Five of seven vendor sites could not be
+read: `signoz.io`, `www.honeycomb.io`, `grafana.com` and `openobserve.ai` did not resolve from the build session (outside its
+allowed network domains).** Their facts above, and foundation section 12's claims that rest on them (SigNoz SLOs,
+SigNoz's Noz on Cloud only, OpenObserve Enterprise AI, Grafana Cloud, Honeycomb's limit of 2), **remain as read on
+2026-11-02 and are unverified today. Nothing from them may enter public wording.** Re-read, 2026-11-22:
+
+| Fact | Page | Result |
+|---|---|---|
+| OneUptime has a free Community edition | github.com/OneUptime/oneuptime, README | Confirmed: "Free and open source ... including SAML and OIDC single sign-on". Enterprise adds SCIM, audit logs, compliance and instance health dashboards |
+| OneUptime's agent investigates and can open a fix pull request | same | Confirmed it exists: it "posts a root cause analysis with citations" and, "if fixing is turned on", can open a pull request. **The README does not say which edition has it, nor anything about own or local models**, so foundation claim 1's "own or local models" for OneUptime is **not supported by this page** |
+| Datadog TV Mode | docs.datadoghq.com/dashboards/configure | Confirmed, one line only. The page does **not** mention public share links (the earlier table's "Public link" for Datadog is unverified here); it lists Copy and Export dashboard JSON; members have Viewer access by default |
+| Datadog "Pause Auto-Refresh" | same | New: pauses refresh by default for relative ranges, "to optimize compute usage", for all viewers |
+
 ## 5. Methods compared
 
 ### How a panel gets its data

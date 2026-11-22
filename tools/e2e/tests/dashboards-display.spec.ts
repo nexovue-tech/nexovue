@@ -43,7 +43,8 @@ test("a note says who can read it and that text can be purged (AC119)", async ({
   });
   await page.goto(`/dashboards/${id}`);
   const note = page.locator("#panel-p_note");
-  await expect(note).toContainText("Everyone in this organization can read this.");
+  // The hosted product adds "and support while an owner has granted access"; both say this.
+  await expect(note).toContainText("Everyone in this organization can read this");
   await expect(note).toContainText("purge");
 });
 

@@ -210,8 +210,10 @@ export function endpointTraffic(options: {
   endpoint: string;
   succeeded: EndpointLoad;
   failed: EndpointLoad;
+  /** How long before now the requests claim to have started; default is `BACKDATE_MS`. */
+  agoMs?: number;
 }): ExportBatch {
-  const startedAtMs = Date.now() - BACKDATE_MS;
+  const startedAtMs = Date.now() - (options.agoMs ?? BACKDATE_MS);
 
   const requests = (load: EndpointLoad, statusCode: number): WireSpan[] =>
     Array.from({ length: load.count }, () => ({

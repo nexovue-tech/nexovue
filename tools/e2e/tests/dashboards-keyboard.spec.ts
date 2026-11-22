@@ -9,6 +9,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
 import { newAccount, signUp } from "./support/accounts";
+import { waitForService } from "./support/dashboard-fixture";
 import { readExportSettings } from "./support/onboarding";
 import { endpointTraffic, exportTrace } from "./support/otlp";
 
@@ -47,6 +48,8 @@ test("a dashboard is built, rearranged and saved with the keyboard alone", async
     }),
   });
 
+  // The sheet's service list is read once on opening; Tab-and-Enter cannot be retried.
+  await waitForService(page.request, SERVICE);
   await page.goto("/dashboards/new?template=start_from_overview");
   await expect(page.getByRole("heading", { name: "New dashboard", level: 1 })).toBeVisible();
   const title = page.getByLabel("Title");
@@ -54,16 +57,24 @@ test("a dashboard is built, rearranged and saved with the keyboard alone", async
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type(`Keyboard ${Date.now()}`);
 
+  // The template's own panels, as the builder shows them; the new one lands after them all.
+  const own = page.locator("section[data-panel-id] h2");
+  await expect(own.first()).toBeVisible();
+  const templateTitles = await own.allTextContents();
+  const total = templateTitles.length + 1;
+
   // Add a panel naming the real service, from the sheet, by keyboard.
   await expect(async () => {
     await tabTo(page, "Add a panel");
     await page.keyboard.press("Enter");
     const sheet = page.getByRole("dialog", { name: "Add a panel" });
-    await expect(sheet.getByLabel("Service").locator(`option[value="${SERVICE}"]`)).toHaveCount(1);
+    await expect(
+      sheet.getByLabel("Service", { exact: true }).locator(`option[value="${SERVICE}"]`),
+    ).toHaveCount(1);
   }).toPass({ timeout: ARRIVAL_TIMEOUT_MS });
   const sheet = page.getByRole("dialog", { name: "Add a panel" });
-  await sheet.getByLabel("Service").focus();
-  await sheet.getByLabel("Service").selectOption(SERVICE);
+  await sheet.getByLabel("Service", { exact: true }).focus();
+  await sheet.getByLabel("Service", { exact: true }).selectOption(SERVICE);
   await tabTo(page, "Apply");
   await page.keyboard.press("Enter");
   await expect(sheet.getByText("Applied")).toBeVisible({ timeout: 30_000 });
@@ -73,10 +84,10 @@ test("a dashboard is built, rearranged and saved with the keyboard alone", async
   // Focus lands on the new panel's toolbar; one tab stop, arrows along it.
   const name = `${SERVICE} · Rate`;
   const status = page.locator("[data-live-region]");
-  await expect(status).toHaveText(`${name} added at position 4 of 4`);
+  await expect(status).toHaveText(`${name} added at position ${total} of ${total}`);
   await expect(page.locator(":focus")).toHaveAttribute("aria-label", `Move ${name} earlier`);
   await page.keyboard.press("Enter");
-  await expect(status).toHaveText(`${name} moved to position 3 of 4`);
+  await expect(status).toHaveText(`${name} moved to position ${total - 1} of ${total}`);
   await expect(page.locator(":focus")).toHaveAttribute("aria-label", `Move ${name} earlier`);
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
@@ -89,6 +100,10 @@ test("a dashboard is built, rearranged and saved with the keyboard alone", async
   await expect(page).toHaveURL(/\/dashboards\/[0-9a-f-]{36}$/);
 
   await page.reload();
-  const headings = page.getByRole("heading", { level: 2 });
-  await expect(headings).toHaveText(["Rate", "Errors", name, "Latency"]);
+  const headings = page.locator("section[data-panel-id] h2");
+  await expect(headings).toHaveText([
+    ...templateTitles.slice(0, -1),
+    name,
+    ...templateTitles.slice(-1),
+  ]);
 });
