@@ -5,9 +5,12 @@ on a running stack (F5 plan T9.2; spec NFR2).
 it does not fail the gate"). The test fails only if a click does not answer with the state it
 should, never on time.
 
-It drives the API a customer's browser drives, over HTTP at `NEXOVUE_API_ORIGIN`, as a person
-signed up through the public signup route, so the session lookup, the routes and their
-Postgres transactions are all in the figure. What the API does not create by a route here (an
+It drives the real API over HTTP, as a person signed up through the public signup route, so the
+session lookup, the routes and their Postgres transactions are all in the figure. The API is this
+test's own, under uvicorn on the stack's stores (`assistant_served`), because the clicks need an
+install the dev stack's API is not: self-hosted with AI available (a hosted install offers no
+suggested fix), held causes shown and signup open, as `general_fix_rows.AI_ON` sets for the
+in-process suites. What the API does not create by a route here (an
 AI connection already agreed to, a Fix App reaching a repository, findings with their facts) is
 written to Postgres first, as the route suites write it. Three clicks, each `SAMPLES` times on
 its own finding:
@@ -16,22 +19,19 @@ its own finding:
 - **Ask for a suggested fix** with typed paths (rung 3): `POST .../fixes`, then its read;
 - **Was this suggestion useful?** on a written suggestion: `POST .../verdict`.
 
-No job it adds is run: its organization is soft-deleted at the end and its jobs removed, so a
-stack's workers never reach `provider.example`. Run it with `-s` to see the figures:
+No job it adds is run: each is held as the API commits it (`held_jobs.jobs_held`), so the
+stack's `scheduler-insight` never takes it, moves the row the read checks, or reaches
+`provider.example`; its organization is soft-deleted at the end and its jobs removed. Run it
+with `-s` to see the figures:
 
-    NEXOVUE_API_ORIGIN=http://127.0.0.1:38000 uv run pytest -s \\
-        apps/api/tests/test_fix_click_timing_live.py
+    uv run pytest -s apps/api/tests/test_fix_click_timing_live.py
 
-The API it reaches must run as a self-hosted install with AI available (`NEXOVUE_DEPLOYMENT=
-self-hosted`, an `AI_SECRET_KEY`, `SHOW_HELD_CAUSES=true`), as `general_fix_rows.AI_ON` sets
-for the in-process suites, with signup open (`SIGNUP_ENABLED=true`, as the dev stack has it).
 The first click of a run includes the API's first use of its connection pool.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import socket
 import statistics
 import time
@@ -46,15 +46,20 @@ from urllib.parse import urlsplit
 
 import general_fix_rows as rows
 import httpx
+import pytest
 import source_fix_rows as source
+from assistant_served import running, served_settings
+from held_jobs import jobs_held
 from live import require_stack
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.data.postgres.models import Organization, Project, User
+from nexovue_api.main import create_app
 from nexovue_api.settings import API_PREFIX
 
-API_ORIGIN: Final = os.environ.get("NEXOVUE_API_ORIGIN", "http://localhost:18000")
+# The install the clicks need, on top of `served_settings`' self-hosted one with AI available.
+TIMED_INSTALL: Final = {**rows.AI_ON, "SIGNUP_ENABLED": "true"}
 SAMPLES: Final = 10
 REQUEST_TIMEOUT_SECONDS: Final = 30.0
 # NFR2's wish, printed beside the figure for the reader; never asserted.
@@ -73,9 +78,9 @@ def _reachable(url: str, default_port: int) -> bool:
 
 
 require_stack(
-    reachable=_reachable(API_ORIGIN, 80) and _reachable(rows.POSTGRES_DSN, 5432),
+    reachable=_reachable(rows.POSTGRES_DSN, 5432),
     suite="apps/api/tests/test_fix_click_timing_live.py",
-    remedy="the API or Postgres is not running — start the stack with `just dev`",
+    remedy="Postgres is not running — start the stack with `just dev`",
 )
 
 
@@ -163,55 +168,64 @@ def _time(click: Callable[[], None]) -> float:
     return time.perf_counter() - started
 
 
-def test_nfr2_each_click_answers_with_its_new_state_and_its_time_is_reported() -> None:
+def test_nfr2_each_click_answers_with_its_new_state_and_its_time_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
-    with httpx.Client(base_url=API_ORIGIN, timeout=REQUEST_TIMEOUT_SECONDS) as http:
+    app = create_app(served_settings(monkeypatch, TIMED_INSTALL))
+    with (
+        running(app) as origin,
+        httpx.Client(base_url=origin, timeout=REQUEST_TIMEOUT_SECONDS) as http,
+    ):
         signed_up = _sign_up(http)
         org_id = uuid.UUID(signed_up["organization"]["id"])
         try:
-            made = asyncio.run(_prepare(org_id, now))
-            findings = f"{API_PREFIX}/findings"
+            with jobs_held(app.state.resources.engine, org_id):
+                made = asyncio.run(_prepare(org_id, now))
+                findings = f"{API_PREFIX}/findings"
 
-            def general(finding_id: uuid.UUID) -> None:
-                asked = http.post(
-                    f"{findings}/{finding_id}/fixes/general", json={"language": "python"}
-                )
-                assert asked.status_code == 202, asked.text
-                read = http.get(f"{findings}/{finding_id}/fixes/general")
-                assert read.status_code == 200 and read.json()["latest"]["state"] == "proposing"
+                def general(finding_id: uuid.UUID) -> None:
+                    asked = http.post(
+                        f"{findings}/{finding_id}/fixes/general", json={"language": "python"}
+                    )
+                    assert asked.status_code == 202, asked.text
+                    read = http.get(f"{findings}/{finding_id}/fixes/general")
+                    assert read.status_code == 200 and read.json()["latest"]["state"] == "proposing"
 
-            def ask(finding_id: uuid.UUID) -> None:
-                asked = http.post(f"{findings}/{finding_id}/fixes", json={"paths": [TYPED_PATH]})
-                assert asked.status_code == 202, asked.text
-                read = http.get(f"{findings}/{finding_id}/fixes/source")
-                assert read.status_code == 200 and read.json()["latest"]["state"] == "gathering"
+                def ask(finding_id: uuid.UUID) -> None:
+                    asked = http.post(
+                        f"{findings}/{finding_id}/fixes", json={"paths": [TYPED_PATH]}
+                    )
+                    assert asked.status_code == 202, asked.text
+                    read = http.get(f"{findings}/{finding_id}/fixes/source")
+                    assert read.status_code == 200 and read.json()["latest"]["state"] == "gathering"
 
-            def verdict(finding_id: uuid.UUID, fix_id: uuid.UUID) -> None:
-                said = http.post(
-                    f"{findings}/{finding_id}/fixes/{fix_id}/verdict",
-                    json={"verdict": "useful_start"},
-                )
-                assert said.status_code == 200, said.text
-                assert said.json()["chosen"] == "useful_start"
+                def verdict(finding_id: uuid.UUID, fix_id: uuid.UUID) -> None:
+                    said = http.post(
+                        f"{findings}/{finding_id}/fixes/{fix_id}/verdict",
+                        json={"verdict": "useful_start"},
+                    )
+                    assert said.status_code == 200, said.text
+                    assert said.json()["chosen"] == "useful_start"
 
-            timed = [
-                Timed(
-                    "Suggest a general fix, then its read",
-                    [_time(partial(general, each)) for each in made["general"]],
-                ),
-                Timed(
-                    "Ask for a suggested fix (typed path), then its read",
-                    [_time(partial(ask, each)) for each in made["source"]],
-                ),
-                Timed(
-                    "Was this suggestion useful?",
-                    [_time(partial(verdict, *each)) for each in made["verdict"]],
-                ),
-            ]
+                timed = [
+                    Timed(
+                        "Suggest a general fix, then its read",
+                        [_time(partial(general, each)) for each in made["general"]],
+                    ),
+                    Timed(
+                        "Ask for a suggested fix (typed path), then its read",
+                        [_time(partial(ask, each)) for each in made["source"]],
+                    ),
+                    Timed(
+                        "Was this suggestion useful?",
+                        [_time(partial(verdict, *each)) for each in made["verdict"]],
+                    ),
+                ]
         finally:
             asyncio.run(_forget(org_id))
 
-    print("\nNFR2 click timing, against", API_ORIGIN)  # noqa: T201  the figure is the deliverable
+    print("\nNFR2 click timing, against the API at", origin)  # noqa: T201  the figure is the deliverable
     for each in timed:
         print(" ", each.line())  # noqa: T201
     assert all(len(each.seconds) == SAMPLES for each in timed)

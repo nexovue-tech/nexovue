@@ -1,7 +1,7 @@
-"""The real API under uvicorn, for chat's suites that read over real HTTP (F4 plan T2.10,
-T2.8, T3.1): its settings read from the environment and validated, as a deployment's are,
-against this suite's stores. Rows such a suite reads must be committed, since the server
-uses its own connections; each organization made is deleted after.
+"""The real API under uvicorn, for the suites that read over real HTTP (chat's, F4 plan T2.10,
+T2.8, T3.1; NFR2's click timing, F5 T9.2): its settings read from the environment and
+validated, as a deployment's are, against this suite's stores. Rows such a suite reads must be
+committed, since the server uses its own connections; each organization made is deleted after.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import os
 import socket
 import threading
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any, Final
 
@@ -40,29 +40,38 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-@contextmanager
-def serve(
-    monkeypatch: pytest.MonkeyPatch, wrap: Callable[[Asgi], Asgi] | None = None
-) -> Iterator[str]:
-    """The application on its own thread and loop; `wrap` may stand in front of it."""
+def served_settings(
+    monkeypatch: pytest.MonkeyPatch, environment: Mapping[str, str] | None = None
+) -> Settings:
+    """A self-hosted install's settings with AI available, on this suite's stores, read from
+    the environment as a deployment's are; `environment` adds to or replaces them."""
     for name, value in {
         "POSTGRES_DSN": ASYNC_DSN,
         "CLICKHOUSE_DSN": CLICKHOUSE_READER_DSN,
         "AI_SECRET_KEY": KEYS.current,
         "NEXOVUE_DEPLOYMENT": "self-hosted",
         "SCHEDULER_INSIGHT_REPLICAS": "1",
+        **(environment or {}),
     }.items():
         monkeypatch.setenv(name, value)
-    app: Asgi = create_app(Settings())
+    return Settings()
+
+
+@contextmanager
+def serve(
+    monkeypatch: pytest.MonkeyPatch, wrap: Callable[[Asgi], Asgi] | None = None
+) -> Iterator[str]:
+    """The application on its own thread and loop; `wrap` may stand in front of it."""
+    app: Asgi = create_app(served_settings(monkeypatch))
+    with running(wrap(app) if wrap is not None else app) as url:
+        yield url
+
+
+@contextmanager
+def running(app: Asgi) -> Iterator[str]:
+    """`app` under uvicorn on its own thread and loop, at the address yielded, until closed."""
     port = _free_port()
-    server = uvicorn.Server(
-        uvicorn.Config(
-            wrap(app) if wrap is not None else app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-        )
-    )
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     while not server.started:
