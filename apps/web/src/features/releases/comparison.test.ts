@@ -15,8 +15,14 @@ import {
 
 const NOW = Date.parse("2026-11-08T12:00:00Z");
 
-function side(version: string, requests: number, errors: number, p95: number | null): Side {
-  return { version, requests, errors, p95_ms: p95 };
+function side(
+  version: string,
+  requests: number,
+  errors: number,
+  p95: number | null,
+  perMinute: number | null = requests / 42,
+): Side {
+  return { version, requests, errors, p95_ms: p95, requests_per_minute: perMinute };
 }
 
 function block(overrides: Partial<Block> = {}): Block {
@@ -233,6 +239,19 @@ describe("each measure's line", () => {
     const lines = measureLines(block({ kind: "after_rollout", method: "version_before_after" }));
     expect(lines[2]?.label).toBe("Requests a minute");
     expect(lines[2]?.sides).toEqual(["v2.1 142.9", "v2.0 142.9"]);
+  });
+
+  it("shows the API's rate, not requests over the whole stretch, when minutes were silent (item 36b)", () => {
+    const lines = measureLines(
+      block({
+        kind: "after_rollout",
+        method: "version_before_after",
+        minutes_compared: 60,
+        this_version: side("v2.1", 6000, 180, 412, 300),
+        previous_version: side("v2.0", 6000, 12, 398, null),
+      }),
+    );
+    expect(lines[2]?.sides).toEqual(["v2.1 300.0", "v2.0 —"]);
   });
 
   it("gives higher the critical text and every other word dim ink, never green (FR24)", () => {

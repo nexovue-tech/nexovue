@@ -288,12 +288,17 @@ class PeriodToCompare:
 
 @dataclass(frozen=True, slots=True)
 class Side:
-    """One version's counts in a block; `p95_ms` only where it reached the floor."""
+    """One version's counts in a block; `p95_ms` only where it reached the floor.
+
+    `requests_per_minute` is requests over the minutes that had any, never over the whole
+    stretch: silent minutes would make a version that took traffic in bursts read low
+    (item 36b). None when no minute had traffic."""
 
     version: str
     requests: int
     errors: int
     p95_ms: float | None
+    requests_per_minute: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,8 +584,10 @@ def _side(
         for index, count in enumerate(row.buckets):
             buckets[index] += count
     requests = sum(row.requests for row in rows)
+    busy_minutes = len({row.minute for row in rows if row.requests > 0})
+    per_minute = requests / busy_minutes if busy_minutes else None
     p95 = bucket_p95(buckets) if counted >= P95_FLOOR else None
-    side = Side(version, requests, sum(row.errors for row in rows), p95)
+    side = Side(version, requests, sum(row.errors for row in rows), p95, per_minute)
     return side, _P95Cell(counted, counted < P95_FLOOR <= requests)
 
 

@@ -41,6 +41,15 @@ errors read at 24 hours, the 2-second target, the `tools/release-demo` judging),
     started; its binary contains deployment tracking, its screen and its Slack, Teams and webhook notices. **Not
     seen working:** it needs Kubernetes metadata through Prometheus, and this container has neither. Remaining: run
     it against a cluster, or read its licence manager for what it gates. Container and image removed.
+  - **Second pass, 2026-11-22, `wt/f28fix`, after the founder allowed the vendor hosts:** the rows were opened from the
+    vendors' own pages with `curl` (the session's page-reading tool still refused those hosts). **Ten of eleven rows are now
+    opened**; Observe is not (`docs.observeinc.com` refused; `www.observeinc.com` redirects to
+    `www.snowflake.com/en/product/observe/`, also refused). What changed is in `research.md` section 10, the short list:
+    Datadog rollback detection exists but in a limited-access Preview product; SigNoz's own guide says it "detects a
+    deployment each time this value changes" under "Deployment Markers", so the first pass's "no markers" statement is
+    withdrawn; Coroot's pricing page lists deployment tracking as paid while its Community Edition binary contains it
+    (not settled); Dynatrace's current page settles that OpenTelemetry-only versions do not reach its release inventory;
+    OpenObserve has generic dashboard annotation sources. The claims check in `plan.md` stays unticked for Observe.
 - **T6.2, the allowed and banned sentences** (`phase-2-foundation.md`, section 12, new subsection *F28: releases and
   deploys*): 11 allowed sentences, each with its source in the code and its limit; 15 banned, each with what in the code
   makes it false. Checking them against the source changed three things the plan's example would have said:
@@ -152,7 +161,8 @@ tools/release-demo (rolling v1 to v2), local development stack, 2026-11-22. Not 
   exceptions**, so *Errors by version* reads "No errors in either version during this window" beside a failure share of 4.2%.
   That is true of what that section counts (exception groups, like the Errors screen) and reads as a contradiction to a
   newcomer. `send.py ... exceptions` mode sends a `v2`-only exception and would fill the section; it was not recorded (16
-  more minutes, and the same service name would have mixed the two runs). **Open decision 2.**
+  more minutes, and the same service name would have mixed the two runs). **Open decision 2, done 2026-11-22: the empty
+  list now reads "No exceptions were recorded in either version during this window."**
 - **Judging it is the founder's.** Nothing here claims it is good: it shows the screens read as built.
 
 ### Launch text
@@ -168,8 +178,8 @@ section 12's allowed sentences say. **Not published, and not to be quoted before
 > traffic to compare. A release's page compares numbers and does not say why they moved. You can switch on a summary of each
 > release to one channel your team reads. Setup: *Releases and deploys* in the setup guide.
 
-- **Found while recording, MEDIUM, not changed, the founder's to weigh (open decision 3):** the comparison's *Requests a
-  minute* is the new version's count divided by the whole window, silent minutes included. The demo's sender stopped at
+- **Found while recording, MEDIUM, fixed 2026-11-22 (open decision 3, done: see *Decisions 2 and 3, built 2026-11-22*):** the comparison's *Requests a
+  minute* was the new version's count divided by the whole window, silent minutes included. The demo's sender stopped at
   08:04 and the page was read at 08:27, so `v2` shows 20.5 requests a minute and `v1` 19.4 when each took about 120
   a minute while traffic flowed. For a service that never goes quiet the figure is right; for one that does (a worker, a
   nightly job, the demo) it understates both and the pair still compares fairly. Recommendation: divide by the minutes
@@ -852,12 +862,42 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
   span. F28 excludes it (D12, D38).
 - The cost gate moves into plan Step 1a, since measuring needs code (D27).
 
+### Decisions 2 and 3, built 2026-11-22 (`wt/f28fix`, founder: foundation item 36 (a) and (b))
+
+- **Decision 2, done.** `version-errors.ts` `errorsAbsence` now returns `NO_EXCEPTIONS`, "No exceptions were recorded in
+  either version during this window.", for an empty list, always rather than only when the failure share is above zero:
+  the section counts exception groups, so the sentence is true whatever the failure share, and it needs no figure from the
+  comparison (a second read). Regression test `ReleaseScreen.test.ts`, "says no exceptions were recorded, not no errors"; seen
+  failing before the change. Spec FR29 and design's states table name the sentence.
+- **Decision 3, done at its root.** The division was in the web (`comparison.ts`, `side.requests / block.minutes_compared`),
+  and `minutes_compared` is the *stretch* (it also words "over 40 minutes"). The rule now lives once, in the platform:
+  `Side.requests_per_minute` is requests over the minutes in which that side had any, `None` when none did
+  (`nexovue_platform/releases._side`, which also builds last week's side). The API sends it as `requests_per_minute` on
+  every side, last week included; the web shows it and a dash for `null`. Tests seen failing before the change:
+  `test_requests_a_minute_divides_by_the_minutes_that_had_traffic` (a 60-minute stretch with traffic in 20 minutes: 120.0, not
+  40.0), `test_a_side_with_no_traffic_has_no_requests_a_minute`, and `comparison.test.ts` "shows the API's rate, not requests
+  over the whole stretch" (read 100.0 where the rate is 300.0).
+  - **Each side divides by its own busy minutes**, not by the minutes both had. The alternative (shared busy minutes) is not
+    built; say if the founder wants it.
+  - **Every caller checked.** The comparison table and phone lines (the only place a per-minute figure was shown): fixed.
+    The opening sentence and the flags use failure share and p95, which are ratios of counts and have no per-minute
+    denominator. The stored reading and release summary carry counts and `minutes_compared` as the stretch's length, no rate.
+    MCP `list_deploys` returns no counts; the MCP comparison tool returns requests and `minutes_compared` and no rate, and
+    its field list was left as it was, so the new field does not reach an assistant (it would need a unit in
+    `assistant_tools.Unit`, a larger change, not asked for).
+  - **Open decision (new, 6): failure share's denominator.** Failure share is errors over *requests*, not over time, so
+    silent minutes do not touch it. The other measure that sees a window is the traffic-floor test ("too little traffic"),
+    which counts requests over the whole stretch: a bursty version can read "too little" where its busy minutes would
+    clear the floor. Options: leave (recommended: the floor guards statistical power, which counts requests, not minutes);
+    or none. No change made.
+
 ## Next action
 
 Step 6 is built 2026-11-22 and awaits the coordinator's commit. What is left is the founder's: judge the demo recording;
 T2.10's timed new person; Steps 3 and 4's Design QA and the finding section at 375px with a real finding; a real send of
-the release summary; decide the three open decisions from Step 6 below. The competitor reading must be repeated, with the
-hosts reachable, within two weeks before announcing (research section 10). The production-readiness assessment and the
+the release summary; decide the open decisions below (2 and 3 are done, 4 is mostly done, 1 and 5 remain). The competitor
+reading was repeated on 2026-11-22 except for Observe; it must be repeated within two weeks before announcing (research
+section 10). The production-readiness assessment and the
 review gate in `plan.md` are the lifecycle's, not done here.
 
 
@@ -873,10 +913,15 @@ review gate in `plan.md` are the lifecycle's, not done here.
    only if the founder is content that "errors" means "exceptions" everywhere); or say "No exceptions were recorded in either
    version" when the failure share is above zero, so the two lines agree. **Recommendation: the second, a one-sentence change in
    `ReleaseScreen.tsx` and its test.** It is the first thing a newcomer to the recording would ask about.
+   **Done 2026-11-22 (founder, foundation item 36a).** Built always rather than only above zero failure share; see *Decisions
+   2 and 3, built 2026-11-22*.
 3. **"Requests a minute" divides by the whole window, silent minutes included** (*Step 6*, MEDIUM). Options: leave; divide by
    the minutes that had traffic (recommended); or drop the row for a version idle more than a tenth of the window. It
    changes the comparison's rule (`nexovue_platform/releases.py`), so it is the founder's, not built here.
-4. **Allow the vendor sites for the competitor reading.** 12 hosts were refused in this build (research section 10). The
+   **Done 2026-11-22 (founder, foundation item 36b).** See *Decisions 2 and 3, built 2026-11-22*.
+4. **Allow the vendor sites for the competitor reading.** **Mostly done 2026-11-22:** the hosts were allowed and ten of eleven rows
+   opened (research section 10). **Left:** Observe (`docs.observeinc.com` refused; `www.observeinc.com` now redirects to
+   `www.snowflake.com`, refused); allow `docs.observeinc.com` and `www.snowflake.com`, or drop the row. Original text: 12 hosts were refused in this build (research section 10). The
    rows marked *extract* and every price except Datadog's need a second read before any public claim. Allow `signoz.io`,
    `docs.coroot.com`, `coroot.com`, `sentry.io`, `docs.sentry.io`, `clickhouse.com`, `docs.honeycomb.io`,
    `docs.newrelic.com`, `docs.observeinc.com`, `grafana.com`, `docs.dynatrace.com`, `openobserve.ai` in the build's network
@@ -884,6 +929,10 @@ review gate in `plan.md` are the lifecycle's, not done here.
 5. **Two builds on one disk.** This container's disk (about 39 GB) was shared with another build and was full four times in
    one step, once from this step's own seed. Not F28's to fix; recorded because it costs hours. Options: a disk each, or a
    rule that a seed over a few million rows asks first. No F28 decision depends on it.
+6. **The traffic floor counts requests over the whole stretch** (*Decisions 2 and 3, built 2026-11-22*). Failure share has no
+   per-minute denominator, so item 36b leaves it. A bursty version can read "too little traffic" where its busy minutes
+   would clear the floor. Options: leave (recommended: the floor guards statistical power, which counts requests); or count
+   the floor over busy minutes. Nothing changed.
 
 **From Step 5, none blocking; each built as recommended, open to overrule.**
 

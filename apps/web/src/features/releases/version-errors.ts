@@ -13,6 +13,9 @@ export const ERRORS_CAUTION =
 export const ERRORS_TIMED_OUT = "This read took too long. Try the 1-hour window.";
 export const ERRORS_MAY_BE_INCOMPLETE =
   "This project's sampling does not keep every error, so this list may be incomplete.";
+// This section counts exception groups, so an empty list says exceptions: failing spans
+// can carry none, and "no errors" would contradict a failure share beside it (item 36a).
+export const NO_EXCEPTIONS = "No exceptions were recorded in either version during this window.";
 export const FROM_THE_BROWSER = "from the browser";
 
 const KIND_TITLES: Record<ErrorKind, string> = {
@@ -49,6 +52,6 @@ export function errorsAbsence(errors: VersionErrors, agedOutWords: string | null
   if (errors.aged_out_on !== null && agedOutWords !== null) {
     return `Error details aged out on ${agedOutWords}.`;
   }
-  if (errors.groups.length === 0) return "No errors in either version during this window.";
+  if (errors.groups.length === 0) return NO_EXCEPTIONS;
   return null;
 }

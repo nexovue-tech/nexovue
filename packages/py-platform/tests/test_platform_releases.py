@@ -513,6 +513,34 @@ def test_last_week_is_the_service_a_week_before_for_before_and_after_only() -> N
     assert releases.last_week_of(side_by_side, last_week) is None
 
 
+def test_requests_a_minute_divides_by_the_minutes_that_had_traffic() -> None:
+    """Item 36b: silent minutes must not pull a version's rate down, on either side or in
+    last week's figure. Each side's rate is its requests over its own busy minutes."""
+    week = timedelta(days=7)
+    # v1 was busy in 30 of the 60 minutes before the start; v2 in 20 of the 60 after it.
+    before = _minutes("v1", START - HOUR, 30, requests=100)
+    after = _minutes("v2", START, 10, requests=120) + _minutes(
+        "v2", START + 30 * MINUTE, 10, requests=120
+    )
+    found = _compare(before + after)
+    (block,) = found.blocks
+    assert block.minutes_compared == 60
+    assert block.this_version.requests_per_minute == 120.0
+    assert block.previous_version.requests_per_minute == 100.0
+    # Last week's service was busy in 20 of the same 60 minutes.
+    quiet = _totals(START - week, 10, requests=50) + _totals(
+        START - week + 30 * MINUTE, 10, requests=50
+    )
+    last_week = releases.last_week_of(block, quiet)
+    assert last_week is not None
+    assert last_week.requests_per_minute == 50.0
+
+
+def test_a_side_with_no_traffic_has_no_requests_a_minute() -> None:
+    side, _ = releases._side("v1", [], None)
+    assert side.requests_per_minute is None
+
+
 @pytest.mark.parametrize(
     ("finding_after", "window", "reaches"),
     [

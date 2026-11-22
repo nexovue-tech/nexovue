@@ -131,6 +131,8 @@ export interface Side {
   requests: number;
   errors: number;
   p95_ms: number | null;
+  /** Requests over the minutes that had any, not the whole stretch (item 36b). */
+  requests_per_minute: number | null;
 }
 
 export interface CellReading {

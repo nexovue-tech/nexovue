@@ -210,7 +210,7 @@ export function measureLines(block: Block): MeasureLine[] {
     ];
   }
   const perMinute = (side: Side) =>
-    block.minutes_compared > 0 ? (side.requests / block.minutes_compared).toFixed(1) : "—";
+    side.requests_per_minute === null ? "—" : side.requests_per_minute.toFixed(1);
   return [
     failure,
     p95,

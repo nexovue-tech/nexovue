@@ -86,7 +86,7 @@ BLOCK_FIELDS: Final = {
     "previous_start",
     "previous_end",
 }
-SIDE_FIELDS: Final = {"version", "requests", "errors", "p95_ms"}
+SIDE_FIELDS: Final = {"version", "requests", "errors", "p95_ms", "requests_per_minute"}
 READING_FIELDS: Final = {"reading", "note"}
 FREE_TEXT: Final = ("metadata", "url", "source", "delivery_id")
 

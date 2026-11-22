@@ -154,6 +154,8 @@ class SideView(_Out):
     requests: int
     errors: int
     p95_ms: float | None
+    # Requests over the minutes that had any, not the whole stretch (item 36b).
+    requests_per_minute: float | None
 
 
 class ReadingView(_Out):

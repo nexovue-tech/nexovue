@@ -100,8 +100,20 @@ function block(overrides: Partial<Block> = {}): Block {
     previous_from: minutesAgo(50),
     previous_to: minutesAgo(8),
     minutes_compared: 42,
-    this_version: { version: "v2.1", requests: 6000, errors: 180, p95_ms: 412 },
-    previous_version: { version: "v2.0", requests: 6000, errors: 12, p95_ms: 398 },
+    this_version: {
+      version: "v2.1",
+      requests: 6000,
+      errors: 180,
+      p95_ms: 412,
+      requests_per_minute: 142.9,
+    },
+    previous_version: {
+      version: "v2.0",
+      requests: 6000,
+      errors: 12,
+      p95_ms: 398,
+      requests_per_minute: 142.9,
+    },
     failure_share: { reading: "higher", note: null },
     p95: { reading: "about_same", note: null },
     last_week: null,
@@ -272,7 +284,13 @@ describe("the comparison section", () => {
             block({
               kind: "after_rollout",
               method: "version_before_after",
-              last_week: { version: "", requests: 4000, errors: 12, p95_ms: 300 },
+              last_week: {
+                version: "",
+                requests: 4000,
+                errors: 12,
+                p95_ms: 300,
+                requests_per_minute: 95.2,
+              },
             }),
           ],
         }),
@@ -372,6 +390,18 @@ describe("errors by version (FR29 to FR31, AC69)", () => {
     await waitFor(
       () => readable(container).includes("This read took too long. Try the 1-hour window."),
       "the timeout words",
+    );
+    expect(readable(container)).not.toContain("No exceptions were recorded");
+  });
+
+  it("says no exceptions were recorded, not no errors, when the groups are empty (item 36a)", async () => {
+    // Failing spans can carry no exception: the section counts exception groups only, so
+    // "no errors" would contradict a failure share beside it.
+    page({ errors: json(errors({ groups: [] })) });
+    const container = await opened();
+    await waitFor(
+      () => readable(container).includes("No exceptions were recorded in either version"),
+      "the empty words",
     );
     expect(readable(container)).not.toContain("No errors in either version");
   });

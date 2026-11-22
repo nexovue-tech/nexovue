@@ -96,7 +96,8 @@ Takes `?period=` (default the latest) and `?finding=` (a finding id). In order:
    event in order.
 3. **Warnings, where true:** two environments; versions combined; incomplete with its minute count.
 4. **Comparison:** up to two blocks, "During the rollout" and "Since the rollout finished". In each, a row for failure share, p95, and
-   either traffic share or requests per minute; a column for each side, with counts and the plain word. Window chooser: 1, 6, 24 hours,
+   either traffic share or requests per minute (requests over the minutes that side had traffic, not the whole stretch; the platform's
+   `_side` computes it once and the API sends it as `requests_per_minute`, item 36b); a column for each side, with counts and the plain word. Window chooser: 1, 6, 24 hours,
    applying to the second block. Last week's column for before-and-after methods. Under the table: "Counts assume you do not sample
    before sending", the warm-up rule, and FR49's sentence under any `about_same`.
    **Phone:** one stacked block per measure: "Failure share: higher. v2.1 3.0% (180 of 6,012), v2.0 0.2% (12 of 5,844)", with last week
@@ -135,6 +136,7 @@ Takes `?period=` (default the latest) and `?finding=` (a finding id). In order:
 | Loading | Skeleton for each section, separately, so facts appear while ClickHouse reads |
 | Failure | Per section, `InlineFailure`; facts stay |
 | Error read timed out | "This read took too long. Try the 1-hour window." Never an empty list |
+| No exception groups | "No exceptions were recorded in either version during this window." Not "no errors": failing spans can carry no exception (item 36a) |
 | Error data expired | "Error details aged out on {date}" |
 | Incomplete | Label beside the numbers, with minute count |
 | Delayed | "As of 14:32" |
@@ -439,16 +441,16 @@ This differs from the console's shared `Delta` threshold (D50).
     {
       "kind": "rollout", "method": "side_by_side",
       "from": "...", "to": "...", "minutes_compared": 3,
-      "this_version": {"version": "v2.1", "requests": 612, "errors": 2, "p95_ms": null},
-      "previous_version": {"version": "v2.0", "requests": 584, "errors": 1, "p95_ms": null},
+      "this_version": {"version": "v2.1", "requests": 612, "errors": 2, "p95_ms": null, "requests_per_minute": 204.0},
+      "previous_version": {"version": "v2.0", "requests": 584, "errors": 1, "p95_ms": null, "requests_per_minute": 194.7},
       "failure_share": {"reading": "not_clearly_different"},
       "p95": {"reading": null, "note": "warm_up"}
     },
     {
       "kind": "after_rollout", "method": "version_before_after",
       "from": "...", "to": "...", "minutes_compared": 42,
-      "this_version": {"version": "v2.1", "requests": 6012, "errors": 180, "p95_ms": 412.0},
-      "previous_version": {"version": "v2.0", "requests": 5844, "errors": 12, "p95_ms": 398.0},
+      "this_version": {"version": "v2.1", "requests": 6012, "errors": 180, "p95_ms": 412.0, "requests_per_minute": 143.1},
+      "previous_version": {"version": "v2.0", "requests": 5844, "errors": 12, "p95_ms": 398.0, "requests_per_minute": 139.1},
       "failure_share": {"reading": "higher"},
       "p95": {"reading": "about_same"},
       "last_week": null

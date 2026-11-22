@@ -599,7 +599,11 @@ def _chosen(periods: list[ReleasePeriod], period_id: uuid.UUID | None) -> Releas
 
 def _side(side: method.Side) -> SideView:
     return SideView(
-        version=side.version, requests=side.requests, errors=side.errors, p95_ms=side.p95_ms
+        version=side.version,
+        requests=side.requests,
+        errors=side.errors,
+        p95_ms=side.p95_ms,
+        requests_per_minute=side.requests_per_minute,
     )
 
 

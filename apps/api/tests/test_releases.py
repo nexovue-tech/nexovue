@@ -129,7 +129,7 @@ def test_no_response_carries_sender_text(model: Any) -> None:
 
 def test_a_block_says_from_and_to_on_the_wire() -> None:
     """The design's response shape."""
-    side = SideView(version="v2", requests=10, errors=0, p95_ms=None)
+    side = SideView(version="v2", requests=10, errors=0, p95_ms=None, requests_per_minute=None)
     block = BlockView(
         kind="rollout",
         method="side_by_side",
