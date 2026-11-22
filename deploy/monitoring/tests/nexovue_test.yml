@@ -445,3 +445,57 @@ tests:
           - exp_labels: {severity: ticket}
             exp_annotations:
               summary: "AI wording jobs have waited 1900s for scheduler-insight"
+
+  # F19 (design, *Observability and operations*): reliability targets judged over 15 minutes ago
+  # for 10 minutes, while detection is settling minutes. Its sweep shares the clock, so a stopped
+  # detection is already NexovueDetectionStalled and this stays quiet.
+  - name: reliability targets not judged for 15 minutes open a ticket while detection runs
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_slo_oldest_status_age_seconds{job="scheduler-beat"}'
+        values: "60x5 1200x20"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat"}'
+        values: "120x25"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NexovueSloStatusStale
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "the stalest reliability target was last judged 1200s ago, and detection is running (docs/operations/slo-tracking.md)"
+
+  - name: stale reliability targets are quiet while detection has stopped, which pages by itself
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_slo_oldest_status_age_seconds{job="scheduler-beat"}'
+        values: "1200x25"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat"}'
+        values: "1200x25"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NexovueDetectionStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "the newest minute detection settled is 20m 0s old; nothing newer is judged (docs/operations/detection.md)"
+
+  - name: a target judged late for a short while is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_slo_oldest_status_age_seconds{job="scheduler-beat"}'
+        values: "60x5 1200x5 60x15"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat"}'
+        values: "120x25"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []

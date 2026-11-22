@@ -20,6 +20,7 @@ to go next.
 | You want plainer wording of a finding's facts from your own AI account or model (optional, off by default) | [ai.md](ai.md) |
 | You want a case's work to follow a GitHub issue (self-hosted) | [trackers/github.md](trackers/github.md) — what crosses, what stays in GitHub, and how to connect |
 | You want AI to suggest a change to your code on a finding (self-hosted, GitHub.com) | [ai-suggested-fixes.md](ai-suggested-fixes.md) — what is sent, what is not checked, and what to protect first |
+| You want to say how much failure a service may have, and be told when it is running out | [reliability-targets.md](reliability-targets.md) — targets (SLOs), what they do not measure, and where their alerts go |
 | You have set it all up and nothing has arrived | [troubleshooting.md](troubleshooting.md) |
 
 ## The two variables

@@ -2,9 +2,11 @@
 
 ## Lifecycle status
 
-**In development. Step 5b, the budget reader, built 2026-11-21, committed** (added by the founder's decision 34, `phase-2-foundation.md` item 34, 2026-11-21; on `wt/f19budget`; no migration, no ADR). **Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
+**In development. Step 6 built 2026-11-22, awaiting commit** (proving it: cost measured on a development machine, the failure drill, the target-aware fault score, docs and the claims table; no migration, no ADR; the multi-day fault run, the deployed-server measurement and AC38 are not done). **Step 5b, the budget reader, built 2026-11-21, committed** (added by the founder's decision 34, `phase-2-foundation.md` item 34, 2026-11-21; on `wt/f19budget`; no migration, no ADR). **Step 5 is on `feature/phase-2` (2026-11-09).** Steps 1 to 4 are on `feature/phase-2` (2026-11-08), except T2.7, the founder's judgement; Step 4's decisions were answered 2026-11-09, each as recommended. The founder approved the specification, design and plan on 2026-11-02. Steps 4 and 5 were built under foundation item 27 (2026-11-08): the demand gate is a customer-validation milestone read afterwards, and its result is still to be read.
 
 ## Current task
+
+**Plan Step 6, *Proving it*: built 2026-11-22, awaiting commit.** T6.1 to T6.9 ticked; T6.10 to T6.12 need a customer, a tester or the founder's signature. Five new open decisions below (5 to 9).
 
 **Plan Step 5b, *The budget reader other features read*: built 2026-11-21, committed.** The founder's decision 34 (2026-11-21) added it before Step 6 so F20's reliability-target panel (F20 T10.2, built alongside) has a reader. T5b.1 and T5b.2 ticked; no migration, no ADR; one open decision below (4).
 
@@ -22,9 +24,192 @@ Plan Step 5, *What a burn may withhold*: on `feature/phase-2` (2026-11-09; migra
 
 ## Next action
 
+**Step 6 (2026-11-22):** the coordinator reviews the diff, runs `just check`, and commits it. The founder answers open decisions 5 to 9, reads the claims table and the T6.9 list, runs the multi-day fault bed on a machine that stays on (AC49) and measures on the first deployed server (AC50, AC86), and finds AC38's tester. Nothing else in F19 is waiting on a build.
+
 **Step 5b (2026-11-21):** the coordinator reviews the diff and commits it with F20's T10.2, which reads it. The founder answers open decision 4 (which window `/budget` is for) and walks Step 5b's *Judgeable* (`GET /slos/{id}/budget` with a token on the demo; the panel renamed) after Phase 2. Step 6 next.
 
 The coordinator commits Step 5 after `just check`, restoring 0063's `down_revision` to the parallel 0061 (or the next free number) and renumbering 0063, 0064 and ADR-038 if taken. The founder answers Step 5's three open decisions (*Open decisions*, below), judges T2.7's list, and checks one inbox message and one PagerDuty alert against the running demo after Phase 2 (Step 5's *Judgeable*, not walked here). Step 6 next.
+
+## Step 6, built 2026-11-22, awaiting commit
+
+*Proving it: cost, demo faults, operations, docs and claims.* Built on `wt/f19s6` (on `feature/phase-2`'s head, 4ad5d47), with the hardening items below. No migration, no ADR. **Not proved here, said first:** nothing in this step was measured on a server, the multi-day fault run was not run, and no outside tester walked AC38. Every number below is from a shared 4-CPU, 16 GB development machine under load (other builders' work ran beside it) and is labelled so. **None is a figure for a deployed server, and none is extrapolated: where the target scale was not run, the row says what it would be only as plain arithmetic from a measured figure, marked as arithmetic.**
+
+### What was built, by task
+
+| Task | Done | Where |
+|---|---|---|
+| T6.1 | Three gauges beat's leader reads from Postgres (`nexovue_scheduler_slo_oldest_status_age_seconds`, `_slo_targets_late`, `_notifications_withheld_held`) and the ticket alert `NexovueSloStatusStale` (over 15 minutes for 10, only while detection settles minutes). The design's four counters could not be scraped (the jobs and the claim run in a worker's child process). *Released lately* is not read (open decision 5) | `metrics.py`, `deploy/monitoring/rules/nexovue.yml`, `tests/nexovue_test.yml`, `test_scheduler_metrics_live.py`, `test_scheduler_postgres_tenancy_structure.py` (the two statements are named sweeps) |
+| T6.2 | `slo_scale.py`: checks, all four kinds of target (an ordinary project's 10, project 1's 200), history, judging, counting, burns opened, the delivery claim with and without the hold-back statements, each ClickHouse statement's time and memory from the server's query log, Postgres rows written. Called from `scale.py` as `slo-checks`, `slo-targets`, `slo-measure`; `load --projects N` | `tools/detection-measure/` (`test_slo_scale.py`, `test_scale.py`) |
+| T6.3 | A target-aware score: a burn in at least 4 of 5 injections, a burn already open counting only if it escalates (and how many were already open), whether a finding that also opened was linked and how many emails the burn delivered or held back, the reference week's burns beside the demo's own failure rate. Read through `GET /alerts/incidents`. The README says how to see one email in development (`just alert-email`, or the log line) | `tools/fault-bed/` (`fault_score_burns.py`, `test_fault_burns.py`) |
+| T6.4 | The drill, below | |
+| T6.5 | `test_slo_system.py` and `test_browser_door_live.py` (AC37: a forged server span and a forged `synthetic.*` reading change no figure; the cap keeps the busiest and records the minute: AC87's record) pass through a real receiver, Kafka and worker: **4 passed** | |
+| T6.6 | `docs/product/setup/reliability-targets.md` (new; in the setup index), `docs/operations/slo-tracking.md` (new runbook), `current-system-reference.md` §7.7, `database.md`, `security-and-tenancy.md`, `observability.md`, `feature-catalog.md`. `test_slo_words.py` scans the page and finds "SLO" and "error budget" on it | |
+| T6.7 | `/review-diff` and `/readiness-check`, below; the named check is `test_slo_no_provider_calls.py`; design QA below | |
+| T6.8, T6.9 | Below | |
+
+### Measurements (AC50, AC86, AC90): size, machine, numbers
+
+**Machine.** 4 vCPUs, 16 GB, one kernel shared with other builders' stores and builds; load average 10 to 20 while this ran. ClickHouse 26.3 and Postgres 18 in containers (3 GB and 1 GB caps) on that machine. **Not a server and not Oracle.**
+
+**Size, honestly.** The target is 200 projects and 2,000 services. **Data for all 200 projects and 2,000 services was seeded** (4 weeks, 10 services a project; ClickHouse held 77.2 million `service_stats_1m` rows (699 MB on disk), 201.6 million `endpoint_stats_1m` rows (101 MB) and 3.3 million check readings), and 2,190 targets were written. **The jobs were timed on 30 projects only** (projects 1 to 30, project 1 being the 200-target one; 300 services, **490 targets**: 226 service availability, 88 service latency, 98 endpoint availability, 78 check availability; the largest project 200). The first measurement needed the whole 2,190 targets' history read, about an hour of that machine, and disk fell to 6 GB free, so it was cut to this size. **The target-scale figures are owed after deployment.**
+
+Judged at 2026-11-22 10:30 UTC, a minute every measured project held a day before. History is 28 days (the install's 30-day derived retention and whole-week seeding allow no more).
+
+| Job (per project, one after another, this process) | Projects | Mean | 95th | Largest project |
+|---|---|---|---|---|
+| Judging, first | 30 | 339 ms | 414 ms | 2.55 s (project 1, 200 targets) |
+| Judging, a minute later | 30 | 301 ms | 290 ms | 2.34 s |
+| Judging with one burn a project open | 30 | 315 ms | 335 ms | 2.57 s |
+| Judging project 1 with 190 of its 200 targets burning | 1 | | | 2.97 s, 2,145 Postgres statements |
+| Counting days, first round (every day written) | 30 | 328 ms | 384 ms | 1.35 s |
+| Counting days, steady round | 30 | 320 ms | 377 ms | 1.53 s |
+| History read of one target, 28 days | 490 targets | 1.04 s | 1.46 s | 7.1 s |
+
+- **Against NFR1 (a burn job finishes inside its minute; the largest project reported beside the average):** every judging job here finished in under 3 s, the largest beside a mean of about 0.3 s. **Arithmetic from those means, not a measurement:** 200 ordinary projects at 0.3 s is about 60 s of work a minute, about 30 s on the queue's two slots, plus project 1's 2.3 to 3 s. The plan's own limit was 0.6 s per job on two slots, which these means meet. At 200 projects it was **not measured**.
+- **ClickHouse statements** (server's `query_log`, user `nexovue_reader`, the whole run: history, judging, counting, burns): none came near 5 s or 256 MiB. Mean time, 95th percentile, largest; rows read; peak memory (mean, largest).
+
+| Statement | Runs | Mean | 95th | Largest | Rows read (mean) | Memory (mean, largest) |
+|---|---|---|---|---|---|---|
+| `SLO_SERVICE_DAY_SQL` | 7,443 | 9.1 ms | 15 ms | 1.14 s | 2,247 | 4.9, 9.5 MiB |
+| `SLO_SERVICE_LATENCY_SQL` | 3,027 | 14.7 ms | 21 ms | 0.33 s | 2,375 | 5.8, 25.2 MiB |
+| `SLO_ENDPOINT_MINUTES_SQL` (named endpoints) | 10,579 | 9.8 ms | 16 ms | 0.95 s | 31,261 | 5.2, 16.7 MiB |
+| `SLO_CHECK_RUNS_SQL` | 2,707 | 19.6 ms | 28 ms | 0.62 s | 35,071 | 7.9, 13.1 MiB |
+
+  **The named endpoint read, the design's largest guess, read about 31,000 rows a statement against the design's "up to 16,384 per name, up to about 65 million across the install".** At this size it is cheap; the 5.1 ms difference to a service read is the whole of it. Its cost at 200 projects was not measured (the table held 201.6 million rows, all 200 projects', while it ran).
+- **Postgres rows written** (server counters, per phase): history of 490 targets wrote 14,184 `slo_daily_counts` rows; one judging round writes one `slo_status` upsert a target (490); the first counting round updated 980 day rows. A judging statement count per job: 107 to 151 (2,145 for project 1 all burning).
+- **Claim time with and without the hold-back statements** (a claim over 30 owners channels, each with one due message, rolled back; mean of 5 rounds each; the "without" run switches off the burn-involved check and the release): **0 open burns: 181 ms with, 105 ms without. 121 open (the seeded history's own): 319 with, 222 without. 156 open across 30 projects: 263 with, 141 without. 292 open, 190 of them in project 1: 235 with, 129 without.** The statements add about 76 to 120 ms to a claim of 30 channels, about 2.5 to 4 ms a channel. **The plan's "0, 200 open across the install and one project at 200 all burning" was not reached as stated:** 156 and 190 were open (a check or latency target did not burn in every case), and at 30 projects, not 200. The mix, not the arithmetic, is what these report.
+- **List at 200 targets (AC90, NFR3 under 1 s):** `GET /slos` for project 1 returned 200 targets (306 KB) in **0.05 to 0.26 s** over six requests through the API with a read token, on the same loaded machine. With ClickHouse stopped it answered in **0.55 s** (AC40, below).
+- **Time from save to first figure (AC86):** not timed end to end. A target's history read took a mean of 1.04 s (95th 1.46 s, largest 7.1 s), and its first judging runs at the next minute's hand-out. **A finding of the drill:** `slo_history` has one slot, so when 2,190 targets are created at once the reads take about 1 s each in turn: about 37 minutes at this speed, and the queue is re-offered every minute. A customer creating a few targets sees no queue.
+- **Slot use and memory of `scheduler-light`** (AC50): the real worker ran in a container at its **768M ceiling** beside beat and deliveries (host processes), with all 2,190 targets' history reads, 200 projects of SLO judging, detection and evidence jobs queued. 264 samples over 94 minutes: **peak 644.5 MiB of 768, no OOM kill, no restart** (`OOMKilled` false throughout). Probes ran in the same container. This is a development container and the load was not the 200-project live feed (6 projects sent live spans).
+- **What buckets on named endpoints would cost** (for a later request, spec D65), arithmetic from measured figures: the service table's bucket column was **637 MB compressed over 77.2 million rows, 8.25 bytes a row**; the endpoint table holds 201.6 million rows in 101 MB. Giving each endpoint row the same bucket column would add about **1.7 GB (arithmetic, assuming the same bytes a row), 16 times the endpoint table**. A bucket read of a service took 14.7 ms and up to 25.2 MiB against the counts-only read's 9.1 ms and 9.5 MiB: about 1.6 times the time and 2.6 times the largest memory.
+- **F6's AC29 re-measured beside this (AC50's last clause): not run.** It needs 75 minutes of live traffic for 200 projects through a real receiver; this machine fed 6.
+
+### T6.4: the failure drill, on an own stack
+
+Own stack: Postgres, ClickHouse and Kafka containers; receiver, worker, API, beat and deliveries as host processes; `scheduler-light` in a container at 768M. 200 projects seeded; 6 sent live spans through the real receiver. A check on the drill project (tcp to the Postgres container, every 60 s).
+
+| Failure | What was seen | Criterion |
+|---|---|---|
+| **SLO queues not served** (`scheduler-light` running with no `slo`, `slo_counts` or `slo_history` queue), 10 minutes | Detection kept judging and alert delivery kept running. Every target on the project read **Not up to date**, none On track. Judging stopped at 11:02; the "not being judged" notice opened for each of 200 projects at **11:16:07**, 14 minutes after the last judging: once per project, delivered to the two projects whose owners had a verified email and failed ("no owner … verified email") for the rest, which is the fixtures' own doing. After the queues returned, it resolved per project with one "judging again" each (delivered, 2 of 2) | AC48, AC91 (within 16 minutes, once) |
+| **Metrics worker stopped** (the worker's other pipelines kept running) | The check target read **No recent runs** (the state name for a check) once the last judged minute was 3 intervals past its last run; recovered 2 minutes after the pipeline returned | AC67 at 60 s. 300 s and 3,600 s intervals not run (they need 15 minutes and 3 hours of waiting each) |
+| **Whole worker stopped** | The settled minute stopped, so every target went Not up to date and detection reads stalled, which is what `NexovueDetectionStalled` is for | |
+| **Prober stopped** (`scheduler-light` without the `light.local` queue) | The check target read **No recent runs** at the judged minute 12:24, with coverage lowered to 0.94 from missed runs (the figure moved from 1.0 to 0.936 as runs went missing) | AC67 at 60 s |
+| **ClickHouse stopped** | `GET /slos` for the 200-target project returned all 200 targets in 0.55 s, each saying how old it was (last judged 10:33, state Not up to date); `/readyz` read 503, as it should | AC40 |
+| **`scheduler-light` stopped altogether** | **Not run separately:** with its SLO queues unserved the same statuses age and the same notice is raised from `scheduler-deliveries`, which reads Postgres only; stopping the whole container adds that probes stop (they did, for the prober case). Not walked | AC91's second half |
+
+**Two defects found by the drill, fixed at the root (below).** Not covered: a thin target must not raise the notice (no thin target was left alone long enough), tiers' "judge no tier" for a stopped prober was read from the status rows, not each tier.
+
+### The short labelled demo (T6.3)
+
+**Demo result.** A burn path, not the multi-day run. The fault flag was not used: the OpenTelemetry Demo was not started (too large for this machine). A `checkout` failure was written into `service_stats_1m` for 75 minutes, as the flag would make the worker write it. The real scheduler judged it, the real API listed it, and the bed's own `NexovueApi.burns()` read it through a token:
+
+- the burn on `checkout availability, 99.9% over 28 days` opened **critical at 11:24, 4 minutes after the injection's window began**, and was **linked to the finding** detection opened for `checkout`;
+- the email path wrote its message to the log ("mail was rendered and not sent: this deployment logs mail instead of sending it", `[critical] … is using its allowed failures`), which is how one email is seen in development;
+- the burn's own message to the owners channel was listed as `dropped` (held back: the finding had told that channel), so no second email was sent; the bed's table reported `1 of 1` injections with both a finding and a burn, linked `1 of 1` (the held-back count was proved by its unit test, and the demo's table was not re-rendered after the owners channel was counted as email). The verdict reads **not proved: 1 injection, 5 needed**, as it must.
+
+Found by running it and fixed: the incident list returns an open incident in both its lists, so one burn read as two; and the owners channel (which sends email) was not counted as email.
+
+### Hardening items, from the earlier steps' "not built or not proved"
+
+- **AC108, one start time on both pages: fixed.** `timeIn` on the target page now says what the incident page says (`formatZonedTime`), so "IST" and "Kolkata time" no longer name one moment two ways. `zoneAbbreviation` was deleted. `SloScreen.test.ts` seen failing first.
+- **AC67's words: fixed (found by the drill).** A stopped check read "No recent requests" and "Check the service is running", and the spec and AC67 say **No recent runs**. The badge, the sentence and the next step now say runs and the check, by the target's kind (`shared/slo/words.ts`). `SlosScreen.test.ts` seen failing first.
+- **A check at 60 s read "No recent runs" while it ran every minute (found by the drill, the real defect):** the silence was measured to the clock, and a minute is judged about 5 minutes after it ends, so any check with an interval under about 2 minutes read silent for ever. Measured now to the last judged minute (`_silence_until`, `nexovue_platform/slo.py`). `test_slo_model.py` seen failing first; one boundary case's input moved by the judged minute's lag (stated in the test). A job that stopped is Not up to date, which is tried first.
+- **The parallel-run failure of `test_slo_job_live.py`** (recorded 2026-11-21): gone since baf5e47. `pytest -n 2` on the file: **37 passed**.
+- **Design's "Logs: project and target ids at warning on a failed read": not built, and the drill showed why it matters little today:** a failed read raises and the worker records the failed job with its task; a failed read of one project is visible by the project's statuses ageing. If an operator needs the project in the log, it is a small task; not done without being asked. Recorded in `design.md`.
+- **Playwright specs: none exist for F19** (`tools/e2e/tests` holds none). Nothing to run. I looked at the screens in a real browser instead: Chromium at 375 and 1280 px against the dev web server and my API, signed in as an owner: the list and the new-target form render with **no horizontal scroll at either width**; the list read "3 of 10 need attention. 5 cannot be judged yet or have alerts off", the burn sentence "Using allowed failures 999 times faster than allowed, since 03:24 PST, and nothing is left." AC81's keyboard half and the target page itself were not walked in the browser (the form was the first link).
+- **Still open, recorded: open decision 3 (a burn noted on a PagerDuty alert that then escalates stays a note), the Exclusions tab, a burn rule naming only deleted targets not marked "covers nothing", the finding and service lines at 375px.** None is built; each is the founder's to schedule (decisions below).
+
+### T6.7: review, readiness, design QA
+
+**`/review-diff` (2026-11-22).** Tenancy: the two new Postgres statements in `metrics.py` read every tenant on purpose (an install-wide gauge) and were **not named in `CROSS_TENANT_STATEMENTS`, so `test_scheduler_postgres_tenancy_structure.py` failed (found by this review, fixed: both are named with their reason)**; no new ClickHouse statement in product code (the scale tool's statements bind tenant and project and run as the admin account on a dev store only, guarded to localhost). Authorization: no route added. No migration. No credential: the scale tool's dev passwords are the repository's published development defaults. Web: `shared → features` direction held; no new design token. Unintended changes: none; every file is named in this section. MEDIUM, fixed: `badgeOf` is shared with F20's panel, which now receives the kind through the budget's own `kind` field. LOW, left: the scale tool replaces two names on the outbox module in its own process to time the claim without the statements (a documented patch, never in a service).
+
+**Design QA against `design.md`.** The list, the form, the sentences, the banner and the zone wording read as designed in a browser (above). Not checked: the target page's tabs and the exclusions tab (not built).
+
+**The named check** (no `slos/` module reaches a provider by plain HTTP): `apps/scheduler/tests/test_slo_no_provider_calls.py`. It walks every module `nexovue_scheduler.slos`, `nexovue_platform.slo` and `nexovue_api.slos` import through our own code and fails if one reaches a network client. Four shared modules are the named doors (the two settings modules and `nexovue_api.deps` and `.lifespan`, which hold the mail and object-store clients every process and route shares). A control lets the walk through the doors and finds the mail provider's `httpx` and the object store's `boto3`; a second control finds the probes' `pycurl`. **Seen failing** with `from nexovue_scheduler.probes import http_check` planted in `slos/retention.py`.
+
+**`/readiness-check`, scope: this change only.** The platform's verified gap list (`docs/operations/production-readiness.md`) is private and not in this working copy (`docs/quality/production-readiness.md` says so), so the checklist was read from the gate document and each item answered from what was observed. Verdict: **NOT READY for a production rollout of F19**, which is the platform's verdict too (the gate has not been passed).
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| Configuration and secrets | ✓ | No secret added; the SLO work reads existing settings (`CLICKHOUSE_DSN`, `POSTGRES_DSN`) |
+| Migrations | ✓ | No migration in this step; 0052 to 0064 hold their roll-forward-only rule (`test_migration_rules.py` passes) |
+| Capacity | ✗ | Measured at 30 of 200 projects on a shared development machine; **a deployed server's figure is owed**; `scheduler-light`'s 768M held in a container (peak 644 MiB) but not under a 200-project live feed |
+| Health | ✓ | `/healthz`, `/readyz` unchanged; with ClickHouse stopped `/readyz` read 503 and `/slos` still answered |
+| Logging, monitoring, alerting | ✓ with a gap | Three gauges and `NexovueSloStatusStale` (`promtool test rules`: success); no log line names the project for a failed read (above) |
+| Backup and restore | ? | `slo_daily_counts` and `slo_target_changes` exist nowhere else once rollups expire; a restore of these tables was not run |
+| Rollback | ✓ | Take the three queues out of `scheduler-light`'s default queues; the plan's *Rollout and rollback* |
+| TLS and public endpoints | ? | Nothing public added; not assessed beyond routes' existing tiers |
+| Security | ✓ | Tenancy tests and the no-provider walk pass; the target's name stays on screens |
+| Release process, smoke tests | ✗ | No deployed install; the drill is a development one |
+| Operational ownership | ✗ | The runbook `docs/operations/slo-tracking.md` is written from the drill and has not been used on call |
+| Faults (AC49) | ✗ | **Not run**: the multi-day bed needs a machine that stays on. F19 is not proved on faults |
+| Real customers' traffic, AC38's outside tester, T6.10 | ✗ | Not possible yet |
+
+**Blockers for a rollout:** (1) the deployed-server measurement; (2) AC49's run; (3) the backup restore of the F19 tables; (4) an owner for the runbook. The rollout decision is the founder's.
+
+
+### T6.8: the claims table, read again 2026-11-22
+
+Each row was read from the rival's own page by `curl` from the shell on 2026-11-22, the page's text saved and searched for the quote. **"Matches" means the fact in `research.md` (read 2026-11-02) still holds; "Changed" says how it differs; "Not re-read" means this pass did not find the page text that would show it, so the fact may not be used.** A quote is verbatim from the page text. Pages are as they stood on the read date and are not archived here.
+
+| Rival | Fact | Quote (verbatim) | Page | Result |
+|---|---|---|---|---|
+| Datadog | Rolling windows of 7, 30 or 90 days | "Set a target and a rolling time window (past 7, 30, or 90 days) for the SLO." | docs.datadoghq.com/service_management/service_level_objectives/ | Matches |
+| Datadog | Three SLO types; monitor-based ones take Synthetic tests | "Metric Monitor types, Synthetic Monitors, and Service Checks" (the monitor-based column of *Supported data types*) | docs.datadoghq.com/service_level_objectives/guide/slo_types_comparison/ | Matches. This is the fact behind "Datadog's monitor-based SLOs support Synthetic tests" in the spec's *Must not be claimed* |
+| Datadog | Missing data is published, by type | "Missing data is ignored in SLO status and error budget calculations"; "Missing data is handled based on the underlying Monitor's configuration"; "Missing data is treated as uptime in SLO status and error budget calculations" | the same comparison page | Matches. The third is time slice |
+| Datadog | History up to 15 months | "The supported history duration for Metric-based and Time Slice SLOs matches your account's metric duration (by default, this is 15 months)." | the same page | Matches, with the qualifier that monitor-based SLOs are not named in this sentence |
+| Datadog | Short window is 1/12 of the long | "Google recommends the short window to be 1/12 of the long window. However, you will be able to customize the short window programmatically in Datadog through the API or with Terraform." | docs.datadoghq.com/service_management/service_level_objectives/burn_rate/ | Changed: it is a recommendation, and customisable through the API. The "long window 1 to 48 h" range was **not re-read** |
+| Datadog | Corrections, one-time and recurring, with a separate permission | "One-time corrections require a start and end time, while recurring corrections require a start time, duration, and interval."; "To create, edit, and delete status corrections, users require the slos_corrections permission." | the SLO page above | Matches |
+| Datadog | One notification for correlated alerts | not found: the Event Correlation page read states nothing about SLO burn alerts | docs.datadoghq.com/service_management/events/correlation/ | **Not re-read.** No claim about Datadog grouping burn alerts may be made |
+| Honeycomb | SLOs are a Pro feature; 2 on Pro, 100 on Enterprise, none on Free | "2 Service Level Objectives (SLOs)" under Pro (from "$150 per month"); "Starts with 100 SLOs" under Enterprise; the SLO page's metadata tag reads "Pro" | www.honeycomb.io/pricing; docs.honeycomb.io/notify/alert/slos | Matches. Free's list names no SLO |
+| Honeycomb | An exhaustion alert does not alert again until it resolves | "Because Exhaustion Time burn alerts will not alert again until after they resolve, a team may want to track whether a budget burn remains or reoccurs." | docs.honeycomb.io/notify/alert/slos/monitor/ | Matches |
+| Honeycomb | Docs recommend an exhaustion alert at 0 | "We recommend creating at least one Exhaustion Time burn alert where the Exhaustion Time is 0." | the same page | Matches |
+| Honeycomb | Known failures can be left out of the SLI | "Alert only on actionable issues: Exclude known/expected failures (for example, invalid credentials or user disconnects) to avoid noise." | docs.honeycomb.io/notify/alert/slos | Matches. No budget reset was looked for in the text read |
+| Grafana | Proposes targets from recent data | "If the service has no SLOs yet, Grafana suggests availability and latency targets from recent request, error and latency metrics." | grafana.com/whats-new/2026-09-10-let-grafana-propose-slos-for-your-service/ | Matches. How far back is not stated on the page |
+| Grafana | Maintenance windows are in preview, one fixed range | "Maintenance windows is currently in public preview."; "Each maintenance window is a single fixed time range. Recurring schedules are not supported." | grafana.com/docs/grafana-cloud/observe-and-act/alert-and-measure-reliability/slo/maintenance-windows/ | Matches |
+| Grafana | Price | Pro "$19/ month + usage"; Enterprise "$25,000/ year spend commit" | grafana.com/pricing/ | Matches. **Which plan holds SLO is not stated** on the pages read |
+| Grafana | Whether SLO is in self-managed Grafana | nothing on the SLO pages states it either way (they sit under *Grafana Cloud documentation*) | grafana.com/docs/grafana-cloud/alerting-and-irm/slo/ | **Unknown.** No claim about Grafana's self-managed status may be made. The question stays open |
+| New Relic | Uses recent data as a baseline | "If you associate the SLI with an APM service or a browser app, New Relic will suggest some typical SLI and their queries. We'll use the latest data as a baseline for your service level objectives" | docs.newrelic.com/docs/service-level-management/create-slm/ | Matches |
+| New Relic | One-time or recurring maintenance windows left out of compliance | "You can schedule one-time or recurring maintenance windows, so your performance metrics accurately reflect only operational periods without manual adjustments." | docs.newrelic.com/docs/service-level-management/maintenance-windows-slm/intro/ | Matches |
+| New Relic | 500 SLIs per account, 13 months retention | "You can create a maximum of 500 SLIs on an account."; "The data has 13 month retention by default." | docs.newrelic.com/docs/service-level-management/create-slm/ | Matches |
+| Coroot | Presets from install | "It also comes with preset SLOs that you can easily adjust, so it can start monitoring your services right after installation." | docs.coroot.com/alerting/slo-monitoring | Matches. Which services get them is not stated |
+| Coroot | Burn alerts, both critical, trigger an incident | the page's table lists "Critical, 1 hour, 5 minutes, 14.4" and "Critical, 6 hours, 15 minutes, 6"; "An incident will be triggered if the burn rate exceeds the threshold in both the long and short windows." | the same page | Changed: this page gives 5 and 15 minutes as the short windows (the earlier note said 30 or 15 by page) |
+| Coroot | Valid-data rule | "Coroot only calculates the burn rate if at least half of the window contains valid data." | the same page | Matches |
+| Coroot | SLO tracking in the free edition | Community Edition: "Free forever", "Self-hosted deployment", "SLO tracking"; Enterprise "$1 per monitored CPU core/month" with "AI-powered root cause analysis" | coroot.com/editions | Matches. The Apache-2.0 licence is **not stated** on this page |
+| OpenObserve | SLOs are in the open-source, self-hosted platform | "the SLO feature is part of the open-source platform, works self-hosted, and does not add per-signal or per-host charges." | openobserve.ai/slo.md | Matches |
+| OpenObserve | Rolling windows, no calendar | "SLOs are measured over a rolling window — 7, 30, or 90 days — not a calendar month." | openobserve.ai/docs/user-guide/analytics/slos/index.md | Matches |
+| OpenObserve | A gap is not a zero; below the floor, No data and alerts freeze | "A slice that was never measured is a gap, not a zero."; "When coverage falls below the floor — `ZO_SLO_MIN_COVERAGE`, default **0.9** — the SLO reads as **No data** and alerts on it **freeze**" | the same page | Matches. This is the rule the spec calls parity |
+| OpenObserve | Burn alert windows | the fast row reads "1h / 5m" and the mid row "6h / 30m" | openobserve.ai/docs/user-guide/analytics/slos/slo-alerts.md | Matches for two rows; the third was not read |
+| OpenObserve | Exclusions | "Pausing does **not** exclude that time from the SLO." No maintenance-window or exclusion feature was found on the SLO pages read | the SLO page | "Not found", not "absent" |
+| Dynatrace | SLOs exist, with burn rate and error budget | the SLO page defines "Error budget burn rate" | docs.dynatrace.com/docs/deliver/service-level-objectives | Read only for existence. Nothing else about Dynatrace may be claimed |
+| Sentry | No SLO feature | no "SLO" or "service level" on the uptime-monitoring page read | docs.sentry.io/product/monitors-and-alerts/monitors/uptime-monitoring/ | **Not confirmed absent.** One page was read and Sentry's docs search is not reachable from here |
+| SigNoz | No native SLO | `signoz.io`'s home, docs index and pricing pages hold no SLO text, and the docs sitemap's addresses hold none (only `collecting_syslogs` and `slog-to-signoz` contain the letters) | signoz.io, signoz.io/docs/sitemap.xml | **Weak support only.** The sitemap may be partial |
+| SigNoz | Issue 658 still open, last comment 2026-10-23 | **Unreachable:** `github.com` is not an allowed host for the shell, and the repository is not one this session may read | github.com/SigNoz/signoz/issues/658 | **Not re-read.** The foundation's "SigNoz's lack is the only rival gap supported, as of 2026-11-02" stands as of that date only, and may not be dated later |
+| Elastic | SLO burn-rate rules | **Unreachable:** `elastic.co` is not an allowed host | elastic.co/docs/solutions/observability/incident-management/create-an-slo-burn-rate-rule | **Not re-read.** The 2026-11-02 row stands as a search-summary fact and may not be used |
+| Better Stack | Monthly "Compound SLA" and "Average SLA" reports | **Unreachable:** `betterstack.com` is not an allowed host | betterstack.com/docs/uptime/reporting | **Not re-read.** The 2026-11-02 row may not be used |
+| Every rival | How each groups alerts | no rival's page read states that a burn alert is grouped with other alerts. Coroot: "An incident will be triggered"; OpenObserve: nothing on grouping; Honeycomb: nothing; Datadog: see above | the pages above | **Unverified for every rival.** Foundation's "the others do not suppress" is not a fact this pass supports, so no comparison of noise may be made |
+
+### T6.9: launch text against *Must not be claimed*, the founder's list to review
+
+**There is no F19 launch text, release note or trial script in the repository yet** (a search of `docs/`, `README.md`, `apps/web`, `packages` and the foundation for each phrase below found none outside this feature's own documents). So the review is of the one customer-facing page written, `docs/product/setup/reliability-targets.md`, and of the lines other documents already carry. Each row says where the founder must check once launch text exists.
+
+| Must not be claimed | Where it could appear | Found in what exists |
+|---|---|---|
+| "One problem, one message" | launch text, the page | Not said. The page says the limit: a second message about the same news is held back for up to an hour, "for burns only", and "Setting a target adds alerts" |
+| "Adds no extra alert" with no qualifier | launch text | Not said |
+| "Tells you what it could not see" with no qualifier | launch text | Not said; the page says what is not measured, including sampling and the service cap |
+| "13 months of history" with no qualifier | launch text, pricing | The page says "up to 13 months ... a service target reaches back about a month ... the rest builds up forward". Foundation item 20 states 13 months without the qualifier: it is an internal decision, and must carry it if quoted |
+| "Measures your uptime" | launch text | Not said; the page says it measures requests that reached a service (the word "uptime" is refused by `test_slo_words.py`) |
+| "Exact request counts" | launch text | Not said (`exact` is refused in the page and the screens) |
+| "Others don't have SLOs" | launch text | Not said. The claims table gives only SigNoz, and **its support could not be refreshed** (T6.8: issue 658 unreachable; weak support from the docs sitemap): the foundation's line stands as of 2026-11-02 only |
+| "Tamper-proof", "audit-grade", "SLA reporting" | launch text | Not said; the page says "nexovue does not do SLAs" and that an exclusion is "visible, not preventable" |
+| "Exact latency" for an endpoint; a 500 ms target | launch text | Not said; the page says a typed 500 ms counts requests at or under 487.2 ms |
+| "A target in under a minute", "figures within a minute" | launch text | Not said; AC38 and AC86 are not proved, and this step could not prove them |
+| "Nobody can move the number" | launch text | Not said |
+| "Specific to nexovue" or "only nexovue" | launch text | Not said. The claims table shows Coroot and OpenObserve list SLOs in their free self-hosted products (re-read 2026-11-22), and Datadog's monitor-based SLOs take Synthetic tests |
+| A rival fact | launch text | **Only a row of the claims table marked Matches may be used**; rows marked Not re-read, Unknown or Unreachable may not |
+
+**The foundation's section 12 line "SLOs on the free product with no small count limit. SigNoz's lack is the only rival gap supported, as of 2026-11-02" must not be dated later until issue 658 is read again.** The founder signs the launch sheet (T6.12); this table is the reviewed list for it.
 
 ## Step 5b, built 2026-11-21
 
@@ -285,6 +470,14 @@ Every service's `GET /health` was pre-ticked. On one day, `checkout` had 48,728 
 
 ## Open decisions
 
+Five from Step 6, 2026-11-22:
+
+5. **How many held-back messages were released lately is not a metric.** The design named a released counter. No index serves `notifications.released_at`, so reading it every 15 seconds scans the whole delivery log; only the rows held now (index-backed) are read (`nexovue_scheduler_notifications_withheld_held`). **Options:** (a) keep: held now only; (b) add a partial index on `released_at` in a migration and a gauge. **Recommendation: (a)** until an operator asks; the delivery log already shows each release.
+6. **Open decision 3 above (a burn on a lower-severity PagerDuty alert that escalates stays a note) is still the founder's.** Step 6 did not build it: it changes the one-key-per-subject model F6 tested. **Recommendation unchanged: (a)**, as its own small change with its own test, because an unpaged critical is the failure PagerDuty exists to prevent.
+7. **The Exclusions tab is not built; exclusions are made through the API only.** Spec FR29 to FR31 name it. **Options:** (a) build it as a small step before release; (b) leave to a first customer's ask. **Recommendation: (a)**, since "everyone gets a notice and the reason shows" is the page's promise and a person cannot make one on screen.
+8. **The fault bed cannot read the finding's own email with a read token,** so "one email delivered" (AC49) is read from the burn's side only: delivered, or held back with the reason. **Options:** (a) accept, and read the delivery log by hand in the founder's run; (b) let the bed sign in and read the channel's delivery log (a session, not a token). **Recommendation: (a)** for this run; (b) if the run's reading is ambiguous.
+9. **The scale measurement was cut to 30 projects (490 targets) and the largest project's 200,** and all 200 projects' data was seeded. **Options:** (a) accept and measure at 200 on the first deployed server (the plan's own wording); (b) re-run at 200 here when the machine is quiet and 20 GB of disk is free (about 2 hours, 1.7 GB of ClickHouse). **Recommendation: (a)**: this machine's numbers carry load from other builders, and the 200-project figure should come from the server it is about.
+
 One from Step 5b, 2026-11-21:
 
 4. **Which window `GET /slos/{id}/budget` is for.** The design's route reads `GET /slos/{id}/budget?window=`, and nothing in the spec or design says what `window` would choose. A target's figure has one window, its own 7 or 28 days by whole days, which the list, the target's page and every message use; a dashboard's time range (the hour or day a chart shows) never changes it, and a figure over another window would be a different number under the same name. **Built: the target's own window, with no parameter.** **Options:** (a) keep: one figure per target, everywhere; (b) add `window` choosing 7 or 28 days apart from the target's, a second figure the target page does not show. **Recommendation: (a)**, and the design's row drops `?window=` once answered.
@@ -327,16 +520,16 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 
 - **P2 affects what is already on this branch.** By reading the code, anyone holding a site key can forge server spans under any service name, and they count in the rollups F6 judges. It was not run. This should be seen before F6's release is decided.
 - **F28's design still says "2 of 8" for `scheduler-light`** (`deployment-release-tracking/design.md:356`). F3's floor keeps probes and alert sweeps 4 of 8 (`ai-insights/design.md:271,829`), and F3 already asks F28 to correct this (`:785`). Nothing for the founder to decide. Since D66, F19's queues share those other 4 too.
-- **A parallel run of `test_slo_job_live.py` fails, a serial run passes (found 2026-11-21, not fixed; it predates Step 5b, which touches no scheduler code).** With `pytest -n 2`, one of AC8's cases fails with `org_id … is not present in table "organizations"`: the test drives the real `job.queue_jobs`, which hands out work for every tenant with a live target, so it queues a job for the other worker's tenant just as that tenant's fixture deletes it. Serially, all 199 scheduler SLO tests pass. A fix would scope the hand-out the test drives, or hold tenants until both workers finish; it belongs to Step 6's test work.
+- **(Fixed: gone since baf5e47; `pytest -n 2` passes, 37 tests, 2026-11-22.)** *Was:* A parallel run of `test_slo_job_live.py` fails, a serial run passes (found 2026-11-21, not fixed; it predates Step 5b, which touches no scheduler code).** With `pytest -n 2`, one of AC8's cases fails with `org_id … is not present in table "organizations"`: the test drives the real `job.queue_jobs`, which hands out work for every tenant with a live target, so it queues a job for the other worker's tenant just as that tenant's fixture deletes it. Serially, all 199 scheduler SLO tests pass. A fix would scope the hand-out the test drives, or hold tenants until both workers finish; it belongs to Step 6's test work.
 - **F20's document disagrees with F19 until its author takes the hand-off.** *2026-11-21: settled in code: the panel reads `budgets_named`, Postgres only, no scan (F20 T10.2).* F20 stores the SLO by name, and F19 now does too. F20 also wants the panel's burn rate from ClickHouse, and F19 recommends Postgres (design, *API*; `dashboards/design.md:436,446-447,970`). Both sides split the budget and burn functions the same way. F20's document was left alone.
 - **SLO work shares `scheduler-light` (D66).** It waits behind detection, evidence and release reads, so burns can be judged a minute or two late under load, and a crash of that container stops probes and SLO judging together. Probes and alert sweeps never wait behind SLO work.
 - **The rule on what a burn may withhold changes a path F6 has tested closely.** It is gated on a burn being involved, existing tests must pass unedited, and they run again beside an open burn.
-- **All costs are unmeasured.** Reads, jobs, slots, `scheduler-light`'s 768M with SLO work added, and Postgres writes are arithmetic and guesses until T6.2. The named endpoint read is the largest figure.
+- **Costs are measured at 30 of 200 projects, on a shared development machine (Step 6).** `scheduler-light`'s 768M held in a container (peak 644 MiB, no OOM kill); the 200-project figure and a deployed server's are owed. The named endpoint read is the largest figure.
 - **Every guess in the spec is in one register:** *Cannot be proved before a customer*.
 - **The suggestion has never been tried on real traffic.**
 - **`sumForEachMergeIf` is untested.** T1.3 is the first check.
 - **Demand.** Nothing shows SLOs win a purchase. Coroot and OpenObserve give this away on self-hosted, so it is a gap-filler against SigNoz, as of 2026-11-02, and that gap may close. The gate comes before the alert work.
-- **Competitor facts** were read through a summarizing tool on 2026-11-02, which got one Datadog table wrong in a way only the page's HTML showed. Check before quoting in public (T6.8).
+- **Competitor facts** were re-read from the pages on 2026-11-22 (Step 6, T6.8). Elastic, Better Stack and SigNoz issue 658 could not be reached and stay unusable; Grafana's self-managed status and any rival's alert grouping are unknown.
 - **No test server, by the founder's choice** (foundation item 9, 2026-11-02). AC49's weeks-long run waits for Oracle after deployment and reads "not run" until then, so F19 launches unproved on faults. AC50 runs on the Mac's Docker; the 16 GB server is confirmed only on Oracle, whose free allowance (2 Arm CPUs, 12 GB) is below that size.
 - **13 months on Free gives away what a rival charges for** (Grafana Cloud keeps 13 months on its paid plan). Approved knowingly on 2026-11-02.
 - **AC38's outside tester** comes from the conversation round (spec D64). If nobody there agrees to a later screen test, it reads "not proved".

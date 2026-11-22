@@ -29,6 +29,7 @@ from typing import Final
 from nexovue_platform.connections import TRACKER_KINDS
 from nexovue_platform.detection import NOT_RUNNING_AFTER
 from nexovue_platform.fixes.records import APPROVED, FIX_SWEEP_NAME, IN_FLIGHT_STATES
+from nexovue_platform.slo import STALE_AFTER as SLO_STALE_AFTER
 from prometheus_client import Counter, Gauge, disable_created_metrics
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -184,6 +185,32 @@ _FIX_SWEEP_AGE: Final = text(
     "SELECT EXTRACT(EPOCH FROM now() - finished_at) FROM fix_sweep_status WHERE sweep = :sweep"
 )
 
+# F19 (design, *Observability and operations*). Across every organization, no tenant label.
+# A target's answer is as old as the minute the job last judged it; one never judged ages from
+# its creation, as the screens' *Not up to date* does (`slo.State.NOT_UP_TO_DATE`). The same
+# live projects the job is handed out for, so a deleted target or project is not read.
+_SLO_STATUS: Final = text(
+    """
+    SELECT count(*) FILTER (WHERE age > :late_after) AS late, coalesce(max(age), 0) AS oldest
+    FROM (
+        SELECT EXTRACT(EPOCH FROM now() - coalesce(s.evaluated_minute, t.created_at)) AS age
+        FROM slo_targets AS t
+        JOIN project_retention AS live
+            ON live.org_id = t.org_id AND live.project_id = t.project_id
+        LEFT JOIN slo_status AS s ON s.org_id = t.org_id AND s.slo_id = t.id
+        WHERE t.deleted_at IS NULL
+    ) AS answers
+    """
+)
+# What a burn held back (FR22, FR26) and has not yet released: the partial index
+# `ix_notifications_withheld_unreleased` serves it, so it reads no more rows than are held. It
+# is read here, not counted where it happens, because the claim runs in a worker's child
+# process. How many were released lately is not read: no index serves `released_at`, so it
+# would scan the whole delivery log every 15 seconds (`slo-tracking/status.md`, open decision 5).
+_SLO_WITHHELD: Final = text(
+    "SELECT count(*) FROM notifications WHERE withheld_why IS NOT NULL AND released_at IS NULL"
+)
+
 LOOP_SILENT: Final = Gauge(
     "nexovue_scheduler_loop_silent_seconds", "Seconds since this process's loop last beat."
 )
@@ -286,6 +313,18 @@ FIX_SWEEP_AGE: Final = Gauge(
     "Seconds since rung 3's suggested fix sweep last finished a pass; +Inf before any, 0 while "
     "connections are off (leader only).",
 )
+SLO_TARGETS_LATE: Final = Gauge(
+    "nexovue_scheduler_slo_targets_late",
+    "Live reliability targets last judged over 15 minutes ago (leader only).",
+)
+SLO_OLDEST_STATUS_AGE: Final = Gauge(
+    "nexovue_scheduler_slo_oldest_status_age_seconds",
+    "How old the stalest reliability target's last judging is, by maximum (leader only).",
+)
+NOTIFICATIONS_WITHHELD_HELD: Final = Gauge(
+    "nexovue_scheduler_notifications_withheld_held",
+    "Notifications held back for the same news or a snooze and not yet released (leader only).",
+)
 
 # How a worker's job ended — the label values JOBS_ENDED takes.
 FINISHED: Final = "finished"
@@ -315,6 +354,9 @@ class QueueReadings:
     fix_rows_recent: dict[tuple[str, str, str], int] = field(default_factory=dict)
     fix_oldest_in_flight_seconds: float = 0.0
     fix_sweep_age_seconds: float = 0.0
+    slo_targets_late: int = 0
+    slo_oldest_status_age_seconds: float = 0.0
+    notifications_withheld_held: int = 0
 
 
 async def connections_live(connection: AsyncConnection, *, enabled: bool) -> bool:
@@ -364,6 +406,10 @@ async def read_queues(
         _FIX_OLDEST_IN_FLIGHT, {"states": list(FIX_WORKING_STATES)}
     )
     sweep_age = await _fix_sweep_age(connection, connections_enabled=connections_enabled)
+    slo = (
+        await connection.execute(_SLO_STATUS, {"late_after": SLO_STALE_AFTER.total_seconds()})
+    ).one()
+    withheld = await connection.scalar(_SLO_WITHHELD)
     return QueueReadings(
         jobs_ready={row.queue: int(row.ready) for row in jobs},
         oldest_ready_seconds={row.queue: float(row.oldest) for row in jobs},
@@ -387,6 +433,9 @@ async def read_queues(
         fix_rows_recent={(row.kind, row.state, row.reason): int(row.rows) for row in fix_rows},
         fix_oldest_in_flight_seconds=float(oldest_fix or 0),
         fix_sweep_age_seconds=sweep_age,
+        slo_targets_late=int(slo.late),
+        slo_oldest_status_age_seconds=float(slo.oldest),
+        notifications_withheld_held=int(withheld or 0),
     )
 
 
@@ -434,6 +483,9 @@ def publish(readings: QueueReadings) -> None:
         FIX_ROWS_RECENT.labels(kind=kind, state=state, reason=reason).set(rows)
     FIX_OLDEST_IN_FLIGHT.set(readings.fix_oldest_in_flight_seconds)
     FIX_SWEEP_AGE.set(readings.fix_sweep_age_seconds)
+    SLO_TARGETS_LATE.set(readings.slo_targets_late)
+    SLO_OLDEST_STATUS_AGE.set(readings.slo_oldest_status_age_seconds)
+    NOTIFICATIONS_WITHHELD_HELD.set(readings.notifications_withheld_held)
 
 
 def forget_queues() -> None:
@@ -462,5 +514,8 @@ def forget_queues() -> None:
         FIX_CHECKS_REFUSED,
         FIX_OLDEST_IN_FLIGHT,
         FIX_SWEEP_AGE,
+        SLO_TARGETS_LATE,
+        SLO_OLDEST_STATUS_AGE,
+        NOTIFICATIONS_WITHHELD_HELD,
     ):
         single.set(0)

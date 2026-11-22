@@ -14,6 +14,12 @@ Anomaly detection (F6, migrations 0041 to 0049) added:
 
 Every other new table carries `org_id` and is deleted with its project.
 
+Reliability targets (F19; migrations 0052, 0053, 0058 to 0060, 0063 and 0064, numbered as merged; ADR-027, ADR-028, ADR-034, ADR-038) added:
+
+- `slo_targets`, a target's definition, soft-deleted for 30 days, with two partial unique indexes over live rows (the name and the definition, so two targets never read alike); `slo_status`, one row per target rewritten each minute by the judging job (`evaluated_minute`, the three burn tiers, `burning_since`); `slo_daily_counts`, one row per target and local day, which is why a month's figure outlives the rollups it was counted from (ADR-027); `slo_target_changes`, kept after a purge; `slo_deleted_months`, the months of a purged target; `slo_exclusions`, stretches left out with a reason;
+- on `incidents`: `about_key`, `about_signal`, `about_endpoint` and `about_check_id`, so an incident can say what it is about, which a burn is (ADR-034); on `notifications`: `withheld_why`, the subject that held a row back, and `released_at` (ADR-038), with a partial index serving the rows held and not yet released;
+- every one of these has `org_id`; the downgrades of the migrations holding figures that exist nowhere else refuse, and their revisions are on `ROLL_FORWARD_ONLY`. Past ones are a restore. `slo_daily_counts` is kept 13 months on every plan, then pruned by the scheduler.
+
 Deployment and release tracking (F28; `0054`, `0057`, `0074`, `0075`, numbered as merged) added:
 
 - `releases` (ADR-029), one row per project, service and version, telling what reported it and what was counted, and `release_periods`, each stretch one served, with `last_reading` (the comparison's words and counts stored 30 minutes in, never a name) and `mixed_environments` (FR45), which `/releases` and the Deploys section read so neither touches ClickHouse; `release_sync_state`, how far the release sync has read each project's version rollup; `deploy_intake_state`, what each project's webhook last received;

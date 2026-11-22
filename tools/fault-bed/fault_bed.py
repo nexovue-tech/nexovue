@@ -36,13 +36,16 @@ from fault_model import (
     FAULTS,
     REFERENCE,
     ROUNDS,
+    BurnSeen,
     FindingSeen,
     Injection,
+    MessageSeen,
     Observation,
     Plan,
     ServiceWindow,
     Skipped,
     append,
+    burns_event,
     events,
     fault_named,
     findings_event,
@@ -56,6 +59,7 @@ from fault_model import (
     skipped_event,
 )
 from fault_score import render, score
+from fault_score_burns import render_burns, score_burns
 
 REPOSITORY: Final = Path(__file__).resolve().parents[2]
 DEFAULT_FLAG_FILE: Final = REPOSITORY / "tools/otel-demo/upstream/src/flagd/demo.flagd.json"
@@ -69,6 +73,8 @@ DEFAULT_ACTIVE_MINUTES: Final = 30
 # An injection is started up to this late; any later and its time to catch would be wrong.
 START_GRACE: Final = timedelta(minutes=2)
 FINDINGS_POLL: Final = timedelta(hours=1)
+# `incidents.condition_kind` of a reliability target's burn (F19).
+SLO_BURN: Final = "slo_burn"
 SERVICES_LIMIT: Final = 500
 REQUEST_TIMEOUT_SECONDS: Final = 30.0
 
@@ -83,6 +89,7 @@ class FlagStore(Protocol):
 class Nexovue(Protocol):
     def services(self, start: datetime, end: datetime) -> list[ServiceWindow]: ...
     def findings(self) -> list[FindingSeen]: ...
+    def burns(self) -> list[BurnSeen]: ...
 
 
 class Clock(Protocol):
@@ -224,6 +231,16 @@ class NexovueApi:
                 seen.append(self._finding(raw))
         return seen
 
+    def burns(self) -> list[BurnSeen]:
+        """Every reliability target's burn the incidents list holds: the open ones and the last
+        30 days'. An open incident is in both lists, so each is counted once. A burn's page lists
+        each notification with its state and reason."""
+        listed = self.fetch(
+            f"/alerts/incidents?{urllib.parse.urlencode({'project_id': self.project_id})}"
+        )
+        once = {str(raw["id"]): raw for raw in [*listed["open"], *listed["recent"]]}
+        return [_burn(raw) for raw in once.values() if raw["condition_kind"] == SLO_BURN]
+
     def _finding(self, raw: dict[str, Any]) -> FindingSeen:
         if raw["scope"] == "project":
             # The list leaves out a project finding's services; its page names them.
@@ -239,6 +256,31 @@ class NexovueApi:
             severity=str(raw["severity"]),
             closed_reason=raw["closed_reason"],
         )
+
+
+def _burn(raw: dict[str, Any]) -> BurnSeen:
+    return BurnSeen(
+        id=str(raw["id"]),
+        opened_at=_moment(raw["opened_at"]),
+        resolved_at=None if raw["resolved_at"] is None else _moment(raw["resolved_at"]),
+        severity=str(raw["severity"]),
+        label=str(raw["subject_label"]),
+        findings=tuple(str(f["id"]) for f in (raw.get("burn") or {}).get("findings", [])),
+        messages=tuple(
+            MessageSeen(
+                str(m["kind"]),
+                str(m["state"]),
+                str(m["channel_kind"]),
+                None if m["reason"] is None else str(m["reason"]),
+                None if m["delivered_at"] is None else _moment(m["delivered_at"]),
+            )
+            for m in raw["notifications"]
+        ),
+    )
+
+
+def _moment(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def resolve_project(fetch: Fetch, wanted: str | None) -> str:
@@ -360,6 +402,7 @@ class Runner:
 
     def _snapshot(self) -> None:
         append(self.log, findings_event(self.clock.now(), self.api.findings()))
+        append(self.log, burns_event(self.clock.now(), self.api.burns()))
 
 
 class RealClock:
@@ -466,7 +509,10 @@ def run(args: argparse.Namespace) -> int:
 
 
 def score_command(args: argparse.Namespace) -> int:
-    table = render(score(load(events(args.log))))
+    run = load(events(args.log))
+    table = render(score(run))
+    if run.burns:
+        table += "\n" + render_burns(score_burns(run))
     if args.out:
         args.out.write_text(table, encoding="utf-8")
         print(f"Wrote {args.out}")

@@ -160,3 +160,12 @@ def test_lags_are_grouped_by_minute_in_order() -> None:
     )
     assert list(found) == [M, M + MINUTE]
     assert found[M] == [10.0, None]
+
+
+def test_a_load_limited_to_some_projects_sends_for_the_first_of_them() -> None:
+    from scale import Tenant, limited
+
+    tenants = [Tenant(n, f"o{n}", f"p{n}", "UTC") for n in range(1, 6)]
+    assert [t.number for t in limited(tenants, 2)] == [1, 2]
+    assert limited(tenants, 0) == tenants
+    assert limited(tenants, 99) == tenants

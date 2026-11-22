@@ -494,3 +494,98 @@ async def test_f5_s_rows_by_state_and_reason_and_the_oldest_in_flight(
         )._value.get()
         == after.fix_rows_recent[("source", "refused", "withheld_K7")]
     )
+
+
+_TARGET: Final = text(
+    """
+    INSERT INTO slo_targets (org_id, project_id, name, kind, service_name, objective_percent,
+        window_days, upstream_sampling, definition_key, created_at, deleted_at)
+    VALUES (:org, :project, :name, 'service_availability', 'checkout', 99.9, 28, 'no',
+            :name, now() - make_interval(mins => :created), CASE WHEN :deleted THEN now() END)
+    RETURNING id
+    """
+)
+_STATUS: Final = text(
+    """
+    INSERT INTO slo_status (slo_id, org_id, project_id, evaluated_minute)
+    VALUES (:id, :org, :project, now() - make_interval(mins => :judged))
+    """
+)
+
+
+async def test_slo_status_age_counts_a_target_that_is_late_and_never_a_deleted_one(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F19 T6.1: the oldest answer across every live target, and how many are past the 15
+    minutes the screens call Not up to date. A target never judged ages from its creation;
+    a deleted one is not read; no label names a tenant."""
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            scope = {"org": tenant.org_id, "project": tenant.project_id}
+            for name, created, judged, deleted in (
+                ("fresh", 600, 3, False),
+                ("late", 600, 20, False),
+                ("never judged", 30, None, False),
+                ("deleted and old", 600, 300, True),
+            ):
+                made = await connection.scalar(
+                    _TARGET, scope | {"name": name, "created": created, "deleted": deleted}
+                )
+                if judged is not None:
+                    await connection.execute(_STATUS, scope | {"id": made, "judged": judged})
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.slo_targets_late - before.slo_targets_late == 2
+    assert after.slo_oldest_status_age_seconds >= 20 * 60 - CLOCKS_APART.total_seconds()
+    assert after.slo_oldest_status_age_seconds >= before.slo_oldest_status_age_seconds
+    metrics.publish(after)
+    assert metrics.SLO_TARGETS_LATE._value.get() == after.slo_targets_late
+    assert metrics.SLO_OLDEST_STATUS_AGE._value.get() == after.slo_oldest_status_age_seconds
+
+
+async def test_a_withheld_notification_counts_as_held_until_it_is_released(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F19 T6.1: a row held back and not yet released is counted as held; a released one is
+    not."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            finding = await add_finding(
+                connection, tenant, started_at=datetime.now(UTC) - timedelta(hours=1)
+            )
+            for sequence, released_minutes_ago in enumerate((None, 5, 90)):
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO notifications (org_id, project_id, finding_id, channel_id,
+                            kind, sequence, severity, state, withheld_why, released_at)
+                        VALUES (:org, :project, :finding, :channel, 'opened', :sequence,
+                            'warning', 'dropped', 'same_news',
+                            CASE WHEN CAST(:ago AS integer) IS NULL THEN NULL
+                                 ELSE now() - make_interval(mins => CAST(:ago AS integer)) END)
+                        """
+                    ),
+                    {
+                        "org": tenant.org_id,
+                        "project": tenant.project_id,
+                        "finding": finding,
+                        "channel": tenant.owners_channel_id,
+                        "sequence": sequence,
+                        "ago": released_minutes_ago,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.notifications_withheld_held - before.notifications_withheld_held == 1
+    metrics.publish(after)
+    assert metrics.NOTIFICATIONS_WITHHELD_HELD._value.get() == after.notifications_withheld_held

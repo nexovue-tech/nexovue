@@ -168,6 +168,31 @@ class FindingSeen:
 
 
 @dataclass(frozen=True, slots=True)
+class MessageSeen:
+    """One notification of a burn's incident, as the API lists it: what was sent (or held back,
+    with the reason) to one channel. `delivered_at` is None for a row that was not delivered."""
+
+    kind: str
+    state: str
+    channel_kind: str
+    reason: str | None
+    delivered_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BurnSeen:
+    """A reliability target's burn (an incident of kind `slo_burn`) as the API returned it."""
+
+    id: str
+    opened_at: datetime
+    resolved_at: datetime | None
+    severity: str
+    label: str
+    findings: tuple[str, ...]
+    messages: tuple[MessageSeen, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RecordedRun:
     plan: Plan
     observations: tuple[Observation, ...]
@@ -175,6 +200,8 @@ class RecordedRun:
     findings: tuple[FindingSeen, ...]
     # Every service that reported during the reference week, for the false-alarm rate's denominator.
     reference_services: tuple[str, ...] | None
+    # F19 (AC49): empty when the run watched no reliability target.
+    burns: tuple[BurnSeen, ...] = ()
 
 
 def opened_at(finding_id: str) -> datetime:
@@ -278,6 +305,35 @@ def findings_event(at: datetime, findings: Iterable[FindingSeen]) -> dict[str, A
     }
 
 
+def _message_json(message: MessageSeen) -> dict[str, Any]:
+    return {
+        "kind": message.kind,
+        "state": message.state,
+        "channel_kind": message.channel_kind,
+        "reason": message.reason,
+        "delivered_at": None if message.delivered_at is None else _time(message.delivered_at),
+    }
+
+
+def burns_event(at: datetime, burns: Iterable[BurnSeen]) -> dict[str, Any]:
+    return {
+        "kind": "burns",
+        "at": _time(at),
+        "burns": [
+            {
+                "id": b.id,
+                "opened_at": _time(b.opened_at),
+                "resolved_at": None if b.resolved_at is None else _time(b.resolved_at),
+                "severity": b.severity,
+                "label": b.label,
+                "findings": list(b.findings),
+                "messages": [_message_json(m) for m in b.messages],
+            }
+            for b in burns
+        ],
+    }
+
+
 def reference_services_event(services: Iterable[str]) -> dict[str, Any]:
     return {"kind": "reference_services", "services": sorted(services)}
 
@@ -336,6 +392,7 @@ def load(raw: Iterable[dict[str, Any]]) -> RecordedRun:
     skipped: dict[tuple[str, int], Skipped] = {}
     findings: dict[str, FindingSeen] = {}
     reference_services: tuple[str, ...] | None = None
+    burns: dict[str, BurnSeen] = {}
     for event in raw:
         kind = event["kind"]
         if kind == "plan":
@@ -363,6 +420,26 @@ def load(raw: Iterable[dict[str, Any]]) -> RecordedRun:
                     severity=str(f["severity"]),
                     closed_reason=None if f["closed_reason"] is None else str(f["closed_reason"]),
                 )
+        elif kind == "burns":
+            for b in event["burns"]:
+                burns[str(b["id"])] = BurnSeen(
+                    id=str(b["id"]),
+                    opened_at=_parse_time(b["opened_at"]),
+                    resolved_at=None if b["resolved_at"] is None else _parse_time(b["resolved_at"]),
+                    severity=str(b["severity"]),
+                    label=str(b["label"]),
+                    findings=tuple(str(f) for f in b["findings"]),
+                    messages=tuple(
+                        MessageSeen(
+                            str(m["kind"]),
+                            str(m["state"]),
+                            str(m["channel_kind"]),
+                            None if m["reason"] is None else str(m["reason"]),
+                            None if m["delivered_at"] is None else _parse_time(m["delivered_at"]),
+                        )
+                        for m in b["messages"]
+                    ),
+                )
         elif kind == "reference_services":
             reference_services = tuple(str(s) for s in event["services"])
         elif kind != "flag":
@@ -375,6 +452,7 @@ def load(raw: Iterable[dict[str, Any]]) -> RecordedRun:
         skipped=tuple(skipped.values()),
         findings=tuple(sorted(findings.values(), key=lambda f: f.opened_at)),
         reference_services=reference_services,
+        burns=tuple(sorted(burns.values(), key=lambda b: b.opened_at)),
     )
 
 

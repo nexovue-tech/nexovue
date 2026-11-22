@@ -126,6 +126,19 @@ groups:
         annotations:
           summary: "detection has completed no run in over 3 minutes for {{ $value }} projects; their owners are emailed at 15 (docs/operations/detection.md)"
 
+      # F19: the stalest reliability target was last judged over 15 minutes ago (the age the
+      # screens call *Not up to date*), for 10 minutes. Only while detection settles minutes,
+      # since its sweep hands out the SLO jobs too; a stopped sweep already pages
+      # NexovueDetectionStalled. A ticket, not a page: the figures on screen say they are old.
+      - alert: NexovueSloStatusStale
+        expr: |
+          max(nexovue_scheduler_slo_oldest_status_age_seconds) > 900
+          and on() (max(nexovue_scheduler_detection_settled_minute_age_seconds) < 600)
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "the stalest reliability target was last judged {{ $value }}s ago, and detection is running (docs/operations/slo-tracking.md)"
+
       - alert: NexovueSchedulerLoopSilent
         expr: nexovue_scheduler_loop_silent_seconds > 30
         for: 1m

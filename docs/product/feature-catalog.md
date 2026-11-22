@@ -81,7 +81,7 @@
 | **F16** | Session replay | 🔴 No | 🔲 | Later | Neither built nor scoped |
 | **F17** | Continuous profiling | ✅ Preview | ✅ | **1** | **Built 2026-09-19 as a preview** to the approved [spec](../features/profiling/spec.md) — see [status](../features/profiling/status.md); storage restated per busy core (D6) and met at ~73 MB a day. Before it: moved into Phase 1 Track 1, 2026-09-19, by founder decision. The OTel profiles signal entered public alpha in March 2026; its OTLP format is still *Development* (sent to `/v1development/profiles`) and will change, so the design must confine that format to the intake. Nothing collects profiles today |
 | **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Committed 2026-09-18 (`75b5424`) — see [status](../features/synthetic-checks/status.md) |
-| **F19** | SLO tracking | 🔴 No | ✅ | 2 | [Approved](../features/slo-tracking/spec.md), not built. After the chain ([plan](phase-2-plan.md)) |
+| **F19** | SLO tracking | 🔴 No | ✅ | 2 | [Built through Step 6](../features/slo-tracking/status.md); costs measured on a development machine only, the faults' and the deployed server's runs owed |
 | **F20** | Dashboards | 🟡 Partly | ✅ | 2 | [Approved](../features/dashboards/spec.md); **built through plan Step 10, awaiting Step 11's demo gate, measurement gate and the founder's screen-reader pass** ([status](../features/dashboards/status.md)). The Findings feed holds `/` and Overview is at `/overview` |
 | **F21** | Alerts & notification connectors | ✅ Yes | ✅ | **1** | **Built 2026-09-19** to the approved [spec](../features/alerts/spec.md) — see [status](../features/alerts/status.md). Before it: The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
 | **F22** | Case management | 🟡 Partly | ✅ | 2 | [Approved](../features/case-management/spec.md); **built through plan Step 8 against a simulated GitHub, self-hosted and GitHub only**; real-GitHub checks are the founder's after Phase 2 — see [status](../features/case-management/status.md) |
@@ -311,8 +311,8 @@ Specified, designed and built through the SDD workflow: [`spec.md`](../features/
 [`design.md`](../features/synthetic-checks/design.md), [`plan.md`](../features/synthetic-checks/plan.md). Browser
 checks, screenshots and customer scripts are out of scope by founder decision (spec D13, D16).
 
-### F19 — SLO Tracking ✅ SPECIFIED, NOT BUILT
-**Approved by the founder 2026-11-02, not built:** [spec](../features/slo-tracking/spec.md), [design](../features/slo-tracking/design.md), [plan](../features/slo-tracking/plan.md). Where this older text differs, the spec is what was approved.
+### F19 — SLO Tracking ✅ BUILT THROUGH STEP 6; RUNS ON A SERVER OWED
+**Approved by the founder 2026-11-02; built through plan Step 6 (2026-11-22, awaiting commit):** [spec](../features/slo-tracking/spec.md), [design](../features/slo-tracking/design.md), [plan](../features/slo-tracking/plan.md). Where this older text differs, the spec is what was approved.
 
 Define targets on services/endpoints; error-budget status; budget-burn alerts into findings feed.
 

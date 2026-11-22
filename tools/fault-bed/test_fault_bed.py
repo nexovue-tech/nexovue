@@ -19,7 +19,16 @@ from fault_bed import (
     resolve_project,
     resting_variants,
 )
-from fault_model import REFERENCE, FindingSeen, Plan, ServiceWindow, events, load
+from fault_model import (
+    REFERENCE,
+    BurnSeen,
+    FindingSeen,
+    MessageSeen,
+    Plan,
+    ServiceWindow,
+    events,
+    load,
+)
 from fault_score import render, score
 from test_fault_score import uuid7
 
@@ -78,6 +87,7 @@ class FakeApi:
         self.clock, self.flags = clock, flags
         self.windows: list[tuple[datetime, datetime]] = []
         self.opened: list[FindingSeen] = []
+        self.burning: list[BurnSeen] = []
         # What the flag file held at each read, to prove what the services ran under.
         self.flags_at_read: list[dict[str, Any]] = []
 
@@ -95,6 +105,9 @@ class FakeApi:
 
     def findings(self) -> list[FindingSeen]:
         return [f for f in self.opened if f.opened_at <= self.clock.now()]
+
+    def burns(self) -> list[BurnSeen]:
+        return [b for b in self.burning if b.opened_at <= self.clock.now()]
 
 
 def test_setting_a_flag_changes_its_default_and_leaves_the_rest(flag_file: FlagFile) -> None:
@@ -308,3 +321,75 @@ def test_the_score_command_writes_the_table(tmp_path: Path, flag_file: FlagFile)
     out = tmp_path / "ac36.md"
     assert main(["score", "--log", str(log), "--out", str(out)]) == 0
     assert "| `paymentFailure` | `paymentFailure` = `10%` |" in out.read_text()
+
+
+def test_the_api_reads_only_reliability_burns_with_their_messages() -> None:
+    incident = {
+        "id": "i1",
+        "condition_kind": "slo_burn",
+        "subject_label": "payment availability, 99.9% over 28 days",
+        "severity": "critical",
+        "opened_at": "2026-11-02T09:05:00Z",
+        "resolved_at": None,
+        "burn": {"findings": [{"id": "f1", "title": "t"}]},
+        "notifications": [
+            {
+                "kind": "opened",
+                "state": "delivered",
+                "channel_kind": "email",
+                "reason": None,
+                "delivered_at": "2026-11-02T09:06:00Z",
+            },
+            {
+                "kind": "opened",
+                "state": "dropped",
+                "channel_kind": "slack",
+                "reason": "held back",
+                "delivered_at": None,
+            },
+        ],
+    }
+    other = {**incident, "id": "i2", "condition_kind": "service_threshold", "burn": None}
+    # An open incident is listed in both lists, as the API lists it: it counts once.
+    answers: dict[str, Any] = {
+        "/alerts/incidents?project_id=p": {"open": [incident], "recent": [incident, other]}
+    }
+    api = NexovueApi(lambda path: answers[path], "p")
+    [seen] = api.burns()
+    assert (seen.id, seen.findings, seen.resolved_at) == ("i1", ("f1",), None)
+    assert seen.opened_at == START + timedelta(minutes=5)
+    assert [(m.state, m.delivered_at is None) for m in seen.messages] == [
+        ("delivered", False),
+        ("dropped", True),
+    ]
+
+
+def test_a_run_records_burns_and_the_score_command_adds_the_target_table(
+    tmp_path: Path, flag_file: FlagFile
+) -> None:
+    clock = FakeClock(START)
+    api = FakeApi(clock, flag_file)
+    injections = plan_injections(
+        ["paymentFailure"], 1, START + REFERENCE, timedelta(minutes=90), timedelta(minutes=30), 1
+    )
+    api.burning = [
+        BurnSeen(
+            "b1",
+            injections[0].start + timedelta(minutes=9),
+            None,
+            "warning",
+            "payment availability, 99.9% over 28 days",
+            (),
+            (MessageSeen("opened", "delivered", "email", None, injections[0].start),),
+        )
+    ]
+    log = tmp_path / "run.jsonl"
+    runner = Runner(log, flag_file, api, clock, say=lambda _: None)
+    runner.start(Plan("p", "3.0.0", START, {"paymentFailure": "off"}, injections))
+    runner.run()
+    assert [b.id for b in load(events(log)).burns] == ["b1"]
+    out = tmp_path / "scored.md"
+    assert main(["score", "--log", str(log), "--out", str(out)]) == 0
+    text = out.read_text()
+    assert "## AC49: reliability target burns on `payment`" in text
+    assert "Demo result" in text

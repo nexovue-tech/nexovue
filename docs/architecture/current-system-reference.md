@@ -469,6 +469,19 @@ sweep run on `light`. Beat's leader publishes `nexovue_scheduler_fix_rows_recent
 
 ---
 
+### 7.7 Reliability targets (F19)
+
+`apps/scheduler/src/nexovue_scheduler/slos/`, with the arithmetic in `nexovue_platform.slo` and the screens in `apps/api/src/nexovue_api/slos/` and `apps/web/src/features/slos/`. A target is a Postgres row (`slo_targets`); everything a screen shows is read from Postgres alone, so the list renders with ClickHouse down and says how old its figures are.
+
+- **Three queues, all on `scheduler-light`, under the shared floor** (ADR-028): `slo` (cap 2) judges, `slo_counts` (cap 1) rewrites each target's daily counts, `slo_history` (cap 1) counts a new or changed target's past days. Together with `detection`, `evidence` and `releases` they hold at most 4 of the 8 slots, so probes and alert sweeps always keep 4. No new role or container.
+- **Judging** (`job.judge_slos`) is handed out once a minute with detection's settled minute, one job per project holding a live target, longest-waiting first. It reads the last 24 hours once per source (four statements in `slos/store.py`: a service's counts, a service's latency buckets, named endpoints, a check's runs), works each target's state with the platform's one function, saves `slo_status`, and judges each burn rule covering it. A failed read writes nothing, so a status ages into *Not up to date*.
+- **Counting** (`job.count_slos`) rewrites today, yesterday and any day not yet final into `slo_daily_counts`; **history** (`job.read_slo_history`) counts a target's past days, oldest first, and runs again if the definition moved during the read.
+- **Burns** are incidents about a target (`incidents.about_signal`), opened and closed through the alert path, three fixed tiers (fast: 1 hour and 5 minutes at 14.4 times, critical; medium: 6 hours and 30 minutes at 6 times, critical; slow: 24 hours and 2 hours at 3 times, a warning), each needing a minimum of events. **A burn does not repeat news** (ADR-038): the outbox claim holds a second message about the same news on a channel people read and releases it when its reason ends; a hold shows in the delivery log with its reason.
+- **Blind notice.** `scheduler-deliveries` (a different container) tells a project's rules' channels, or its owners, when its targets have not been judged for 15 minutes (`notices.report_blind`).
+- **API** (`/slos`, all on the default rate-limit tier except `/slo-readings`): list, read, create, change, delete and restore, months, history, burn, exclusions, and `GET /slos/{id}/budget` for other features. Writes need `CONFIGURE_SLOS`.
+- **What it does not do:** call a model or any provider (held by `test_detection_has_no_ai.py` and `test_slo_no_provider_calls.py`), define targets in code, or import or export them.
+- **Cost** has been measured only on a development machine (`docs/features/slo-tracking/status.md`, Step 6). The numbers for a deployed server are owed.
+
 ## 8. apps/web — the console
 
 ### 8.1 Stack

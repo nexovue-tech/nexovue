@@ -52,6 +52,27 @@ flag it left on. An injection whose start time passed while the run was stopped 
 `--slot-minutes`, `--inject-minutes` and `--seed`. The run log is a JSON Lines file. The `runs/`
 directory is not committed. Copy the table into `status.md`.
 
+## A reliability target on the bed (F19, AC49)
+
+The bed also scores a reliability target's burns, as a demo result. Before step 6 above, in the
+console create **payment availability, 99.9% over 28 days** for `payment` and tick the owners
+channel, so a burn has somewhere to go. In `just dev`, alert email is written to the log: read it
+with `docker logs -f nexovue-scheduler-deliveries-1 2>&1 | grep 'mail was rendered'`, or send
+real mail with `just alert-email real` (`just alert-email log` puts it back). The run records every
+burn the incident list holds (`GET /alerts/incidents`), and `score` adds a second table:
+
+- a burn must fire in at least 4 of the 5 `paymentFailure` injections;
+- a burn already open when an injection begins counts as caught only if it escalates inside it,
+  and the table says how many were already open;
+- where a finding also opened, whether the burn was linked to it, and how many emails the burn's
+  own incident delivered or held back (the finding's email is not readable with a token);
+- the no-fault reference week's burns, one by one, beside the demo's own failure rate for
+  `payment`: a reported number, never a fixed zero.
+
+Run `paymentFailure` in the full 14-fault order (the default) so about 21 hours separate its
+injections and a burn can clear between them. Without a machine that stays on for the run, this
+reads "not run". A short labelled demo (one fault, one round) proves the path, not the result.
+
 ## The flags
 
 The flags are those of the demo release `tools/otel-demo/otel-demo.sh` pins, **3.0.0**. Its flag file is

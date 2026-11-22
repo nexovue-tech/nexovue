@@ -224,6 +224,16 @@ CROSS_TENANT_STATEMENTS: Final = (
     _across("metrics", "_ALERTS_WAITING", "an install-wide gauge: notifications waiting"),
     _across(
         "metrics",
+        "_SLO_STATUS",
+        "an install-wide gauge: the stalest reliability target's last judging",
+    ),
+    _across(
+        "metrics",
+        "_SLO_WITHHELD",
+        "an install-wide gauge: notifications held back and not yet released",
+    ),
+    _across(
+        "metrics",
         "_DETECTION_PROJECTS",
         "an install-wide gauge: projects whose detection is behind",
     ),
