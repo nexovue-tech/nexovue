@@ -697,15 +697,23 @@ def _silence_limit(facts: Facts) -> timedelta:
     return QUIET_AFTER
 
 
+def _silence_until(facts: Facts) -> datetime:
+    """Where a silence is measured to: the last minute the job worked out, not the clock.
+    A minute is judged a few minutes after it ends, so measured to the clock a check that runs
+    every minute would read silent for ever (found live, 2026-11-22). A job that stopped is
+    *Not up to date*, which is tried first."""
+    return facts.evaluated_minute or facts.now
+
+
 def _silent(facts: Facts) -> bool:
     last = facts.last_event_minute
-    return last is not None and facts.now - last > _silence_limit(facts)
+    return last is not None and _silence_until(facts) - last > _silence_limit(facts)
 
 
 def _quiet_minutes(facts: Facts) -> int | None:
     if facts.last_event_minute is None or not _silent(facts):
         return None
-    return int((facts.now - facts.last_event_minute).total_seconds() // 60)
+    return int((_silence_until(facts) - facts.last_event_minute).total_seconds() // 60)
 
 
 def _past_attention_limit(facts: Facts, quiet: int | None) -> bool:

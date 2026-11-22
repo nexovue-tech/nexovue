@@ -87,6 +87,26 @@ describe("the targets list", () => {
     expect(readable(container)).not.toContain("On track");
   });
 
+  it("says No recent runs, and runs, for a check that has stopped (AC67 on screen)", async () => {
+    const stopped = target({
+      kind: "check_availability",
+      service_name: null,
+      check_id: "check-1",
+      check_name: "Checkout page",
+      state: "no_recent_requests",
+      attention: true,
+      quiet_minutes: 190,
+      last_event_minute: minutesAgo(190),
+    });
+    stubApi(listed([stopped]));
+    const { container } = await mountAt("/slos");
+    await waitFor(() => readable(container).includes("No runs for 3 h 10 m"), "the silence");
+    const text = readable(container);
+    expect(text).toContain("No recent runs");
+    expect(text).not.toContain("No recent requests");
+    expect(text).not.toContain("No requests for");
+  });
+
   it("puts the counted rows first, so the top N are the headline's N (AC110)", async () => {
     const fine = target({ id: "fine", name: "fine" });
     const missed = target({

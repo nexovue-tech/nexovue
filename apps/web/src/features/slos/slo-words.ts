@@ -9,7 +9,8 @@
  * `test_slo_words.py` scans this folder for words the spec forbids (AC13).
  */
 
-import { allowedNoun, lastsFor } from "@/shared/slo/words";
+import { formatZonedTime } from "@/shared/format/zoned";
+import { allowedNoun, lastsFor, silentThing } from "@/shared/slo/words";
 
 import type { SloQualifier, SloState, SloVariant, SloView } from "./api";
 
@@ -29,40 +30,12 @@ export function liveState(view: SloView, now: number): { state: SloState; varian
   return { state: view.state, variant: view.variant };
 }
 
-/** FR13: a time in the project's zone, with its date when not today: "23:10 yesterday (IST)". */
-export function timeIn(iso: string, zone: string, now: number = Date.now()): string {
-  const at = new Date(iso);
-  const clock = new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: zone,
-  }).format(at);
-  const dayOf = (moment: Date) =>
-    new Intl.DateTimeFormat("en-CA", { timeZone: zone, dateStyle: "short" }).format(moment);
-  const zoneName = zoneAbbreviation(at, zone);
-  const today = dayOf(new Date(now));
-  const yesterday = dayOf(new Date(now - 86_400_000));
-  const day = dayOf(at);
-  let when = "";
-  if (day === yesterday) when = " yesterday";
-  else if (day !== today) {
-    when = ` on ${new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: zone }).format(at)}`;
-  }
-  return `${clock}${when} (${zoneName})`;
-}
-
 /**
- * A zone's short name, such as "IST": English locales disagree on which zones have
- * one, so the first that is not a bare offset wins, and the offset otherwise.
+ * FR13, AC108: a time in the project's zone, with its date when not today. The incident page's
+ * own words (`formatZonedTime`), so the two pages never name one moment two ways.
  */
-function zoneAbbreviation(at: Date, zone: string): string {
-  const names = ["en-GB", "en-US", "en-IN"].map(
-    (locale) =>
-      new Intl.DateTimeFormat(locale, { timeZone: zone, timeZoneName: "short" })
-        .formatToParts(at)
-        .find((part) => part.type === "timeZoneName")?.value ?? zone,
-  );
-  return names.find((name) => !name.startsWith("GMT")) ?? names[0];
+export function timeIn(iso: string, zone: string, now: number = Date.now()): string {
+  return formatZonedTime(iso, { zone, now });
 }
 
 /** "3 h 10 m", "40 m", "2 d 4 h". */
@@ -119,8 +92,8 @@ export function sentenceOf(view: SloView, zone: string, now: number = Date.now()
       return `Nexovue measured only ${Math.floor((view.figures.coverage ?? 0) * 100)}% of this window. It will not judge it.`;
     case "no_recent_requests":
       return view.attention
-        ? `No requests for ${durationOf(quiet)}. The figure below does not count that silence. Check the service is running.`
-        : `No requests for ${durationOf(quiet)}. Its longest quiet stretch in the last 7 days was ${durationOf(view.longest_quiet_7d_minutes)}.`;
+        ? `No ${silentThing(view.kind)} for ${durationOf(quiet)}. The figure below does not count that silence. ${view.kind === "check_availability" ? "Check the check is running." : "Check the service is running."}`
+        : `No ${silentThing(view.kind)} for ${durationOf(quiet)}. Its longest quiet stretch in the last 7 days was ${durationOf(view.longest_quiet_7d_minutes)}.`;
     case "building_history":
       return `Holds ${view.figures.days_held} of ${view.window_days} days. Too early to judge.`;
     case "nothing_left":
@@ -161,7 +134,7 @@ function burnSentence(view: SloView, variant: SloVariant, zone: string, now: num
 /** FR10's next step, straight after the sentence; null where there is none. */
 export function nextStepOf(
   state: SloState,
-  view: Pick<SloView, "attention"> & Partial<Pick<SloView, "severity">>,
+  view: Pick<SloView, "attention" | "kind"> & Partial<Pick<SloView, "severity">>,
 ): string | null {
   switch (state) {
     case "running_out":
@@ -175,7 +148,10 @@ export function nextStepOf(
     case "not_measured":
       return "Nothing to do; see system health.";
     case "no_recent_requests":
-      return view.attention ? "Check the service is running." : null;
+      if (!view.attention) return null;
+      return view.kind === "check_availability"
+        ? "Check the check is running."
+        : "Check the service is running.";
     case "building_history":
       return "Nothing to do yet.";
     case "nothing_left":
@@ -263,7 +239,7 @@ export function qualifierLine(qualifier: SloQualifier, view: SloView): string {
     case "not_measured":
       return `Nexovue measured only ${Math.floor((view.figures.coverage ?? 0) * 100)}%.`;
     case "no_recent_requests":
-      return `No requests for ${durationOf(view.quiet_minutes ?? 0)}.`;
+      return `No ${silentThing(view.kind)} for ${durationOf(view.quiet_minutes ?? 0)}.`;
     case "building_history":
       return `Holds ${view.figures.days_held} of ${view.window_days} days. This figure will still move.`;
     case "never_failed":

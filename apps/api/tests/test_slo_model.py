@@ -297,7 +297,7 @@ def test_ac51_a_burn_no_tier_can_judge_reads_not_judged_since() -> None:
         ({"source_gone": True}, State.SOURCE_GONE),
         ({"counting": True}, State.COUNTING),
         ({"coverage": 0.89}, State.NOT_MEASURED),
-        ({"last_event_minute": NOW - timedelta(minutes=16)}, State.NO_RECENT_REQUESTS),
+        ({"last_event_minute": NOW - timedelta(minutes=17)}, State.NO_RECENT_REQUESTS),
         ({"days_held": 6}, State.BUILDING_HISTORY),
         ({"failures": 1_000}, State.NOTHING_LEFT),
         ({"allowed": 9, "failures": 0}, State.TOO_LITTLE_TRAFFIC),
@@ -335,6 +335,22 @@ def test_a_check_reads_no_recent_runs_only_after_three_intervals() -> None:
     assert slo.status_of(four_hours).state is State.NO_RECENT_REQUESTS
 
 
+def test_a_check_that_ran_in_the_last_judged_minute_is_not_silent_however_late() -> None:
+    """AC67 found live (2026-11-22): a minute is judged about five minutes after it ends, so a
+    silence measured to the wall clock read "No recent runs" for a check that ran every minute."""
+    judged = NOW - timedelta(minutes=5)
+    running = _facts(
+        kind=slo.CHECK_AVAILABILITY,
+        check_interval_seconds=60,
+        evaluated_minute=judged,
+        last_event_minute=judged,
+    )
+    stopped = running.replace(last_event_minute=judged - timedelta(minutes=4))
+    assert slo.status_of(running).state is State.ON_TRACK
+    assert slo.status_of(stopped).state is State.NO_RECENT_REQUESTS
+    assert slo.status_of(stopped).quiet_minutes == 4
+
+
 def test_ac111_exactly_at_the_allowance_reads_exactly_on_target_and_one_more_misses() -> None:
     exactly = slo.status_of(_facts(failures=1_000))
     beyond = slo.status_of(_facts(failures=1_001))
@@ -362,7 +378,9 @@ def test_ac98_the_attention_limit_follows_the_usual_quiet(
     longest: int, silent: int, counted: bool
 ) -> None:
     facts = _facts(
-        last_event_minute=NOW - timedelta(minutes=silent), longest_quiet_7d_minutes=longest
+        evaluated_minute=NOW,
+        last_event_minute=NOW - timedelta(minutes=silent),
+        longest_quiet_7d_minutes=longest,
     )
     status = slo.status_of(facts)
     assert status.state is State.NO_RECENT_REQUESTS

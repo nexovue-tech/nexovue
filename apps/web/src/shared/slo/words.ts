@@ -38,6 +38,8 @@ export const STATE_NAMES: Record<SloState, string> = {
 /** What a badge and its tone are worked out from: a target's state as the API sends it. */
 export interface SloStanding {
   state: SloState;
+  /** A check's silence is runs, not requests (FR10, AC67): the kind says which. */
+  kind?: string;
   severity: "critical" | "warning" | null;
   /** Counted in the list's headline (FR10a): a silence past its usual length. */
   attention: boolean;
@@ -63,12 +65,24 @@ export function toneOf(standing: SloStanding): Tone {
 }
 
 /** The badge: "Running out, act now" or "can wait", or the state's name; none on track. */
-export function badgeOf(standing: Pick<SloStanding, "state" | "severity">): string | null {
+export function badgeOf(standing: Pick<SloStanding, "state" | "severity" | "kind">): string | null {
   if (standing.state === "on_track") return null;
   if (standing.state === "running_out") {
     return standing.severity === "critical" ? "Running out, act now" : "Running out, can wait";
   }
+  if (standing.state === "no_recent_requests" && standing.kind === CHECK_KIND) {
+    return CHECK_SILENT_NAME;
+  }
   return STATE_NAMES[standing.state];
+}
+
+const CHECK_KIND = "check_availability";
+/** FR10: a check that has not run for three of its intervals. */
+const CHECK_SILENT_NAME = "No recent runs";
+
+/** What was silent: a check's runs, or a service's or endpoint's requests. */
+export function silentThing(kind: string): "runs" | "requests" {
+  return kind === CHECK_KIND ? "runs" : "requests";
 }
 
 // FR12: each kind's own word, so a latency target never says "failures" (AC89).

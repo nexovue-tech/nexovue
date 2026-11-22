@@ -38,6 +38,10 @@ SCANNED: Final = {
     "apps/web/src/shared/slo": ("*.ts", "*.tsx"),
     "apps/web/src/features/dashboards": ("slo-budget-words.ts", "SloBudgetPanel.tsx"),
 }
+# T6.6: the customer's docs page is prose, not code, so the whole text is what it says. It must
+# say "SLO" and "error budget" (AC13), so those two are allowed here and nowhere else.
+DOCS_PAGE: Final = "docs/product/setup/reliability-targets.md"
+DOCS_ALLOWED: Final[dict[str, tuple[str, ...]]] = {"slo": ("slo",), "budget": ("error budget",)}
 # Files each step names, so a renamed tab cannot leave the scan by being absent.
 NAMED: Final = (
     "apps/web/src/features/slos/SloMonthsTab.tsx",
@@ -184,3 +188,25 @@ def test_the_scan_reads_strings_and_jsx_but_not_imports_or_names() -> None:
 def test_a_placeholder_in_a_string_is_code_not_words() -> None:
     assert offences(said('f"{slo.allowance_words(kind)}: 3 of {allowed}"')[0]) == []
     assert offences(said("`${budget} left`")[0]) == []
+
+
+def test_the_docs_page_says_no_forbidden_word() -> None:
+    path = REPOSITORY / DOCS_PAGE
+    assert path.is_file(), f"{DOCS_PAGE} is gone: this test must follow it"
+    text = path.read_text(encoding="utf-8")
+    hits = [line for line in text.splitlines() if offences(line, also_allowed=DOCS_ALLOWED)]
+    assert hits == [], f"{DOCS_PAGE} says: {hits}"
+
+
+def test_the_docs_page_says_slo_and_error_budget_so_they_can_be_found() -> None:
+    lowered = (REPOSITORY / DOCS_PAGE).read_text(encoding="utf-8").lower()
+    assert "slo" in lowered
+    assert "error budget" in lowered
+
+
+def test_the_docs_scan_does_not_let_a_stray_word_through() -> None:
+    assert offences("Your uptime is fine", also_allowed=DOCS_ALLOWED) == ["uptime"]
+    assert offences("Burning through the budget", also_allowed=DOCS_ALLOWED) == [
+        "budget",
+        "burning",
+    ]

@@ -2,6 +2,7 @@
 
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatZonedTime } from "@/shared/format/zoned";
 
 import {
   AUDIENCE,
@@ -76,12 +77,9 @@ describe("one target", () => {
       () => readable(container).includes("Failures still allowed: 360 of 672."),
       "the sentence",
     );
-    const clock = new Intl.DateTimeFormat("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: "Asia/Kolkata",
-    }).format(evaluated);
-    expect(readable(container)).toContain(`As of ${clock} (IST)`);
+    // AC108: the same words the incident page uses for the same moment.
+    const said = formatZonedTime(evaluated.toISOString(), { zone: "Asia/Kolkata" });
+    expect(readable(container)).toContain(`As of ${said}`);
     const text = readable(container);
     expect(text.indexOf("Failures still allowed: 360")).toBeLessThan(
       text.indexOf("What was measured"),
