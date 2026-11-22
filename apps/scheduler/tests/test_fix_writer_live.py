@@ -150,7 +150,7 @@ async def test_as_shipped_delete_this_branch_does_nothing(
     before = len(fake.site.requests)
 
     deleted = await fix_writer.delete_fix_branch(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         fix_id=str(fix_id),
         requested_by=str(world.user_id),
@@ -475,7 +475,7 @@ async def test_ac26a_the_sweep_returns_a_job_that_never_finished_and_a_late_run_
             {"at": now - timedelta(minutes=21), "id": fix_id},
         )
 
-    await fix_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await fix_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "did_not_finish")
@@ -516,7 +516,7 @@ async def _closed_with_branch(
 
 async def _delete(engine: AsyncEngine, world: SourceWorld, fix_id: uuid.UUID, now: datetime) -> Any:
     return await fix_writer.delete_fix_branch(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         fix_id=str(fix_id),
         requested_by=str(world.user_id),

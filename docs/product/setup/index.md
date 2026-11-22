@@ -18,6 +18,7 @@ to go next.
 | You want to *read* your data from a script, CI or an AI assistant | [api.md](api.md) — API tokens, the read surface, the MCP server |
 | You want releases, and deploys reported from CI | [deploys.md](deploys.md) — a build id in `service.version`, or a signed step in your pipeline |
 | You want plainer wording of a finding's facts from your own AI account or model (optional, off by default) | [ai.md](ai.md) |
+| You want a case's work to follow a GitHub issue (self-hosted) | [trackers/github.md](trackers/github.md) — what crosses, what stays in GitHub, and how to connect |
 | You have set it all up and nothing has arrived | [troubleshooting.md](troubleshooting.md) |
 
 ## The two variables

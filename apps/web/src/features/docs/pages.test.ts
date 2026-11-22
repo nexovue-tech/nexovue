@@ -15,6 +15,7 @@ describe("arranging the published pages", () => {
       "Your language",
       "Where it runs",
       "Alerts",
+      "Trackers",
       "Profiling",
     ]);
     expect(groups[0].pages[0].slug).toBe(INDEX_SLUG);
@@ -28,6 +29,7 @@ describe("arranging the published pages", () => {
 
   it("finds a page by the slug its route carries", () => {
     expect(docBySlug("languages/go")?.title).toBe("Go");
+    expect(docBySlug("trackers/github")?.title).toBe("GitHub issues for cases");
     expect(docBySlug("nothing-here")).toBeUndefined();
   });
 

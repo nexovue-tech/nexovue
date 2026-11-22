@@ -197,20 +197,15 @@ _ENDED: Final = text(
 _DROP_PACK: Final = text(
     "DELETE FROM finding_fix_source_packs WHERE org_id = :org_id AND fix_id = :fix_id"
 )
-# FR5c's request: the API's row, holding the stack's candidates until answered once.
+# FR5c's request: the API's `job_results` row, holding the stack's candidates until answered
+# once. Through migration 0085's functions, since this role's account holds no right on that
+# table (F22 T8.7); each writes `kind = 'brief_paths'` itself.
 _BRIEF_REQUEST: Final = text(
-    """
-    SELECT payload FROM job_results
-    WHERE org_id = :org_id AND request_id = CAST(:request_id AS uuid) AND kind = 'brief_paths'
-    """
+    "SELECT connections_brief_request(CAST(:request_id AS uuid), CAST(:org_id AS uuid))"
 )
 _BRIEF_ANSWERED: Final = text(
-    """
-    UPDATE job_results SET payload = CAST(:payload AS jsonb)
-    WHERE org_id = :org_id AND request_id = CAST(:request_id AS uuid) AND kind = 'brief_paths'
-      AND payload ? 'candidates'
-    RETURNING CAST(payload ->> 'requested_by' AS uuid) AS requested_by
-    """
+    "SELECT requested_by FROM connections_answer_brief("
+    "CAST(:request_id AS uuid), CAST(:org_id AS uuid), CAST(:payload AS jsonb))"
 )
 _BRIEF_SOURCE: Final = text(
     """

@@ -37,6 +37,8 @@ class SourceWorld:
     repository_id: uuid.UUID
     finding_id: uuid.UUID
     fake: FakeGitHub
+    # The tracker account rung 3's jobs run as (F22 T8.7); arranging is the install's.
+    jobs: AsyncEngine
 
     @property
     def org_id(self) -> uuid.UUID:
@@ -51,7 +53,12 @@ def box(purpose: str) -> SealedBox:
 
 
 async def build_world(
-    engine: AsyncEngine, fake: FakeGitHub, *, folder: str | None = "services/shop", now: datetime
+    engine: AsyncEngine,
+    fake: FakeGitHub,
+    *,
+    jobs: AsyncEngine,
+    folder: str | None = "services/shop",
+    now: datetime,
 ) -> SourceWorld:
     tenant = await make_tenant(engine, with_check=False)
     connection_id, repository_id = uuid.uuid4(), uuid.uuid4()
@@ -137,7 +144,7 @@ async def build_world(
         )
         finding_id = await add_finding(connection, tenant, started_at=now)
     await consent(engine, tenant.org_id, repository_id, folder=folder, now=now)
-    return SourceWorld(tenant, user_id, connection_id, repository_id, finding_id, fake)
+    return SourceWorld(tenant, user_id, connection_id, repository_id, finding_id, fake, jobs)
 
 
 async def consent(

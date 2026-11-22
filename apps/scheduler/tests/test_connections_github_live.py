@@ -185,14 +185,18 @@ def _ids(tenant: AlertTenant, connection_id: uuid.UUID) -> dict[str, str]:
 
 
 async def test_the_code_converts_once_and_is_gone_in_the_same_transaction(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     code = github.add_code()
     connection_id = await _with_code(engine, tenant, code, expires_in=timedelta(minutes=30))
 
     with capture_logs() as logged:
         await tasks.convert_manifest(
-            engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+            connections_engine,
+            keys=KEYS,
+            endpoint=_endpoint(github),
+            now=NOW,
+            **_ids(tenant, connection_id),
         )
 
     row = await _row(engine, connection_id)
@@ -215,28 +219,36 @@ async def test_the_code_converts_once_and_is_gone_in_the_same_transaction(
 
 
 async def test_a_second_run_makes_no_call(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     code = github.add_code()
     connection_id = await _with_code(engine, tenant, code, expires_in=timedelta(minutes=30))
     ids = _ids(tenant, connection_id)
-    await tasks.convert_manifest(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
+    await tasks.convert_manifest(
+        connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids
+    )
     sent = len(github.calls("/app-manifests"))
 
-    await tasks.convert_manifest(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
+    await tasks.convert_manifest(
+        connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids
+    )
 
     assert len(github.calls("/app-manifests")) == sent == 1
 
 
 async def test_a_code_past_its_hour_is_never_sent(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     """AC74: refused past one hour, and nulled."""
     code = github.add_code()
     connection_id = await _with_code(engine, tenant, code, expires_in=timedelta(minutes=-1))
 
     await tasks.convert_manifest(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -247,14 +259,18 @@ async def test_a_code_past_its_hour_is_never_sent(
 
 
 async def test_a_code_github_refuses_is_dropped_with_the_reason(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     connection_id = await _with_code(
         engine, tenant, "a-code-github-never-issued", expires_in=timedelta(minutes=30)
     )
 
     await tasks.convert_manifest(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -263,7 +279,7 @@ async def test_a_code_github_refuses_is_dropped_with_the_reason(
 
 
 async def test_github_down_keeps_the_code_for_the_job_s_next_attempt(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     code = github.add_code()
     github.fail("conversion", 502)
@@ -271,7 +287,11 @@ async def test_github_down_keeps_the_code_for_the_job_s_next_attempt(
 
     with pytest.raises(tasks.Retry):
         await tasks.convert_manifest(
-            engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+            connections_engine,
+            keys=KEYS,
+            endpoint=_endpoint(github),
+            now=NOW,
+            **_ids(tenant, connection_id),
         )
 
     assert (await _row(engine, connection_id)).sealed_manifest_code is not None
@@ -289,7 +309,7 @@ def test_no_job_accepts_an_installation_id() -> None:
 
 
 async def test_refresh_binds_the_app_s_own_installation_and_reads_its_repositories(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     installation = github.install(3000042)
     github.add_repository(11, "acme/api", private=True)
@@ -298,7 +318,11 @@ async def test_refresh_binds_the_app_s_own_installation_and_reads_its_repositori
     connection_id = await _app_connection(engine, tenant, github)
 
     await tasks.refresh(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -321,17 +345,17 @@ async def test_refresh_binds_the_app_s_own_installation_and_reads_its_repositori
 
 
 async def test_a_repository_no_longer_reached_is_marked_unreachable(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     github.install()
     github.add_repository(11, "acme/api")
     github.add_repository(12, "acme/web")
     connection_id = await _app_connection(engine, tenant, github)
     ids = _ids(tenant, connection_id)
-    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
+    await tasks.refresh(connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
     github.repositories = github.repositories[:1]
 
-    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
+    await tasks.refresh(connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
 
     assert await _places(engine, connection_id) == {
         "acme/api": (True, True),
@@ -340,7 +364,7 @@ async def test_a_repository_no_longer_reached_is_marked_unreachable(
 
 
 async def test_repositories_are_read_page_by_page(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     github.install()
     for number in range(105):
@@ -348,7 +372,11 @@ async def test_repositories_are_read_page_by_page(
     connection_id = await _app_connection(engine, tenant, github)
 
     await tasks.refresh(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     assert len(await _places(engine, connection_id)) == 105
@@ -364,13 +392,18 @@ async def test_an_app_installed_nowhere_or_twice_binds_nothing(
     github: FakeGitHub,
     installations: int,
     failure: str,
+    connections_engine: AsyncEngine,
 ) -> None:
     for number in range(installations):
         github.install(3000100 + number)
     connection_id = await _app_connection(engine, tenant, github)
 
     await tasks.refresh(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -380,13 +413,17 @@ async def test_an_app_installed_nowhere_or_twice_binds_nothing(
 
 
 async def test_an_installation_reaching_no_repository_says_so(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     github.install()
     connection_id = await _app_connection(engine, tenant, github)
 
     await tasks.refresh(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -397,7 +434,7 @@ async def test_an_installation_reaching_no_repository_says_so(
 
 
 async def test_a_passing_test_makes_the_connection_working_and_leaves_its_result(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     installation = github.install()
     github.add_repository(11, "acme/api")
@@ -405,7 +442,7 @@ async def test_a_passing_test_makes_the_connection_working_and_leaves_its_result
     request_id = str(uuid.uuid4())
 
     await tasks.check(
-        engine,
+        connections_engine,
         keys=KEYS,
         endpoint=_endpoint(github),
         now=NOW,
@@ -431,7 +468,7 @@ async def test_a_passing_test_makes_the_connection_working_and_leaves_its_result
 
 
 async def test_a_working_connection_fails_only_after_five_straight_failures(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     """AC79: `failing` after 5 straight, and one success brings it back."""
     installation = github.install()
@@ -443,7 +480,7 @@ async def test_a_working_connection_fails_only_after_five_straight_failures(
     github.fail("app", 503)
 
     for attempt in range(1, FAILURES_BEFORE_FAILING + 1):
-        await tasks.check(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
+        await tasks.check(connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
         row = await _row(engine, connection_id)
         expected = "failing" if attempt == FAILURES_BEFORE_FAILING else "working"
         assert (row.state, row.consecutive_failures) == (expected, attempt)
@@ -451,7 +488,7 @@ async def test_a_working_connection_fails_only_after_five_straight_failures(
     assert row.failing_since is not None
 
     github.faults.clear()
-    await tasks.check(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
+    await tasks.check(connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **ids)
 
     row = await _row(engine, connection_id)
     assert (row.state, row.consecutive_failures, row.failing_since) == ("working", 0, None)
@@ -459,7 +496,7 @@ async def test_a_working_connection_fails_only_after_five_straight_failures(
 
 
 async def test_a_refused_sign_in_needs_a_person(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     installation = github.install()
     connection_id = await _app_connection(
@@ -468,7 +505,11 @@ async def test_a_refused_sign_in_needs_a_person(
     github.fail("app", 401)
 
     await tasks.check(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -480,7 +521,7 @@ async def test_a_refused_sign_in_needs_a_person(
 
 
 async def test_a_key_this_install_cannot_open_calls_nothing(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     """Design, *Failure handling*: the operator's key is wrong; no call is made."""
     installation = github.install()
@@ -489,7 +530,11 @@ async def test_a_key_this_install_cannot_open_calls_nothing(
     )
 
     await tasks.check(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     row = await _row(engine, connection_id)
@@ -498,7 +543,7 @@ async def test_a_key_this_install_cannot_open_calls_nothing(
 
 
 async def test_a_job_naming_another_organization_s_connection_finds_nothing(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     """AC129: every read binds the job's own `org_id`; a mismatch stops before any call."""
     installation = github.install()
@@ -507,20 +552,28 @@ async def test_a_job_naming_another_organization_s_connection_finds_nothing(
     )
     stranger = {"org_id": str(uuid.uuid4()), "connection_id": str(connection_id)}
 
-    await tasks.check(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **stranger)
-    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **stranger)
+    await tasks.check(
+        connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **stranger
+    )
+    await tasks.refresh(
+        connections_engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **stranger
+    )
 
     assert github.site.requests == []
     assert (await _row(engine, connection_id)).last_ok_at is None
 
 
 async def test_a_disconnected_connection_is_left_alone(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     connection_id = await _connection(engine, tenant, state="disconnected")
 
     await tasks.check(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=NOW, **_ids(tenant, connection_id)
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=NOW,
+        **_ids(tenant, connection_id),
     )
 
     assert github.site.requests == []
@@ -545,7 +598,7 @@ async def _public_marks(engine: AsyncEngine, connection_id: uuid.UUID) -> dict[s
 
 
 async def test_a_repository_turning_public_owes_its_admins_one_notice(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub, connections_engine: AsyncEngine
 ) -> None:
     """FR42, AC115: one first listed public owes nothing; one that turns public owes a
     notice (`public_told_at` cleared, which the cases sweep then sends once); one that
@@ -558,7 +611,9 @@ async def test_a_repository_turning_public_owes_its_admins_one_notice(
     connection_id = await _app_connection(engine, tenant, github)
     ids = _ids(tenant, connection_id)
 
-    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=pinned, **ids)
+    await tasks.refresh(
+        connections_engine, keys=KEYS, endpoint=_endpoint(github), now=pinned, **ids
+    )
 
     assert await _public_marks(engine, connection_id) == {
         "acme/api": (True, None, None),
@@ -576,7 +631,7 @@ async def test_a_repository_turning_public_owes_its_admins_one_notice(
     github.make_public("acme/api")
     github.repository("acme/site")["private"] = True
     later = pinned + timedelta(hours=1)
-    await tasks.refresh(engine, keys=KEYS, endpoint=_endpoint(github), now=later, **ids)
+    await tasks.refresh(connections_engine, keys=KEYS, endpoint=_endpoint(github), now=later, **ids)
 
     assert await _public_marks(engine, connection_id) == {
         "acme/api": (False, None, None),
@@ -585,7 +640,11 @@ async def test_a_repository_turning_public_owes_its_admins_one_notice(
 
     github.repository("acme/site")["private"] = False
     await tasks.refresh(
-        engine, keys=KEYS, endpoint=_endpoint(github), now=later + timedelta(hours=1), **ids
+        connections_engine,
+        keys=KEYS,
+        endpoint=_endpoint(github),
+        now=later + timedelta(hours=1),
+        **ids,
     )
 
     assert await _public_marks(engine, connection_id) == {

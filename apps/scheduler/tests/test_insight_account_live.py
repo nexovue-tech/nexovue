@@ -44,7 +44,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from nexovue_api import insight_account
+from nexovue_api import insight_account, role_accounts
 from nexovue_scheduler.jobs import queue, results
 from nexovue_scheduler.jobs.queue import LEASE_GRACE_SECONDS, QueueStatements
 from nexovue_scheduler.leader import BEAT_LEADER_LOCK
@@ -475,7 +475,7 @@ async def test_no_advisory_or_notify_function_is_left_to_it_or_to_public(
     """Every overload, from the catalog: the revoke from `PUBLIC` held, and the install
     account, which beat and detection run as, kept each one."""
     async with install.connect() as connection:
-        signatures = (await connection.execute(insight_account.SHARED_FUNCTIONS)).scalars().all()
+        signatures = (await connection.execute(role_accounts.SHARED_FUNCTIONS)).scalars().all()
         rows = await connection.execute(
             text(
                 """

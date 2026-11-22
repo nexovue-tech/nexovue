@@ -115,3 +115,41 @@ jobs:
         run: uv sync --all-packages
       - name: just insight-fence
         run: just insight-fence
+
+  # F22 plan T8.3 (AC56): a full case with no AI configured and no `scheduler-insight`. Postgres
+  # alone, prepared by the real setup step with no AI account made; the run is refused if an AI
+  # setting or an AI container is present, then the suite runs a case through the API and the
+  # scheduler's real worker. Separate from `check`, whose stack runs `scheduler-insight` idle.
+  ai-off:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      POSTGRES_DSN: postgresql+asyncpg://nexovue:nexovue_dev@localhost:15432/nexovue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.12.6"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-packages
+      - name: Start Postgres alone
+        run: docker compose -f deploy/compose/docker-compose.yaml up -d --wait postgres
+      # No object store and no account passwords: setup migrates, and makes no AI account.
+      - name: Prepare Postgres with no AI account
+        run: uv run --package nexovue-api python -m nexovue_api.setup
+      - name: Refuse an AI setting or an AI container
+        run: |
+          # The variables nexovue's AI half reads, by name: an unrelated AI_* is not one.
+          if env | grep -E '^(AI_SECRET_KEY|AI_SECRET_PREVIOUS_KEYS|AI_PRIVATE_ENDPOINTS|DEV_AI_SECRET_KEY|POSTGRES_INSIGHT_PASSWORD)='; then
+            echo "an AI setting is present; this job proves cases with AI off"; exit 1
+          fi
+          if docker ps --format '{{.Names}}' | grep -q 'insight'; then
+            echo "scheduler-insight is running; this job proves cases without it"; exit 1
+          fi
+          if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+              psql -U nexovue -d nexovue -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'nexovue_insight'" | grep -q 1; then
+            echo "the AI account exists; setup was given its password"; exit 1
+          fi
+      - name: A full case with AI off
+        run: uv run pytest -p no:cacheprovider apps/api/tests/test_ai_off_cases_live.py

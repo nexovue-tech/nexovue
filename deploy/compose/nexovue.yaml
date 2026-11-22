@@ -135,6 +135,9 @@ services:
       # F3: the AI role's own Postgres account, which setup creates and grants after every
       # migration (and so after every restore). `:-`: an install without it runs, with no AI.
       POSTGRES_INSIGHT_PASSWORD: ${POSTGRES_INSIGHT_PASSWORD:-}
+      # F22 T8.7: the tracker role's own account, made and granted the same way. `:-` here: a
+      # missing one is said by setup, and `scheduler-connections` itself demands it.
+      POSTGRES_CONNECTIONS_PASSWORD: ${POSTGRES_CONNECTIONS_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -461,7 +464,9 @@ services:
       LOG_LEVEL: info
       LOG_FORMAT: json
       SCHEDULER_ROLE: connections
-      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Its own account (T8.7, by F3's pattern): column grants on its tables, and the job
+      # queue only through migration 0085's functions. `nexovue upgrade` adds a missing one.
+      POSTGRES_DSN: postgresql+asyncpg://nexovue_connections:${POSTGRES_CONNECTIONS_PASSWORD:?set POSTGRES_CONNECTIONS_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # The link back in an issue, and the App's own addresses (design, *Issue text*).
       APP_BASE_URL: https://${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
       CONNECTION_SECRET_KEY: ${CONNECTION_SECRET_KEY:?set CONNECTION_SECRET_KEY}

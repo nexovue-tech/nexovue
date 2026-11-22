@@ -50,7 +50,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
-from alert_fixtures import ASYNC_DSN, AlertTenant, postgres_reachable
+from alert_fixtures import AlertTenant, postgres_reachable
+from connections_fixtures import CONNECTIONS_ASYNC_DSN
 from held_jobs import jobs_held
 from live import require_stack
 from nexovue_platform.cases import CASE_IDLE_LIMIT
@@ -121,6 +122,8 @@ class World:
     connection_id: uuid.UUID
     api_place: uuid.UUID
     web_place: uuid.UUID
+    # The tracker account every job here runs as (T8.7); arranging is `engine`'s.
+    jobs: AsyncEngine
     pauses: list[float] = field(default_factory=list)
     settles: float = 0.0
 
@@ -137,15 +140,20 @@ def github() -> Iterator[FakeGitHub]:
 
 @pytest.fixture
 async def world(
-    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+    engine: AsyncEngine,
+    connections_engine: AsyncEngine,
+    tenant: AlertTenant,
+    github: FakeGitHub,
 ) -> AsyncIterator[World]:
     """The tenant's connection, its every job held from the stack's own connections worker:
     this suite runs each job itself, and counts the jobs the sweep adds."""
     with jobs_held(engine, tenant.org_id):
-        yield await _built_world(engine, tenant, github)
+        yield await _built_world(engine, connections_engine, tenant, github)
 
 
-async def _built_world(engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub) -> World:
+async def _built_world(
+    engine: AsyncEngine, jobs: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+) -> World:
     clock = Clock()
     github.clock = clock.seconds
     # An App and installation of this test's own: the pair is unique across every
@@ -195,7 +203,7 @@ async def _built_world(engine: AsyncEngine, tenant: AlertTenant, github: FakeGit
                     },
                 )
             ).scalar_one()
-    return World(tenant, github, clock, connection_id, places["acme/api"], places["acme/web"])
+    return World(tenant, github, clock, connection_id, places["acme/api"], places["acme/web"], jobs)
 
 
 def _box() -> SealedBox:
@@ -215,12 +223,12 @@ def _tracker_of(world: World) -> Any:
     return build
 
 
-async def _sync(engine: AsyncEngine, world: World, **ids: str) -> list[str]:
+async def _sync(world: World, **ids: str) -> list[str]:
     async def pause(seconds: float) -> None:
         world.pauses.append(seconds)
 
     return await sync.sync_connection(
-        engine,
+        world.jobs,
         keys=KEYS,
         tracker_of=_tracker_of(world),
         clock=world.clock,
@@ -430,7 +438,7 @@ async def test_the_issue_is_the_preview_s_bytes_written_by_a_narrowed_token(
         await connection.execute(
             text("UPDATE findings SET severity = 'warning' WHERE id = :id"), {"id": finding}
         )
-    assert await _sync(engine, world) == [str(link_id)]
+    assert await _sync(world) == [str(link_id)]
 
     [issue] = world.github.issues_in("acme/api")
     assert (issue.title, issue.body, issue.labels) == (preview.title, preview.markdown, ["nexovue"])
@@ -453,7 +461,7 @@ async def test_a_public_repository_is_refused_at_creation(
     link_id = await _creating(engine, world, finding)
     world.github.make_public("acme/api")  # private when the page was opened
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert world.github.issues_in("acme/api") == []
     assert not [call for call in _writes(world.github) if call[1].endswith("/issues")]
@@ -480,7 +488,7 @@ async def test_an_allowed_public_repository_creates_and_a_withdrawn_one_refuses(
             {"now": world.clock.now, "id": world.api_place},
         )
     allowed = await _creating(engine, world, await _case(engine, world))
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _link(engine, allowed)).sync_status == "in_sync"
 
     async with engine.begin() as connection:
@@ -489,7 +497,7 @@ async def test_an_allowed_public_repository_creates_and_a_withdrawn_one_refuses(
             {"id": world.api_place},
         )
     withdrawn = await _creating(engine, world, await _case(engine, world, service="payments"))
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _link(engine, withdrawn)).sync_status == "refused"
     assert len(world.github.issues_in("acme/api")) == 1
 
@@ -500,7 +508,7 @@ async def test_a_repository_turned_public_between_tries_is_refused_on_the_retry(
     finding = await _case(engine, world)
     link_id = await _creating(engine, world, finding)
     world.github.fail("create_issue", 502)
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert (link.sync_status, link.last_failure) == ("creating", "server_error")
     assert link.first_attempt_at is not None
@@ -508,7 +516,7 @@ async def test_a_repository_turned_public_between_tries_is_refused_on_the_retry(
     world.github.heal("create_issue")
     world.github.make_public("acme/api")
     world.clock.advance(timedelta(hours=2))
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _link(engine, link_id)).sync_status == "refused"
     assert world.github.issues_in("acme/api") == []
@@ -518,7 +526,7 @@ async def test_a_public_check_that_fails_creates_nothing(engine: AsyncEngine, wo
     link_id = await _creating(engine, world, await _case(engine, world))
     world.github.fail("repository", 503)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert world.github.issues_in("acme/api") == []
     link = await _link(engine, link_id)
@@ -545,7 +553,7 @@ async def test_a_worker_killed_while_creating_leaves_exactly_one_issue(
         )
 
     exit_code = run_child(
-        dsn=ASYNC_DSN,
+        dsn=CONNECTIONS_ASYNC_DSN,
         key=KEY,
         base_url=world.github.base_url,
         point=None if point == TRACKER_POINT else point,
@@ -558,7 +566,7 @@ async def test_a_worker_killed_while_creating_leaves_exactly_one_issue(
     world.github.after_commit = None
     # The killed run's lease (taken on the real clock) lapses, and the list's delay passes.
     world.clock.advance(timedelta(seconds=sync.LEASE_SECONDS + 60))
-    await _sync(engine, world)
+    await _sync(world)
 
     assert len(world.github.issues_in("acme/api")) == 1
     link = await _link(engine, link_id)
@@ -574,19 +582,19 @@ async def test_a_retry_before_the_list_settles_waits_rather_than_creating(
     world.settles = 120.0
     link_id = await _creating(engine, world, await _case(engine, world))
     world.github.drop_after_commit.add("create_issue")
-    await _sync(engine, world)
+    await _sync(world)
     world.github.drop_after_commit.clear()
     assert len(world.github.issues_in("acme/api")) == 1
 
     # The dropped reply read as a failure: the run paused, and backed off about a minute.
     world.clock.advance(timedelta(seconds=90))
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert link.sync_status == "creating"
     assert link.next_sync_at == link.first_attempt_at + timedelta(seconds=120)
 
     world.clock.advance(timedelta(seconds=30))
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _link(engine, link_id)).sync_status == "in_sync"
     assert len(world.github.issues_in("acme/api")) == 1
 
@@ -597,10 +605,10 @@ async def test_a_retry_before_the_list_settles_waits_rather_than_creating(
 async def test_row_1_running_twice_changes_nothing(engine: AsyncEngine, world: World) -> None:
     finding = await _case(engine, world)
     link_id, _ = await _synced(engine, world, finding)
-    await _sync(engine, world)
+    await _sync(world)
     before = (await _link(engine, link_id), await _finding(engine, finding))
     world.clock.advance(ACTIVE_POLL)
-    await _sync(engine, world)
+    await _sync(world)
     after = (await _link(engine, link_id), await _finding(engine, finding))
 
     assert before[0].seen_state == after[0].seen_state == "open"
@@ -623,7 +631,7 @@ async def test_row_2_a_resolve_closes_the_issue_then_comments_once(
     finding = await _case(engine, world, case_state="resolved", resolution=comment)
     link_id, key = await _synced(engine, world, finding, wanted="closed", comment=comment)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     issue = world.github.issue(key)
     assert (issue.state, issue.state_reason) == ("closed", reason)
@@ -636,7 +644,7 @@ async def test_row_2_a_resolve_closes_the_issue_then_comments_once(
     assert link.next_sync_at == world.clock.now + RESOLVED_POLL
 
     world.clock.advance(RESOLVED_POLL)
-    await _sync(engine, world)
+    await _sync(world)
     assert len(world.github.issue(key).comments) == 1
 
 
@@ -645,7 +653,7 @@ async def test_row_2_a_reopen_reopens_the_issue_with_no_comment(
 ) -> None:
     finding = await _case(engine, world)
     _, key = await _synced(engine, world, finding, seen="closed", wanted="open")
-    await _sync(engine, world)
+    await _sync(world)
     assert world.github.issue(key).state == "open"
     assert world.github.issue(key).comments == []
 
@@ -653,7 +661,7 @@ async def test_row_2_a_reopen_reopens_the_issue_with_no_comment(
 async def test_row_3_our_earlier_write_landed(engine: AsyncEngine, world: World) -> None:
     finding = await _case(engine, world, case_state="resolved")
     link_id, _ = await _synced(engine, world, finding, wanted="closed", issue_state="closed")
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert (link.seen_state, link.wanted_state) == ("closed", None)
     assert not [call for call in _writes(world.github) if call[0] == "PATCH"]
@@ -666,7 +674,7 @@ async def test_row_4_reopened_there_reopens_the_case_and_restarts_its_clock(
     link_id, key = await _synced(engine, world, finding, seen="closed")
     world.github.reopen(key)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     row = await _finding(engine, finding)
     assert (row.case_state, row.case_activity_at) == ("investigating", world.clock.now)
@@ -692,7 +700,7 @@ async def test_row_4b_reopened_there_during_a_hold_ends_it_and_nothing_else(
     world.github.reopen(key)
     before = await _finding(engine, finding)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, link_id)
     assert (link.seen_state, link.tracker_closed_at) == ("open", None)
@@ -710,7 +718,7 @@ async def test_row_5a_closed_there_with_the_signal_open_holds_the_case(
     link_id, key = await _synced(engine, world, finding)
     world.github.close(key, "not_planned")
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _finding(engine, finding)).case_state == "investigating"
     link = await _link(engine, link_id)
@@ -730,7 +738,7 @@ async def test_row_5a_closed_there_with_the_signal_open_holds_the_case(
             {"now": world.clock.now, "id": finding},
         )
     world.clock.advance(ACTIVE_POLL)
-    await _sync(engine, world)
+    await _sync(world)
 
     row = await _finding(engine, finding)
     assert (row.case_state, row.case_resolution) == ("resolved", "tracker_closed")
@@ -751,7 +759,7 @@ async def test_a_hold_leaves_an_open_joined_finding_on_the_case(
     _, key = await _synced(engine, world, root)
     world.github.close(key)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _finding(engine, root)).case_state == "investigating"
     assert (await _finding(engine, joined)).root_finding_id == root
@@ -764,7 +772,7 @@ async def test_row_5c_closed_there_with_the_signal_closed_resolves(
     link_id, key = await _synced(engine, world, finding)
     world.github.close(key, "duplicate")
 
-    await _sync(engine, world)
+    await _sync(world)
 
     row = await _finding(engine, finding)
     assert (row.case_state, row.case_resolution, row.case_resolved_by) == (
@@ -790,7 +798,7 @@ async def test_row_6_a_case_resolved_leaving_the_issue_open_records_a_later_clos
     link_id, key = await _synced(engine, world, finding)
     world.github.close(key)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _link(engine, link_id)).seen_state == "closed"
     assert await _events(engine, finding) == []
@@ -805,7 +813,7 @@ async def test_row_7_a_reopen_another_case_blocks_needs_attention(
     link_id, key = await _synced(engine, world, finding, seen="closed")
     world.github.reopen(key)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _finding(engine, finding)).case_state == "resolved"
     link = await _link(engine, link_id)
@@ -816,7 +824,7 @@ async def test_row_7_a_reopen_another_case_blocks_needs_attention(
     )
     assert [kind for kind, _, _ in await _events(engine, finding)] == ["issue_reopened"]
     world.clock.advance(RESOLVED_POLL)
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _link(engine, link_id)).sync_status == "needs_attention"
 
 
@@ -827,7 +835,7 @@ async def test_row_8_a_deleted_issue_is_gone_and_no_longer_read(
     link_id, key = await _synced(engine, world, finding)
     world.github.delete(key)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, link_id)
     assert (link.sync_status, link.next_sync_at) == ("gone", None)
@@ -842,7 +850,7 @@ async def test_row_9_missing_from_a_readable_repository_is_read_daily_for_a_week
     link_id, key = await _synced(engine, world, finding)
     world.github.issues.remove(world.github.issue(key))
 
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert (link.sync_status, link.next_sync_at) == ("gone", world.clock.now + timedelta(days=1))
 
@@ -852,7 +860,7 @@ async def test_row_9_missing_from_a_readable_repository_is_read_daily_for_a_week
             text("UPDATE finding_links SET next_sync_at = :now WHERE id = :id"),
             {"now": world.clock.now, "id": link_id},
         )
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _link(engine, link_id)).next_sync_at is None
     assert [kind for kind, _, _ in await _events(engine, finding)] == ["issue_gone"]
 
@@ -866,7 +874,7 @@ async def test_row_10_a_repository_removed_and_restored_resumes(
     link_id, _ = await _synced(engine, world, finding)
     world.github.remove_repository("acme/api")
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, link_id)
     assert (link.sync_status, link.last_failure) == ("needs_attention", "repository_unreachable")
@@ -880,13 +888,13 @@ async def test_row_10_a_repository_removed_and_restored_resumes(
 
     world.github.restore_repository("acme/api")
     await tasks.refresh(
-        engine,
+        world.jobs,
         keys=KEYS,
         endpoint=GitHubEndpoint(base_url=world.github.base_url, private_allowed=True),
         now=world.clock.now,
         **world.ids,
     )
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert (link.sync_status, link.last_failure) == ("in_sync", None)
 
@@ -898,7 +906,7 @@ async def test_row_11_a_transfer_into_a_connected_repository_is_followed(
     link_id, key = await _synced(engine, world, finding)
     moved = world.github.transfer(key, "acme/web")
 
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert (link.external_key, link.external_id, link.place_id) == (
         f"acme/web#{moved.number}",
@@ -906,7 +914,7 @@ async def test_row_11_a_transfer_into_a_connected_repository_is_followed(
         world.web_place,
     )
     world.github.close(f"acme/web#{moved.number}")
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _finding(engine, finding)).case_state == "resolved"
 
 
@@ -917,7 +925,7 @@ async def test_row_11_a_transfer_out_of_reach_needs_attention(
     link_id, key = await _synced(engine, world, finding)
     world.github.transfer(key, "elsewhere/api")
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, link_id)
     assert (link.sync_status, link.last_failure, link.external_key) == (
@@ -939,7 +947,7 @@ async def test_a_kill_between_close_and_comment_leaves_at_most_one_comment(
     link_id, key = await _synced(engine, world, finding, wanted="closed", comment="resolved")
 
     exit_code = run_child(
-        dsn=ASYNC_DSN,
+        dsn=CONNECTIONS_ASYNC_DSN,
         key=KEY,
         base_url=world.github.base_url,
         point=point,
@@ -951,8 +959,8 @@ async def test_a_kill_between_close_and_comment_leaves_at_most_one_comment(
     assert world.github.issue(key).comments == []
 
     world.clock.advance(timedelta(seconds=sync.LEASE_SECONDS + 60))
-    await _sync(engine, world)
-    await _sync(engine, world)
+    await _sync(world)
+    await _sync(world)
 
     comments = world.github.issue(key).comments
     assert len(comments) == (1 if point == "after_close_before_comment_commit" else 0)
@@ -967,7 +975,7 @@ async def test_writes_are_a_second_apart(engine: AsyncEngine, world: World) -> N
     for service in ("checkout", "payments"):
         finding = await _case(engine, world, service=service, case_state="resolved")
         await _synced(engine, world, finding, wanted="closed")
-    await _sync(engine, world)
+    await _sync(world)
     # The clock does not move inside a run, so each write after the first waits a second.
     assert world.pauses == [1.0]
 
@@ -981,7 +989,7 @@ async def test_a_rate_limit_pauses_the_connection_for_as_long_as_it_asked(
     untouched, _ = await _synced(engine, world, second)
     world.github.fail("read_issue", 429, headers={"retry-after": "120"})
 
-    await _sync(engine, world)
+    await _sync(world)
 
     connection = await _connection(engine, world)
     assert connection.paused_until == world.clock.now + timedelta(seconds=120)
@@ -991,7 +999,7 @@ async def test_a_rate_limit_pauses_the_connection_for_as_long_as_it_asked(
 
     # While paused, a run makes no call.
     world.github.site.requests.clear()
-    await _sync(engine, world)
+    await _sync(world)
     assert not [r for r in world.github.site.requests if r.path.startswith("/repos/")]
 
 
@@ -1004,7 +1012,7 @@ async def test_a_dead_tracker_ends_the_run_at_the_first_failure(
     untouched, _ = await _synced(engine, world, second)
     world.github.fail("read_issue", 500)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, failed)
     assert (link.sync_status, link.failures, link.last_failure) == ("waiting", 1, "server_error")
@@ -1036,7 +1044,7 @@ async def test_a_disconnect_between_two_links_stops_the_next_write(
             )
 
     await sync.sync_connection(
-        engine,
+        world.jobs,
         keys=KEYS,
         tracker_of=_tracker_of(world),
         clock=world.clock,
@@ -1058,7 +1066,7 @@ async def test_a_recovery_leaves_the_link_alone_and_writes_nothing(
     """AC4: a signal closing is not an act on the case or the issue."""
     finding = await _case(engine, world, signal="open")
     link_id, _ = await _synced(engine, world, finding)
-    await _sync(engine, world)
+    await _sync(world)
     before = await _link(engine, link_id)
     async with engine.begin() as connection:
         await connection.execute(
@@ -1070,7 +1078,7 @@ async def test_a_recovery_leaves_the_link_alone_and_writes_nothing(
         )
     assert (await _link(engine, link_id)) == before
     world.clock.advance(ACTIVE_POLL)
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _finding(engine, finding)).case_state == "investigating"
     assert _writes(world.github) == []
 
@@ -1081,7 +1089,7 @@ async def test_a_resolve_while_sync_was_stopped_reaches_the_tracker_later(
     """AC55: the resolve happened with no run; days later the first run carries it."""
     finding = await _case(engine, world, case_state="resolved", resolved_ago=timedelta(days=2))
     _, key = await _synced(engine, world, finding, wanted="closed", comment="resolved")
-    await _sync(engine, world)
+    await _sync(world)
     assert world.github.issue(key).state == "closed"
 
 
@@ -1094,7 +1102,7 @@ async def test_a_replaced_key_resumes_the_same_issue(engine: AsyncEngine, world:
             text("UPDATE connections SET state = 'needs_attention' WHERE id = :id"),
             {"id": world.connection_id},
         )
-    await _sync(engine, world)
+    await _sync(world)
     assert world.github.issue(key).state == "open"
 
     # FR43: the key is re-sealed in place and the test passes: `working` again.
@@ -1113,7 +1121,7 @@ async def test_a_replaced_key_resumes_the_same_issue(engine: AsyncEngine, world:
                 "id": world.connection_id,
             },
         )
-    await _sync(engine, world)
+    await _sync(world)
     assert world.github.issue(key).state == "closed"
     assert len(world.github.issues_in("acme/api")) == 1
     count = await _one(
@@ -1142,7 +1150,7 @@ async def test_a_no_activity_case_reopened_there_stays_90_days_with_no_second_co
         )
     world.github.reopen(key)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     row = await _finding(engine, finding)
     assert row.case_state == "investigating"
@@ -1153,7 +1161,7 @@ async def test_a_no_activity_case_reopened_there_stays_90_days_with_no_second_co
 async def test_the_idle_warning_comment_carries_its_date(engine: AsyncEngine, world: World) -> None:
     finding = await _case(engine, world, activity_ago=timedelta(days=76))
     _, key = await _synced(engine, world, finding, comment="idle_warning")
-    await _sync(engine, world)
+    await _sync(world)
     ends = (world.clock.now - timedelta(days=76) + CASE_IDLE_LIMIT).date()
     assert world.github.issue(key).comments == [comment_text("idle_warning", ends_on=ends).markdown]
     assert world.github.issue(key).state == "open"
@@ -1165,7 +1173,7 @@ async def test_an_idle_warning_owed_on_a_case_that_then_ended_is_not_posted(
     """AC97: none when the case then ends."""
     finding = await _case(engine, world, case_state="resolved", resolution="no_activity")
     link_id, key = await _synced(engine, world, finding, comment="idle_warning")
-    await _sync(engine, world)
+    await _sync(world)
     assert world.github.issue(key).comments == []
     assert (await _link(engine, link_id)).comment_wanted is None
 
@@ -1176,7 +1184,7 @@ async def test_a_link_past_30_days_after_its_case_resolved_is_no_longer_followed
     finding = await _case(engine, world, case_state="resolved", resolved_ago=timedelta(days=31))
     link_id, key = await _synced(engine, world, finding)
     world.github.close(key)
-    await _sync(engine, world)
+    await _sync(world)
     link = await _link(engine, link_id)
     assert (link.sync_status, link.next_sync_at, link.seen_state) == ("not_followed", None, "open")
     assert not [r for r in world.github.site.requests if r.path.startswith("/repos/")]
@@ -1188,7 +1196,7 @@ async def test_a_job_naming_another_organization_s_connection_does_nothing(
     """AC129: the job binds its own `org_id`; another's connection is no row."""
     finding = await _case(engine, world, case_state="resolved")
     _, key = await _synced(engine, world, finding, wanted="closed")
-    await _sync(engine, world, org_id=str(uuid.uuid4()), connection_id=str(world.connection_id))
+    await _sync(world, org_id=str(uuid.uuid4()), connection_id=str(world.connection_id))
     assert world.github.site.requests == []
     assert world.github.issue(key).state == "open"
 
@@ -1201,11 +1209,11 @@ async def test_a_held_lease_stops_a_second_run(engine: AsyncEngine, world: World
             text("UPDATE connections SET sync_lease_until = :until WHERE id = :id"),
             {"until": world.clock.now + timedelta(minutes=1), "id": world.connection_id},
         )
-    assert await _sync(engine, world) == []
+    assert await _sync(world) == []
     assert world.github.issue(key).state == "open"
     # A finished run lets go of its lease.
     world.clock.advance(timedelta(minutes=2))
-    await _sync(engine, world)
+    await _sync(world)
     assert (await _connection(engine, world)).sync_lease_until is None
 
 
@@ -1222,7 +1230,7 @@ async def test_a_successful_run_returns_a_failing_connection_to_working(
             {"at": world.clock.now - timedelta(hours=1), "id": world.connection_id},
         )
     await _synced(engine, world, await _case(engine, world))
-    await _sync(engine, world)
+    await _sync(world)
     connection = await _connection(engine, world)
     assert (connection.state, connection.consecutive_failures, connection.failure_told_at) == (
         "working",
@@ -1249,7 +1257,7 @@ async def test_the_sweep_adds_one_sync_job_however_often_it_runs(
 ) -> None:
     await _synced(engine, world, await _case(engine, world))
     for _ in range(3):
-        await sync.sweep_connections(engine, now=world.clock.now)
+        await sync.sweep_connections(world.jobs, now=world.clock.now)
     assert await _jobs(engine, world, SYNC_CONNECTION_TASK) == 1
     assert await _jobs(engine, world, REFRESH_CONNECTION_TASK) == 0
 
@@ -1263,17 +1271,17 @@ async def test_the_sweep_adds_no_sync_job_with_nothing_due(
             text("UPDATE finding_links SET next_sync_at = :later WHERE id = :id"),
             {"later": world.clock.now + timedelta(minutes=5), "id": link_id},
         )
-    await sync.sweep_connections(engine, now=world.clock.now)
+    await sync.sweep_connections(world.jobs, now=world.clock.now)
     assert await _jobs(engine, world, SYNC_CONNECTION_TASK) == 0
 
 
 async def test_the_sweep_refreshes_each_connection_hourly(
     engine: AsyncEngine, world: World
 ) -> None:
-    await sync.sweep_connections(engine, now=world.clock.now + timedelta(minutes=59))
+    await sync.sweep_connections(world.jobs, now=world.clock.now + timedelta(minutes=59))
     assert await _jobs(engine, world, REFRESH_CONNECTION_TASK) == 0
     for _ in range(2):
-        await sync.sweep_connections(engine, now=world.clock.now + timedelta(minutes=61))
+        await sync.sweep_connections(world.jobs, now=world.clock.now + timedelta(minutes=61))
     assert await _jobs(engine, world, REFRESH_CONNECTION_TASK) == 1
 
 
@@ -1286,7 +1294,7 @@ async def test_the_sweep_leaves_a_disconnected_or_paused_connection_alone(
             text("UPDATE connections SET paused_until = :until WHERE id = :id"),
             {"until": world.clock.now + timedelta(hours=2, minutes=5), "id": world.connection_id},
         )
-    await sync.sweep_connections(engine, now=world.clock.now + timedelta(hours=2))
+    await sync.sweep_connections(world.jobs, now=world.clock.now + timedelta(hours=2))
     async with engine.begin() as connection:
         await connection.execute(
             text(
@@ -1295,7 +1303,7 @@ async def test_the_sweep_leaves_a_disconnected_or_paused_connection_alone(
             ),
             {"id": world.connection_id},
         )
-    await sync.sweep_connections(engine, now=world.clock.now + timedelta(hours=2))
+    await sync.sweep_connections(world.jobs, now=world.clock.now + timedelta(hours=2))
     assert await _jobs(engine, world, SYNC_CONNECTION_TASK) == 0
     assert await _jobs(engine, world, REFRESH_CONNECTION_TASK) == 0
 
@@ -1316,7 +1324,7 @@ async def test_a_link_whose_repository_row_is_gone_needs_attention_and_the_run_g
             text("DELETE FROM connection_repositories WHERE id = :id"), {"id": world.web_place}
         )
 
-    await _sync(engine, world)
+    await _sync(world)
 
     gone = await _link(engine, orphan_link)
     assert (gone.sync_status, gone.last_failure, gone.next_sync_at) == (
@@ -1380,9 +1388,9 @@ async def _beat_until_synced(engine: AsyncEngine, world: World, *, within: timed
     waited = timedelta()
     while waited <= within:
         before = await _jobs(engine, world, SYNC_CONNECTION_TASK)
-        await sync.sweep_connections(engine, now=world.clock.now)
+        await sync.sweep_connections(world.jobs, now=world.clock.now)
         if await _jobs(engine, world, SYNC_CONNECTION_TASK) > before:
-            await _sync(engine, world)
+            await _sync(world)
             return
         world.clock.advance(SWEEP_EVERY)
         waited += SWEEP_EVERY
@@ -1394,7 +1402,7 @@ async def test_ac46_polling_alone_resolves_an_active_case_within_one_poll(
 ) -> None:
     finding = await _case(engine, world)
     _, key = await _synced(engine, world, finding)
-    await _sync(engine, world)
+    await _sync(world)
     world.github.close(key)
     closed_at = world.clock.now
 
@@ -1409,7 +1417,7 @@ async def test_ac46_polling_alone_reopens_a_resolved_case_within_an_hour(
 ) -> None:
     finding = await _case(engine, world, case_state="resolved")
     _, key = await _synced(engine, world, finding, seen="closed")
-    await _sync(engine, world)
+    await _sync(world)
     world.github.reopen(key)
     reopened_at = world.clock.now
 
@@ -1427,7 +1435,7 @@ async def test_ac46_a_signed_webhook_resolves_an_active_case_within_a_minute(
     await _with_webhook_secret(engine, world)
     finding = await _case(engine, world)
     _, key = await _synced(engine, world, finding)
-    await _sync(engine, world)
+    await _sync(world)
     world.clock.advance(after_read)
     world.github.close(key)
     closed_at = world.clock.now
@@ -1445,7 +1453,7 @@ async def test_ac48_a_replayed_delivery_adds_no_job_and_reads_at_most_twice_a_mi
     await _with_webhook_secret(engine, world)
     finding = await _case(engine, world)
     _, key = await _synced(engine, world, finding)
-    await _sync(engine, world)
+    await _sync(world)
     reads_from = len(world.github.calls("/repos/"))
 
     # A minute of beat, with the delivery replayed 100 times between each sweep.
@@ -1454,8 +1462,8 @@ async def test_ac48_a_replayed_delivery_adds_no_job_and_reads_at_most_twice_a_mi
         for _ in range(100):
             await _deliver(engine, world, key)
         assert await _jobs(engine, world, SYNC_CONNECTION_TASK) == 0
-        await sync.sweep_connections(engine, now=world.clock.now)
-        await _sync(engine, world)
+        await sync.sweep_connections(world.jobs, now=world.clock.now)
+        await _sync(world)
         async with engine.begin() as connection:
             await connection.execute(
                 text("DELETE FROM jobs WHERE org_id = :org"), {"org": world.tenant.org_id}
@@ -1586,7 +1594,7 @@ async def test_a_reference_is_read_and_shown_and_never_changes_its_case(
     finding = await _case(engine, world, signal="closed")
     link_id, issue = await _reference(engine, world, finding, state="closed")
 
-    assert await _sync(engine, world) == [str(link_id)]
+    assert await _sync(world) == [str(link_id)]
 
     link = await _link(engine, link_id)
     assert (link.sync_status, link.seen_state, link.external_id) == (
@@ -1602,7 +1610,7 @@ async def test_a_reference_is_read_and_shown_and_never_changes_its_case(
 
     issue.state, issue.state_reason = "open", None
     world.clock.advance(timedelta(hours=1))
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _link(engine, link_id)).seen_state == "open"
     assert (await _finding(engine, finding)).case_state == "investigating"
@@ -1616,7 +1624,7 @@ async def test_a_reference_on_a_case_resolved_over_30_days_ago_is_no_longer_foll
     finding = await _case(engine, world, case_state="resolved", resolved_ago=timedelta(days=31))
     link_id, _ = await _reference(engine, world, finding, learned=True)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, link_id)
     assert (link.sync_status, link.next_sync_at) == ("not_followed", None)
@@ -1635,7 +1643,7 @@ async def test_a_promoted_reference_is_checked_read_and_synced_from_then_on(
         engine, world, finding, state="closed", role="synced", status="promoting", learned=True
     )
 
-    assert await _sync(engine, world) == [str(link_id)]
+    assert await _sync(world) == [str(link_id)]
 
     link = await _link(engine, link_id)
     assert (link.role, link.sync_status, link.seen_state, link.wanted_state) == (
@@ -1651,10 +1659,10 @@ async def test_a_promoted_reference_is_checked_read_and_synced_from_then_on(
 
     issue.state, issue.state_reason = "open", None
     world.clock.advance(ACTIVE_POLL)
-    await _sync(engine, world)
+    await _sync(world)
     world.github.close(f"acme/api#{issue.number}")
     world.clock.advance(ACTIVE_POLL)
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _finding(engine, finding)).case_resolution == "tracker_closed"
 
@@ -1671,7 +1679,7 @@ async def test_a_promotion_into_a_public_repository_nobody_allowed_is_refused(
         engine, world, finding, role="synced", status="promoting", learned=True
     )
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, refused)
     assert (link.sync_status, link.last_failure, link.next_sync_at) == (
@@ -1694,7 +1702,7 @@ async def test_a_promotion_into_a_public_repository_nobody_allowed_is_refused(
             text("UPDATE connection_repositories SET public_allowed_at = :now WHERE id = :id"),
             {"now": PINNED, "id": world.api_place},
         )
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _link(engine, allowed)).sync_status == "in_sync"
 
@@ -1709,7 +1717,7 @@ async def test_a_promotion_whose_check_fails_waits_and_changes_nothing(
     )
     world.github.fail("repository", 502)
 
-    await _sync(engine, world)
+    await _sync(world)
 
     link = await _link(engine, link_id)
     assert (link.sync_status, link.last_failure, link.seen_state) == (
@@ -1728,7 +1736,7 @@ async def test_a_promoted_issue_that_was_deleted_is_gone(engine: AsyncEngine, wo
     )
     world.github.delete(f"acme/api#{issue.number}")
 
-    await _sync(engine, world)
+    await _sync(world)
 
     assert (await _link(engine, link_id)).sync_status == "gone"
     assert (await _finding(engine, finding)).case_state == "investigating"

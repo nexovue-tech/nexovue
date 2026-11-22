@@ -86,11 +86,12 @@ from nexovue_platform.fixes.records import (
 )
 from nexovue_platform.fixes.statements import CLEAR_STORED_CODE
 from nexovue_platform.fixes.stored import StoredRefusal, read_stored
-from nexovue_platform.jobs import ENQUEUE_UNLESS_WAITING, JobRequest
+from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from nexovue_scheduler.jobs.queue import CONNECTIONS_ENQUEUE
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
 
@@ -595,7 +596,7 @@ async def _queue_refreshes(engine: AsyncEngine, *, now: datetime, only_org: str 
                 org_id=str(row.org_id),
                 expires_seconds=REFRESH_EXPIRES_SECONDS,
             )
-            await connection.execute(text(ENQUEUE_UNLESS_WAITING), request.parameters())
+            await connection.execute(CONNECTIONS_ENQUEUE, request.parameters())
     return len(due)
 
 

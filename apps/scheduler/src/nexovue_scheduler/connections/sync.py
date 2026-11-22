@@ -83,7 +83,6 @@ from nexovue_platform.connections import (
     refresh_job,
     sync_job,
 )
-from nexovue_platform.jobs import ENQUEUE_UNLESS_WAITING
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -122,6 +121,7 @@ from nexovue_scheduler.connections.trackers import (
     Tracker,
     TrackerFailure,
 )
+from nexovue_scheduler.jobs.queue import CONNECTIONS_ENQUEUE
 
 logger = get_logger(__name__)
 
@@ -1264,13 +1264,13 @@ async def sweep_connections(engine: AsyncEngine, *, now: datetime) -> tuple[int,
             org_id, connection_id = str(row.org_id), str(row.id)
             if row.sync_due:
                 await connection.execute(
-                    text(ENQUEUE_UNLESS_WAITING),
+                    CONNECTIONS_ENQUEUE,
                     sync_job(org_id=org_id, connection_id=connection_id).parameters(),
                 )
                 syncs += 1
             if row.refresh_due:
                 await connection.execute(
-                    text(ENQUEUE_UNLESS_WAITING),
+                    CONNECTIONS_ENQUEUE,
                     refresh_job(org_id=org_id, connection_id=connection_id).parameters(),
                 )
                 refreshes += 1

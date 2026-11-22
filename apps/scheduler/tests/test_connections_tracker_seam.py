@@ -20,7 +20,13 @@ from nexovue_scheduler.connections.trackers import StoredConnection, tracker_for
 
 PACKAGE: Final = Path(github.__file__).parent
 SOURCE: Final = PACKAGE.parent
-TEST_ONLY: Final = ("tracker_harness", "tracker_fake", "recording_site")
+TEST_ONLY: Final = (
+    "tracker_harness",
+    "tracker_fake",
+    "recording_site",
+    "e2e_worker",
+    "e2e_github_preload",
+)
 
 
 def _stored() -> StoredConnection:

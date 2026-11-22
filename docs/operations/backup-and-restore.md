@@ -25,12 +25,13 @@ The customer-facing guide is [`docs/self-hosting/backup.md`](../self-hosting/bac
 stores, replaces both databases and the bucket, runs `verify.sh` against the manifest, and starts
 nexovue. The ingest watermarks are never restored (`restore-clickhouse.sh`, `restore-postgres.sh`).
 
-**Grants are not in the dump** (`pg_restore --no-owner --no-privileges`). The one account that
-needs them is the AI role's, `nexovue_insight` (F3): `start` runs `setup`, which migrates and then
-creates the account if missing and grants it again, so a restore needs no step of its own, onto an
-empty server too. `scheduler-insight` is stopped with the other writers first. Run by hand,
-`restore-postgres.sh` ends by saying `setup` is next; until it runs, the AI role cannot claim its jobs
-and its four job functions are callable by any account. **Not yet run** through the real `nexovue
+**Grants are not in the dump** (`pg_restore --no-owner --no-privileges`). Two accounts need them:
+the AI role's, `nexovue_insight` (F3), and the tracker role's, `nexovue_connections` (F22 T8.7).
+`start` runs `setup`, which migrates and then creates each account if missing and grants it again,
+so a restore needs no step of its own, onto an empty server too. `scheduler-insight` and
+`scheduler-connections` are stopped with the other writers first. Run by hand,
+`restore-postgres.sh` ends by saying `setup` is next; until it runs, neither role can claim its jobs,
+and their job functions (migrations 0070 and 0085) are callable by any account. **Not yet run** through the real `nexovue
 restore`: `just insight-fence` does that (AC46).
 
 **Suggested fixes' code (F5, ADR-095).** The dump holds no row of `finding_fix_source_packs`

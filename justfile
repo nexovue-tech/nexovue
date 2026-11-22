@@ -10,6 +10,7 @@ go_modules := "apps/receiver apps/workers packages/contracts tools/gateseed tool
 # either to point at another environment.
 postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "15432") + "/nexovue")
 insight_dev_password := env("POSTGRES_INSIGHT_PASSWORD", "nexovue_insight_dev")
+connections_dev_password := env("POSTGRES_CONNECTIONS_PASSWORD", "nexovue_connections_dev")
 # The setup command (apps/workers/cmd/setup) speaks ClickHouse's native protocol; its migration lock
 # lives in Postgres, which it reaches with the plain postgres:// form.
 clickhouse_dsn := env("CLICKHOUSE_SETUP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "/nexovue")
@@ -397,11 +398,12 @@ topics:
 # Apply all migrations: Postgres then ClickHouse
 migrate: migrate-pg migrate-ch
 
-# `POSTGRES_INSIGHT_PASSWORD`: the AI role's account, which setup creates (F3); the dev compose
-# file's `scheduler-insight` signs in with the same development value.
+# `POSTGRES_INSIGHT_PASSWORD` and `POSTGRES_CONNECTIONS_PASSWORD`: the AI and tracker roles'
+# accounts, which setup creates (F3; F22 T8.7); the dev compose file's `scheduler-insight` and
+# `scheduler-connections` sign in with the same development values.
 # Postgres to the newest migration, and the object store's bucket: the deploy step's Python half.
 migrate-pg:
-    POSTGRES_DSN="{{postgres_dsn}}" POSTGRES_INSIGHT_PASSWORD="{{insight_dev_password}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
+    POSTGRES_DSN="{{postgres_dsn}}" POSTGRES_INSIGHT_PASSWORD="{{insight_dev_password}}" POSTGRES_CONNECTIONS_PASSWORD="{{connections_dev_password}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
 
 migrate-ch:
     {{setup_go}} clickhouse

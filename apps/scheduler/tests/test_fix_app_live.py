@@ -54,8 +54,10 @@ def fake() -> Iterator[FakeGitHub]:
 
 
 @pytest.fixture
-async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
-    made = await build_world(engine, fake, now=now)
+async def world(
+    engine: AsyncEngine, connections_engine: AsyncEngine, fake: FakeGitHub, now: datetime
+) -> AsyncIterator[SourceWorld]:
+    made = await build_world(engine, fake, jobs=connections_engine, now=now)
     try:
         yield made
     finally:
@@ -91,7 +93,7 @@ async def test_t3_3_conversion_seals_the_key_and_client_secret_and_drops_the_cod
 
     with capture_logs() as logs:
         await fix_app.convert_fix_app(
-            engine,
+            world.jobs,
             org_id=str(world.org_id),
             connection_id=str(connection_id),
             keys=KEYS,
@@ -119,7 +121,7 @@ async def test_t3_3_the_refresh_keeps_the_grant_and_the_repositories(
     fake.granted = {"contents": "read", "metadata": "read", "pull_requests": "read"}
 
     await fix_app.refresh_fix_app(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         connection_id=str(world.connection_id),
         keys=KEYS,
@@ -178,7 +180,7 @@ async def test_ac31_a_link_keeps_the_id_and_login_and_no_token_and_the_code_goes
     attempt_id = await _attempt(engine, world, code, now)
 
     outcome = await fix_link.complete_github_user_link(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         attempt_id=str(attempt_id),
         keys=KEYS,
@@ -226,7 +228,7 @@ async def test_a18_a_code_github_refuses_links_nothing(
     attempt_id = await _attempt(engine, world, "never-issued", now)
 
     outcome = await fix_link.complete_github_user_link(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         attempt_id=str(attempt_id),
         keys=KEYS,
@@ -249,7 +251,7 @@ async def test_a_job_naming_another_organization_s_attempt_finds_nothing(
     attempt_id = await _attempt(engine, world, fake.add_oauth_code(7002, "other"), now)
 
     outcome = await fix_link.complete_github_user_link(
-        engine,
+        world.jobs,
         org_id=str(uuid.uuid4()),
         attempt_id=str(attempt_id),
         keys=KEYS,

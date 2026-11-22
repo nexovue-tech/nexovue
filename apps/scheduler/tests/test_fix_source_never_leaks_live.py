@@ -41,6 +41,7 @@ HINT_MARKER = "PERSON_HINT_MARKER"
 async def test_nfr5_a_file_s_text_and_the_hint_reach_the_provider_and_nothing_else(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
+    connections_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
     now: datetime,
@@ -54,7 +55,7 @@ async def test_nfr5_a_file_s_text_and_the_hint_reach_the_provider_and_nothing_el
 
     with structlog.testing.capture_logs() as logged:
         assert await run_propose(ai_engine, connected, made.fix_id, at=now) == "proposed"
-        await fix_sweep.sweep(ai_install, clock=lambda: now, only_org=str(ai_tenant.org_id))
+        await fix_sweep.sweep(connections_engine, clock=lambda: now, only_org=str(ai_tenant.org_id))
         await notify.notify(
             ai_install,
             sender=None,

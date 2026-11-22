@@ -63,10 +63,15 @@ F5 reached the same answer for its own GitHub work (`ai-solution/design.md`, D40
   arrives a moment later, through the job, not in the response.
 - One more container, with a 384 MB ceiling that is a guess (F22 T4.9 measures it), on a
   16 GB server whose ceilings already add to about 13.75 GB (`docs/self-hosting/sizing.md`).
-- **Stated plainly: a compromise of this role still reads and writes all of Postgres,**
-  because every role shares one Postgres account (foundation section 1). It cannot open
-  check or channel secrets, and holds no AI, mail or object-store key. F22 T8.7 gives it
-  its own account once F3's pattern exists; until then that is a named risk.
+- **Its own Postgres account since F22 T8.7 (2026-11-22), by ADR-040's pattern:**
+  `nexovue_connections`, made and granted by `setup`, with column grants on the
+  connection, link and case columns and F5's tables, and the job queue reached only through
+  migration 0085's functions, limited to the two tracker queues. **Stated plainly, what a
+  compromise of it still reaches:** every organization's connections, links, case columns
+  and F5 suggestions (its jobs cross organizations, so no grant binds `org_id`), and the
+  explanation facts F5 reads. It cannot read a check, channel, AI or mail secret, an alert,
+  telemetry or a sign-in, lock the alert queue, or add a job outside its queues
+  (`test_connections_grants_live.py`). Before T8.7 it shared the install account.
 - F5's GitHub work joins this role and this task set, rather than `TASK_MODULES`.
 - **Unverified until the founder's real-GitHub run after Phase 2** (foundation item 28):
   every GitHub answer this role depends on was read from documentation and replayed by a

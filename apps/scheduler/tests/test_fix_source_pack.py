@@ -70,8 +70,10 @@ def fake() -> Iterator[FakeGitHub]:
 
 
 @pytest.fixture
-async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
-    made = await build_world(engine, fake, folder=FOLDER, now=now)
+async def world(
+    engine: AsyncEngine, connections_engine: AsyncEngine, fake: FakeGitHub, now: datetime
+) -> AsyncIterator[SourceWorld]:
+    made = await build_world(engine, fake, jobs=connections_engine, folder=FOLDER, now=now)
     fake.seed_files(
         REPOSITORY,
         {
@@ -102,7 +104,7 @@ def _stack(*frames: tuple[str, int]) -> list[dict[str, Any]]:
 
 async def _run(engine: AsyncEngine, world: SourceWorld, fix_id: Any, now: datetime) -> str | None:
     return await source_pack.build_source_pack(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         fix_id=str(fix_id),
         keys=KEYS,
@@ -589,7 +591,7 @@ async def test_ac35_the_brief_s_paths_read_the_tree_and_no_blob(
         )
 
     found = await source_pack.match_brief_paths(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         finding_id=str(world.finding_id),
         request_id=request_id,

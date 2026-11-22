@@ -46,8 +46,9 @@ async def _written(
     return made.fix_id
 
 
-async def _sweep(install: AsyncEngine, tenant: AlertTenant, at: datetime) -> None:
-    await fix_sweep.sweep(install, clock=lambda: at, only_org=str(tenant.org_id))
+async def _sweep(jobs: AsyncEngine, tenant: AlertTenant, at: datetime) -> None:
+    """Rung 3's sweep, as `scheduler-connections` signs in: the tracker account (T8.7)."""
+    await fix_sweep.sweep(jobs, clock=lambda: at, only_org=str(tenant.org_id))
 
 
 async def _row(install: AsyncEngine, fix_id: str) -> Any:
@@ -89,6 +90,7 @@ def test_the_sweep_s_longest_call_is_f3_s() -> None:
 
 async def test_t4_8_a_written_suggestion_is_recorded_once_and_owes_its_requester_an_email(
     ai_install: AsyncEngine,
+    connections_engine: AsyncEngine,
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
@@ -96,8 +98,8 @@ async def test_t4_8_a_written_suggestion_is_recorded_once_and_owes_its_requester
 ) -> None:
     fix = await _written(ai_install, ai_engine, provider_site, ai_tenant, now, edits_answer())
 
-    await _sweep(ai_install, ai_tenant, now)
-    await _sweep(ai_install, ai_tenant, now)
+    await _sweep(connections_engine, ai_tenant, now)
+    await _sweep(connections_engine, ai_tenant, now)
 
     row = await _row(ai_install, fix)
     assert row.state == "proposed" and row.edits is not None
@@ -109,6 +111,7 @@ async def test_t4_8_a_written_suggestion_is_recorded_once_and_owes_its_requester
 
 async def test_d18_a_suggestion_changed_after_the_ai_wrote_it_is_refused_and_audited(
     ai_install: AsyncEngine,
+    connections_engine: AsyncEngine,
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
@@ -126,7 +129,7 @@ async def test_d18_a_suggestion_changed_after_the_ai_wrote_it_is_refused_and_aud
             {"id": fix},
         )
 
-    await _sweep(ai_install, ai_tenant, now)
+    await _sweep(connections_engine, ai_tenant, now)
 
     row = await _row(ai_install, fix)
     assert (row.state, row.reason) == ("failed", "checks_refused_at_click")
@@ -138,6 +141,7 @@ async def test_d18_a_suggestion_changed_after_the_ai_wrote_it_is_refused_and_aud
 
 async def test_t4_8_a_rule_s_refusal_is_audited_with_the_files_it_named_and_its_code_cleared(
     ai_install: AsyncEngine,
+    connections_engine: AsyncEngine,
     ai_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
@@ -146,8 +150,8 @@ async def test_t4_8_a_rule_s_refusal_is_audited_with_the_files_it_named_and_its_
     answer = edits_answer(edit(new_text="    call('https://evil.example/pay')\n"))
     fix = await _written(ai_install, ai_engine, provider_site, ai_tenant, now, answer)
 
-    await _sweep(ai_install, ai_tenant, now)
-    await _sweep(ai_install, ai_tenant, now)
+    await _sweep(connections_engine, ai_tenant, now)
+    await _sweep(connections_engine, ai_tenant, now)
 
     row = await _row(ai_install, fix)
     assert (row.state, row.reason) == ("refused", "withheld_K6")
@@ -158,7 +162,11 @@ async def test_t4_8_a_rule_s_refusal_is_audited_with_the_files_it_named_and_its_
 
 
 async def test_t4_8_a_row_stuck_proposing_past_every_attempt_ends_with_its_pack_gone(
-    ai_install: AsyncEngine, provider_site: RecordingSite, ai_tenant: AlertTenant, now: datetime
+    ai_install: AsyncEngine,
+    connections_engine: AsyncEngine,
+    provider_site: RecordingSite,
+    ai_tenant: AlertTenant,
+    now: datetime,
 ) -> None:
     await connect(ai_install, ai_tenant, provider_site, now=now)
     made = await a_proposing_fix(
@@ -166,11 +174,11 @@ async def test_t4_8_a_row_stuck_proposing_past_every_attempt_ends_with_its_pack_
     )
     younger = now + fix_sweep.PROPOSING_STUCK_AFTER - timedelta(seconds=1)
 
-    await _sweep(ai_install, ai_tenant, younger)
+    await _sweep(connections_engine, ai_tenant, younger)
     assert (await _row(ai_install, made.fix_id)).state == "proposing"
 
     await _sweep(
-        ai_install, ai_tenant, now + fix_sweep.PROPOSING_STUCK_AFTER + timedelta(seconds=1)
+        connections_engine, ai_tenant, now + fix_sweep.PROPOSING_STUCK_AFTER + timedelta(seconds=1)
     )
     row = await _row(ai_install, made.fix_id)
     assert (row.state, row.reason) == ("failed", "timed_out")

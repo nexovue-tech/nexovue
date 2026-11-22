@@ -2,18 +2,223 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR.
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR. **Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.7; migration 0085, the tracker role's own Postgres account). Step 7 (Jira) is out of Phase 2 (foundation item 32).
 
 
 ## Current task
 
-Step 6 is on `feature/phase-2` (2026-11-11): a pasted issue address attaches as a reference
-that is read hourly and never changes its case; a person may promote one to the synced
-issue after a warning, through a job that runs the public check; an admin maps a service
-to a repository, which the create panel preselects, and allows or withdraws a public
-repository, each audited; admins are told once when a repository turns public. Migrations
-0068 and 0069; no new ADR. Eight new
-open decisions (12 to 19), none blocking the commit.
+**Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.7; T8.8 and T8.9 not built). Customer
+documents, the AI-off case test with a real worker and its CI job, the timeline measured at
+D65's worst shape, the connections end-to-end test with real workers and a credential search,
+the claims check dated 2026-11-22, and the tracker role's own Postgres account
+`nexovue_connections` (migration 0085). Three new open decisions (20 to 22), none blocking the
+commit. Every real-GitHub check stays the founder's after Phase 2 (foundation item 28); Jira is
+out of Phase 2 (foundation item 32), so no `jira.md` was written.
+
+
+## Step 8 built, 2026-11-22
+
+Plan tasks T8.1 to T8.7, each with its note in `plan.md`. Built and tested against the
+simulated GitHub only. Worktree `wt/f22s8` on `feature/phase-2` at 4ad5d47; own stores
+(`f22s8-postgres`, `f22s8-clickhouse`), removed at the end.
+
+### What exists now
+
+- **T8.1.** `docs/product/setup/trackers/github.md`: what a connection does and does not,
+  what leaves the server (with the sample issue), that an issue notifies nobody until someone is
+  assigned, that cases cover anomaly findings only (with D58's one search line), the proxy limit,
+  who must act in GitHub, the operator's note on `nexovue_connections`, disconnecting, what stays
+  in GitHub after a case or organization is deleted, that a deleted note lives in backups for a
+  while, and that it is unchecked against real GitHub. The console's docs gain a **Trackers**
+  group (`features/docs/pages.ts`). `index.md` links it. The demo script is
+  `docs/features/case-management/demo.md` (take, note, recover, return with the real detection
+  job; create and close an issue needs real GitHub, the founder's). **Not walked through by
+  hand.** No `jira.md`.
+- **T8.2.** `feature-catalog.md` (row, F22 section, glossary) and `vision.md` (table row, the
+  chain) amended to ADR-022's reading; `vision.md`'s "Our value = auto-creating the case" is
+  recorded as superseded. `FindingsScreen.tsx` holds no stale wording, so it is unchanged.
+- **T8.3 (AC56).** `apps/api/tests/test_ai_off_cases_live.py`: through the routes, a member takes
+  a case, writes a note, the signal recovers and the case stays, it is handed over, resolved and
+  reopened, and a **real `scheduler-light` worker process** then ends it after 90 idle days as
+  `no_activity`. It asserts no AI key in the API's settings or the worker's environment, **no
+  session signed in as `nexovue_insight`** while it runs (what a running `scheduler-insight`
+  would be), no job on an AI queue, and no `ai_connections` or `ai_runs` row. CI gains a
+  separate **`ai-off`** job: Postgres alone, `setup` with no AI password (so no AI account),
+  a step refusing any of nexovue's AI variables, a `scheduler-insight` container or an existing
+  AI account, then the suite. `check` and `insight-fence` are untouched. **The job has not run
+  on GitHub**; its steps were rehearsed here on a throwaway Postgres (setup made neither account;
+  the guard found nothing; the suite passed). Making it a required check is a GitHub settings
+  change, the founder's.
+- **T8.4.** `tools/detection-seed/timeline_seed.py seed|measure|remove` (D65's worst shape:
+  540 joined findings over 90 days, 500 notes of 4,000 incompressible characters, 2,670 case
+  events beside 150,000 others). Measured below.
+- **T8.5 (AC36, AC50).** `apps/scheduler/tests/test_connections_end_to_end_live.py`, with
+  `e2e_worker.py` and `e2e_github_preload.py`. Two **real worker processes**, started as their
+  containers start them: `scheduler-connections` signed in as `nexovue_connections` (its
+  children reach the simulated GitHub through a forkserver preload that changes only GitHub's
+  address; no production setting moves it), and a `full` worker on `deliveries,detection`.
+  AC36: setup, GitHub's return with a code, the conversion job, installation, refresh, the
+  test, a person's **Create an issue** synced by the worker, and a disconnect; then every
+  worker log line (at `debug`), every API log line, every job row seen while they ran, the
+  results, timeline events, audit rows and the connections route's answers are searched for
+  the App key, webhook and client secrets, manifest code, every installation token and App
+  sign-in sent to GitHub, the connection key, the account's password and the sealed columns
+  (as text, base64 and hex). AC50: GitHub stops answering (token mints outlast the client's
+  10 s), the connections worker holds those jobs, and an alert delivery (console mail) and a
+  detection judge job on the other worker each finish inside their soft limits while it still
+  hangs. **Placed in `apps/scheduler/tests/`**, not the plan's `apps/api/tests/`, because the
+  simulated GitHub and the tenant fixtures live there; the API half calls the routes' service
+  functions in-process, not HTTP.
+- **T8.6.** The claims table below.
+- **T8.7.** The tracker role's own Postgres account, by F3's pattern:
+  - **Migration 0085** (down_revision 0084; reversible: drops what it adds): seven
+    `SECURITY DEFINER` functions with `search_path` fixed — claim, retry and finish limited to
+    `connections` and `connections-interactive`; an enqueue (`ENQUEUE_UNLESS_WAITING`) that
+    **raises** for any other queue; the connection test's result store with its kind written
+    in; and F5's two `brief_paths` statements. `EXECUTE` taken from `PUBLIC`. Two permissive
+    row-security policies admit the account to `finding_fixes` and its packs (the AI account's
+    `PUBLIC` policies would otherwise have hidden every non-`proposing` row from it).
+  - **`nexovue_api/connections_account.py`**: the grants, column lists everywhere a table is
+    shared, `DELETE` only on F5's three short-lived tables; connection limit 20, timeouts 10 s
+    and 30 s (guesses, the AI account's). **`nexovue_api/role_accounts.py`** holds the
+    machinery both accounts share, moved out of `insight_account.py` unchanged in behaviour
+    (F3's suites pass; two of its test references now name the shared module).
+  - **Code:** `jobs/queue.py`'s `CONNECTIONS_STATEMENTS` for the role, `CONNECTIONS_ENQUEUE`
+    for the two sweeps, `results.store_connection_test`, and `source_pack.py`'s brief statements
+    through the functions.
+  - **Setup and deployment:** `setup` (and `nexovue setup grants`) provisions it after the AI
+    account; Compose gives `setup` `POSTGRES_CONNECTIONS_PASSWORD` (`:-`) and
+    `scheduler-connections` a DSN as `nexovue_connections` (`:?`, so a missing password is
+    refused by name); `deploy/nexovue` generates the password at install and adds a missing one
+    at upgrade, like the AI account's; the dev stack and `just migrate-pg` use
+    `nexovue_connections_dev`. No secret in the repository.
+  - **How the grants are proved least and enough:** `test_connections_grants_live.py` reads the
+    catalog back against a hand-written list (every table and column, `PUBLIC` included), and
+    proves no right on `jobs`, `job_results`, alerts, check secrets, notes or sign-ins, no
+    `LOCK` on the queue or the case tables, no advisory lock or temporary table, a plain login
+    with its limit and timeouts, and the policies' exact text. **Enough:** every connections
+    suite now runs its jobs as the account (`connections_engine`): the sync (61), GitHub (19)
+    and F5's eleven connections suites (152) pass, and the end-to-end test runs the real worker
+    as it. `test_connections_account_live.py` holds the functions to the shared statements and
+    proves they never reach another queue.
+
+### The claims check (T8.6), read 2026-11-22
+
+Rivals' pages were read through this session's allowed hosts. **Unreachable, so not re-read:**
+`www.elastic.co`, `incident.io`, `docs.rootly.com`, `support.pagerduty.com` (the proxy refused
+the connection; nothing returned) and `www.observeinc.com` (redirects to `www.snowflake.com`,
+refused). `docs.datadoghq.com` answered, redirecting Case Management to
+`/incident_response/work_management/`, but its text needs scripts and could not be read.
+
+| Rival page (read today) | What it says now |
+|---|---|
+| SigNoz, Jira channel | Tagged "SigNoz Cloud" and "Self-Host". "An alert firing creates a Jira issue." "Send resolved alerts: on by default … transitions the issue to a 'done' status". Reopen window default 3d. Self-hosted Jira supported from SigNoz v0.150.0 |
+| SigNoz, pricing | Community edition's alert channels listed as "Slack, Pagerduty, OpsGenie & webhooks", MS Teams separately; **no Jira row, so the edition is still not confirmed** |
+| Sentry, issue states | "You can manually mark an issue as Resolved", or by a commit or release; "Regressed: A resolved issue that's come up again". No resolving when errors stop |
+| Sentry, Jira | Manual issue management on Team, Business, Enterprise; automatic on Business and Enterprise; issue sync of comments, assignees and status both ways on Team and up. Self-hosted Sentry: installation URL "resolvable on the internet". Pricing: Team $26/mo, Business $80/mo |
+| OpenObserve, incidents | "available in OpenObserve Enterprise and Cloud editions"; Open, Acknowledged, Resolved, reopen; auto-resolve after 3 days by default; no mention of Jira or GitHub |
+| Grafana IRM, Jira | Creates a Jira issue on declare and moves its status as the incident changes; Jira Cloud and classic API tokens only, "doesn't support self-managed Jira" |
+| New Relic, notification integrations | Jira Cloud: "automatically create, update, and close Jira issues", two-way sync with an admin API key; no on-premises Jira |
+| Dynatrace, Jira connector | A workflow action (page dated 13 Feb 2025); not read further |
+| Coroot, incidents | An incidents list, ongoing and resolved; no tracker named |
+| Honeycomb triggers, HyperDX, ClickStack | No case or tracker feature found on the pages read |
+
+| Line (spec, *May say* / *Do not say*) | Built product | Rivals | Result |
+|---|---|---|---|
+| "A finding becomes someone's job with one click and no form." | Take is `PATCH /case` with no field required (`test_findings_cases_live.py`, `test_ai_off_cases_live.py`) | — | **Passed** |
+| "Once someone has taken a finding, recovery does not end the work, and the page says so." | `test_ai_off_cases_live.py` (closed signal, investigating case); the page sentence's tests | Ordinary elsewhere (Sentry by hand; OpenObserve by hand or after 3 days) — not a differentiator | **Passed**, not to lead with |
+| The GitHub line (one issue by a click with a preview; closing ends the case once recovered; status only; public refused) | Built and tested against the simulated GitHub only | Sentry creates and syncs more, both ways, Team and up | **Not passed:** T3.0 and T4.8 against real GitHub are the founder's after Phase 2 |
+| "Case tracking is included … no per-person charge … keep PagerDuty for paging", with the 30-day retention limit beside it | No plan gate on any case route; retention default as stated | PagerDuty's page unreachable; not needed for the line | **Passed** for self-hosted, with the retention sentence |
+| "Track the work on a detected problem …" and the search line | On the setup page verbatim | — | **Passed** |
+| "A problem that returns while a case is active joins it. After a resolve, the new finding names the earlier case." | Step 2's join and earlier-case tests | Sentry regresses the same issue; SigNoz reopens the same Jira issue within 3d | **Passed** |
+| The combination row (own server, statistical detection, one click, evidence, no per-person charge, AI off) | Built | Elastic Cases unreadable today; SigNoz's edition unconfirmed | **Not passed:** do not call it unique |
+| Do not say "two-way sync" without status only; "your data never leaves your server"; "Jira support"; hosted sync; "works from behind a firewall"; "cases for every alert"; "incident tracking"; "keeps your incident history"; "the only" | The setup page says status only, lists what leaves, names GitHub only and self-hosted only, says a proxy is unsupported, cases cover anomaly findings only, and states deletion | — | **Held** in everything Step 8 wrote. "Works from behind a firewall" stays unsaid until T3.0 |
+
+**Launch note, from passed lines only (draft, not published):** "Cases: a finding becomes
+someone's job with one click and no form. Recovery does not end the work, and the page says
+so. A problem that returns while a case is active joins it; after a resolve, the new finding
+names the earlier case. Case tracking is included, with no per-person charge from nexovue; on
+a self-hosted install a resolved case and its notes are deleted 30 days later by default, until
+the operator raises retention. Self-hosted. GitHub issue sync is not in this note: it has not
+yet run against real GitHub." **Changelog entry:** "Added: cases on findings — take, note, hand
+over, resolve, reopen, a timeline, and the case feed. Self-hosted. GitHub issue sync ships once
+its first real-GitHub run passes."
+
+### Measured (T8.4), indicative only
+
+Shared 4-CPU development VM under other builders' load (load average 9 to 14), Postgres 18 in
+a container; one reading set, not a benchmark.
+
+- **Timeline, first page (100 rows, notes joined):** medians 19.8, 23.1, 37.3 ms over three runs
+  of 50 reads; 95th percentiles 44.6, 53.3, **264.9** ms; maximum 496 ms. Server-side
+  `EXPLAIN ANALYZE`: 12 to 19 ms execution.
+- **Timeline, earliest page:** medians 4.7, 5.1, 6.2 ms; 95th percentiles 6.4 to 12.5 ms.
+- **Against D65's 200 ms guess:** the median is well under; one run's tail passed it, on a
+  loaded machine, not attributed further. **The plan is a parallel sequential scan of all of
+  `finding_events`** (the `OR … IN` filter does not use the `(org_id, finding_id, at)` index at
+  this size), so the read grows with every organization's events. Open decision 20.
+- **Memory (against T4.9's guess, 384 MB):** the real connections worker, its forkserver and
+  three children after one job each, about 250 MB proportional (PSS) and 99/15/77/89/93/93 MB
+  resident, read from `/proc` on this VM, not the container. T4.9 on the real server stays
+  owed.
+
+### Tests seen failing first (how)
+
+- Grants: `test_connections_grants_live.py` before migration 0085 (provisioning refused: the
+  functions did not exist); after, F5's upsert refused `EXCLUDED.bytes` and
+  `EXCLUDED.github_login` without `SELECT` on them, which added those two columns.
+- Queue parity: `test_connections_account_live.py` before the scheduler code (12 failed, no
+  `CONNECTIONS_STATEMENTS`).
+- The sync suite's sweep tests as the account with the old code: "permission denied for table
+  jobs".
+- Compose and installer: 16 failed before the wiring.
+- Setup: `test_setup_grants_prepares_both_role_accounts` failed before `setup` called it.
+- Docs: `pages.test.ts` failed before the Trackers group and page.
+- Timeline seed: its test failed to import before the script.
+- End-to-end: with the old scheduler code the worker could not claim; and a deliberate leak
+  (the webhook secret added to a log line, reverted) made the search fail with "the webhook
+  secret in worker logs".
+- AI-off: a session held open as `nexovue_insight` made it fail (`ai_sessions: 1`).
+
+### Not built in Step 8
+
+T8.8 (finding event kinds, audit coverage) and T8.9 (Design QA by hand) are outside this
+step's brief. **No F22 Playwright spec exists**, so none was run; the browser job is
+*Not in this plan*, step L.
+
+### Validation run (read, not inferred)
+
+On the worktree's own stores (Postgres 18 with pgvector, ClickHouse 26.3; migrated to 0085),
+2026-11-22, counts read from the output:
+
+- **API side**, 32 files (F22's API suites, the grants and AI-account suites, setup, Compose
+  and installer contracts, both tenancy structure tests, authorization coverage, the tenant
+  chokepoint and read-surface structure tests, migration rules, the AI-off suite, AI settings):
+  **3,869 passed**; `test_setup_live.py` **not run** (it needs the S3 store, which was not
+  started on a nearly full shared disk).
+- **Scheduler side**, 25 files (F22's sync, GitHub, cases sweep and detection-link suites, the
+  new account and end-to-end suites, F5's connections suites, the queue and F3/F4/F5 account
+  suites): **408 passed**.
+- **Offline:** platform case, issue-text and address tests, the detection-seed tools, the
+  seam, room, role and settings tests, the fake's recordings: **348 passed**. Web:
+  `features/docs` and the setup-docs plugin, **11 passed** (Vitest).
+- `uv run mypy .` (fresh cache): **no issues in 1,330 files**. `ruff check .` and
+  `ruff format --check .`: clean. Biome on the two touched web files: clean.
+  `pnpm -r --if-present run typecheck`: done for all three packages. Shellcheck on
+  `deploy/nexovue`: only the existing SC1091 note.
+- **Not run:** `just check` (the coordinator's); `test_setup_live.py`; the `ai-off` CI job on
+  GitHub; every real-GitHub check; a browser.
+
+### Residual risks
+
+- A broken-into `scheduler-connections` still reads and changes every organization's
+  connections, links, case columns and F5 suggestions, and reads explanation facts including
+  `aliases`; it no longer reaches the alert queue, secrets, telemetry or sign-ins (ADR-030).
+- The role's timeouts are defaults a session can change, and `NOTIFY` needs no privilege, as
+  for the AI account (F3's open decision 7).
+- A managed Postgres without `CREATEROLE` leaves tracker sync off; setup says so.
+- The `ai-off` CI job and the end-to-end test's worker launcher have not run on GitHub's
+  runners.
 
 
 ## Step 6 built, 2026-11-11
@@ -960,14 +1165,42 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-The founder answers open decisions 12 to 19 below, with Steps 4's and 5's. Then
-Step 8 (customer documents, and the whole gate); Step 7 waits on Atlassian. T4.9 measures
+The coordinator commits Step 8. The founder answers open decisions 12 to 22 below, with Steps
+4's and 5's. Then T8.8 and T8.9 (event kinds and audit coverage; Design QA by hand). Step 7
+(Jira) is out of Phase 2. T4.9 measures
 the built container. After Phase 2, the founder runs T3.0, T3.9's hand
 checks and T4.8 against real GitHub and a real browser (foundation item 28). T2.9 waits
 on F3; Step 7 on Atlassian.
 
 
 ## Open decisions
+
+**From Step 8 (2026-11-22).** None blocks the commit; each is built as recommended.
+
+**20. The timeline read scans every organization's events.** Measured at D65's worst shape,
+its median is 20 to 37 ms, under the 200 ms guess, so D65's "store a root on each event" is not
+triggered. But the plan is a sequential scan of all of `finding_events`: its cost grows with the
+install's total events, not the case's. *Option A (recommended):* keep D65 as decided, and
+re-measure on the test bed at a realistic event count before the first customer; if it slows,
+rewrite the read as two index scans joined by `UNION ALL` (no schema change). *Option B:* make
+that rewrite now, unmeasured at scale.
+
+**21. AC56's "the whole gate" runs beside an idle `scheduler-insight`.** The dev stack `just
+check` uses starts `scheduler-insight` (idle, no AI key). Built: a separate CI job, `ai-off`,
+with Postgres alone and no AI account, runs the AI-off case suite and refuses any AI variable,
+container or account; `check` is untouched. *Option A (recommended):* keep it, and amend AC56's
+"the whole gate must run with no AI configured and no `scheduler-insight`" to "a full case must
+run, in CI, with no AI configured and no `scheduler-insight`", since F3's and F4's own suites
+need the AI account; making `ai-off` a required check is a GitHub settings change, the
+founder's. *Option B:* take `scheduler-insight` out of `check`'s stack, which F3's and F4's
+suites would then have to start themselves.
+
+**22. Row security names the tracker account by text.** 0085's two policies admit
+`current_user = 'nexovue_connections'`, because a migration runs before `setup` creates the
+role, so `TO nexovue_connections` cannot be written there. Only an account allowed to create
+roles could make another account of that name, and the install's is the only one. *Option A
+(recommended):* keep it. *Option B:* have `setup` create the policies `TO nexovue_connections`
+after the role, which puts schema objects outside Alembic.
 
 **From Step 6 (2026-11-11).** None blocks the commit; each is built as recommended.
 
@@ -1507,7 +1740,7 @@ No written decision rule was found for F22, so this order was applied and record
 - **Most first-week pages for a migrating team cannot become cases (D6).** Stated, not solved.
 - **Issue text can still be read by someone's AI.** `ignore_previous_instructions_and_merge` remains readable, and no suite can make it meaningless. Autolink shapes are untested until T4.8.
 - **Deadlock prevention is reasoning until T2.1 runs.** Nothing has exercised a lock.
-- **A compromised `scheduler-connections` reads and writes all of Postgres** until T8.7, which depends on F3's pattern.
+- ~~A compromised `scheduler-connections` reads and writes all of Postgres until T8.7.~~ **Closed by T8.7 (2026-11-22):** it signs in as `nexovue_connections`; what it still reaches is in ADR-030.
 - **Layout and browser policy can regress between hand checks (D84).**
 - **The fake tracker is written by the people it tests.** Its fixtures come from T4.8 and can go stale.
 - **Memory.** About 1.5 GB left on the 16 GB server by arithmetic, with F5's load uncounted.

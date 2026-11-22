@@ -84,7 +84,7 @@
 | **F19** | SLO tracking | 🔴 No | ✅ | 2 | [Approved](../features/slo-tracking/spec.md), not built. After the chain ([plan](phase-2-plan.md)) |
 | **F20** | Dashboards | 🟡 Partly | ✅ | 2 | [Approved](../features/dashboards/spec.md); **built through plan Step 10, awaiting Step 11's demo gate, measurement gate and the founder's screen-reader pass** ([status](../features/dashboards/status.md)). The Findings feed holds `/` and Overview is at `/overview` |
 | **F21** | Alerts & notification connectors | ✅ Yes | ✅ | **1** | **Built 2026-09-19** to the approved [spec](../features/alerts/spec.md) — see [status](../features/alerts/status.md). Before it: The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
-| **F22** | Case management | 🔴 No | ✅ | 2 | [Approved](../features/case-management/spec.md), not built. Depends on findings existing |
+| **F22** | Case management | 🟡 Partly | ✅ | 2 | [Approved](../features/case-management/spec.md); **built through plan Step 8 against a simulated GitHub, self-hosted and GitHub only**; real-GitHub checks are the founder's after Phase 2 — see [status](../features/case-management/status.md) |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | Later | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
 | **F25** | Usage & cost view | ✅ Yes | 🔶 | 0 | Usage, allowance, projected cost, billing, charge history. **A real specification exists since 2026-09-21** and awaits approval — 14 business rules, 15 acceptance criteria, six gaps marked. Writing it found a hole nothing was holding: the allowance rule is implemented in Python and in Go and neither checked the other ([AC25.15](../features/usage-billing/spec.md)) |
@@ -345,12 +345,12 @@ rate and p95, and a service going silent; one incident per breach, flap guard, b
 maintenance windows. **WhatsApp, SMS and a native Opsgenie connector are dropped** (D6): SMS and phone reach a
 person through PagerDuty, and Opsgenie ends support on 5 April 2027.
 
-### F22 — Case Management ✅ SPECIFIED, NOT BUILT
-**Approved by the founder 2026-11-02, not built:** [spec](../features/case-management/spec.md), [design](../features/case-management/design.md), [plan](../features/case-management/plan.md). Where this older text differs, the spec is what was approved.
+### F22 — Case Management 🟡 BUILT THROUGH STEP 8
+**Approved by the founder 2026-11-02; built through plan Step 8 (2026-11-22), against a simulated GitHub:** [spec](../features/case-management/spec.md), [design](../features/case-management/design.md), [plan](../features/case-management/plan.md). Where this older text differs, the spec is what was approved.
 
-Auto-created cases from findings; list/detail with lifecycle (open → investigating → resolved); GitHub Issues/Jira connectors (create + status sync); case timeline.
+Every finding is ready to become a case with one click and no form (ADR-022; *amended by F22, 2026-11-22: "auto-created cases" is replaced, since no case starts by itself, FD12*). A case is two states, investigating and resolved, on top of the finding's own signal state; a feed of active, assigned and resolved cases; a GitHub issue created by a person's click with a preview, whose open or closed status follows (status only); a case timeline.
 
-> **Not a helpdesk.** A case here is an *incident* raised from a finding, never a customer support ticket. Customer support tooling is unplaced — see the commercial-model open questions in `vision.md` §7.
+> **Not a helpdesk.** A case here is the work on a detected finding — not an *incident*, a word the foundation keeps for F21's threshold record (D58) — and never a customer support ticket. Customer support tooling is unplaced — see the commercial-model open questions in `vision.md` §7.
 
 ### F23 — Onboarding 🔲 TO SPECIFY
 Signup → project → "2 env vars" screen → live first-span celebration → auto-created defaults (service overview, suggested synthetic check from domain, alert presets). The 10-minute promise, specified.
@@ -575,7 +575,7 @@ To be written as a companion one-pager: performance targets (feed load, query la
 
 ## 8. Glossary
 
-**Finding** — a generated, plain-language statement of a detected problem with evidence. **Case** — the workflow object created from a finding. **Signal** — traces, logs, metrics, events. **Owner view** — the P3-facing plain-language surface.
+**Finding** — a generated, plain-language statement of a detected problem with evidence. **Case** — the work on a finding, started by a person's click (columns on the finding; F22). **Signal** — traces, logs, metrics, events. **Owner view** — the P3-facing plain-language surface.
 
 ---
 

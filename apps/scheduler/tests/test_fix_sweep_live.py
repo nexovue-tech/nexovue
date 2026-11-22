@@ -52,10 +52,12 @@ def fake() -> Iterator[FakeGitHub]:
 
 
 @pytest.fixture
-async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
+async def world(
+    engine: AsyncEngine, connections_engine: AsyncEngine, fake: FakeGitHub, now: datetime
+) -> AsyncIterator[SourceWorld]:
     """A world whose every job is held from the stack's own connections worker: the sweep's
     jobs are read here, never run, and the stack would run and finish them first."""
-    made = await build_world(engine, fake, now=now)
+    made = await build_world(engine, fake, jobs=connections_engine, now=now)
     try:
         with jobs_held(engine, made.org_id):
             yield made
@@ -89,7 +91,7 @@ async def test_ac46_a_list_nobody_sent_in_15_minutes_lapses_with_its_pack_and_co
 ) -> None:
     fix_id = await _gathered(engine, world, now - timedelta(minutes=16))
 
-    await source_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await source_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.reason) == ("failed", "lapsed")
@@ -103,7 +105,7 @@ async def test_a_list_younger_than_15_minutes_waits(
 ) -> None:
     fix_id = await _gathered(engine, world, now - timedelta(minutes=14))
 
-    await source_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await source_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     assert (await fix_row(engine, world, fix_id)).state == "gathered"
 
@@ -118,7 +120,7 @@ async def test_ac14_a_row_stuck_gathering_ends_timed_out_with_its_candidates_cle
         now=now - timedelta(minutes=21),
     )
 
-    await source_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await source_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.reason) == ("failed", "timed_out")
@@ -135,7 +137,7 @@ async def test_ac14_a_pack_past_its_expiry_is_removed(
             {"at": now - timedelta(seconds=1), "id": fix_id},
         )
 
-    await source_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await source_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     assert await pack_of(engine, world, fix_id) is None
 
@@ -160,7 +162,7 @@ async def test_code_is_cleared_when_a_person_switches_ai_off(
             {"org": world.org_id},
         )
 
-    await source_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await source_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     row = await fix_row(engine, world, fix_id)
     assert (row.files_read, row.code_deleted_reason) == (None, "ai_off")
@@ -175,7 +177,7 @@ async def test_the_fix_app_is_refreshed_hourly_as_a_job_with_ids_only(
             {"at": now - timedelta(hours=2), "id": world.connection_id},
         )
 
-    await source_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    await source_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
     async with engine.connect() as connection:
         kwargs = (

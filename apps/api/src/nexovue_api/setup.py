@@ -7,8 +7,9 @@ changes nothing. ClickHouse and the Kafka topics are the pipeline image's half (
 `nexovue rollback` compares two versions' answers to tell whether an upgrade changed the schema.
 
 After the migrations, meaning search's extension and columns (`provision_vector`, F4 Step 6),
-then the AI role's own account and its grants (`insight_account`, F3); a restore drops grants,
-and `start` runs this step, so they come back. `nexovue setup grants` runs that part alone.
+then the AI role's and the tracker role's own accounts and their grants (`insight_account`, F3;
+`connections_account`, F22 T8.7); a restore drops grants, and `start` runs this step, so they
+come back. `nexovue setup grants` runs that part alone.
 
 **`vector` is created here, not by a migration** (F4 design, *Extension*; D62; ADR-067): a
 missing extension in the Alembic chain would stop `setup`, and with it every service. Here a
@@ -38,7 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from nexovue_api import insight_account
+from nexovue_api import connections_account, insight_account
 from nexovue_api.data.objectstore.store import ObjectStore
 from nexovue_api.settings import ObjectStoreSettings
 
@@ -132,13 +133,20 @@ def object_store_settings() -> ObjectStoreSettings | None:
     )
 
 
+def _provision_role_accounts() -> None:
+    """Never stops setup: AI is optional (AC71), and cases work with no tracker (F22 AC55), so
+    every refusal is said and setup goes on."""
+    asyncio.run(insight_account.provision())
+    asyncio.run(connections_account.provision())
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if arguments == ["schema"]:
         print(f"postgres {postgres_schema()}")
         return 0
     if arguments == ["grants"]:
-        asyncio.run(insight_account.provision())
+        _provision_role_accounts()
         return 0
     if arguments:
         raise SystemExit("usage: nexovue setup [schema | grants]")
@@ -147,8 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     # Never stops setup: meaning search is optional, and a refusal is said (AC43). Before the
     # AI account's grants, which name these columns only once they exist.
     asyncio.run(provision_vector())
-    # Never stops setup: AI is optional, and every refusal is said (AC71).
-    asyncio.run(insight_account.provision())
+    _provision_role_accounts()
 
     settings = object_store_settings()
     if settings is None:

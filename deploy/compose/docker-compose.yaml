@@ -605,7 +605,8 @@ services:
       LOG_LEVEL: debug
       LOG_FORMAT: console
       SCHEDULER_ROLE: connections
-      POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
+      # Its own account (F22 T8.7), which `just migrate-pg` creates with this development value.
+      POSTGRES_DSN: ${DEV_CONNECTIONS_POSTGRES_DSN:-postgresql+asyncpg://nexovue_connections:nexovue_connections_dev@postgres:5432/nexovue}
       APP_BASE_URL: http://localhost:${WEB_HOST_PORT:-15173}
       CONNECTION_SECRET_KEY: ${DEV_CONNECTION_SECRET_KEY:-Wm3n0P1oYHk2s1Yx7c5lQ0mJd8h6rT4vB9eA2uFgK0s=}
       CONNECTION_SECRET_PREVIOUS_KEYS: ${DEV_CONNECTION_SECRET_PREVIOUS_KEYS:-}

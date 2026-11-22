@@ -18,8 +18,16 @@ enough has not been measured on a 16 GB server. Most services use well under the
 | Postgres (accounts and settings) | 1 GB | `POSTGRES_MEMORY` |
 | Worker (writes telemetry) | 1.25 GB | `WORKER_MEMORY`, `WORKER_GOMEMLIMIT` |
 | API, receiver, schedulers, edge, object store | about 3.5 GB together | — |
-| Tracker connections (`scheduler-connections`), only while `NEXOVUE_CONNECTIONS=yes` | 384 MB, a guess copied from the alert deliveries worker; not yet measured | — |
+| Tracker connections (`scheduler-connections`), only while `NEXOVUE_CONNECTIONS=yes` | 384 MB ceiling. **Read once, indicatively (2026-11-22):** about 250 MB of proportional memory for the worker, its forkserver and three children after a job each, read from the processes on a shared 4-CPU development VM, not from the container on a real server | — |
 | AI explanations (`scheduler-insight`), idle until an organization turns AI on | 384 MB: four children kept under 48 MiB each beside the parent, by arithmetic; **not yet measured** at 4 or 6 children | `SCHEDULER_INSIGHT_REPLICAS=0` runs with no AI container at all |
+
+**Case timelines (F22).** One case's timeline is one Postgres read. At the largest case nexovue
+allows (90 days kept alive, a recurrence joining every 4 hours, 500 notes of 4,000 characters,
+beside 150,000 other events), the console's first page took a median of 20 to 37 ms and the
+oldest page 5 to 6 ms, over three runs of 50 reads (`tools/detection-seed/timeline_seed.py`,
+2026-11-22, shared 4-CPU VM under load: indicative only). On one run the slowest 5% reached 265 ms.
+The read scans the events table, so it grows with every organization's events, not only the
+case's; it is not measured at millions of events.
 
 A local model (Ollama, for example) is not in these figures: it runs outside nexovue, and needs its
 own memory on top.

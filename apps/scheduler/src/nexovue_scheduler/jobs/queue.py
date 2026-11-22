@@ -10,11 +10,12 @@ Celery's late acknowledgement gave, without a visibility timeout to tune.
 the worker that claimed the job, so a worker that stalled past its lease cannot
 undo what the job's next holder did — the fence `alerts/outbox.py` uses.
 
-**The AI role reaches the queue only through functions** (F3, design *The Postgres
-account*). Its account holds no right on `jobs`, since a right to change a table is a
-right to lock it; migration 0070's four functions do what the statements below do, for
-the `insight` queue alone. A worker takes its statements from `STATEMENTS_OF_ROLE`, and
-`test_insight_account_live.py` holds both kinds to one table of cases (AC44).
+**The AI and tracker roles reach the queue only through functions** (F3, design *The
+Postgres account*; F22 T8.7). Their accounts hold no right on `jobs`, since a right to
+change a table is a right to lock it; migration 0070's functions do what the statements
+below do for the AI queues alone, and 0085's for the two tracker queues. A worker takes its
+statements from `STATEMENTS_OF_ROLE`; `test_insight_account_live.py` and
+`test_connections_account_live.py` hold each kind to the shared statements (AC44).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from nexovue_platform.assistant_records import ASSISTANT_QUEUE
+from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, CONNECTIONS_QUEUE
 from nexovue_platform.evidence import INSIGHT_QUEUE
 from nexovue_platform.fixes.records import FIX_QUEUE
 from nexovue_platform.jobs import ENQUEUE, ENQUEUE_UNLESS_ORGANIZATION_GONE, WAKE, JobRequest
@@ -96,6 +98,26 @@ _INSIGHT_RETRY: Final = text(
     "SELECT insight_retry_job(:id, :worker, CAST(:countdown AS double precision), :error)"
 )
 
+# The same three for the tracker role's account, through migration 0085's functions, and
+# `ENQUEUE_UNLESS_WAITING` through the one that refuses any queue but the two tracker queues;
+# its bound values are `JobRequest.parameters()`.
+_CONNECTIONS_CLAIM: Final = text(
+    "SELECT * FROM connections_claim_jobs(:worker, :queues, :limit, :grace)"
+).bindparams(bindparam("queues", type_=ARRAY(Text)))
+_CONNECTIONS_FINISH: Final = text("SELECT connections_finish_job(:id, :worker)")
+_CONNECTIONS_RETRY: Final = text(
+    "SELECT connections_retry_job(:id, :worker, CAST(:countdown AS double precision), :error)"
+)
+CONNECTIONS_ENQUEUE: Final = text(
+    """
+    SELECT connections_enqueue_job(
+        :queue, :task, CAST(:kwargs AS jsonb), CAST(:org_id AS uuid),
+        CAST(:countdown_seconds AS double precision), CAST(:expires_seconds AS double precision),
+        :max_attempts, :soft_limit_seconds, :hard_limit_seconds
+    )
+    """
+)
+
 
 @dataclass(frozen=True, slots=True)
 class QueueStatements:
@@ -118,10 +140,16 @@ INSIGHT_STATEMENTS: Final = QueueStatements(
     _INSIGHT_FINISH,
     queues=frozenset({INSIGHT_QUEUE, ASSISTANT_QUEUE, FIX_QUEUE}),
 )
-# By `Settings.scheduler_role`: only the AI role's account lacks rights on `jobs`.
+CONNECTIONS_STATEMENTS: Final = QueueStatements(
+    _CONNECTIONS_CLAIM,
+    _CONNECTIONS_RETRY,
+    _CONNECTIONS_FINISH,
+    queues=frozenset({CONNECTIONS_QUEUE, CONNECTIONS_INTERACTIVE_QUEUE}),
+)
+# By `Settings.scheduler_role`: only the install's own account holds rights on `jobs`.
 STATEMENTS_OF_ROLE: Final[dict[str, QueueStatements]] = {
     "full": SHARED_STATEMENTS,
-    "connections": SHARED_STATEMENTS,
+    "connections": CONNECTIONS_STATEMENTS,
     "insight": INSIGHT_STATEMENTS,
 }
 

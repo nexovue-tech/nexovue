@@ -22,7 +22,7 @@ from live import require_stack
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from nexovue_api import insight_account
+from nexovue_api import insight_account, role_accounts
 
 DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
@@ -503,7 +503,7 @@ async def test_setup_will_not_call_an_over_privileged_account_ready(
 ) -> None:
     """`setup` cannot take such a right back without being a superuser, so it says so and
     does not call the account ready. The read is replaced by one that finds it."""
-    monkeypatch.setattr(insight_account, "_HELD_TOO_MUCH", text("SELECT true OR :account = ''"))
+    monkeypatch.setattr(role_accounts, "HELD_TOO_MUCH", text("SELECT true OR :account = ''"))
     said: list[str] = []
 
     assert await insight_account.provision(ASYNC_DSN, say=said.append) is False

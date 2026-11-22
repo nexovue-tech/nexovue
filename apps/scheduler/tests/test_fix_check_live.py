@@ -60,8 +60,10 @@ def fake() -> Iterator[FakeGitHub]:
 
 
 @pytest.fixture
-async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
-    made = await build_world(engine, fake, now=now)
+async def world(
+    engine: AsyncEngine, connections_engine: AsyncEngine, fake: FakeGitHub, now: datetime
+) -> AsyncIterator[SourceWorld]:
+    made = await build_world(engine, fake, jobs=connections_engine, now=now)
     async with engine.begin() as connection:
         await connection.execute(
             text("DELETE FROM fix_source_consents WHERE org_id = :org"), {"org": made.org_id}
@@ -114,7 +116,7 @@ async def _link(engine: AsyncEngine, world: SourceWorld, github_id: int, login: 
 
 async def _run(engine: AsyncEngine, world: SourceWorld, check_id: str, now: datetime) -> Any:
     return await fix_check.check_fix(
-        engine,
+        world.jobs,
         org_id=str(world.org_id),
         check_id=check_id,
         keys=KEYS,

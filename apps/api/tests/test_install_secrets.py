@@ -22,6 +22,8 @@ KEY: Final = "CONNECTION_SECRET_KEY"
 KEYS_ADDED_LATER: Final = (KEY, "AI_SECRET_KEY")
 # F3: the AI role's Postgres account, which `setup` sets at every start, so an upgrade may add it.
 INSIGHT_PASSWORD: Final = "POSTGRES_INSIGHT_PASSWORD"
+# F22 T8.7: the tracker role's Postgres account, which `setup` sets at every start too.
+CONNECTIONS_PASSWORD: Final = "POSTGRES_CONNECTIONS_PASSWORD"
 
 
 def _run(function: str, settings: Path, environment: dict[str, str] | None = None) -> str:
@@ -72,21 +74,23 @@ def test_an_upgrade_never_replaces_a_key_that_exists(tmp_path: Path, key: str) -
     assert _settings(settings)[key] == "existing-key"
 
 
+@pytest.mark.parametrize("password", [INSIGHT_PASSWORD, CONNECTIONS_PASSWORD])
 @pytest.mark.parametrize("function", ["write_secrets", "add_missing_secrets"])
-def test_the_ai_account_gets_a_password_at_install_and_at_upgrade(
-    tmp_path: Path, function: str
+def test_a_role_s_own_account_gets_a_password_at_install_and_at_upgrade(
+    tmp_path: Path, function: str, password: str
 ) -> None:
-    """F3: `setup` creates `nexovue_insight` with it; an install upgraded from before F3 gets
-    one, and an existing one is kept, since `setup` sets it again at every start anyway."""
+    """F3 and F22 T8.7: `setup` creates `nexovue_insight` and `nexovue_connections` with
+    these; an install upgraded from before either gets one, and an existing one is kept,
+    since `setup` sets it again at every start anyway."""
     settings = tmp_path / "nexovue.env"
     settings.write_text("POSTGRES_PASSWORD='kept-password'\n")
 
     _run(function, settings)
-    first = _settings(settings)[INSIGHT_PASSWORD]
+    first = _settings(settings)[password]
     _run("add_missing_secrets", settings)
 
     assert len(first) == 48 and int(first, 16) >= 0
-    assert _settings(settings)[INSIGHT_PASSWORD] == first
+    assert _settings(settings)[password] == first
 
 
 # ------------------------------------------------------ NEXOVUE_CONNECTIONS (T3.12)

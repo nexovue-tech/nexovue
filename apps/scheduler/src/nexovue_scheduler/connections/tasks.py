@@ -27,7 +27,6 @@ from nexovue_platform.connections import (
     CHECK_CONNECTION_TASK,
     CONNECTION_CREDENTIAL_PURPOSE,
     CONNECTION_MANIFEST_CODE_PURPOSE,
-    CONNECTION_TEST_RESULT_KIND,
     CONNECTION_TEST_RESULT_TTL_SECONDS,
     CONNECTION_WEBHOOK_SECRET_PURPOSE,
     CONVERT_MANIFEST_TASK,
@@ -324,9 +323,8 @@ async def check(
         await _stand(engine, org_id, connection_id, standing)
         outcome = {"ok": True, "failure": None}
     if request_id is not None:
-        await results.store(
+        await results.store_connection_test(
             engine,
-            kind=CONNECTION_TEST_RESULT_KIND,
             org_id=org_id,
             request_id=request_id,
             payload={**outcome, "state": standing.state},

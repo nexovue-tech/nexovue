@@ -60,8 +60,10 @@ def fake() -> Iterator[FakeGitHub]:
 
 
 @pytest.fixture
-async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
-    made = await build_world(engine, fake, now=now)
+async def world(
+    engine: AsyncEngine, connections_engine: AsyncEngine, fake: FakeGitHub, now: datetime
+) -> AsyncIterator[SourceWorld]:
+    made = await build_world(engine, fake, jobs=connections_engine, now=now)
     try:
         yield made
     finally:
@@ -99,7 +101,7 @@ async def _in_flight(engine: AsyncEngine, world: SourceWorld, now: datetime) -> 
 
 
 async def _sweep(engine: AsyncEngine, world: SourceWorld, now: datetime) -> Any:
-    return await fix_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    return await fix_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
 
 async def _execute(engine: AsyncEngine, statement: str, **values: Any) -> None:
@@ -209,8 +211,8 @@ async def test_the_refresh_starts_the_clock_once_and_a_repository_that_answers_c
 ) -> None:
     """F22's refresh (`write_reach`) keeps the first miss, so 72 hours count from it."""
     org, connection = str(world.org_id), str(world.connection_id)
-    await write_reach(engine, org, connection, Reach(places=()), now=now)
-    await write_reach(engine, org, connection, Reach(places=()), now=now + timedelta(hours=1))
+    await write_reach(world.jobs, org, connection, Reach(places=()), now=now)
+    await write_reach(world.jobs, org, connection, Reach(places=()), now=now + timedelta(hours=1))
     async with engine.connect() as db:
         missed = (
             await db.execute(
@@ -224,7 +226,9 @@ async def test_the_refresh_starts_the_clock_once_and_a_repository_that_answers_c
     assert (missed.is_reachable, missed.unreachable_since) == (False, now)
 
     place = Place(external_id="4200001", key="acme/shop", is_private=True)
-    await write_reach(engine, org, connection, Reach(places=(place,)), now=now + timedelta(hours=2))
+    await write_reach(
+        world.jobs, org, connection, Reach(places=(place,)), now=now + timedelta(hours=2)
+    )
     async with engine.connect() as db:
         back = (
             await db.execute(

@@ -56,7 +56,7 @@ _READS: Final = frozenset({"GET"})
 
 async def _poll(engine: AsyncEngine, world: SourceWorld, now: datetime) -> Any:
     return await fix_poller.poll(
-        engine,
+        world.jobs,
         keys=KEYS,
         endpoints=world.endpoints(),
         clock=lambda: now,
@@ -300,7 +300,7 @@ async def test_an_approved_row_is_left_to_its_job(
 
 
 async def _sweep(engine: AsyncEngine, world: SourceWorld, now: datetime) -> Any:
-    return await fix_sweep.sweep(engine, clock=lambda: now, only_org=str(world.org_id))
+    return await fix_sweep.sweep(world.jobs, clock=lambda: now, only_org=str(world.org_id))
 
 
 async def test_ac49_access_gone_72_hours_marks_a_followed_pull_request_untracked(

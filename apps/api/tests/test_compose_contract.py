@@ -63,6 +63,7 @@ SETTINGS: Final = {
     "CREDENTIAL_ENCRYPTION_KEY": "credential-key",
     "CONNECTION_SECRET_KEY": "connection-key",
     "POSTGRES_INSIGHT_PASSWORD": "insight-postgres-secret",
+    "POSTGRES_CONNECTIONS_PASSWORD": "connections-postgres-secret",
     "AI_SECRET_KEY": "ai-key-stand-in",
     "S3_BUCKET": "nexovue",
     "S3_ACCESS_KEY_ID": "install-access-key",
@@ -468,6 +469,45 @@ def test_the_connections_role_holds_exactly_its_own_variables(
     assert services[CONNECTIONS_ROLE]["command"] == ["scheduler-connections"]
 
 
+@pytest.mark.parametrize("layout_name", ["self-hosted", "quickstart", "three-brokers"])
+def test_the_connections_role_signs_in_as_its_own_account(layout_name: str, tmp_path: Path) -> None:
+    """T8.7: `nexovue_connections`, by F3's pattern, never the install's own account."""
+    services = _render(layout_name, tmp_path, profiles=("connections",))
+
+    dsn = services[CONNECTIONS_ROLE]["environment"]["POSTGRES_DSN"]
+
+    assert dsn == (
+        "postgresql+asyncpg://nexovue_connections:connections-postgres-secret@postgres:5432/nexovue"
+    )
+    assert f":{SETTINGS['POSTGRES_PASSWORD']}@" not in dsn
+
+
+def test_only_setup_and_the_connections_role_hold_its_password(layout: str, tmp_path: Path) -> None:
+    """T8.7: setup creates the account; the role signs in as it; nothing else knows it."""
+    services = _render(layout, tmp_path, profiles=EVERY_PROFILE)
+
+    holders = {
+        name
+        for name, service in services.items()
+        if SETTINGS["POSTGRES_CONNECTIONS_PASSWORD"] in json.dumps(service.get("environment") or {})
+    }
+
+    # Hosted names no tracker role (step H), so only setup there.
+    assert holders in ({"setup", CONNECTIONS_ROLE}, {"setup"}), f"{layout}: {sorted(holders)}"
+    assert (CONNECTIONS_ROLE in holders) == (CONNECTIONS_ROLE in services)
+
+
+def test_an_install_without_the_connections_password_refuses_to_start(tmp_path: Path) -> None:
+    """`${…:?}`, as the connection key: the role is on by default and an upgrade adds the
+    password (`deploy/nexovue`), so a missing one is a fault, said by name."""
+    values = {k: v for k, v in SETTINGS.items() if k != "POSTGRES_CONNECTIONS_PASSWORD"}
+
+    rendered = _compose_config("self-hosted", tmp_path, values, ("connections",))
+
+    assert rendered.returncode != 0
+    assert "set POSTGRES_CONNECTIONS_PASSWORD" in rendered.stderr
+
+
 def test_only_the_api_and_the_connections_role_hold_the_connection_key(
     layout: str, tmp_path: Path
 ) -> None:
@@ -510,6 +550,8 @@ def test_the_development_stack_runs_the_connections_role_on_its_own_tasks() -> N
     assert argv[argv.index("--tasks") + 1] == "connections"
     assert service["environment"]["SCHEDULER_ROLE"] == "connections"
     assert "CHECK_SECRET_KEY" not in service["environment"]
+    # T8.7: as in an install, the role signs in as its own account.
+    assert "nexovue_connections:" in service["environment"]["POSTGRES_DSN"]
 
 
 def test_a_restore_stops_every_role_that_writes_to_postgres(tmp_path: Path) -> None:
