@@ -130,11 +130,25 @@ export function AssistantPanel() {
     if (lastStep && running) setAnnouncement(lastStep);
   }, [lastStep, running]);
 
+  const forbidden =
+    isForbidden(availability.error) ||
+    isForbidden(conversations.error) ||
+    isForbidden(conversation.error) ||
+    isForbidden(live.error);
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
+  // Opening moves focus to the box (design). The box appears only once availability reads
+  // ready, often after the panel opens, so the move waits for it, once per opening.
+  const focusOwed = useRef(false);
+  const composerShown = !forbidden && mayAsk && availability.data?.state === "ready";
   useEffect(() => {
-    if (open) box.current?.focus();
+    focusOwed.current = open;
   }, [open]);
+  useEffect(() => {
+    if (!open || !composerShown || !focusOwed.current || !box.current) return;
+    box.current.focus();
+    focusOwed.current = false;
+  }, [open, composerShown]);
 
   const close = () => {
     closeAssistant();
@@ -154,11 +168,6 @@ export function AssistantPanel() {
       : [...stored, fresh];
   }, [conversation.data, live.data]);
 
-  const forbidden =
-    isForbidden(availability.error) ||
-    isForbidden(conversations.error) ||
-    isForbidden(conversation.error) ||
-    isForbidden(live.error);
   // Failed polls since the last answer: React Query resets `failureCount` at every fetch,
   // so the count is kept from its error tally instead.
   const errorsAtLastAnswer = useRef(0);
@@ -264,7 +273,7 @@ export function AssistantPanel() {
         ) : null}
       </div>
 
-      {forbidden || !mayAsk || availability.data?.state !== "ready" ? null : (
+      {composerShown ? (
         <Composer
           box={box}
           draft={draft}
@@ -279,7 +288,7 @@ export function AssistantPanel() {
             setDraft("");
           }}
         />
-      )}
+      ) : null}
     </aside>
   );
 }

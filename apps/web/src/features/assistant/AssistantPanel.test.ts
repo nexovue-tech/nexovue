@@ -107,6 +107,25 @@ describe("before anyone asks", () => {
   });
 });
 
+describe("focus (design, *Keyboard and screen readers*)", () => {
+  it("opening moves focus to the box, which appears only once chat is ready", async () => {
+    stubApi();
+    const panel = await openPanel();
+    const box = panel.querySelector("textarea");
+    expect(box).not.toBeNull();
+    expect(document.activeElement).toBe(box);
+  });
+
+  it("an answer arriving later does not take focus back to the box", async () => {
+    stubApi();
+    const panel = await openPanel();
+    const close = panel.querySelector<HTMLButtonElement>("button[aria-label=Close]");
+    act(() => close?.focus());
+    await settle();
+    expect(document.activeElement).toBe(close);
+  });
+});
+
 describe("each state of a question renders (AC48)", () => {
   // The spec's *Conversation states*, word for word, apart from the module that says them.
   const SPEC: [MessageState, string][] = [
