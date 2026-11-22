@@ -5,7 +5,8 @@ A due job, an alert waiting to be delivered, an erasure owed past three days, a
 project detection has stopped judging, the detection sweep's own record and
 detection's events are written in one transaction, read there, and rolled back —
 so the dev stack's own workers never see them, and the readings move by exactly
-what was written.
+what was written. The readings count every organization's rows, which the stack and the
+other suites commit all the time, so each transaction reads one snapshot (`_one_snapshot`).
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -20,7 +21,7 @@ from typing import Final
 from alert_fixtures import AlertTenant, postgres_reachable
 from live import require_stack
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncTransaction
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.detection import coordinator, holds
@@ -54,13 +55,25 @@ _RUN: Final = text(
 )
 
 
+async def _one_snapshot(connection: AsyncConnection, *rewritten: str) -> AsyncTransaction:
+    """The test's transaction, in which every reading sees one snapshot: read afresh, a reading
+    would also count what another writer committed between `before` and `after`. A table the
+    test rewrites whole is first locked against other writers, before the snapshot is taken
+    (`LOCK` takes none), so its `UPDATE` cannot meet a row changed since and fail to serialise."""
+    await connection.execution_options(isolation_level="REPEATABLE READ")
+    transaction = await connection.begin()
+    for table in rewritten:
+        await connection.execute(text(f"LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE"))
+    return transaction
+
+
 async def test_a_due_job_and_a_waiting_alert_and_an_overdue_erasure_are_counted(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:
     queue = f"metrics-test-{uuid.uuid4().hex[:8]}"
     now = datetime.now(UTC)
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=now)
             await connection.execute(
@@ -128,7 +141,7 @@ async def test_a_project_detection_has_not_judged_for_three_minutes_is_counted_b
     a_day = timedelta(days=1)
     now = datetime.now(UTC)
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             await connection.execute(
                 text("DELETE FROM detection_project_runs WHERE project_id = :project"), keys
@@ -200,7 +213,7 @@ async def test_detection_events_of_the_last_fifteen_minutes_are_counted_by_kind(
     """*Detection held by intake*'s reading. Beat reads the rows: the sweep that
     writes them runs in a worker's child process, whose metrics no scrape sees."""
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             for kind, ago in (
@@ -230,7 +243,7 @@ async def test_beat_says_whether_any_tracker_connection_is_live(engine: AsyncEng
     connections are turned off, or when only F5's own App is connected."""
     org_id = uuid.uuid4()
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection, "connections")
         try:
             # Every live connection in this database, ended for this transaction only.
             await connection.execute(
@@ -282,7 +295,7 @@ async def test_f3_s_readings_move_by_exactly_what_was_written(
     from alert_fixtures import add_finding
 
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection, "ai_connections")
         try:
             await connection.execute(text("UPDATE ai_connections SET enabled = false"))
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
@@ -358,7 +371,7 @@ async def test_f5_s_tamper_signal_counts_refusals_again_in_the_last_hour_only(
     from alert_fixtures import add_finding
 
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             for minutes, state, reason in (
@@ -442,7 +455,7 @@ async def test_f5_s_rows_by_state_and_reason_and_the_oldest_in_flight(
     from alert_fixtures import add_finding
 
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             for minutes, kind, state, reason in (
@@ -520,7 +533,7 @@ async def test_slo_status_age_counts_a_target_that_is_late_and_never_a_deleted_o
     minutes the screens call Not up to date. A target never judged ages from its creation;
     a deleted one is not read; no label names a tenant."""
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             scope = {"org": tenant.org_id, "project": tenant.project_id}
@@ -555,7 +568,7 @@ async def test_a_withheld_notification_counts_as_held_until_it_is_released(
     from alert_fixtures import add_finding
 
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             finding = await add_finding(
@@ -620,7 +633,7 @@ async def test_chat_s_readings_count_this_month_s_outcomes_and_what_is_in_flight
     and last month's are not counted; questions in flight, the oldest of them, and the oldest
     nobody has taken (`queued`), which a running question is not. No label names a tenant."""
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             scope = {"org": tenant.org_id, "project": tenant.project_id}
