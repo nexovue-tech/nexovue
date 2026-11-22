@@ -535,6 +535,39 @@ async def test_t3_19_an_asked_name_that_passes_joins_the_pack_as_it_stands(
     assert row.files_read["round"] == 2
 
 
+async def test_decision_81_a_later_round_sends_the_first_round_s_frames(
+    engine: AsyncEngine, world: SourceWorld, now: datetime
+) -> None:
+    """Design, *What the model gets*: the frames go "from the pack as numbers" in every
+    round, and a later round runs the proposal "again, with every file in the pack". The
+    kept files keep their numbers, so the stack's frames carry forward with them."""
+    frames = _stack(("app/handler.py", 5), ("app/money.py", 4))
+    fix_id = await source_fix(engine, world, candidates=frames, now=now)
+    await _run(engine, world, fix_id, now)
+    first = await pack_of(engine, world, fix_id)
+    assert first is not None and first.frames == [
+        {"ref": "file_1", "line": 5},
+        {"ref": "file_2", "line": 4},
+    ]
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "UPDATE finding_fixes SET state = 'gathering', candidates_from = 'model', "
+                "round = 2, requested_paths = CAST(:asked AS jsonb) WHERE id = :id"
+            ),
+            {
+                "id": fix_id,
+                "asked": json.dumps([{"path": "app/tax.py", "ref": "file_2", "line": 1}]),
+            },
+        )
+
+    assert await _run(engine, world, fix_id, now) == "gathered"
+
+    later = await pack_of(engine, world, fix_id)
+    assert later is not None and later.frames == first.frames
+    assert [each["ref"] for each in later.files][-1] == "file_4"
+
+
 async def test_ac35_the_brief_s_paths_read_the_tree_and_no_blob(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:

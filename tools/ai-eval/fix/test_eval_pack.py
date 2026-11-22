@@ -141,3 +141,14 @@ def test_a_later_round_admits_asked_names_through_the_lists() -> None:
         ("file_3", "cart.py", "asked"),
     ]
     assert sorted(later.asked_refused) == ["configuration", "matched_no_file"]
+
+
+def test_a_later_round_carries_the_stack_s_frames_as_the_product_does() -> None:
+    """Decision 81: the pack job carries round 1's frames forward, and the bed mirrors it."""
+    receipts = case("py_planted_receipts")
+    first = pack_for(receipts, arm="imports_and_rounds")
+    assert first.frames
+
+    later = next_round(receipts, first, [AskedFile("checkout/cart.py", "file_1", 3, "r")])
+
+    assert later.frames == first.frames

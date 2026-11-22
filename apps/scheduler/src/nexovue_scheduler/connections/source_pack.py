@@ -157,7 +157,8 @@ _LINK: Final = text(
 )
 _PACK: Final = text(
     """
-    SELECT files FROM finding_fix_source_packs WHERE org_id = :org_id AND fix_id = :fix_id
+    SELECT files, frames FROM finding_fix_source_packs
+    WHERE org_id = :org_id AND fix_id = :fix_id
     """
 )
 _GATHERED: Final = text(
@@ -305,6 +306,8 @@ class PackContext:
     path_in_production: str | None
     github_user_id: int | None
     pack_files: list[dict[str, Any]]
+    # The stack's frames as the earlier round stored them, `[{ref, line}]` (decision 81).
+    pack_frames: list[dict[str, Any]]
 
 
 async def _context(engine: AsyncEngine, row: Any) -> PackContext:
@@ -325,11 +328,12 @@ async def _context(engine: AsyncEngine, row: Any) -> PackContext:
             if row.requested_by is None
             else await connection.scalar(_LINK, {**ids, "user_id": row.requested_by})
         )
-        pack = await connection.scalar(_PACK, {**ids, "fix_id": row.id})
+        pack = (await connection.execute(_PACK, {**ids, "fix_id": row.id})).one_or_none()
     return PackContext(
         path_in_production=production,
         github_user_id=linked,
-        pack_files=list(pack or []),
+        pack_files=[] if pack is None else list(pack.files or []),
+        pack_frames=[] if pack is None else list(pack.frames or []),
     )
 
 
@@ -598,13 +602,20 @@ class PackReader:
     ) -> set[str]:
         """T3.19: the pack as it stands, then each name the model asked for, checked like a
         stack file. A name matching no file is counted, never kept (AC84). The model's
-        reason goes on the file's `why` only if it passes FR16's prose checks here too."""
+        reason goes on the file's `why` only if it passes FR16's prose checks here too.
+        The stack's frames carry forward with the files they name, which keep their
+        numbers, so every round sends them (design, *What the model gets*; decision 81)."""
         asked: set[str] = set()
         for stored in context.pack_files:
             path = stored.get("path")
             if isinstance(path, str) and path in builder.tree:
                 builder.keep(_kept_file(stored, builder.tree[path], row.files_read))
-        refs = {file.ref for file in builder.files}
+        path_of = {file.ref: file.path for file in builder.files}
+        for frame in context.pack_frames:
+            ref, line = frame.get("ref"), frame.get("line")
+            if ref in path_of and isinstance(line, int):
+                builder.note_frame(path_of[ref], line)
+        refs = set(path_of)
         for asked_for in (row.requested_paths or [])[:MAX_ASKED_PATHS]:
             name = asked_for.get("path") if isinstance(asked_for, dict) else None
             if not isinstance(name, str) or not _plain_name(name) or name not in index:

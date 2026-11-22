@@ -155,11 +155,14 @@ def _reader(case: Case, repository: LocalRepository) -> PackReader:
     return PackReader(repository, "bed", "bed/fixture", case.service.folder)
 
 
-def _context(case: Case, pack_files: list[dict[str, Any]]) -> PackContext:
+def _context(
+    case: Case, pack_files: list[dict[str, Any]], pack_frames: list[dict[str, Any]]
+) -> PackContext:
     return PackContext(
         path_in_production=case.service.deployed_at or None,
         github_user_id=None,
         pack_files=pack_files,
+        pack_frames=pack_frames,
     )
 
 
@@ -202,7 +205,7 @@ def pack_for(
     row = _BedRow(
         candidates_from=FROM_STACK, path_candidates=stack_candidates((*case.frames, *forged))
     )
-    reading = _reader(case, local).read(row, NO_OWNER_LISTS, _context(case, []))
+    reading = _reader(case, local).read(row, NO_OWNER_LISTS, _context(case, [], []))
     if not has_imports(arm):
         _without_imports(reading)
     return _pack(case, reading, first_round(arm), asked_names=0)
@@ -222,6 +225,6 @@ def next_round(
         requested_paths=[each.stored() for each in asked],
         files_read=dict(previous.files_read),
     )
-    context = _context(case, previous.stored_files())
+    context = _context(case, previous.stored_files(), [dict(each) for each in previous.frames])
     reading = _reader(case, local).read(row, NO_OWNER_LISTS, context)
     return _pack(case, reading, previous.round_number + 1, asked_names=len(asked))
