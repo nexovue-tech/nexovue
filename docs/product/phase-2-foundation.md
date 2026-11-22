@@ -620,7 +620,7 @@ These must stay in the future tense until shipped (competitors research).
 2. **Facts stay when AI goes.** The explanation's facts work with AI off, because correlation holds no model.
 3. **A fence you can read.** The model cannot write, can reach no telemetry database or repository key (not "no route to GitHub": its network is open unless the optional outbound limit is on), and this is held by tests on an AGPL codebase anyone may read. Rivals describe human approval; the pages read did not describe this separation, though they may have it. **Say what Nexovue does, never what others lack.**
 4. **Free case management on your own server**, with no per-person charge from nexovue. No saving comparison: rivals have free plans (F22).
-5. **SLOs on the free product with no small count limit.** SigNoz's lack is the only rival gap supported, as of 2026-11-02.
+5. **SLOs on the free product with no small count limit.** SigNoz's lack is the only rival gap supported, as of 2026-11-02. **Re-read 2026-11-22: unsupported.** SigNoz's pricing page and docs name no SLO feature or its absence, and its Terraform page lists an "SLO Widget". Do not use this claim until a SigNoz page is read (F20 `research.md`, *Re-read for T11.5*).
 6. **Published fault scores and injection results**, if the founder agrees. Coroot and HolmesGPT publish results on their own test sets (F3 research), so this meets a norm on faults; no vendor found publishes injection results. They would be demo results, and must say so.
 
 ### Must not be claimed
