@@ -49,7 +49,7 @@ export const FIX_APP_WORDS = {
   // Required before anyone raises the App to write (design, *Fix App*; foundation, section 6).
   raiseHeading: "Before raising the App to write branches and pull requests",
   raiseWarning:
-    "Write access reaches every repository you installed this App on, including branches and tags that may start your deploys. Nexovue only writes to nexovue/suggestion-* branches, and only in repositories an owner has allowed, but GitHub does not enforce that. Protect your main and release branches and tags. Private repositories need GitHub Team or Enterprise Cloud for drafts; check your plan first.",
+    "Write access reaches every repository you installed this App on, including branches and tags that may start your deploys. Nexovue only writes to nexovue/suggestion-* branches, and only in repositories an owner has allowed, but GitHub does not enforce that. Protect your main and release branches and tags.",
   raiseSteps:
     "To raise it: on GitHub, open this App's settings, add Contents: read and write and Pull requests: read and write, and save. GitHub's organization owner then accepts the new permissions.",
   signedCommits:

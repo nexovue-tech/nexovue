@@ -85,7 +85,7 @@ describe("the Nexovue suggestions App (T3.3)", () => {
     expect(shown.textContent).toContain("The Nexovue suggestions App is not set up yet.");
   });
 
-  it("T7.7: before raising, warns what write reaches, the plan requirement and signed commits", async () => {
+  it("T7.7: before raising, warns what write reaches and signed commits, and names no plan requirement (F5 decision 95)", async () => {
     stub(APP);
     const shown = await mount(() => createElement(FixAppPanel));
     for (let round = 0; round < 4; round += 1) await settle();
@@ -94,9 +94,9 @@ describe("the Nexovue suggestions App (T3.3)", () => {
     expect(raise?.textContent).toContain(
       "Write access reaches every repository you installed this App on, including branches and tags that may start your deploys.",
     );
-    expect(raise?.textContent).toContain(
-      "Private repositories need GitHub Team or Enterprise Cloud for drafts; check your plan first.",
-    );
+    // GitHub allows draft pull requests in every repository on every plan (D62).
+    expect(raise?.textContent).not.toContain("Enterprise Cloud");
+    expect(raise?.textContent).not.toContain("check your plan");
     expect(raise?.textContent).toContain("GitHub's organization owner then accepts");
     expect(raise?.textContent).toContain("a draft's commit may not count as signed");
   });
