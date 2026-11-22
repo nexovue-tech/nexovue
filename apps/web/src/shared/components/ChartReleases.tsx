@@ -1,15 +1,13 @@
 import { useCallback, useState } from "react";
 
 import type { DeployMarker, MarkerCluster } from "../deploy-markers";
-import { markersLine, truncatedLine } from "../deploy-markers";
+import { markersLine, PLAIN_MARK, truncatedLine } from "../deploy-markers";
 import { Button } from "./Button";
 import type { BoxAnchor } from "./ReleaseHoverBox";
 import { ReleaseFacts, ReleaseHoverBox } from "./ReleaseHoverBox";
 
 /** The strip's height above a plot: one line of small tags. */
 export const STRIP_HEIGHT = 18;
-/** A plain deploy's tag where it has no word: a short mark, still a button. */
-const PLAIN_MARK = "▾";
 /** The box opens this far under its tag. */
 const BOX_GAP = 4;
 

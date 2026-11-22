@@ -95,10 +95,27 @@ export function markerTag(marker: DeployMarker): string | null {
   return null;
 }
 
+/** What a mark with no word of its own shows: a short mark, still a button. */
+export const PLAIN_MARK = "▾";
+
+/** One character of a tag's small monospace words, in CSS pixels (a guess, 11 px type). */
+export const TAG_CHAR_PX = 7;
+
+function tagOf(markers: readonly DeployMarker[]): string | null {
+  const [only] = markers;
+  return markers.length > 1 || only === undefined ? `${markers.length} releases` : markerTag(only);
+}
+
+function tagWidth(markers: readonly DeployMarker[]): number {
+  return (tagOf(markers) ?? PLAIN_MARK).length * TAG_CHAR_PX;
+}
+
 /**
- * Marks in pixel order, each within `COLLAPSE_WITHIN_PX` of the first of a run folded
- * into one tag with the count. `position` is the chart's own `valToPos`, so a tag and its
- * dash agree about where a moment is.
+ * Marks in pixel order, folded into one tag with the count when their dashes are within
+ * `COLLAPSE_WITHIN_PX`, or when their tags would print over each other: a tag is centred
+ * on its dash and far wider than the dash gap, so without the second rule two near runs
+ * each said "2 releases" in the same place. `position` is the chart's own `valToPos`, so
+ * a tag and its dash agree about where a moment is.
  */
 export function clusterMarkers(
   markers: readonly DeployMarker[],
@@ -111,19 +128,17 @@ export function clusterMarkers(
   const clusters: MarkerCluster[] = [];
   for (const { marker, left } of placed) {
     const last = clusters.at(-1);
-    if (last !== undefined && left - last.left <= COLLAPSE_WITHIN_PX) {
+    const reach = Math.max(
+      COLLAPSE_WITHIN_PX,
+      (tagWidth(last?.markers ?? []) + tagWidth([marker])) / 2,
+    );
+    if (last !== undefined && left - last.left <= reach) {
       last.markers.push(marker);
     } else {
       clusters.push({ left, markers: [marker], tag: null });
     }
   }
-  for (const cluster of clusters) {
-    const [only] = cluster.markers;
-    cluster.tag =
-      cluster.markers.length > 1 || only === undefined
-        ? `${cluster.markers.length} releases`
-        : markerTag(only);
-  }
+  for (const cluster of clusters) cluster.tag = tagOf(cluster.markers);
   return clusters;
 }
 

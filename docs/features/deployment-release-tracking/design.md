@@ -150,7 +150,7 @@ Takes `?period=` (default the latest) and `?finding=` (a finding id). In order:
 - **The strip:** an HTML strip above the plot, aligned by `valToPos`, carries word tags: "failed", "rolled back", "seen", "3 releases".
   It falls back to a short mark only when space is tight. A marker draws under the series and is clipped to the plot, so a letter painted
   on canvas would be overprinted (`:255-261,361-367`).
-- Markers within 8 pixels (*guess*) collapse into one tag with the count.
+- Markers within 8 pixels (*guess*) collapse into one tag with the count, and so do neighbours whose tags would print over each other (a tag is about 7 px a character; F20 fix, 2026-11-22).
 - **Hover** shows facts only (service, version, source, time), in a React portal fed from the cursor hook's state, so it renders as text.
   A **click** on a marker or tag pins the box, with its link to the release and an Escape or close control. A drag still selects. A box
   following the cursor could not otherwise be reached.

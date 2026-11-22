@@ -99,11 +99,28 @@ describe("marks close together (AC39)", () => {
   const atPixel = (seconds: number) => seconds;
 
   it("collapse within 8 pixels into one tag with the count", () => {
-    const clusters = clusterMarkers([marker(100), marker(104), marker(108), marker(130)], atPixel);
+    const clusters = clusterMarkers([marker(100), marker(104), marker(108), marker(200)], atPixel);
     expect(clusters.map((cluster) => [cluster.left, cluster.markers.length, cluster.tag])).toEqual([
       [100, 3, "3 releases"],
-      [130, 1, null],
+      [200, 1, null],
     ]);
+  });
+
+  it("fold in a neighbour whose tag would print over theirs, so each word reads once", () => {
+    // Two pairs 20 px apart: each pair's "2 releases" is far wider than 20 px.
+    const clusters = clusterMarkers(
+      [marker(100), marker(104), marker(120), marker(124), marker(400)],
+      atPixel,
+    );
+    expect(clusters.map((cluster) => [cluster.left, cluster.markers.length, cluster.tag])).toEqual([
+      [100, 4, "4 releases"],
+      [400, 1, null],
+    ]);
+  });
+
+  it("keep two tags apart when their words fit side by side", () => {
+    const clusters = clusterMarkers([marker(100), marker(130, { state: "failed" })], atPixel);
+    expect(clusters.map((cluster) => cluster.tag)).toEqual([null, "failed"]);
   });
 
   it("keep a lone mark's own word", () => {
