@@ -31,6 +31,7 @@ from typing import Final
 
 import pytest
 from live import require_stack
+from nexovue_platform.fixes.records import IN_FLIGHT_STATES
 
 import nexovue_api
 
@@ -44,6 +45,8 @@ POSTGRES_USER: Final = os.environ.get("POSTGRES_USER", "nexovue")
 POSTGRES_DB: Final = os.environ.get("POSTGRES_DB", "nexovue")
 DOCKER: Final = shutil.which("docker")
 MARKER: Final = f"MARKER-{uuid.uuid4().hex[:8]}-release-check"
+# BR8's one working suggestion a finding: the in-flight row goes on a finding holding none.
+_WORKING: Final = ", ".join(f"'{state}'" for state in IN_FLIGHT_STATES)
 # A bounded wait for each script: a hung restore fails the check, never stalls it.
 SCRIPT_TIMEOUT_SECONDS: Final = 600
 
@@ -92,9 +95,10 @@ def _psql(sql: str) -> str:
         ],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
         timeout=60,
     )
+    assert done.returncode == 0, f"psql refused the statement: {done.stderr.strip()}"
     return done.stdout.strip()
 
 
@@ -134,7 +138,12 @@ def _seed() -> tuple[str, str]:
         INSERT INTO finding_fixes (id, org_id, project_id, finding_id, kind, state,
             connection_repository_id, folder, requested_by)
         SELECT '{flying}', '{org}', '{project}', id, 'source', 'proposing', '{repository}',
-            'src', '{user}' FROM findings WHERE org_id = '{org}' AND id <> '{finding}'
+            'src', '{user}' FROM findings
+        WHERE org_id = '{org}' AND id <> '{finding}'
+          AND NOT EXISTS (
+              SELECT 1 FROM finding_fixes AS working
+              WHERE working.finding_id = findings.id AND working.state IN ({_WORKING})
+          )
         ORDER BY id LIMIT 1;
         INSERT INTO finding_fix_source_packs (fix_id, org_id, files, frames, bytes, expires_at)
         SELECT '{flying}', '{org}', '[{{"content": "{MARKER}"}}]', '[]', 1,

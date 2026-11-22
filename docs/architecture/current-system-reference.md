@@ -453,6 +453,20 @@ Results are encoded as OTLP protobuf — for a check, gauges carrying the run's 
 - **Retention** (`retention.py`, in the expiry sweep). A closed finding is purged at its project's derived retention, because it names services and endpoints. `intake_refusals`, `detection_events` and `baseline_shifts` are kept 30 days.
 - **What operators see.** Beat's leader publishes, with no project label, the settled minute's age, how many projects have had no completed run for 3 minutes and the longest wait, and recent `detection_events` by kind. A failing project job logs its `project_id`.
 
+### 7.7 Suggested fixes (F5)
+
+F5's scheduler half (design: `docs/features/ai-solution/design.md`; summary:
+`docs/architecture/system.md`, *Suggested fixes*). Rung 2b's job `insight.suggest_general_fix`
+and rung 3's `insight.propose_fix` run in `scheduler-insight` on `insight-fix`, as
+`nexovue_insight`. Everything that touches GitHub runs in `scheduler-connections`, on
+`connections-interactive` for a person's click (`build_source_pack`, `check_fix`, the draft and
+Run CI jobs, behind the write gate) and on `connections` for beat's `sweep:fixes` (every minute,
+`connections/fix_sweep.py`, which records each finished pass in `fix_sweep_status`) and
+`sweep:fix-pull-requests` (every 5 minutes, read only). `fixes.notify_requesters` and rung 2b's
+sweep run on `light`. Beat's leader publishes `nexovue_scheduler_fix_rows_recent`,
+`…_fix_oldest_in_flight_seconds`, `…_fix_checks_refused_recent` and `…_fix_sweep_age_seconds`
+(§7.6's install-wide gauges, no tenant label).
+
 ---
 
 ## 8. apps/web — the console

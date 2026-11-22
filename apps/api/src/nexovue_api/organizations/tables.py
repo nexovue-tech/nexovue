@@ -215,6 +215,9 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
     "alert_evaluation_status": (
         "when each alert sweep last finished — one row per sweep, across every tenant"
     ),
+    "fix_sweep_status": (
+        "when F5's rung 3 sweep last finished a pass — one row, across every tenant (0085)"
+    ),
     "rate_limit_windows": (
         "the auth tier's counters, keyed by a fingerprint of an address or IP and gone "
         "within the hour; nothing in a row names a tenant"

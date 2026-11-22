@@ -39,6 +39,9 @@ merged or closed (BR9's second row, `pull_request_done`); and once a repository'
 access has been gone 72 hours, every pull request or held branch there that Nexovue still
 followed reads `untracked` and frees its finding (design, *The sweep*, step 6; BR8, AC49),
 whether or not a consent was still live.
+
+Step 9 (T9.1): the task runs `sweep_and_record`, which writes `fix_sweep_status` once a whole
+pass has finished; beat reads its age for the operator's alert (migration 0085).
 """
 
 from __future__ import annotations
@@ -71,6 +74,7 @@ from nexovue_platform.fixes.records import (
     CONSENT_WITHDRAWN_ACCESS_GONE,
     FAILED,
     FIX_CHECKS_REFUSED,
+    FIX_SWEEP_NAME,
     FIX_WITHHELD,
     GATHERED_LAPSES_AFTER,
     GATHERING_STUCK_AFTER,
@@ -127,6 +131,14 @@ _ENDED_WAITING: Final = text(
 )
 _DROP_PACK: Final = text(
     "DELETE FROM finding_fix_source_packs WHERE org_id = :org_id AND fix_id = :fix_id"
+)
+# Install-wide bookkeeping (migration 0085): the database's clock, since beat reads the age
+# with it, and a test's clock may be anywhere.
+_RECORD_FINISHED: Final = text(
+    """
+    INSERT INTO fix_sweep_status (sweep, finished_at) VALUES (:sweep, now())
+    ON CONFLICT (sweep) DO UPDATE SET finished_at = EXCLUDED.finished_at
+    """
 )
 # Across every organization: drafts whose job never finished (AC26a). A late retry then
 # finds the state moved and stops.
@@ -643,9 +655,18 @@ async def _take_back_lost_access(
     return len(due)
 
 
+async def sweep_and_record(engine: AsyncEngine, *, clock: Callable[[], datetime]) -> SweptFixes:
+    """A whole pass, then when it finished, which beat reads for the operator's alert
+    (T9.1). A pass that raises records nothing, so the age keeps growing."""
+    swept = await sweep(engine, clock=clock)
+    async with engine.begin() as connection:
+        await connection.execute(_RECORD_FINISHED, {"sweep": FIX_SWEEP_NAME})
+    return swept
+
+
 @task(SWEEP_FIXES_TASK)
 def sweep_fixes_task() -> None:
-    swept = with_engine(lambda engine: sweep(engine, clock=lambda: datetime.now(UTC)))
+    swept = with_engine(lambda engine: sweep_and_record(engine, clock=lambda: datetime.now(UTC)))
     if (
         swept.ended
         or swept.cleared

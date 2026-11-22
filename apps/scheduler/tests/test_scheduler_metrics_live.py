@@ -397,3 +397,100 @@ async def test_f5_s_tamper_signal_counts_refusals_again_in_the_last_hour_only(
     assert after.fix_checks_refused - before.fix_checks_refused == 1
     metrics.publish(after)
     assert metrics.FIX_CHECKS_REFUSED._value.get() == after.fix_checks_refused
+
+
+_SWEEP_FINISHED: Final = text(
+    """
+    INSERT INTO fix_sweep_status (sweep, finished_at)
+    VALUES ('sweep_fixes', now() - make_interval(mins => :minutes))
+    ON CONFLICT (sweep) DO UPDATE SET finished_at = EXCLUDED.finished_at
+    """
+)
+SWEEP_AGE_MINUTES: Final = 20
+
+
+async def test_f5_s_sweep_age_is_read_while_connections_are_on(engine: AsyncEngine) -> None:
+    """F5 T9.1 (open decision 70): how long since `sweep_fixes` last finished a whole pass;
+    never finished reads +Inf; with connections off nothing is expected, so 0."""
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            await connection.execute(text("DELETE FROM fix_sweep_status"))
+            never = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(_SWEEP_FINISHED, {"minutes": SWEEP_AGE_MINUTES})
+            on = await metrics.read_queues(connection, now=datetime.now(UTC))
+            off = await metrics.read_queues(
+                connection, now=datetime.now(UTC), connections_enabled=False
+            )
+        finally:
+            await transaction.rollback()
+
+    assert never.fix_sweep_age_seconds == math.inf
+    expected = SWEEP_AGE_MINUTES * 60
+    assert abs(on.fix_sweep_age_seconds - expected) < CLOCKS_APART.total_seconds()
+    assert off.fix_sweep_age_seconds == 0
+    metrics.publish(on)
+    assert metrics.FIX_SWEEP_AGE._value.get() == on.fix_sweep_age_seconds
+
+
+async def test_f5_s_rows_by_state_and_reason_and_the_oldest_in_flight(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F5 T9.1 (design, *Observability*: "rows by state and reason in the last hour, the oldest
+    row in flight"): a row counts once under its kind, state and reason when its state moved
+    in the last hour; an older move does not; the oldest working row's age is read."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            for minutes, kind, state, reason in (
+                (10, "source", "refused", "withheld_K7"),
+                (20, "source", "failed", "timed_out"),
+                (90, "source", "refused", "withheld_K7"),
+                (45, "source", "proposing", None),
+            ):
+                finding = await add_finding(
+                    connection,
+                    tenant,
+                    service=f"svc-{minutes}-{kind}",
+                    started_at=datetime.now(UTC) - timedelta(hours=3),
+                )
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state,
+                            reason, state_changed_at)
+                        VALUES (:org, :project, :finding, :kind, :state, :reason,
+                            now() - make_interval(mins => :minutes))
+                        """
+                    ),
+                    {
+                        "org": tenant.org_id,
+                        "project": tenant.project_id,
+                        "finding": finding,
+                        "kind": kind,
+                        "state": state,
+                        "reason": reason,
+                        "minutes": minutes,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    def moved(key: tuple[str, str, str]) -> int:
+        return after.fix_rows_recent.get(key, 0) - before.fix_rows_recent.get(key, 0)
+
+    assert moved(("source", "refused", "withheld_K7")) == 1
+    assert moved(("source", "failed", "timed_out")) == 1
+    assert moved(("source", "proposing", metrics.NO_REASON)) == 1
+    assert after.fix_oldest_in_flight_seconds >= 45 * 60 - CLOCKS_APART.total_seconds()
+    metrics.publish(after)
+    assert (
+        metrics.FIX_ROWS_RECENT.labels(
+            kind="source", state="refused", reason="withheld_K7"
+        )._value.get()
+        == after.fix_rows_recent[("source", "refused", "withheld_K7")]
+    )

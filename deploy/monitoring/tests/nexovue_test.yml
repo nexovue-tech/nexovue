@@ -381,6 +381,36 @@ tests:
             exp_annotations:
               summary: "1 suggested fixes failed Nexovue's rules again on the same files in the last hour"
 
+  - name: the suggested fix sweep not finishing for fifteen minutes opens a ticket
+    interval: 1m
+    input_series:
+      # Finished 5 minutes before the series starts, then never again: past 900 s from 11m,
+      # held 5 minutes, so the ticket opens at 16m.
+      - series: 'nexovue_scheduler_fix_sweep_age_seconds{job="scheduler-beat"}'
+        values: "300+60x25"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: NexovueSuggestionSweepStalled
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: NexovueSuggestionSweepStalled
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "the suggested fix sweep last finished 21m 0s ago; stored code is not being deleted on time (docs/operations/ai.md)"
+
+  - name: a sweep finishing every minute, or connections off, is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_fix_sweep_age_seconds{job="scheduler-beat"}'
+        values: "30x30"
+      - series: 'nexovue_scheduler_fix_sweep_age_seconds{job="scheduler-beat-off"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: NexovueSuggestionSweepStalled
+        exp_alerts: []
+
   - name: no AI connection on and no scheduler-insight is quiet
     interval: 1m
     input_series:

@@ -1033,7 +1033,7 @@ The foundation asks that disagreement be stated. **For the founder's approval of
 
 ## Proposed ADRs
 
-*Written here, not as files. Numbers are assigned on acceptance; the next free one today is ADR-024.*
+*Written here first. **Filed 2026-11-22 (Step 9, T9.9) as ADR-103 to ADR-106**, in the order below; the files are the record from now on.*
 
 ### Proposed ADR: Code from a model reaches a person or a repository only through rules in a room with no model
 

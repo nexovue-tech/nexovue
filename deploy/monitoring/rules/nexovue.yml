@@ -192,6 +192,17 @@ groups:
         annotations:
           summary: "{{ $value }} suggested fixes failed Nexovue's rules again on the same files in the last hour"
 
+      # F5 (T9.1, migration 0085): rung 3's sweep deletes stored code when its time is up and
+      # ends stuck rows. No pass finished for 15 minutes means code is kept past its time.
+      # +Inf before the first pass and 0 while connections are off; held 5 minutes so a fresh
+      # install's first pass is not reported.
+      - alert: NexovueSuggestionSweepStalled
+        expr: max(nexovue_scheduler_fix_sweep_age_seconds) > 900
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "the suggested fix sweep last finished {{ $value | humanizeDuration }} ago; stored code is not being deleted on time (docs/operations/ai.md)"
+
       - alert: NexovueAlertsUndelivered
         expr: max(nexovue_scheduler_oldest_alert_waiting_seconds) > 300
         for: 5m

@@ -84,6 +84,11 @@ INSTALL_WIDE_TABLES: Final = (
         "is the scheduler's own heartbeat, the same for every tenant",
     ),
     Decision(
+        "fix_sweep_status",
+        "one row: when F5's rung 3 sweep last finished a whole pass, for the operator's alert "
+        "(migration 0085, T9.1). The sweep's own heartbeat, the same for every tenant",
+    ),
+    Decision(
         "usage_ingest_offsets",
         "how far the usage meter has counted each Kafka partition; a partition holds "
         "every tenant's records, so no tenant owns its offset",
@@ -244,6 +249,18 @@ CROSS_TENANT_STATEMENTS: Final = (
         "_FIX_CHECKS_REFUSED",
         "an install-wide gauge: suggested fixes the rules refused again on the same files, a "
         "count only, for F5's tamper alert (D18, T5.1)",
+    ),
+    _across(
+        "metrics",
+        "_FIX_ROWS_RECENT",
+        "an install-wide gauge: suggested fixes whose state moved in the last hour, counted by "
+        "kind, state and reason, all fixed vocabularies; no tenant label (F5 T9.1)",
+    ),
+    _across(
+        "metrics",
+        "_FIX_OLDEST_IN_FLIGHT",
+        "an install-wide gauge: the age of the oldest suggested fix a job is working on, one "
+        "number (F5 T9.1)",
     ),
     # F3's AI sweep, run as `nexovue_insight` (plan T5.5).
     _across(

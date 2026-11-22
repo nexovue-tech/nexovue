@@ -30,6 +30,8 @@ from nexovue_api.auth.dependencies import CurrentIdentity, Identity
 from nexovue_api.auth.permissions import Action, may
 from nexovue_api.auth.policy import MayConsentAIDisclosure, MayManageAI
 from nexovue_api.deps import AppSettings, DbSession, OptionalEmail
+from nexovue_api.findings import fix_summary
+from nexovue_api.findings.fix_schemas import FixSummary
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -173,3 +175,17 @@ async def read_runs(identity: MayManageAI, db: DbSession) -> list[RunRow]:
 @router.get("/runs/{run_id}/sent", summary="What a run sent, rebuilt, and whether it matches")
 async def read_sent(identity: MayManageAI, db: DbSession, run_id: uuid.UUID) -> SentView:
     return await service.sent(db, org_id=identity.org_id, run_id=run_id)
+
+
+@router.get(
+    "/fix-summary",
+    summary="Suggested fixes in the last 30 days: counts, and notices of rules that may mean "
+    "planted text (F5 UR12)",
+)
+async def read_fix_summary(identity: MayManageAI, db: DbSession) -> FixSummary:
+    return await fix_summary.summary(
+        db,
+        org_id=identity.org_id,
+        now=datetime.now(UTC),
+        support_view=identity.impersonation is not None,
+    )

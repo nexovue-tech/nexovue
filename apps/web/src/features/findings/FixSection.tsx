@@ -112,7 +112,7 @@ export function FixBrief({
         open={open}
         onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
       >
-        <summary className="cursor-pointer text-ink-dim text-sm hover:text-ink">
+        <summary className="flex min-h-11 cursor-pointer items-center text-ink-dim text-sm hover:text-ink">
           {BRIEF_WORDS.disclosure}
         </summary>
         <pre

@@ -67,7 +67,7 @@
 | **F2** | Finding detail | 🔴 No | 🔲 | 2 | Needs the engine first |
 | **F3** | Finding explanation | 🟡 Partly | ✅ | 2 | [Approved](../features/ai-insights/spec.md). Steps 1 to 6 built on `feature/phase-2` with fake providers only: facts from code on the finding page, then optional AI wording behind an owner's consent. A likely cause stays held until the recorded bar is met (T2.17, T2.18), and every real-model run is the founder's after Phase 2. [Readiness](../features/ai-insights/readiness.md): not ready |
 | **F4** | AI chatbot (RAG) | 🔴 No | ✅ | 2 | [Approved](../features/ai-chatbot/spec.md), not built. Compose reserves an `insight` service and Ollama; the package does not exist |
-| **F5** | AI solution | 🔴 No | ✅ | 2 | [Approved](../features/ai-solution/spec.md), not built. The chain's last link: after F3 earns trust |
+| **F5** | AI solution | 🔴 No | ✅ | 2 | [Approved](../features/ai-solution/spec.md); **built through Step 9, 2026-11-22, with write access off in code** until the founder's go (T6.5); real-model and real-GitHub runs are the founder's, after Phase 2 — see [status](../features/ai-solution/status.md) |
 | **F6** | Anomaly detection | 🔴 No | 🔲 | 2 | Feeds F1 and F21; worth little before alerts exist |
 | **F7** | Owner status page | 🔴 No | 🔲 | Later | The P3 persona has no surface yet |
 | **F8** | Service overview | ✅ Yes | 🔲 | 0 | Services list, ranking, trends, service detail |
@@ -261,8 +261,8 @@ The proactive finding-generation surface rules: cross-signal correlation present
 
 "Ask your system anything" panel available on every screen. Answers grounded in the user's telemetry (live tool-calling) + knowledge base (resolved findings, runbooks). Must cite/link the data it used.
 
-### F5 — AI Solution ✅ SPECIFIED, NOT BUILT
-**Approved by the founder 2026-11-02, not built:** [spec](../features/ai-solution/spec.md), [design](../features/ai-solution/design.md), [plan](../features/ai-solution/plan.md). Where this older text differs, the spec is what was approved.
+### F5 — AI Solution ✅ SPECIFIED, BUILT (WRITE ACCESS OFF)
+**Approved by the founder 2026-11-02; built Steps 1 to 9 by 2026-11-22, with write access off in code until his go (T6.5):** [spec](../features/ai-solution/spec.md), [design](../features/ai-solution/design.md), [plan](../features/ai-solution/plan.md). Where this older text differs, the spec is what was approved.
 
 Suggested fix with explanation on finding detail; optional draft-PR flow via GitHub connector; human-in-the-loop gating (never auto-applies without explicit action). Added 2026-11-02: a general suggestion with example code where Nexovue cannot read the code (rung 2b), labelled as not the customer's code.
 

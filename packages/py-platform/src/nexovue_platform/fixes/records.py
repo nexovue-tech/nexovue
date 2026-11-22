@@ -389,6 +389,9 @@ COMPLETE_GITHUB_USER_LINK_TASK: Final = "nexovue_scheduler.connections.complete_
 CONVERT_FIX_APP_TASK: Final = "nexovue_scheduler.connections.convert_fix_app"
 REFRESH_FIX_APP_TASK: Final = "nexovue_scheduler.connections.refresh_fix_app"
 SWEEP_FIXES_TASK: Final = "nexovue_scheduler.fixes.sweep_fixes"
+# The one name `fix_sweep_status` holds (migration 0085): the end of each whole pass of
+# `sweep_fixes`, which beat reads for the operator's alert (T9.1).
+FIX_SWEEP_NAME: Final = "sweep_fixes"
 # F22's queue for a person's jobs on `scheduler-connections` (design, *Jobs*). A copy,
 # because `nexovue_platform.connections` reaches file access this package may not
 # (`test_fix_platform_holds_no_ai.py`); `test_fix_source_records.py` holds them equal.

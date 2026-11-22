@@ -66,6 +66,7 @@ import {
 } from "./api";
 import { ChatSection } from "./ChatSection";
 import { CONSENT_WORDS, FixConsentPanel } from "./FixConsentPanel";
+import { FixSummaryPanel } from "./FixSummaryPanel";
 
 /**
  * `/settings/ai` (F3 FR23 to FR32; design *AI settings*): connect a provider, test it, set a
@@ -134,6 +135,10 @@ function Managed({ settings }: { settings: AISettings }) {
               <SwitchSection settings={settings} />
               <ProjectsSection />
               <UsageSection />
+              {/* F5 Step 9 (UR12, AC39): the suggested fix summary, beside F3's usage. */}
+              <Section id="ai-fix-summary" title="Suggested fixes">
+                <FixSummaryPanel />
+              </Section>
               <Section id="ai-chat" title="Chat">
                 <ChatSection />
               </Section>

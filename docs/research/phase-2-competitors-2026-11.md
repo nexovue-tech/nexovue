@@ -193,6 +193,13 @@ Two things follow, and both matter to Stage 4's design:
 | **OpenSRE** | Pushes fixes to a pull request branch; optionally executes remediation [V] | Tool approvals in headless mode [V] | Free | Alpha |
 | **Splunk** | Named in the plan's sources; not re-checked here | | | |
 
+**Re-read 2026-11-22 for F5 (T9.6):** see `docs/features/ai-solution/research.md`, *Re-read
+2026-11-22*. Sentry's $40 per contributor holds only until 8 December 2026 (usage-based credits
+after); Datadog Bits Code lists GitHub Enterprise Server, GitLab Self-Managed and Azure DevOps
+Cloud and "never auto-merges"; Grafana's sandboxes are Grafana Cloud only, public preview; New
+Relic's own page now says Autopilot "never writes to GitHub". incident.io, Rootly, OneUptime's
+pages, Better Stack, Middleware and Splunk could not be reached from the build session.
+
 **What Nexovue could bring, once built, that is true**
 
 - A strict split: the part reading telemetry holds no write permission, and repository access is narrow and audited.

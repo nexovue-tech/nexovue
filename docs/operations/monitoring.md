@@ -115,7 +115,7 @@ curl -s localhost:18000/metrics | grep ^nexovue_
 
 - `prometheus.yml` scrapes every service above by DNS, so each replica of the API and the receiver is
   its own target;
-- `rules/nexovue.yml` — 19 alerts on the thresholds in the tables above, plus **a service that is
+- `rules/nexovue.yml` — 27 alerts on the thresholds in the tables above and in [ai](ai.md), plus **a service that is
   missing altogether**: a stopped container leaves DNS, so it is never `up == 0`, only absent;
 - `tests/nexovue_test.yml` — `promtool test rules`, run by `just lint-deploy` in `just check`;
 - `alertmanager.yml` — routes to nowhere until a receiver is named.

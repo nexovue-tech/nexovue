@@ -169,6 +169,34 @@ not that the product lacks it.
 | **Aurora** | "Can generate pull requests with the remediation"; "open fix PRs" as an automatic post-analysis action | Approval not stated; org command policies | Isolated Kubernetes pods. Its README lists a NeMo input rail: "Prompt injection detection on every turn" | Free, Apache 2.0, own model |
 | **OpenSRE** | Pushes fixes to a pull request branch (carried) | Tool approvals (carried) | Alpha | Free |
 
+### Re-read 2026-11-22 (plan T9.6)
+
+Each rival's own page was fetched again on 2026-11-22 from the build session with `curl` (the
+web-fetch tool cannot resolve hosts outside the session's allowed network). **Six hosts could not
+be reached at all**, so their rows above stand as read on 2026-11-02 and are **not re-dated**:
+`incident.io`, `docs.rootly.com`, `oneuptime.com` (both the AI agent page and pricing),
+`betterstack.com`, `docs.middleware.io` and `www.splunk.com`. Each refused the same way: the
+session's outbound proxy answered `CONNECT` with 403, and the web-fetch tool could not resolve
+the name. That is this session's network, not the vendor; someone with open network must read
+them before launch.
+
+| Product | Page read 2026-11-22 | What it says now | Change since 2026-11-02 |
+|---|---|---|---|
+| **Sentry Seer Autofix** | [Autofix](https://docs.sentry.io/product/ai-in-sentry/seer/autofix/), [pricing](https://docs.sentry.io/pricing/) | Stopping points "Stop after Root Cause", "Stop after Plan", "Stop after PR Drafted"; "Seer supports GitLab.com and GitHub.com (cloud versions…)"; an organization setting "removes the Create PR button"; handoff to GitHub Copilot cloud agent. Pricing: "Until December 8th, 2026, … $40 per active contributor per month" (2 or more PRs to a Seer-enabled repository); "After December 8th, 2026, Seer will move to a usage-based credit system" | **Price changes on 8 December 2026** to usage-based credits; the $40 row is true only until then. Behaviour unchanged |
+| **Datadog Bits Code** | [Bits Code](https://docs.datadoghq.com/bits_ai/bits_code/) | "create production-ready pull or merge requests, then iterates on changes using CI logs and developer feedback"; results "as a pull or merge request (optionally in draft mode)"; "Bits Code never auto-merges PRs or MRs"; GitHub.com, Enterprise Cloud and **GitHub Enterprise Server**, GitLab.com and **GitLab Self-Managed**, and Azure DevOps Cloud (not Server); "CI Auto-fix" controls on the pull request | Adds Azure DevOps Cloud and a "CI Auto-fix". The "fixes by default" claim was on the Bits AI SRE page, not re-read |
+| **Grafana Managed Sandboxes** | [What's new, 2026-10-19](https://grafana.com/whats-new/2026-10-19-grafana-managed-sandboxes--from-root-cause-to-pull-request--without-leaving-grafana/) | "Grafana Cloud", "Available in public preview", "No self-managed release"; "runs tests and builds, and commits to a branch"; "Grafana never merges or deploys"; "open draft PRs automatically for verified private repositories"; or bring Cursor Cloud or Claude Managed Agents | **Now stated: Grafana Cloud only, no self-managed release** (was "does not say") |
+| **New Relic Autopilot** | [Connect to GitHub](https://docs.newrelic.com/docs/agentic-ai/autopilot/connect-to-github/) | Preview. "Autopilot uses read-only access to your GitHub organization. It never writes to GitHub. No PR is created, commented on, merged, or approved." | **Confirmed from its own page:** it opens no pull request (was carried) |
+| **OneUptime** | [README](https://github.com/OneUptime/oneuptime) only | "When you turn fixing on, it can open a pull request with a fix for your team to review"; "Community Edition: Free and open source, with everything above"; Enterprise Edition: "Production use needs a license"; Apache 2.0 except `ee/` | README unchanged in substance. **Whether the self-hosted fix path is free is still not confirmed:** the AI agent and pricing pages were unreachable, and the Community edition was **not installed** (this host had about 8 GB of disk free and its stack is many services). Plan T9.6's install is the founder's, with open network |
+| **OpenObserve** | [SRE agent setup](https://openobserve.ai/docs/enterprise-setup/sre-agent/) | Enterprise setup of the AI assistant and chat; no pull request found on the page | Unchanged: no pull requests |
+| **HolmesGPT** | [README](https://github.com/HolmesGPT/holmesgpt) | Operator mode "can even open PRs to fix what it finds"; "By design, HolmesGPT has **read-only access**"; a Kubernetes remediation toolset; Apache 2.0 | Unchanged: still unreconciled |
+| **Aurora** | [README](https://github.com/Arvo-AI/aurora) | "can generate pull requests with the remediation"; "open fix PRs" as an automated post-analysis action; sandboxed Kubernetes pods; Apache 2.0 | Unchanged |
+| **OpenSRE** | [README](https://github.com/Tracer-Cloud/opensre) | "pushes a fix for you to review"; "Self-hosted, with your own models"; "Public Alpha" | Confirmed from its own page (was carried) |
+
+**AC52's release item still stands:** rival claims must be dated within 30 days of launch. No
+launch date is set, so these rows need reading once more in the 30 days before it, the six
+unreachable ones first. Nothing here changes what F5 may say (`spec.md`, *What may be said*); it
+removes one hedge (Grafana is Cloud only) and changes one price (Sentry after 8 December 2026).
+
 ### The reference design is not an observability product
 
 **GitHub Copilot's cloud agent** publishes the most complete mitigations found, and they map almost one to one onto F5's risks

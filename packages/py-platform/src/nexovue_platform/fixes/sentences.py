@@ -71,6 +71,23 @@ def _rule_withheld(what: str, *, planted: bool, after: str = "") -> FixSentence:
     return FixSentence(f"The suggestion was withheld because it {what}.{tail}", _WITHHELD_VIEWER)
 
 
+# What each of Nexovue's rules found, in the words the requester and an admin's notice share.
+WITHHELD_RULE_WORDS: Final[dict[str, str]] = {
+    "K1": "touched a file outside the list you agreed to",
+    "K2": "tried to change a build, CI, dependency or agent instruction file",
+    "K3": "its change did not match the file exactly once",
+    "K4": (
+        "tried to create or delete a file, or change a file's mode, which suggested fixes never do"
+    ),
+    "K5": "was too large",
+    "K6": "added an address not already in the file",
+    "K7": "added hidden or look-alike characters",
+    "K8": "added a long encoded string",
+    "K9": "added something shaped like a secret",
+    "K10": "a line was too long to read, or hid text behind spaces",
+}
+
+
 # Why rung 2b is not offered, in FR9's order (the first version, plan T2b.7).
 ELIGIBILITY_SENTENCES: Final[dict[str, FixSentence]] = {
     "ai_off": FixSentence("AI is off. An admin sets it up, then an owner agrees.", None),
@@ -231,29 +248,18 @@ REASON_SENTENCES: Final[dict[str, FixSentence]] = {
         "The model's change did not match the file, even after one more try.",
         "Could not be applied.",
     ),
-    "withheld_K1": _rule_withheld(
-        "touched a file outside the list you agreed to", planted=False, after=_ASK_AGAIN
-    ),
-    "withheld_K2": _rule_withheld(
-        "tried to change a build, CI, dependency or agent instruction file", planted=True
-    ),
-    "withheld_K3": _rule_withheld(
-        "its change did not match the file exactly once", planted=False, after=_ASK_AGAIN
-    ),
-    "withheld_K4": _rule_withheld(
-        "tried to create or delete a file, or change a file's mode, which suggested fixes never do",
-        planted=False,
-    ),
+    "withheld_K1": _rule_withheld(WITHHELD_RULE_WORDS["K1"], planted=False, after=_ASK_AGAIN),
+    "withheld_K2": _rule_withheld(WITHHELD_RULE_WORDS["K2"], planted=True),
+    "withheld_K3": _rule_withheld(WITHHELD_RULE_WORDS["K3"], planted=False, after=_ASK_AGAIN),
+    "withheld_K4": _rule_withheld(WITHHELD_RULE_WORDS["K4"], planted=False),
     "withheld_K5": _rule_withheld(
-        "was too large", planted=False, after=" Removing files may help."
+        WITHHELD_RULE_WORDS["K5"], planted=False, after=" Removing files may help."
     ),
-    "withheld_K6": _rule_withheld("added an address not already in the file", planted=True),
-    "withheld_K7": _rule_withheld("added hidden or look-alike characters", planted=True),
-    "withheld_K8": _rule_withheld("added a long encoded string", planted=True),
-    "withheld_K9": _rule_withheld("added something shaped like a secret", planted=True),
-    "withheld_K10": _rule_withheld(
-        "a line was too long to read, or hid text behind spaces", planted=True
-    ),
+    "withheld_K6": _rule_withheld(WITHHELD_RULE_WORDS["K6"], planted=True),
+    "withheld_K7": _rule_withheld(WITHHELD_RULE_WORDS["K7"], planted=True),
+    "withheld_K8": _rule_withheld(WITHHELD_RULE_WORDS["K8"], planted=True),
+    "withheld_K9": _rule_withheld(WITHHELD_RULE_WORDS["K9"], planted=True),
+    "withheld_K10": _rule_withheld(WITHHELD_RULE_WORDS["K10"], planted=True),
     "checks_refused_at_click": FixSentence(
         "This suggestion no longer passes Nexovue's rules. Do not apply it. Tell your admin.",
         _NOT_PREPARED,

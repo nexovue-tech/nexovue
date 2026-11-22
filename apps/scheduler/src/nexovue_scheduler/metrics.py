@@ -8,7 +8,9 @@ waited, alerts waiting to be delivered, erasures overdue, and detection's
 progress — how old the newest settled minute is, how many projects it has
 stopped judging, how long the stalest has waited, and the events it recorded
 about nexovue's own intake (F6, C8), whether a tracker connection is live
-(F22), F3's explanations and AI runs, and F5's tamper signal. Those are read from
+(F22), F3's explanations and AI runs, and F5's suggested fixes: rows by state and reason,
+the oldest in flight, the tamper signal and how long since rung 3's sweep finished. Those are
+read from
 Postgres, not counted where they happen, because the sweep runs in a worker's child
 process, whose metrics no scrape sees.
 
@@ -26,6 +28,7 @@ from typing import Final
 
 from nexovue_platform.connections import TRACKER_KINDS
 from nexovue_platform.detection import NOT_RUNNING_AFTER
+from nexovue_platform.fixes.records import APPROVED, FIX_SWEEP_NAME, IN_FLIGHT_STATES
 from prometheus_client import Counter, Gauge, disable_created_metrics
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -153,6 +156,34 @@ _FIX_CHECKS_REFUSED: Final = text(
     """
 )
 
+# F5 T9.1 (design, *Observability*; C7: a worker child's counters are never scraped, so the
+# job figures are read from `finding_fixes`). Each state and reason is a fixed vocabulary,
+# so no label names a tenant; a state with no reason is labelled `none`.
+F5_RECENT_SECONDS: Final = 60 * 60
+NO_REASON: Final = "none"
+_FIX_ROWS_RECENT: Final = text(
+    """
+    SELECT kind, state, coalesce(reason, :no_reason) AS reason, count(*) AS rows
+    FROM finding_fixes
+    WHERE state_changed_at > now() - make_interval(secs => :recent)
+    GROUP BY kind, state, coalesce(reason, :no_reason)
+    """
+)
+# A row a job is still working on: gathering, waiting at the list, being written, or its
+# draft being opened. 0 when none.
+FIX_WORKING_STATES: Final = (*IN_FLIGHT_STATES, APPROVED)
+_FIX_OLDEST_IN_FLIGHT: Final = text(
+    """
+    SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(state_changed_at)), 0)
+    FROM finding_fixes WHERE state = ANY(CAST(:states AS text[]))
+    """
+)
+# When `sweep_fixes` last finished a whole pass (migration 0085). Null before any: read as
+# infinitely old, as detection's settled minute is.
+_FIX_SWEEP_AGE: Final = text(
+    "SELECT EXTRACT(EPOCH FROM now() - finished_at) FROM fix_sweep_status WHERE sweep = :sweep"
+)
+
 LOOP_SILENT: Final = Gauge(
     "nexovue_scheduler_loop_silent_seconds", "Seconds since this process's loop last beat."
 )
@@ -240,6 +271,21 @@ FIX_CHECKS_REFUSED: Final = Gauge(
     "Suggested fixes Nexovue's rules refused again on the same files in the last hour "
     "(leader only): F5's tamper signal.",
 )
+FIX_ROWS_RECENT: Final = Gauge(
+    "nexovue_scheduler_fix_rows_recent",
+    "Suggested fixes whose state moved in the last hour, by kind, state and reason (leader only).",
+    ["kind", "state", "reason"],
+)
+FIX_OLDEST_IN_FLIGHT: Final = Gauge(
+    "nexovue_scheduler_fix_oldest_in_flight_seconds",
+    "How long the oldest suggested fix a job is still working on has been in its state "
+    "(leader only).",
+)
+FIX_SWEEP_AGE: Final = Gauge(
+    "nexovue_scheduler_fix_sweep_age_seconds",
+    "Seconds since rung 3's suggested fix sweep last finished a pass; +Inf before any, 0 while "
+    "connections are off (leader only).",
+)
 
 # How a worker's job ended — the label values JOBS_ENDED takes.
 FINISHED: Final = "finished"
@@ -266,6 +312,9 @@ class QueueReadings:
     ai_runs_recent: dict[tuple[str, str], int] = field(default_factory=dict)
     ai_tokens_month: int = 0
     fix_checks_refused: int = 0
+    fix_rows_recent: dict[tuple[str, str, str], int] = field(default_factory=dict)
+    fix_oldest_in_flight_seconds: float = 0.0
+    fix_sweep_age_seconds: float = 0.0
 
 
 async def connections_live(connection: AsyncConnection, *, enabled: bool) -> bool:
@@ -308,6 +357,13 @@ async def read_queues(
     refused_again = await connection.scalar(
         _FIX_CHECKS_REFUSED, {"recent": F5_REFUSED_AGAIN_SECONDS}
     )
+    fix_rows = await connection.execute(
+        _FIX_ROWS_RECENT, {"recent": F5_RECENT_SECONDS, "no_reason": NO_REASON}
+    )
+    oldest_fix = await connection.scalar(
+        _FIX_OLDEST_IN_FLIGHT, {"states": list(FIX_WORKING_STATES)}
+    )
+    sweep_age = await _fix_sweep_age(connection, connections_enabled=connections_enabled)
     return QueueReadings(
         jobs_ready={row.queue: int(row.ready) for row in jobs},
         oldest_ready_seconds={row.queue: float(row.oldest) for row in jobs},
@@ -328,13 +384,31 @@ async def read_queues(
         ai_runs_recent={(row.purpose, row.outcome): int(row.runs) for row in runs},
         ai_tokens_month=int(f3.tokens_month),
         fix_checks_refused=int(refused_again or 0),
+        fix_rows_recent={(row.kind, row.state, row.reason): int(row.rows) for row in fix_rows},
+        fix_oldest_in_flight_seconds=float(oldest_fix or 0),
+        fix_sweep_age_seconds=sweep_age,
     )
+
+
+async def _fix_sweep_age(connection: AsyncConnection, *, connections_enabled: bool) -> float:
+    """Beat schedules `sweep_fixes` only while connections are on, so with them off nothing
+    is late."""
+    if not connections_enabled:
+        return 0.0
+    age = await connection.scalar(_FIX_SWEEP_AGE, {"sweep": FIX_SWEEP_NAME})
+    return math.inf if age is None else float(age)
 
 
 def publish(readings: QueueReadings) -> None:
     # Cleared first: a queue that has emptied stops being reported, rather
     # than repeating its last count.
-    for gauge in (JOBS_READY, OLDEST_READY, DETECTION_EVENTS_RECENT, AI_RUNS_RECENT):
+    for gauge in (
+        JOBS_READY,
+        OLDEST_READY,
+        DETECTION_EVENTS_RECENT,
+        AI_RUNS_RECENT,
+        FIX_ROWS_RECENT,
+    ):
         gauge.clear()
     for queue, ready in readings.jobs_ready.items():
         JOBS_READY.labels(queue=queue).set(ready)
@@ -356,11 +430,21 @@ def publish(readings: QueueReadings) -> None:
         AI_RUNS_RECENT.labels(purpose=purpose, outcome=outcome).set(runs)
     AI_TOKENS_MONTH.set(readings.ai_tokens_month)
     FIX_CHECKS_REFUSED.set(readings.fix_checks_refused)
+    for (kind, state, reason), rows in readings.fix_rows_recent.items():
+        FIX_ROWS_RECENT.labels(kind=kind, state=state, reason=reason).set(rows)
+    FIX_OLDEST_IN_FLIGHT.set(readings.fix_oldest_in_flight_seconds)
+    FIX_SWEEP_AGE.set(readings.fix_sweep_age_seconds)
 
 
 def forget_queues() -> None:
     """A beat that stops leading stops speaking for the queues."""
-    for gauge in (JOBS_READY, OLDEST_READY, DETECTION_EVENTS_RECENT, AI_RUNS_RECENT):
+    for gauge in (
+        JOBS_READY,
+        OLDEST_READY,
+        DETECTION_EVENTS_RECENT,
+        AI_RUNS_RECENT,
+        FIX_ROWS_RECENT,
+    ):
         gauge.clear()
     for single in (
         ALERTS_WAITING,
@@ -376,5 +460,7 @@ def forget_queues() -> None:
         AI_CONNECTIONS_ENABLED,
         AI_TOKENS_MONTH,
         FIX_CHECKS_REFUSED,
+        FIX_OLDEST_IN_FLIGHT,
+        FIX_SWEEP_AGE,
     ):
         single.set(0)

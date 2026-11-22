@@ -133,7 +133,7 @@ Special cases:
 | 3 | **Case management** | F22 | When a finding is detected, one click makes it someone's case, with its evidence already attached; no case starts by itself (FD12, ADR-022). Two states, investigating and resolved, on top of the finding's signal state. A GitHub issue created by a person's click, whose status follows. *Amended by F22, 2026-11-22: was "automatically create a case/incident".* |
 | 4 | **AI chatbot (with RAG)** | F4 | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. |
 | 5 | **AI insights** | F3 | Proactive plain-language findings: "checkout is 4x slower than normal since 14:32." Beside it, the facts that line up, each linked to its data: a signed deploy 4 minutes before, and a slower call to `payments`, with how often deploys here are followed by a finding. Facts first, optional plain-language wording after; never a stated cause the data cannot back (F3). |
-| 6 | **AI solution** | F5 | Beyond diagnosis → suggested fix: "Probable cause: unindexed query in deploy a41f2c9. Suggested fix: add index on orders.user_id." Possibly draft the PR via GitHub connector. |
+| 6 | **AI solution** | F5 | Beyond diagnosis → a suggested fix: a change to the service's own files, which a person lists and agrees to send to the AI they chose, checked by Nexovue's published rules and downloadable as a patch; a draft pull request only on a second click (switched off in code until the safety evaluation is done). Where Nexovue cannot read the code, a labelled general example. See [`features/ai-solution/spec.md`](../features/ai-solution/spec.md). |
 
 **How the features chain together (the incident pipeline):**
 

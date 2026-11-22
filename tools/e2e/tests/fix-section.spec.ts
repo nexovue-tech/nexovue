@@ -345,7 +345,7 @@ for (const width of WIDTHS) {
   test(`AC37d: rung 3's file list fits ${width} px with a long path and host`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await signUp(page, newAccount());
-    await stubFinding(page, LINE);
+    await stubFinding(page);
     await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/source`, (route) =>
       route.fulfill({ json: GATHERED_SOURCE }),
     );
@@ -452,20 +452,24 @@ for (const width of WIDTHS) {
     test(`AC37d: rung 3 ${name} fits ${width} px with its targets`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await signUp(page, newAccount());
-      await stubFinding(page, LINE);
+      await stubFinding(page);
       await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/source`, (route) =>
         route.fulfill({ json: proposedSource(latest) }),
       );
       await page.goto(`/findings/${FINDING_ID}`);
       await expect(
-        page.getByRole("heading", { name: String(latest.heading ?? "Suggested fix") }),
+        page
+          .getByTestId("source-state")
+          .getByRole("heading", { name: String(latest.heading ?? "Suggested fix") }),
       ).toBeVisible();
       await fitsTheWindow(page);
       if (latest.proposal) {
         // AC36: the bidirectional control shows as its code, never as a reordering.
         await expect(page.getByText("\\u{202E}")).toBeVisible();
-        const summary = page.locator("summary").first();
-        expect((await summary.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+        // Every disclosure on the page, the brief's and each file's, is a 44 px target.
+        for (const summary of await page.locator("summary").all()) {
+          expect((await summary.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+        }
       }
     });
   }
@@ -555,18 +559,23 @@ for (const width of WIDTHS) {
     test(`AC37d: the draft ${name} fits ${width} px with its targets`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await signUp(page, newAccount());
-      await stubFinding(page, LINE);
+      await stubFinding(page);
       await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/source`, (route) =>
         route.fulfill({ json: proposedSource(latest) }),
       );
       await page.goto(`/findings/${FINDING_ID}`);
       await expect(
-        page.getByRole("heading", { name: String(latest.heading ?? "Suggested fix") }),
+        page
+          .getByTestId("source-state")
+          .getByRole("heading", { name: String(latest.heading ?? "Suggested fix") }),
       ).toBeVisible();
       await fitsTheWindow(page);
-      for (const target of await page.locator("#suggested-fix button").all()) {
-        const box = await target.boundingBox();
-        expect(box?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+      // AC37d asks 44 px targets at phone width only.
+      if (width === WIDTHS[0]) {
+        for (const target of await page.locator("#suggested-fix button").all()) {
+          const box = await target.boundingBox();
+          expect(box?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+        }
       }
     });
   }

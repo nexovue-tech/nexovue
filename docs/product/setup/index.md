@@ -19,6 +19,7 @@ to go next.
 | You want releases, and deploys reported from CI | [deploys.md](deploys.md) — a build id in `service.version`, or a signed step in your pipeline |
 | You want plainer wording of a finding's facts from your own AI account or model (optional, off by default) | [ai.md](ai.md) |
 | You want a case's work to follow a GitHub issue (self-hosted) | [trackers/github.md](trackers/github.md) — what crosses, what stays in GitHub, and how to connect |
+| You want AI to suggest a change to your code on a finding (self-hosted, GitHub.com) | [ai-suggested-fixes.md](ai-suggested-fixes.md) — what is sent, what is not checked, and what to protect first |
 | You have set it all up and nothing has arrived | [troubleshooting.md](troubleshooting.md) |
 
 ## The two variables

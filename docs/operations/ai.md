@@ -123,11 +123,26 @@ which the worker's kill should prevent, so look at that container's memory and k
   Look at who could write `finding_fixes.edits` (the AI role's account, `nexovue_insight`, while a
   row is `proposing`), and at that role's recent `ai_runs`. A new release of the rules or a file
   that moved on GitHub reads "Out of date" instead, and never counts here.
+- `NexovueSuggestionSweepStalled` (F5, T9.1): rung 3's sweep (`fixes.sweep_fixes`, on
+  `scheduler-connections`) has not finished a whole pass for 15 minutes, held 5 more. It is the
+  job that deletes stored code when its time is up (BR9), ends stuck suggestions and records
+  each result once, so while it is stalled code is kept past its time and stuck rows stay
+  stuck; nothing else is affected (it shares no loop or queue with retention or alerts). Look
+  at `scheduler-connections`: is it running (`NexovueConnectionsMissing`), is the `connections`
+  queue waiting (`nexovue_scheduler_oldest_ready_job_seconds{queue="connections"}`), and does
+  its log show the sweep raising? Each finished pass writes `fix_sweep_status`; the metric is
+  `+Inf` before the first one and 0 while connections are switched off, since beat then
+  schedules no sweep.
 
 Beat also reports, with no tenant label: `nexovue_scheduler_ai_runs_recent{purpose,outcome}`,
 `nexovue_scheduler_ai_tokens_month`, `nexovue_scheduler_ai_connections_enabled`,
 `nexovue_scheduler_evidence_reads_failed_recent`, `nexovue_scheduler_evidence_truncated_recent`
-and `nexovue_scheduler_fix_checks_refused_recent` (the last hour).
+and `nexovue_scheduler_fix_checks_refused_recent` (the last hour). For suggested fixes (F5,
+T9.1): `nexovue_scheduler_fix_rows_recent{kind,state,reason}` (rows whose state moved in the
+last hour; `reason="none"` for a state without one, so a rise in `refused` with
+`withheld_K7` reads directly), `nexovue_scheduler_fix_oldest_in_flight_seconds` (the oldest
+row a job is still working on: gathering, at its list, being written, or its draft being
+opened; 0 when none) and `nexovue_scheduler_fix_sweep_age_seconds`.
 
 ## Not yet run against a real provider
 

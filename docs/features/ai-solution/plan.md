@@ -1,6 +1,6 @@
 # Plan: AI solution (F5)
 
-> **Status:** Approved by the founder, 2026-11-02. **Step 7 built 2026-11-22, awaiting commit** (*Step 7*, below), with write access off in code; Step 6 (code) committed. Ready to implement once F6 merges and Preconditions 1 and 2 (the buyer round and the GitHub trial) are met. **The founder kept approval and made those two block Step 1 (spec D64);** a result that changes the design goes back to him. **Step 2b, rung 2b, was added by his decision of the same day** (spec D65 to D72), and has not been reviewed by personas.
+> **Status:** Approved by the founder, 2026-11-02. **Step 9 built 2026-11-22, awaiting commit** (*Step 9*, below), with write access off in code; Steps 1 to 8 committed. Ready to implement once F6 merges and Preconditions 1 and 2 (the buyer round and the GitHub trial) are met. **The founder kept approval and made those two block Step 1 (spec D64);** a result that changes the design goes back to him. **Step 2b, rung 2b, was added by his decision of the same day** (spec D65 to D72), and has not been reviewed by personas.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step name the file that changes and the test that proves it, read from the code.
 >
@@ -279,15 +279,19 @@ Tasks are marked with the feature whose names they lean on, as **(F3)**, **(F22)
 
 *Judgeable:* the founder reads the customer's page and demo script, runs the demo, and approves the wording (foundation, decision 2) before anything is published.
 
-- [ ] **T9.1** — `nexovue_scheduler/metrics.py`, `deploy/monitoring/rules/nexovue.yml`, `deploy/monitoring/tests/nexovue_test.yml`, `docs/operations/alerting.md` · sweep figures; alert on a click-time refusal, and on `sweep_fixes` age **(C7)** · proved by the monitoring tests
-- [ ] **T9.2** — `apps/api/tests/test_fix_click_timing_live.py` · a named timing test on the demo stack · figure reported, no pass mark (NFR2)
-- [ ] **T9.3** — `features/aisettings/FixSummaryPanel.tsx`, route · the admin summary, with notices · proved by its test (AC39)
+- [x] **T9.1** — `nexovue_scheduler/metrics.py`, `deploy/monitoring/rules/nexovue.yml`, `deploy/monitoring/tests/nexovue_test.yml`, `docs/operations/alerting.md` · sweep figures; alert on a click-time refusal, and on `sweep_fixes` age **(C7)** · proved by the monitoring tests
+- [x] **T9.2** — `apps/api/tests/test_fix_click_timing_live.py` · a named timing test on the demo stack · figure reported, no pass mark (NFR2)
+- [x] **T9.3** — `features/aisettings/FixSummaryPanel.tsx`, route · the admin summary, with notices · proved by its test (AC39)
 - [ ] **T9.4** — no repository file · someone new times setup on a 30-service, two-environment fixture; rungs 3 and 4 and rung 5 apart · result in `status.md` (AC37c)
-- [ ] **T9.5** — `docs/product/setup/ai-suggested-fixes.md`; `docs/product/setup/index.md` · what is sent, what is not checked, protect main and release branches, other CI and other triggers, `pull_request_target`, backups, the outbound limit, the login note, a 90-day case, one worked cost example from one provider's price read that day, labelled an estimate · proved by a search for forbidden words (AC37, AC58's page half) and exact strings (AC62)
+- [x] **T9.5** — `docs/product/setup/ai-suggested-fixes.md`; `docs/product/setup/index.md` · what is sent, what is not checked, protect main and release branches, other CI and other triggers, `pull_request_target`, backups, the outbound limit, the login note, a 90-day case, one worked cost example from one provider's price read that day, labelled an estimate · proved by a search for forbidden words (AC37, AC58's page half) and exact strings (AC62)
 - [ ] **T9.6** — `docs/features/ai-solution/research.md`; `docs/research/phase-2-competitors-2026-11.md` · **re-read each rival's own documentation within 30 days before launch, and date the claims.** Install OneUptime's Community edition and record whether the self-hosted fix path is free · proved by the dated rows, AC52's release item, and the founder's approved wording (foundation, decision 2)
 - [ ] **T9.7** — `docs/product/fix-demo.md` · a written demo: one good diff, one refusal, one planted-instruction case and the "not checked" list, labelled as a seeded fixture. The demo stack's coded faults prove nothing here (D30) · proved by the founder running it
-- [ ] **T9.8** — `docs/architecture/security-and-tenancy.md`, `system.md`, `database.md`, `current-system-reference.md`; `docs/product/feature-catalog.md`; `vision.md:136` · proved by review
-- [ ] **T9.9** — the proposed ADRs, as files in `docs/decisions/`, once accepted · proved by review
+- [x] **T9.8** — `docs/architecture/security-and-tenancy.md`, `system.md`, `database.md`, `current-system-reference.md`; `docs/product/feature-catalog.md`; `vision.md:136` · proved by review
+- [x] **T9.9** — the proposed ADRs, as files in `docs/decisions/`, once accepted · proved by review
+
+**Step 9 built 2026-11-22, awaiting commit** (`wt/f5s9`, on 4ad5d47), with write access still off in code and T6.5 still not given. Where it differs from the tasks above: T9.1 needed migration **0085** (`fix_sweep_status`, the sweep's last finish; open decision 119), and its click-time alert already existed (`NexovueSuggestionRefusedAgain`, Step 5); T9.1's runbook entries are in `docs/operations/ai.md`, beside the tamper alert, with `alerting.md` pointing there. T9.3's route is `GET /ai/fix-summary` on F3's `/ai` router and its logic in `findings/fix_summary.py`; its AC39 walk is `apps/scheduler/tests/test_fix_summary_live.py` (where the AI account's fixtures live) and K6 and K8 notices wait on `nexovue_platform/fixes/notices.REPLAY_REPORT_READ` (decision 89). T9.2 is a live test against a running API (`NEXOVUE_API_ORIGIN`); its figures are in `status.md`. **T9.4 is not done:** its fixture (`tools/ai-eval/fix/setup_fixture.py`) and how to run it are built; the timing is a person's, the founder's to arrange. T9.5's page is a draft awaiting the founder's wording approval, proved by `test_fix_customer_page.py`. **T9.6 is half done:** nine rivals re-read and dated 2026-11-22; six hosts unreachable from the build session and OneUptime not installed. **T9.7's demo is written and rehearsed on the simulated GitHub with fake providers; running it for real is the founder's.** T9.9 filed the design's four ADRs as **ADR-103 to ADR-106**. Hardening done here: `fix-section.spec.ts` run (open decision 120), the Docker restore release check run and passing. Details: `status.md`, *Step 9*.
+
+- [ ] **T9.4, T9.6's unreachable rows and OneUptime install, T9.7's real run** — the founder's, after Phase 2, with open network
 
 ## New risks
 

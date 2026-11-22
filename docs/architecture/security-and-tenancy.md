@@ -20,6 +20,20 @@ Server OTLP uses secret API keys; browser RUM uses public site keys restricted b
 
 Telemetry is masked in workers before derive, sample, and storage. The worker masking hash secret is required in production configuration. The API uses typed domain errors and a central RFC 9457 error boundary.
 
+**Suggested fixes (F5).** Source code is the largest disclosure Nexovue makes, so each step
+needs its own person and grant. An owner agrees per repository and folder, and the consent is
+compared with the provider, key and model at every use (ADR-105). The process that calls the
+model holds no repository key, and the process with the key calls no model; code from a model
+reaches a person or a repository only through Nexovue's rules, run again in the room with the key
+(ADR-103). F5's GitHub App is its own, read only until an owner wants drafts (ADR-106). **Write
+access is off in code** (`write_gate.WRITE_ACCESS_GO` is None, ADR-097): every write path asks
+first, before anything that can reach GitHub, which `test_fix_write_gate.py` holds structurally.
+Under an owner's requirement, quoted code waits for the person's own GitHub access check. A
+support view reads no repository paths (`audit/read` strips `paths` and `files`; the admin
+summary's notices carry none). Every new scheduler statement binds `org_id`; the sweeps and
+gauges that must see every tenant are named in `test_scheduler_postgres_tenancy_structure.py`
+one statement at a time, and `fix_sweep_status` is declared install-wide.
+
 ## Future state
 
-No AI tool permissions, RAG data-access model, or production secret-management platform is implemented. Those require separate approved design before implementation.
+No production secret-management platform is implemented. F5's data-access rules are above; other AI features' rules are in their own designs. Those require separate approved design before implementation.

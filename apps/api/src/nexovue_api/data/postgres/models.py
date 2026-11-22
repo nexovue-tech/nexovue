@@ -84,6 +84,7 @@ from nexovue_platform.fixes.records import (
     FIX_KINDS,
     FIX_REASONS,
     FIX_STATES,
+    FIX_SWEEP_NAME,
     FIX_VERDICTS,
     GENERAL_LANGUAGES,
     GENERAL_SUGGESTION_MAX_BYTES,
@@ -3847,6 +3848,16 @@ class AlertEvaluationStatus(Base):
     evaluation: Mapped[str] = mapped_column(Text, primary_key=True)
     finished_at: Mapped[RequiredTimestamp]
     skipped: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class FixSweepStatus(Base):
+    """When F5's rung 3 sweep last finished a whole pass, for beat's alert (migration 0085)."""
+
+    __tablename__ = "fix_sweep_status"
+    __table_args__ = (CheckConstraint(f"sweep = '{FIX_SWEEP_NAME}'", name="sweep_is_known"),)
+
+    sweep: Mapped[str] = mapped_column(Text, primary_key=True)
+    finished_at: Mapped[RequiredTimestamp]
 
 
 class RateLimitWindow(Base):

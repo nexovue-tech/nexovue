@@ -165,3 +165,45 @@ class GeneralFixRequest(BaseModel):
     """FR33: the picked language, from the fixed list. Nothing typed."""
 
     language: GeneralLanguage
+
+
+class FixSummaryRefusal(BaseModel):
+    """Suggestions refused for one reason in the window (UR12)."""
+
+    reason: str
+    label: str
+    count: int
+
+
+class FixSummaryVerdict(BaseModel):
+    """What people said of suggestions in the window: every answer, 0 when nobody gave it."""
+
+    verdict: FixVerdict
+    label: str
+    count: int
+
+
+class FixSummaryNotice(BaseModel):
+    """A rule that may mean planted text withheld a suggestion (UR12, AC39): the rule, when, and
+    the files it named, never the suggestion's text. `files` is null in a support view."""
+
+    rule: str
+    sentence: str
+    at: datetime
+    fix_id: uuid.UUID | None
+    finding_id: uuid.UUID | None
+    files: list[str] | None
+
+
+class FixSummary(BaseModel):
+    """`GET /ai/fix-summary`: counts for the last `days`, each a true count (AC39)."""
+
+    days: int
+    empty: str
+    requested: int
+    refused: list[FixSummaryRefusal]
+    verdicts: list[FixSummaryVerdict]
+    drafts_opened: int
+    drafts_merged: int
+    tokens: int
+    notices: list[FixSummaryNotice]
