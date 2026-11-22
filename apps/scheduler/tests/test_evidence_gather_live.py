@@ -36,6 +36,7 @@ from nexovue_platform.evidence import (
 )
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from wording_fixtures import hold_added_jobs
 
 from nexovue_scheduler.evidence import gather as gather_module
 from nexovue_scheduler.evidence.gather import gather, lock_key
@@ -474,9 +475,9 @@ PROVIDER_URL = "https://provider.example/v1"
 
 
 async def ai_on(engine: AsyncEngine, tenant: AlertTenant, *, call_seconds: int = 45) -> None:
-    """An organization's connection, switched on after the whole flow (BR4). Its consent is
-    real, so the stack's own AI role, where one runs, retries an unreachable address rather
-    than turning the row `off` under this test."""
+    """An organization's connection, switched on after the whole flow (BR4), its consent real.
+    Nothing is ever sent to it: a test whose gather adds a word job holds that job from the
+    stack's own AI role (`hold_added_jobs`), which would otherwise run it first."""
     fingerprint = consent_fingerprint(
         wire_format="openai_chat", base_url=PROVIDER_URL, region=None, key_id=None
     )
@@ -552,10 +553,14 @@ async def gather_as_released(
 
 
 async def test_with_ai_on_a_new_version_waits_for_words_and_adds_one_job_by_name(
-    engine: AsyncEngine, acme: AlertTenant, telemetry: EvidenceStore
+    engine: AsyncEngine,
+    acme: AlertTenant,
+    telemetry: EvidenceStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """T5.2, AC60: the gather decides `pending`, the first generation, and adds the word job
     in its own transaction, ids only, on the AI role's queue, limited by the connection."""
+    hold_added_jobs(monkeypatch)
     await ai_on(engine, acme, call_seconds=45)
     found = await open_finding(engine, acme)
     await signed_deploy(engine, acme, at=START - timedelta(minutes=4))

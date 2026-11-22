@@ -29,7 +29,7 @@ from live import require_stack
 from recording_site import RecordingSite
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wording_fixtures import CHAT_PATH, answer, connect, openai_reply, run_word
+from wording_fixtures import CHAT_PATH, answer, connect, hold_added_jobs, openai_reply, run_word
 
 from nexovue_scheduler.evidence.gather import gather
 from nexovue_scheduler.evidence.store import connect_store
@@ -240,8 +240,14 @@ async def _stored(engine: AsyncEngine, finding_id: uuid.UUID) -> Any:
 
 @pytest.fixture
 async def planted(
-    ai_install: AsyncEngine, ai_tenant: AlertTenant, provider_site: RecordingSite, now: datetime
+    ai_install: AsyncEngine,
+    ai_tenant: AlertTenant,
+    provider_site: RecordingSite,
+    now: datetime,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Any, Any]:
+    """The markers planted and gathered, the gather's word job held for the test's own run."""
+    hold_added_jobs(monkeypatch)
     connected = await connect(ai_install, ai_tenant, provider_site, now=now)
     start = now - OPENED_BEFORE
     _plant_telemetry(ai_tenant, start)
