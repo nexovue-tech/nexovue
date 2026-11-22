@@ -12,7 +12,7 @@ Held:
   read record, the count tables, `ai_runs` and `ai_usage_monthly` may change. Anything else
   fails. ClickHouse's row counts must not change. The running stack and the other test files
   write their own organizations' rows meanwhile, so a table that reaches an organization is
-  read for this test's two, and four of the stack's own clocks are left out (`STACK_CLOCKS`).
+  read for this test's two, and five of the stack's own clocks are left out (`STACK_CLOCKS`).
 - **AC9.** Another organization's finding, project and service never reach the provider.
 
 The rows are committed, since the API and the worker each use their own connections; each
@@ -62,7 +62,9 @@ CLICKHOUSE_DSN: Final = CLICKHOUSE_READER_DSN
 INSIGHT_ASYNC_DSN: Final = insight_dsn(ASYNC_DSN)
 OTHER_SERVICE: Final = "tenant-b-only-service"
 OWN_SERVICE: Final = "tenant-a-checkout"
-# Changes the loop and the API may make; anything else is a write the model caused.
+# Changes the loop and the API may make; anything else is a write the model caused. A question's
+# reads spend its person's and organization's allowance (F4 T2.4) on tiers counted in the API's
+# memory, never the exact ones in `rate_limit_windows`, so that table is not among them.
 ALLOWED_TABLES: Final = frozenset(
     {
         "assistant_steps",
@@ -78,13 +80,16 @@ ALLOWED_TABLES: Final = frozenset(
 # organization. `detection_project_runs` is detection's clock for each project it works on,
 # which a project with an open finding is (D24, D34): the stack's sweep and project job write
 # this test's every minute, with no question asked. The loop's role has no grant on it, and
-# no API route writes it.
+# no API route writes it. `intake_refusals` is the receiver's count of what it refused per
+# minute for want of a broker (F6, C5): keyed by receiver, written only by the receiver and
+# the scheduler's own tests, pruned by the expiry sweep.
 STACK_CLOCKS: Final = frozenset(
     {
         "alert_evaluation_status",
         "detection_sweep",
         "usage_ingest_offsets",
         "detection_project_runs",
+        "intake_refusals",
     }
 )
 MESSAGE_COLUMNS_WRITTEN: Final = frozenset(
@@ -154,6 +159,31 @@ _OWN_ROWS: Final = (
     ("project_id", "t.project_id IN (SELECT id FROM projects WHERE org_id = ANY(:organizations))"),
     ("token_id", "t.token_id IN (SELECT id FROM api_tokens WHERE org_id = ANY(:organizations))"),
 )
+# The exact limiter's counters, keyed `{quota}:{scope}:{sha256 of the caller}`
+# (`ratelimit/limiter.py`). A caller reaches an organization as a person, the organization
+# itself, a person's address, a project's deploys, or a session or API token by its SHA-256
+# (`middleware/ratelimit.py`). A live question ticket pays as its person; an IP reaches none.
+_OWN_COUNTERS: Final = """split_part(t.key, ':', 3) IN (
+    SELECT encode(sha256(convert_to(caller, 'UTF8')), 'hex') FROM (
+        SELECT 'user:' || id FROM users WHERE org_id = ANY(:organizations)
+        UNION ALL SELECT lower(email) FROM users WHERE org_id = ANY(:organizations)
+        UNION ALL SELECT CAST(id AS text) FROM organizations WHERE id = ANY(:organizations)
+        UNION ALL SELECT CAST(id AS text) FROM projects WHERE org_id = ANY(:organizations)
+        UNION ALL SELECT 'tok:' || token_hash FROM sessions WHERE org_id = ANY(:organizations)
+        UNION ALL SELECT 'tok:' || token_hash FROM api_tokens WHERE org_id = ANY(:organizations)
+    ) AS reached(caller))"""
+# A detection guard names the organizations whose lost traffic engaged it (`holds.py`).
+_OWN_EVENTS: Final = (
+    "t.detail -> 'organizations' ?| "
+    "(SELECT array_agg(CAST(id AS text)) FROM organizations WHERE id = ANY(:organizations))"
+)
+# Tables read by something other than a column of `_OWN_ROWS`. `plans`, `plan_prices` and
+# `alembic_version` reach no organization and only a migration writes them: read whole.
+_OWN_ROWS_BY_TABLE: Final = {
+    "organizations": "t.id = ANY(:organizations)",
+    "rate_limit_windows": _OWN_COUNTERS,
+    "detection_events": _OWN_EVENTS,
+}
 
 
 async def _snapshot(install: AsyncEngine, organizations: list[uuid.UUID]) -> dict[str, str]:
@@ -162,7 +192,9 @@ async def _snapshot(install: AsyncEngine, organizations: list[uuid.UUID]) -> dic
     tenants, the demo's checks, detection, usage, jobs), so a table that reaches an organization
     is read for this test's two only, where any write the question caused, through its own
     ticket or another tenant's ids, would land. `organizations` itself has no `org_id`: it is
-    read by `id`, or another file's tenant made or deleted meanwhile would count as a write."""
+    read by `id`, or another file's tenant made or deleted meanwhile would count as a write. The
+    limiter's counters and detection's events name a caller or an organization in a value, and
+    are read by it."""
     async with install.connect() as db:
         columns: dict[str, set[str]] = {}
         for row in await db.execute(
@@ -196,8 +228,8 @@ async def _snapshot(install: AsyncEngine, organizations: list[uuid.UUID]) -> dic
 def _own_rows(table: str, columns: set[str]) -> str:
     """The condition that keeps `table`'s rows of this test's organizations; every row of a
     table that reaches no organization."""
-    if table == "organizations":
-        return "t.id = ANY(:organizations)"
+    if table in _OWN_ROWS_BY_TABLE:
+        return _OWN_ROWS_BY_TABLE[table]
     return next((rows for column, rows in _OWN_ROWS if column in columns), "TRUE")
 
 
