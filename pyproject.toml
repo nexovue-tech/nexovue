@@ -122,10 +122,13 @@ pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audi
 # `insight_fence` suites need an installed kit (F3 AC42, AC46); `just insight-fence` runs them with
 # `-m insight_fence`, which replaces this one, and `just check` never collects them. `release_check`
 # suites run the backup scripts against a stack's own containers, by hand per release (F5 T5.5).
-addopts = "-p clickhouse_cleanup -p fastapi_caches -p logging_state -m 'not insight_fence and not release_check'"
+# `ai_off` suites need a Postgres with no AI account and no `scheduler-insight`, which the dev
+# stack `just check` runs against always has; CI's `ai-off` job runs them with `-m ai_off` (F22 AC56).
+addopts = "-p clickhouse_cleanup -p fastapi_caches -p logging_state -m 'not insight_fence and not release_check and not ai_off'"
 markers = [
     "insight_fence: needs the installed kit `just insight-fence` builds (F3 plan T3.11)",
     "release_check: run by hand per release against real volumes, never in the gate (F5 T5.5)",
+    "ai_off: needs a Postgres with AI never set up; CI's `ai-off` job runs it (F22 AC56)",
 ]
 testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval"]
 

@@ -11,7 +11,8 @@ days (BR13). Every row it leaves is real and committed.
 key; no organization row says AI is on; no session is signed in as the AI account while the case
 runs, which is what a running `scheduler-insight` would be; and no job reaches an AI queue. CI's
 `ai-off` job runs this suite on a Postgres alone, with no AI account made, and refuses the run if
-an AI setting or a `scheduler-insight` container is present.
+an AI setting or a `scheduler-insight` container is present. The `ai_off` marker keeps it out of
+every other run (`pyproject.toml`): the dev stack `just check` runs against has AI on.
 """
 
 from __future__ import annotations
@@ -88,6 +89,8 @@ def _reachable() -> bool:
     except OSError:
         return False
 
+
+pytestmark = pytest.mark.ai_off
 
 require_stack(
     reachable=_reachable(),

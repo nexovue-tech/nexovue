@@ -152,4 +152,5 @@ jobs:
             echo "the AI account exists; setup was given its password"; exit 1
           fi
       - name: A full case with AI off
-        run: uv run pytest -p no:cacheprovider apps/api/tests/test_ai_off_cases_live.py
+        # `-m ai_off` replaces the default `not ai_off`; selecting nothing exits 5 and fails the job.
+        run: uv run pytest -p no:cacheprovider -m ai_off apps/api/tests/test_ai_off_cases_live.py

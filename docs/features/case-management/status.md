@@ -48,7 +48,9 @@ simulated GitHub only. Worktree `wt/f22s8` on `feature/phase-2` at 4ad5d47; own 
   would be), no job on an AI queue, and no `ai_connections` or `ai_runs` row. CI gains a
   separate **`ai-off`** job: Postgres alone, `setup` with no AI password (so no AI account),
   a step refusing any of nexovue's AI variables, a `scheduler-insight` container or an existing
-  AI account, then the suite. `check` and `insight-fence` are untouched. **The job has not run
+  AI account, then the suite, selected with `-m ai_off`. The `ai_off` marker keeps it out of
+  every other run: `check`'s stack runs `scheduler-insight`, so the suite failed there (seen in
+  the first full gate, 2026-11-22). `insight-fence` is untouched. **The job has not run
   on GitHub**; its steps were rehearsed here on a throwaway Postgres (setup made neither account;
   the guard found nothing; the suite passed). Making it a required check is a GitHub settings
   change, the founder's.
