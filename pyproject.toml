@@ -116,10 +116,13 @@ pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audi
 # per test held thousands of superseded parts in memory (tests/helpers/clickhouse_cleanup.py).
 # FastAPI's dependency caches are emptied after each test: they kept every test's overrides,
 # and with them its session and engine, alive (tests/helpers/fastapi_caches.py).
+# Logging is put back after each test: Alembic's `env.py`, run in-process by `setup` and the
+# migration suites, pointed the root handler at a closed capture stream and disabled every
+# existing logger for the tests after it (tests/helpers/logging_state.py).
 # `insight_fence` suites need an installed kit (F3 AC42, AC46); `just insight-fence` runs them with
 # `-m insight_fence`, which replaces this one, and `just check` never collects them. `release_check`
 # suites run the backup scripts against a stack's own containers, by hand per release (F5 T5.5).
-addopts = "-p clickhouse_cleanup -p fastapi_caches -m 'not insight_fence and not release_check'"
+addopts = "-p clickhouse_cleanup -p fastapi_caches -p logging_state -m 'not insight_fence and not release_check'"
 markers = [
     "insight_fence: needs the installed kit `just insight-fence` builds (F3 plan T3.11)",
     "release_check: run by hand per release against real volumes, never in the gate (F5 T5.5)",
