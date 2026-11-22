@@ -20,6 +20,12 @@ account's password.
 while the connections worker holds jobs; an alert delivery and a detection job, on the other
 worker, each finish inside their soft limit. Sharing Postgres and beat is not proved by this.
 
+**Its own database.** The suite's routes, rows and both workers use a database of its own on the
+stack's Postgres server, prepared by the real `setup` (`private_database`). On the stack's
+database, the stack's `scheduler-connections` claimed the suite's conversion job first and
+dropped its manifest code with a key it could not read (the first full gate, 2026-11-22); the
+suite's own workers must take its jobs, so `jobs_held` cannot keep them from the stack.
+
 **Not proved here:** real GitHub (the founder's, after Phase 2), and a browser.
 """
 
@@ -43,17 +49,30 @@ from typing import Any, Final
 
 import pytest
 import structlog
-from alert_fixtures import ASYNC_DSN, AlertTenant, add_finding, postgres_reachable
-from connections_fixtures import CONNECTIONS_ASYNC_DSN
-from connections_login import DEV_CONNECTIONS_PASSWORD
+from alert_fixtures import (
+    POSTGRES_DSN,
+    AlertTenant,
+    add_finding,
+    drop_tenant,
+    make_tenant,
+    postgres_reachable,
+)
+from connections_login import DEV_CONNECTIONS_PASSWORD, connections_dsn
 from live import require_stack
 from nexovue_platform.alerts.tasks import DELIVER_TASK
 from nexovue_platform.checks.sealing import ConfiguredKeys, generate_key
 from nexovue_platform.jobs import ENQUEUE, JobRequest
+from private_database import private_database
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from tracker_fake import CLIENT_SECRET, WEBHOOK_SECRET, FakeGitHub, serve_fake_github
 
+from nexovue_api import connections_account
 from nexovue_api.connections import service as connections_service
 from nexovue_api.connections.schemas import Availability
 from nexovue_api.data.postgres.models import User
@@ -147,7 +166,8 @@ def _base_environment() -> dict[str, str]:
 
 
 @contextmanager
-def _workers(tmp_path: Path, github: FakeGitHub, key: str) -> Iterator[Workers]:
+def _workers(tmp_path: Path, github: FakeGitHub, key: str, dsn: str) -> Iterator[Workers]:
+    """Both workers, on the suite's own database `dsn`."""
     connections_log, full_log = tmp_path / "connections.log", tmp_path / "full.log"
     common = {
         "ENV": "development",
@@ -169,7 +189,7 @@ def _workers(tmp_path: Path, github: FakeGitHub, key: str) -> Iterator[Workers]:
             {
                 **common,
                 "SCHEDULER_ROLE": "connections",
-                "POSTGRES_DSN": CONNECTIONS_ASYNC_DSN,
+                "POSTGRES_DSN": connections_dsn(dsn),
                 "CONNECTION_SECRET_KEY": key,
                 "HEALTH_ADDR": f"127.0.0.1:{_free_port()}",
                 "E2E_GITHUB_API": github.base_url,
@@ -186,7 +206,7 @@ def _workers(tmp_path: Path, github: FakeGitHub, key: str) -> Iterator[Workers]:
             {
                 **common,
                 "SCHEDULER_ROLE": "full",
-                "POSTGRES_DSN": ASYNC_DSN,
+                "POSTGRES_DSN": dsn,
                 # Required of the role, and never reached by a delivery or a detection job.
                 "KAFKA_BROKERS": "127.0.0.1:9",
                 "CLICKHOUSE_DSN": CLICKHOUSE_READER_DSN,
@@ -211,6 +231,36 @@ def _workers(tmp_path: Path, github: FakeGitHub, key: str) -> Iterator[Workers]:
 
 
 assert fix_takeback.on_disconnect in connections_service.DISCONNECT_HOOKS
+
+
+@pytest.fixture(scope="module")
+def database() -> Iterator[str]:
+    """The suite's own database, with the tracker account's grants, as `setup` makes them."""
+    with private_database(
+        POSTGRES_DSN,
+        prefix="nexovue_connections_e2e",
+        environment={connections_account.PASSWORD_VARIABLE: DEV_CONNECTIONS_PASSWORD},
+    ) as dsn:
+        yield dsn
+
+
+@pytest.fixture
+async def engine(database: str) -> AsyncIterator[AsyncEngine]:
+    """The install's account on the suite's database, as the routes use it."""
+    created = create_async_engine(database, pool_size=4)
+    try:
+        yield created
+    finally:
+        await created.dispose()
+
+
+@pytest.fixture
+async def tenant(engine: AsyncEngine) -> AsyncIterator[AlertTenant]:
+    made = await make_tenant(engine)
+    try:
+        yield made
+    finally:
+        await drop_tenant(engine, made)
 
 
 @pytest.fixture
@@ -482,7 +532,7 @@ async def _written(engine: AsyncEngine, tenant: AlertTenant) -> dict[str, str]:
 
 async def test_ac36_a_full_connect_create_and_disconnect_leaves_no_credential_anywhere(
     engine: AsyncEngine,
-    connections_engine: AsyncEngine,
+    database: str,
     sessions: async_sessionmaker[AsyncSession],
     tenant: AlertTenant,
     github: FakeGitHub,
@@ -495,7 +545,7 @@ async def test_ac36_a_full_connect_create_and_disconnect_leaves_no_credential_an
     try:
         with (
             structlog.testing.capture_logs() as api_logs,
-            _workers(tmp_path, github, key) as workers,
+            _workers(tmp_path, github, key, database) as workers,
         ):
             connection_id, place_id, code = await _connect(
                 engine, sessions, tenant, github, keys, workers, seen
@@ -562,7 +612,7 @@ async def test_ac36_a_full_connect_create_and_disconnect_leaves_no_credential_an
 
 async def test_ac50_a_hanging_tracker_holds_up_no_delivery_or_detection_job(
     engine: AsyncEngine,
-    connections_engine: AsyncEngine,
+    database: str,
     sessions: async_sessionmaker[AsyncSession],
     tenant: AlertTenant,
     github: FakeGitHub,
@@ -570,7 +620,7 @@ async def test_ac50_a_hanging_tracker_holds_up_no_delivery_or_detection_job(
 ) -> None:
     key = generate_key()
     seen = Seen()
-    with _workers(tmp_path, github, key) as workers:
+    with _workers(tmp_path, github, key, database) as workers:
         connection_id, _, _ = await _connect(
             engine, sessions, tenant, github, ConfiguredKeys(key), workers, seen
         )
