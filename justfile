@@ -151,6 +151,13 @@ release-measure *args:
 fault-bed *args:
     uv run python tools/fault-bed/fault_bed.py {{args}}
 
+# F4 plan T8.1 (AC80, AC98): hostile chat questions looping 7-day reads beside the fault bed, then
+# `summary` (memory, the two poll routes) and `compare` (a chat run's alerts against a chat-idle
+# run's). See tools/fault-bed/README.md, *Chat under load*.
+# Load chat beside detection and alerts, and compare
+chat-load *args:
+    uv run python tools/fault-bed/chat_load.py {{args}}
+
 # F3 plan T2.15, T2.16, T6.3: the AI bed. `--run score|tune|payloads|models|forged`; the model runs use
 # fake providers unless a real wire format is named, and a real model is the founder's run after Phase 2.
 # See tools/ai-eval/run.py. The deploy scheduler and facts log are described in docs/research/f3-rules-report-2026-11.md.

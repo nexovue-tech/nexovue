@@ -589,3 +589,113 @@ async def test_a_withheld_notification_counts_as_held_until_it_is_released(
     assert after.notifications_withheld_held - before.notifications_withheld_held == 1
     metrics.publish(after)
     assert metrics.NOTIFICATIONS_WITHHELD_HELD._value.get() == after.notifications_withheld_held
+
+
+_CHAT_MESSAGE: Final = text(
+    """
+    INSERT INTO assistant_messages (org_id, project_id, conversation_id, user_id, question,
+        context, data_level, state, call_seconds, queue_expires_at, deadline_at, hard_ends_at,
+        created_at)
+    VALUES (:org, :project, :conversation, :user, 'What is failing?', '{}', 'facts', :state, 30,
+        now(), now(), now(), now() - make_interval(mins => :ago))
+    """
+)
+_CHAT_COUNT: Final = text(
+    """
+    INSERT INTO assistant_monthly_counts (org_id, month, kind, count)
+    VALUES (:org, date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                  - make_interval(months => :months_back), :kind, :count)
+    """
+)
+# Older than any question another suite leaves queued, so the unclaimed age below is ours.
+RUNNING_FOR_MINUTES = 90
+QUEUED_FOR_MINUTES = 5
+
+
+async def test_chat_s_readings_count_this_month_s_outcomes_and_what_is_in_flight(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F4 T8.2 (design, *Observability and operations*): this month's outcomes and the
+    validator's rejections by reason, from `assistant_monthly_counts`; a person's wrong marks
+    and last month's are not counted; questions in flight, the oldest of them, and the oldest
+    nobody has taken (`queued`), which a running question is not. No label names a tenant."""
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            scope = {"org": tenant.org_id, "project": tenant.project_id}
+            owner = await connection.scalar(
+                text("SELECT id FROM users WHERE org_id = :org AND email = :email"),
+                {"org": tenant.org_id, "email": tenant.owner_email},
+            )
+            colleague = await connection.scalar(
+                text(
+                    "INSERT INTO users (org_id, email, role, password_hash) "
+                    "VALUES (:org, :email, 'member', 'x') RETURNING id"
+                ),
+                {"org": tenant.org_id, "email": f"chat-{uuid.uuid4().hex[:10]}@example.test"},
+            )
+            for user, state, ago in (
+                (owner, "running", RUNNING_FOR_MINUTES),
+                (colleague, "queued", QUEUED_FOR_MINUTES),
+                (owner, "answered", 3 * RUNNING_FOR_MINUTES),
+            ):
+                conversation = await connection.scalar(
+                    text(
+                        "INSERT INTO assistant_conversations (org_id, user_id, project_id, "
+                        "title) VALUES (:org, :user, :project, 'q') RETURNING id"
+                    ),
+                    scope | {"user": user},
+                )
+                await connection.execute(
+                    _CHAT_MESSAGE,
+                    scope
+                    | {"conversation": conversation, "user": user, "state": state, "ago": ago},
+                )
+            for kind, count, months_back in (
+                ("answered", 3, 0),
+                ("withheld", 2, 0),
+                ("rejected_way_out", 2, 0),
+                ("rejected_shape", 1, 0),
+                ("wrong_numbers", 4, 0),
+                ("answered", 7, 1),
+            ):
+                await connection.execute(
+                    _CHAT_COUNT,
+                    {
+                        "org": tenant.org_id,
+                        "kind": kind,
+                        "count": count,
+                        "months_back": months_back,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    def outcome(name: str) -> int:
+        return after.assistant_questions_month[name] - before.assistant_questions_month[name]
+
+    def rejected(reason: str) -> int:
+        return after.assistant_rejections_month[reason] - before.assistant_rejections_month[reason]
+
+    assert (outcome("answered"), outcome("withheld"), outcome("failed")) == (3, 2, 0)
+    assert (rejected("way_out"), rejected("shape"), rejected("command")) == (2, 1, 0)
+    assert "wrong_numbers" not in after.assistant_questions_month
+    assert after.assistant_questions_in_flight - before.assistant_questions_in_flight == 2
+    slack = CLOCKS_APART.total_seconds()
+    assert after.assistant_oldest_in_flight_seconds >= RUNNING_FOR_MINUTES * 60 - slack
+    assert after.assistant_oldest_unclaimed_seconds >= QUEUED_FOR_MINUTES * 60 - slack
+    assert after.assistant_oldest_unclaimed_seconds < RUNNING_FOR_MINUTES * 60 - slack
+    metrics.publish(after)
+    assert (
+        metrics.ASSISTANT_QUESTIONS_MONTH.labels(outcome="answered")._value.get()
+        == after.assistant_questions_month["answered"]
+    )
+    assert (
+        metrics.ASSISTANT_REJECTIONS_MONTH.labels(reason="way_out")._value.get()
+        == after.assistant_rejections_month["way_out"]
+    )
+    assert metrics.ASSISTANT_OLDEST_UNCLAIMED._value.get() == (
+        after.assistant_oldest_unclaimed_seconds
+    )

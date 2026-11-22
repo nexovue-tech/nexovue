@@ -482,6 +482,37 @@ sweep run on `light`. Beat's leader publishes `nexovue_scheduler_fix_rows_recent
 - **What it does not do:** call a model or any provider (held by `test_detection_has_no_ai.py` and `test_slo_no_provider_calls.py`), define targets in code, or import or export them.
 - **Cost** has been measured only on a development machine (`docs/features/slo-tracking/status.md`, Step 6). The numbers for a deployed server are owed.
 
+### 7.8 Chat (F4)
+
+The model loop behind the console's **Ask** panel (design: `docs/features/ai-chatbot/design.md`;
+operations: `docs/operations/ai.md`, *Chat*; customer setup: `docs/product/setup/chat.md`).
+
+- **Asking** (`apps/api/src/nexovue_api/assistant/`). `POST /assistant/conversations` (or
+  `…/{id}/messages`) checks AI is on and consented, the person's daily limit, one question in
+  flight per person and the month's token share, then writes the question as `queued` with a
+  ticket (`tickets.py`, `nvat_`) and an `assistant` job, in one transaction. The panel then reads
+  `GET …/messages/{id}` every 1.5 s while it runs, and the conversation once it ends.
+- **The loop** (`nexovue_scheduler/insight/assistant.py`) runs in `scheduler-insight` as
+  `nexovue_insight`. Up to `MAX_STEPS` (8) times it asks the provider for a tool call or an
+  answer; each tool call is checked against the catalog (`nexovue_platform/assistant_tools.py`:
+  GETs only, windows at most 7 days) and read from the API at `INTERNAL_API_URL` with the ticket,
+  as the person (`assistant_reads.py`). Each step is stored as it runs, so the panel shows it
+  live; tool results are fenced in the next call and never stored. The answer must be JSON whose
+  sentences each cite a step that returned rows (`assistant_answer.py`): an uncited sentence,
+  a model-written link or command, or a copied result is removed or the answer sent back once,
+  then withheld. Abstaining is a closed list of reasons.
+- **Knowledge** (Steps 5 to 7): runbooks, case notes and resolved cases are chunked into
+  Postgres and searched by keyword, and by meaning where an embedding model is set (no vector
+  index). Only person-written text and code-composed facts are indexed.
+- **The sweep** (`assistant_sweep.py`, also in `scheduler-insight`) ends questions past their
+  clocks: a question no one claims within its queue clock (at least `MIN_QUEUE_SECONDS`, 120)
+  reads *unavailable*.
+- **What it stores:** the question, the checked answer, each step's checked arguments and row
+  count, and a read record for the admin section; no prompt and no tool result. Conversations
+  expire at the project's derived retention.
+- **Measured:** memory and the poll routes under 4 looping questions, on a development machine
+  only (`docs/features/ai-chatbot/status.md`, Step 8; `docs/self-hosting/sizing.md`).
+
 ## 8. apps/web — the console
 
 ### 8.1 Stack

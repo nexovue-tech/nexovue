@@ -18,8 +18,9 @@ ASSISTANT_SWEEP_TASK: Final = "nexovue_scheduler.insight.assistant_sweep.sweep"
 # Raised when what chat's consent says changes (the preview's words, or what goes): every
 # owner must agree again. The API and the AI role both compare against it. 2 (F4 Step 6):
 # every chunk and search phrase may now go to be embedded. 3 (F4 Step 7): people's case notes
-# now go too, in search results and to be embedded.
-CHAT_DISCLOSURE_VERSION: Final = 3
+# now go too, in search results and to be embedded. 4 (F4 Step 8): the consent step says
+# BR18's sentence, what the answer check can miss (AC99).
+CHAT_DISCLOSURE_VERSION: Final = 4
 
 # The purpose a ticket is sealed under for the worker; its owner is the message id.
 TICKET_PURPOSE: Final = "assistant-ticket"

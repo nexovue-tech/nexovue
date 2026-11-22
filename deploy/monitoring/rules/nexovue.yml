@@ -196,6 +196,19 @@ groups:
         annotations:
           summary: "AI wording jobs have waited {{ $value }}s for scheduler-insight"
 
+      # F4 (design, *Observability and operations*). A chat question nobody has taken for two
+      # minutes, the shortest queue clock (`MIN_QUEUE_SECONDS`). Read from the question's row,
+      # not the job's, which leaves the ready count when that clock runs out; chat's sweep runs
+      # in scheduler-insight too, so a stopped role leaves the row queued and this grows.
+      - alert: NexovueChatQuestionsUnclaimed
+        expr: |
+          max(nexovue_scheduler_assistant_oldest_unclaimed_seconds) > 120
+          and on() max(nexovue_scheduler_ai_connections_enabled) > 0
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "a chat question has waited {{ $value }}s for scheduler-insight to take it (docs/operations/ai.md)"
+
       # F5 (D18, ADR-096): a written suggestion Nexovue's rules refused again on the same
       # rules, lists and files, at a check run or the sweep's first recording. The one
       # tamper signal: new rules or a moved file read "Out of date" and never count.

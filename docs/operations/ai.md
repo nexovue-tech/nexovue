@@ -144,6 +144,32 @@ last hour; `reason="none"` for a state without one, so a rise in `refused` with
 row a job is still working on: gathering, at its list, being written, or its draft being
 opened; 0 when none) and `nexovue_scheduler_fix_sweep_age_seconds`.
 
+## Chat (F4)
+
+Chat's questions run in the same container, on its own `assistant` queue, beside wording and
+suggested fixes. A question is a job: the API writes it as `queued`, `scheduler-insight` claims
+it, and each read it makes goes to the API at `INTERNAL_API_URL` (`http://api:8000` over the `ai`
+network, never a public address), as the person who asked, on a ticket that dies with the
+question. Customer setup: [`docs/product/setup/chat.md`](../product/setup/chat.md).
+
+- **`NexovueChatQuestionsUnclaimed`**: a question nobody has taken for over two minutes while AI
+  is on, held two more. Either `scheduler-insight` is not running (`NexovueInsightMissing` fires
+  too), or all 8 of its slots, shared with wording and suggested fixes, are busy. Questions are
+  not retried: one that waits past its queue clock reads *unavailable*, and the person asks
+  again. Chat's sweep, which records that ending, runs in `scheduler-insight` as well, so with the
+  role stopped questions stay `queued`, and this alert is what says so. Findings, facts and
+  alerts are unaffected.
+- **A step reads "failed"**: the read went to `INTERNAL_API_URL` and did not come back (the API
+  down, or the read refused under its rate limit). The model is told and answers with what it
+  has; nothing is retried. Check that `api` answers on the `ai` network.
+- **Beat reports, with no tenant label:** `nexovue_scheduler_assistant_questions_month{outcome}`,
+  `…_assistant_validator_rejections_month{reason}` (this month, from the monthly counts),
+  `…_assistant_questions_in_flight`, `…_assistant_oldest_in_flight_seconds` and
+  `…_assistant_oldest_unclaimed_seconds`.
+- **Logs** carry a question's id, organization, outcome and tokens, never its text.
+- **An operator with database access can read conversations**; admins and support staff cannot
+  in the console. Say so to whoever relies on the install.
+
 ## Not yet run against a real provider
 
 Every wording path is tested against a fake provider on this machine. No format has completed a

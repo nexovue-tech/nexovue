@@ -9,6 +9,7 @@ import { useProjectSelection } from "@/shared/projects";
 
 import {
   CHAT_DATA_LEVEL_WORDS,
+  CHAT_LIMITS_LINE,
   CHAT_MASKING_LINE,
   CHAT_MCP_LINE,
   CHAT_NO_READS,
@@ -120,6 +121,7 @@ function ChatSettingsView({ settings, now }: { settings: ChatSettings; now: numb
           </p>
         )}
         <p className="max-w-prose text-ink-dim">{SELLING_LINE}</p>
+        <p className="max-w-prose text-ink">{CHAT_LIMITS_LINE}</p>
         <div>
           <Button variant="secondary" onClick={() => setShowPreview(!showPreview)}>
             {showPreview ? "Hide what would be sent" : "Show what would be sent"}

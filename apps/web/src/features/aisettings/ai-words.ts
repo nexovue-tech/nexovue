@@ -192,6 +192,10 @@ export function outcomeLine(outcome: string): string {
 
 // ---------------------------------------------------------------- F4: chat (T2.12)
 
+/** BR18's sentence, word for word (spec; AC99): what chat can and cannot do, on the consent
+ *  step and the setup page alike. `test_banned_claims.py` holds the page to the same words. */
+export const CHAT_LIMITS_LINE =
+  "Chat has no tool that can write. nexovue checks each answer and removes model-written links and commands; that check can miss things. Log text goes to the AI provider you choose.";
 export const CHAT_MCP_LINE =
   "This switch does not affect the MCP server. Your own AI tools reach it with API tokens your team made.";
 export const CHAT_MASKING_LINE =

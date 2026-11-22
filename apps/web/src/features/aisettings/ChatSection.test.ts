@@ -213,6 +213,17 @@ describe("the Chat section", () => {
     });
   });
 
+  it("says what chat can and cannot do on the consent step, in BR18's words (AC99)", async () => {
+    stub("owner");
+    const shown = await mount(section);
+    // Written out, not imported: the spec's sentence, so a changed constant fails here.
+    expect(shown.textContent).toContain(
+      "Chat has no tool that can write. nexovue checks each answer and removes model-written " +
+        "links and commands; that check can miss things. Log text goes to the AI provider you " +
+        "choose.",
+    );
+  });
+
   it("offers no agreement to an admin who is not an owner", async () => {
     stub("admin");
     const shown = await mount(section);

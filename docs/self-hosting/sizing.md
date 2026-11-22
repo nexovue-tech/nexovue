@@ -5,10 +5,11 @@ defaults suit the smallest server we support; a larger one is given more through
 
 ## The smallest server: 16 GB, 4 CPUs
 
-The defaults add up to about 14.1 GB of ceilings (6 + 2 + 1 + 1.25 + about 3.5, and 0.375 for the
-AI container, by arithmetic; this page said "about 13 GB" until 2026-11-08), and about 14.5 GB with
-tracker connections on, leaving the rest to the operating system and the page cache ClickHouse reads
-through. Whether what is left is
+The defaults add up to about 14.5 GB of ceilings (6 + 2 + 1 + 1.25 + about 3.5, and 0.77 for the
+AI container, by arithmetic; this page said "about 13 GB" until 2026-11-08, and counted the AI
+container at 0.375 until 2026-11-22, after its limit had been raised to 768 MB), and about 14.9 GB
+with tracker connections on, leaving the rest to the operating system and the page cache ClickHouse
+reads through. Whether what is left is
 enough has not been measured on a 16 GB server. Most services use well under their ceiling.
 
 | Service | Ceiling | Setting |
@@ -19,7 +20,7 @@ enough has not been measured on a 16 GB server. Most services use well under the
 | Worker (writes telemetry) | 1.25 GB | `WORKER_MEMORY`, `WORKER_GOMEMLIMIT` |
 | API, receiver, schedulers, edge, object store | about 3.5 GB together | — |
 | Tracker connections (`scheduler-connections`), only while `NEXOVUE_CONNECTIONS=yes` | 384 MB ceiling. **Read once, indicatively (2026-11-22):** about 250 MB of proportional memory for the worker, its forkserver and three children after a job each, read from the processes on a shared 4-CPU development VM, not from the container on a real server | — |
-| AI explanations (`scheduler-insight`), idle until an organization turns AI on | 384 MB: four children kept under 48 MiB each beside the parent, by arithmetic; **not yet measured** at 4 or 6 children | `SCHEDULER_INSIGHT_REPLICAS=0` runs with no AI container at all |
+| AI explanations, chat and suggested fixes (`scheduler-insight`), idle until an organization turns AI on | 768 MB ceiling: eight children kept under 48 MiB each beside the parent and forkserver. **Read once, indicatively (2026-11-22):** a peak of 318 MiB of proportional memory for the worker, its forkserver and all eight children, with four chat questions running at once for 10 minutes, each making eight 7-day reads (F4 T8.1); read from the processes on a shared 4-CPU development VM, not from the container on a real server, with no wording or suggested-fix job beside them | `SCHEDULER_INSIGHT_REPLICAS=0` runs with no AI container at all |
 
 **Case timelines (F22).** One case's timeline is one Postgres read. At the largest case nexovue
 allows (90 days kept alive, a recurrence joining every 4 hours, 500 notes of 4,000 characters,
@@ -28,6 +29,19 @@ oldest page 5 to 6 ms, over three runs of 50 reads (`tools/detection-seed/timeli
 2026-11-22, shared 4-CPU VM under load: indicative only). On one run the slowest 5% reached 265 ms.
 The read scans the events table, so it grows with every organization's events, not only the
 case's; it is not measured at millions of events.
+
+**Chat's two poll routes (F4).** While a question runs, the panel reads it every 1.5 seconds, and
+reads the conversation's first page when it ends. With four people each asking in one
+conversation that grew to 56 questions, the question's read took a median of 22 ms (95% under
+49 ms, its answer at most 5 kB) and the conversation's 35 ms (95% under 59 ms, at most 256 kB),
+over 1,569 and 221 reads (`tools/fault-bed/chat_load.py`, 2026-11-22, the same VM: indicative
+only).
+
+**Chat's reads cost ClickHouse.** A question may read a whole week of logs at a step. A search for
+a phrase reads every log row in that week: on 12 million rows (about 650 MiB on disk), each such
+read took a median of 0.4 seconds with one question running and 1.3 seconds with four, reading
+about 800 MiB each time. Detection and alerts read the same server; whether they keep their
+minute under this is measured on the fault bed (F4 AC80), not here.
 
 A local model (Ollama, for example) is not in these figures: it runs outside nexovue, and needs its
 own memory on top.

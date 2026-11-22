@@ -513,7 +513,9 @@ services:
       resources:
         limits:
           # A guess (F4 design, *Worker memory*; F5 D56): eight children at 48 MiB each with
-          # the parent and forkserver. F3's T3.10 record replaces it; F4's T8.1 measures.
+          # the parent and forkserver. F4 T8.1 read a peak of 318 MiB (proportional) under four
+          # looping chat questions on a development VM (docs/self-hosting/sizing.md); kept until
+          # a real server's container is read, with wording and suggested fixes beside it.
           memory: 768M
 
   # ---------- the monitor, ready to connect (design.md §10) ----------

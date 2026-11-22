@@ -256,6 +256,18 @@ CROSS_TENANT_STATEMENTS: Final = (
     ),
     _across(
         "metrics",
+        "_CHAT_MONTH",
+        "an install-wide gauge: this month's chat outcomes and the checks' rejections, summed "
+        "across organizations by kind, closed lists only (F4 T8.2)",
+    ),
+    _across(
+        "metrics",
+        "_CHAT_IN_FLIGHT",
+        "install-wide gauges: chat questions in flight, the oldest, and the oldest no worker "
+        "has taken, counts and ages only (F4 T8.2)",
+    ),
+    _across(
+        "metrics",
         "_FIX_CHECKS_REFUSED",
         "an install-wide gauge: suggested fixes the rules refused again on the same files, a "
         "count only, for F5's tamper alert (D18, T5.1)",

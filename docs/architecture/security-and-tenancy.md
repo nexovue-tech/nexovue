@@ -36,6 +36,23 @@ summary's notices carry none). Every new scheduler statement binds `org_id`; the
 gauges that must see every tenant are named in `test_scheduler_postgres_tenancy_structure.py`
 one statement at a time, and `fix_sweep_status` is declared install-wide.
 
+**Chat (F4).** A model chooses chat's reads, so it is handed no tenant, no project and no
+credential of a person's. **A third credential, the assistant ticket** (`nvat_`,
+`assistant/tickets.py`), is minted per question and dies with it: its row holds the
+organization, the person and the project, and every read builds its `Reader` from that row,
+never from the request, then passes `require_readable_project` and the tenant-bound repository
+like any other read. The ticket is refused on any method but `GET`, and a path's slots and
+handler must be on the catalog's allow-list (`nexovue_platform/assistant_tools.py`), so a model
+cannot reach a write route by building a path. Reads count against the person's own rate limit.
+In Postgres, the AI role (`nexovue_insight`) sees `assistant_messages` only while a question is
+in flight (or still holds a token reservation), may change it only while it stays in flight, and
+sees only the steps of a message it can see: row-level security, migration 0073, chat's first use
+of it (D85). Knowledge search binds the organization and project from the ticket too. Model
+words are stored only in the asker's own conversation and read only by the conversation routes,
+so no alert, webhook or issue carries them; the answer check removes model-written links and
+commands, a heuristic the injection suite measures. Admins and support staff do not read
+conversations; an operator with database access can, and the setup page says so.
+
 ## Future state
 
-No production secret-management platform is implemented. F5's data-access rules are above; other AI features' rules are in their own designs. Those require separate approved design before implementation.
+No production secret-management platform is implemented. F4's and F5's data-access rules are above; other AI features' rules are in their own designs. Those require separate approved design before implementation.

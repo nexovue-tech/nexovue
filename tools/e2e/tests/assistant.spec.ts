@@ -1,13 +1,14 @@
 /**
  * F4 T2.11: one question, end to end, in the real panel, against T2.0's fake provider.
  *
- * Needs the dev stack with `--profile fake-provider` and an organization connected to it
- * (OpenAI-compatible, http://172.30.250.10:8080/v1), AI and chat on and consented. **Written
- * for the hardening pass, not run** (F4 status.md): Playwright needs the stack, and no CI
- * workflow runs it. The phone arm is AC48's at 375 px.
+ * Needs the dev stack with `--profile fake-provider` and `scheduler-insight` running, and an
+ * organization connected to it (OpenAI-compatible, http://172.30.250.10:8080/v1), AI and chat
+ * on and consented, **with services reporting in the last half hour**: a step that read no
+ * rows cannot be cited, so the fake's answer would be withheld. No CI workflow runs it; F4
+ * Step 8 ran it on a native stack (status.md). The phone arm is AC48's at 375 px.
  *
  * F4 Step 3 adds: a step's link opened in a fresh session shows the same project and range
- * (AC22, T3.3a), and the panel by keyboard alone (AC50). Written, not run, as above.
+ * (AC22, T3.3a), and the panel by keyboard alone (AC50).
  */
 
 import { expect, test } from "@playwright/test";
@@ -34,7 +35,11 @@ test("a question shows its steps live, then the answer whole, with its label and
   await panel.getByRole("button", { name: "What is failing right now?" }).click();
   await panel.getByRole("button", { name: "Send" }).click();
 
-  await expect(panel.getByText("Reading services")).toBeVisible({ timeout: 60_000 });
+  // The step's own row while the question runs; the fake takes 3 s over its answer
+  // (`FAKE_PROVIDER_ANSWER_SECONDS`), so the panel's 1.5 s reads see it live.
+  await expect(panel.getByRole("listitem").filter({ hasText: "Reading services" })).toBeVisible({
+    timeout: 60_000,
+  });
   await expect(panel.getByText("Every service that reported is listed in step s1.")).toBeVisible({
     timeout: 60_000,
   });
@@ -50,11 +55,17 @@ test("on a phone, the Ask button fits, a link closes the panel and offers Back t
   await signIn(page, EMAIL, PASSWORD);
   await page.goto("/services");
   const ask = page.getByRole("button", { name: /^(Ask|Answer ready)$/ });
+  // The button waits for the session, so it is awaited before it is measured.
+  await expect(ask).toBeVisible();
   const box = await ask.boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
   await ask.click();
   const panel = page.getByRole("complementary", { name: "Ask about your telemetry" });
-  await expect(page.locator("main")).toHaveJSProperty("inert", true);
+  // `inert` is set on the shell around `main` (AppShell.tsx) and holds everything inside it;
+  // the property reflects only an element's own attribute, so the subtree is asked.
+  await expect
+    .poll(() => page.locator("main").evaluate((element) => element.closest("[inert]") !== null))
+    .toBe(true);
   await panel.getByRole("button", { name: "What is failing right now?" }).click();
   await panel.getByRole("button", { name: "Send" }).click();
   await expect(panel.getByText("Every service that reported is listed in step s1.")).toBeVisible({

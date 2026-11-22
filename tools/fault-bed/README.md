@@ -139,3 +139,43 @@ The rules are in `fault_score.py`'s docstring. In short:
   need not be caught. The bed cannot see which services are classed bursty. A *fail* on such a
   service needs reading against `GET /services/{name}/detection`.
 - **The probable cause.** Scoring it is Stage 2's job.
+
+## Chat under load (F4, AC80 and AC98)
+
+`chat_load.py` (`just chat-load`) asks whether chat's heaviest questions hold detection and alerts
+back. Each of four people keeps one question in flight, and every question makes eight 7-day reads
+(`search_logs` for a phrase no log holds, so each read covers every row, then `list_traces`), from
+the fake provider in `week-reads` mode. It records each question, every poll of the panel's two
+routes and the memory of the processes or containers named. **AC80's guess, fixed before any
+run:** every minute's detection judged inside the 60-second cycle, and each alert no more than 60
+seconds later than in a chat-idle run, with the same findings and notifications.
+
+```bash
+# 1. The week-reads fake on the `ai` network, and an organization connected to it (Settings → AI
+#    wording, OpenAI-compatible, http://172.30.250.10:8080/v1), with chat on, the daily limit at
+#    1,000 and four members sharing one password.
+FAKE_PROVIDER_MODE=week-reads docker compose --profile fake-provider up -d fake-provider
+
+# 2. The chat-idle run is the AC36 run above. The chat run is a second one, with this beside it
+#    for the whole run:
+export NEXOVUE_LOAD_PASSWORD='…'
+just chat-load run --project-id <the load project> --email a@… --email b@… --email c@… --email d@… \
+  --minutes 16560 --container nexovue-scheduler-insight-1 --container nexovue-api-1 \
+  --log tools/fault-bed/runs/chat-load.jsonl
+
+# 3. Memory and the poll routes (AC98), and the alerts against the idle run (AC80).
+just chat-load summary --log tools/fault-bed/runs/chat-load.jsonl
+just chat-load compare --idle tools/fault-bed/runs/run-1.jsonl --chat tools/fault-bed/runs/run-2.jsonl
+```
+
+`compare` pairs the two runs' injections by fault and round, and fails any whose first finding or
+first burn came more than 60 seconds later under chat, or whose findings differ on scope,
+services, signals or severity, or whose notifications differ on kind, state, channel or reason.
+An injection in only one run is not judged. A looper the API refuses (the daily limit, a rate
+limit) stops and is reported, so refused load is never counted as load.
+
+**Not yet measured by any tool here: AC80's detection half,** every minute judged inside the
+60-second cycle on the fault bed. `just detection-scale watch` measures exactly that, but only for
+AC29's generated tenants, not the demo's project (F4 status, open decision on AC80's detection
+half).
+

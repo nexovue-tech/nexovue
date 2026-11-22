@@ -8,9 +8,9 @@ waited, alerts waiting to be delivered, erasures overdue, and detection's
 progress — how old the newest settled minute is, how many projects it has
 stopped judging, how long the stalest has waited, and the events it recorded
 about nexovue's own intake (F6, C8), whether a tracker connection is live
-(F22), F3's explanations and AI runs, and F5's suggested fixes: rows by state and reason,
-the oldest in flight, the tamper signal and how long since rung 3's sweep finished. Those are
-read from
+(F22), F3's explanations and AI runs, F4's chat questions, and F5's suggested fixes: rows by
+state and reason, the oldest in flight, the tamper signal and how long since rung 3's sweep
+finished. Those are read from
 Postgres, not counted where they happen, because the sweep runs in a worker's child
 process, whose metrics no scrape sees.
 
@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
 
+from nexovue_platform.assistant_records import FINAL_STATES, IN_FLIGHT, REJECTION_REASONS
 from nexovue_platform.connections import TRACKER_KINDS
 from nexovue_platform.detection import NOT_RUNNING_AFTER
 from nexovue_platform.fixes.records import APPROVED, FIX_SWEEP_NAME, IN_FLIGHT_STATES
@@ -145,6 +146,32 @@ _AI_RUNS_RECENT: Final = text(
     GROUP BY purpose, outcome
     """
 )
+# F4 (design, *Observability and operations*). This month's counts, the ones the Chat section
+# shows, summed across organizations; a kind is an outcome, `rejected_<reason>`, or a person's
+# wrong mark, and only the first two are read, each from its closed list, so no label is free text.
+_CHAT_MONTH: Final = text(
+    """
+    SELECT kind, sum(count) AS questions FROM assistant_monthly_counts
+    WHERE month = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+    GROUP BY kind
+    """
+)
+CHAT_REJECTED_PREFIX: Final = "rejected_"
+# In flight, the oldest, and the oldest nobody has taken: the worker's claim moves a question
+# from `queued` to `running`. The states are written into the statement, not bound, so the
+# planner can use the in-flight partial index (`uq_assistant_one_in_flight`) on every plan.
+_IN_FLIGHT_LIST: Final = ", ".join(f"'{state}'" for state in IN_FLIGHT)
+_CHAT_IN_FLIGHT: Final = text(
+    f"""
+    SELECT count(*) AS in_flight,
+           COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0) AS oldest,
+           COALESCE(EXTRACT(EPOCH FROM now() - min(created_at) FILTER (WHERE state = 'queued')), 0)
+               AS oldest_unclaimed
+    FROM assistant_messages
+    WHERE state IN ({_IN_FLIGHT_LIST})
+    """
+)
+
 # F5 (D18, decision 52): written suggestions the rules refused again on the same rules,
 # lists and files, at a check run or the sweep's first recording, in the last hour. The
 # one tamper signal: an upgrade or a moved file reads "Out of date" and never counts.
@@ -293,6 +320,29 @@ AI_TOKENS_MONTH: Final = Gauge(
     "nexovue_scheduler_ai_tokens_month",
     "Tokens AI runs used this month, across organizations (leader only).",
 )
+ASSISTANT_QUESTIONS_MONTH: Final = Gauge(
+    "nexovue_scheduler_assistant_questions_month",
+    "Chat questions that ended this month, by outcome, across organizations (leader only).",
+    ["outcome"],
+)
+ASSISTANT_REJECTIONS_MONTH: Final = Gauge(
+    "nexovue_scheduler_assistant_validator_rejections_month",
+    "Chat answers the checks withheld this month, by reason, across organizations (leader only).",
+    ["reason"],
+)
+ASSISTANT_IN_FLIGHT: Final = Gauge(
+    "nexovue_scheduler_assistant_questions_in_flight",
+    "Chat questions queued or running, across organizations (leader only).",
+)
+ASSISTANT_OLDEST_IN_FLIGHT: Final = Gauge(
+    "nexovue_scheduler_assistant_oldest_in_flight_seconds",
+    "How long ago the oldest chat question still in flight was asked; 0 when none (leader only).",
+)
+ASSISTANT_OLDEST_UNCLAIMED: Final = Gauge(
+    "nexovue_scheduler_assistant_oldest_unclaimed_seconds",
+    "How long ago the oldest chat question no worker has taken was asked; 0 when none "
+    "(leader only).",
+)
 FIX_CHECKS_REFUSED: Final = Gauge(
     "nexovue_scheduler_fix_checks_refused_recent",
     "Suggested fixes Nexovue's rules refused again on the same files in the last hour "
@@ -350,6 +400,11 @@ class QueueReadings:
     ai_connections_enabled: int = 0
     ai_runs_recent: dict[tuple[str, str], int] = field(default_factory=dict)
     ai_tokens_month: int = 0
+    assistant_questions_month: dict[str, int] = field(default_factory=dict)
+    assistant_rejections_month: dict[str, int] = field(default_factory=dict)
+    assistant_questions_in_flight: int = 0
+    assistant_oldest_in_flight_seconds: float = 0.0
+    assistant_oldest_unclaimed_seconds: float = 0.0
     fix_checks_refused: int = 0
     fix_rows_recent: dict[tuple[str, str, str], int] = field(default_factory=dict)
     fix_oldest_in_flight_seconds: float = 0.0
@@ -396,6 +451,8 @@ async def read_queues(
         )
     ).one()
     runs = await connection.execute(_AI_RUNS_RECENT, {"recent": F3_RECENT_SECONDS})
+    chat_month = {row.kind: int(row.questions) for row in await connection.execute(_CHAT_MONTH)}
+    chat_flight = (await connection.execute(_CHAT_IN_FLIGHT)).one()
     refused_again = await connection.scalar(
         _FIX_CHECKS_REFUSED, {"recent": F5_REFUSED_AGAIN_SECONDS}
     )
@@ -429,6 +486,14 @@ async def read_queues(
         ai_connections_enabled=int(f3.connections_enabled),
         ai_runs_recent={(row.purpose, row.outcome): int(row.runs) for row in runs},
         ai_tokens_month=int(f3.tokens_month),
+        assistant_questions_month={outcome: chat_month.get(outcome, 0) for outcome in FINAL_STATES},
+        assistant_rejections_month={
+            reason: chat_month.get(f"{CHAT_REJECTED_PREFIX}{reason}", 0)
+            for reason in REJECTION_REASONS
+        },
+        assistant_questions_in_flight=int(chat_flight.in_flight),
+        assistant_oldest_in_flight_seconds=float(chat_flight.oldest),
+        assistant_oldest_unclaimed_seconds=float(chat_flight.oldest_unclaimed),
         fix_checks_refused=int(refused_again or 0),
         fix_rows_recent={(row.kind, row.state, row.reason): int(row.rows) for row in fix_rows},
         fix_oldest_in_flight_seconds=float(oldest_fix or 0),
@@ -456,6 +521,8 @@ def publish(readings: QueueReadings) -> None:
         OLDEST_READY,
         DETECTION_EVENTS_RECENT,
         AI_RUNS_RECENT,
+        ASSISTANT_QUESTIONS_MONTH,
+        ASSISTANT_REJECTIONS_MONTH,
         FIX_ROWS_RECENT,
     ):
         gauge.clear()
@@ -478,6 +545,13 @@ def publish(readings: QueueReadings) -> None:
     for (purpose, outcome), runs in readings.ai_runs_recent.items():
         AI_RUNS_RECENT.labels(purpose=purpose, outcome=outcome).set(runs)
     AI_TOKENS_MONTH.set(readings.ai_tokens_month)
+    for outcome, questions in readings.assistant_questions_month.items():
+        ASSISTANT_QUESTIONS_MONTH.labels(outcome=outcome).set(questions)
+    for reason, rejections in readings.assistant_rejections_month.items():
+        ASSISTANT_REJECTIONS_MONTH.labels(reason=reason).set(rejections)
+    ASSISTANT_IN_FLIGHT.set(readings.assistant_questions_in_flight)
+    ASSISTANT_OLDEST_IN_FLIGHT.set(readings.assistant_oldest_in_flight_seconds)
+    ASSISTANT_OLDEST_UNCLAIMED.set(readings.assistant_oldest_unclaimed_seconds)
     FIX_CHECKS_REFUSED.set(readings.fix_checks_refused)
     for (kind, state, reason), rows in readings.fix_rows_recent.items():
         FIX_ROWS_RECENT.labels(kind=kind, state=state, reason=reason).set(rows)
@@ -495,6 +569,8 @@ def forget_queues() -> None:
         OLDEST_READY,
         DETECTION_EVENTS_RECENT,
         AI_RUNS_RECENT,
+        ASSISTANT_QUESTIONS_MONTH,
+        ASSISTANT_REJECTIONS_MONTH,
         FIX_ROWS_RECENT,
     ):
         gauge.clear()
@@ -511,6 +587,9 @@ def forget_queues() -> None:
         EVIDENCE_TRUNCATED,
         AI_CONNECTIONS_ENABLED,
         AI_TOKENS_MONTH,
+        ASSISTANT_IN_FLIGHT,
+        ASSISTANT_OLDEST_IN_FLIGHT,
+        ASSISTANT_OLDEST_UNCLAIMED,
         FIX_CHECKS_REFUSED,
         FIX_OLDEST_IN_FLIGHT,
         FIX_SWEEP_AGE,

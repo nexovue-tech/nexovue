@@ -499,3 +499,50 @@ tests:
       - eval_time: 25m
         alertname: NexovueSloStatusStale
         exp_alerts: []
+
+  # F4 (design, *Observability and operations*): a chat question nobody has taken for over two
+  # minutes while AI is on. The question's own row is read, not the job's: an `assistant` job
+  # leaves the ready count when its queue clock (at least 2 minutes) runs out, and chat's sweep,
+  # which settles it, runs in scheduler-insight too, so a stopped role leaves the row `queued`.
+  - name: a chat question unclaimed past two minutes opens a ticket while AI is on
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x10"
+      # Asked at 0m and never taken: 60 s old at 1m, past 120 s from 3m, held 2 minutes.
+      - series: 'nexovue_scheduler_assistant_oldest_unclaimed_seconds{job="scheduler-beat"}'
+        values: "0+60x10"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "a chat question has waited 300s for scheduler-insight to take it (docs/operations/ai.md)"
+
+  - name: chat questions taken within two minutes are quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x15"
+      - series: 'nexovue_scheduler_assistant_oldest_unclaimed_seconds{job="scheduler-beat"}'
+        values: "0 40 90 0 110 0x10"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts: []
+
+  - name: with AI on nowhere, an old queued question is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "0x15"
+      - series: 'nexovue_scheduler_assistant_oldest_unclaimed_seconds{job="scheduler-beat"}'
+        values: "3600x15"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts: []
