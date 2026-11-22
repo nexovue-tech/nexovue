@@ -14,12 +14,15 @@ overwritten.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
 import pytest
 from alert_fixtures import AlertTenant, postgres_reachable
 from general_fix_fixtures import MODEL_INPUT
+from held_jobs import acting_as, jobs_held
+from insight_login import INSIGHT_ACCOUNT
 from live import require_stack
 from nexovue_platform.fixes.records import (
     BUILD_SOURCE_PACK_TASK,
@@ -42,7 +45,7 @@ from propose_fix_fixtures import (
 from recording_site import RecordingSite
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wording_fixtures import CHAT_PATH, connect, finding, openai_reply
+from wording_fixtures import ASYNC_DSN, CHAT_PATH, connect, finding, openai_reply
 
 from nexovue_scheduler.jobs.registry import Retry
 
@@ -51,6 +54,17 @@ require_stack(
     suite="apps/scheduler/tests/test_fix_propose.py",
     remedy="Postgres is not reachable — run `just up`",
 )
+
+
+@pytest.fixture
+async def as_insight_held(ai_install: AsyncEngine) -> AsyncIterator[AsyncEngine]:
+    """The AI role's grants, through an engine whose jobs `jobs_held` can hold: the AI account
+    itself holds no right on `jobs`."""
+    built = acting_as(ASYNC_DSN, INSIGHT_ACCOUNT, pool_size=2)
+    async with built.connect() as connection:
+        assert await connection.scalar(text("SELECT current_user")) == INSIGHT_ACCOUNT
+    yield built
+    await built.dispose()
 
 
 async def _ready(
@@ -229,15 +243,18 @@ async def test_fr8_a_consent_for_a_sibling_folder_does_not_cover_the_row(
 
 async def test_ac83_needs_files_stores_the_names_and_hands_the_row_back_with_its_pack(
     ai_install: AsyncEngine,
-    ai_engine: AsyncEngine,
+    as_insight_held: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
     now: datetime,
 ) -> None:
+    """The pack job the AI role adds is held from the stack's own connections worker, which
+    would otherwise build the pack its own way and end the row before it is read."""
     connected, fix = await _ready(ai_install, ai_tenant, provider_site, now)
     provider_site.replies[CHAT_PATH] = openai_reply(needs_files())
 
-    assert await run_propose(ai_engine, connected, fix, at=now) == "needs_files"
+    with jobs_held(as_insight_held, ai_tenant.org_id):
+        assert await run_propose(as_insight_held, connected, fix, at=now) == "needs_files"
 
     row = await source_row(ai_install, fix)
     assert (row.state, row.round, row.candidates_from) == ("gathering", 2, "model")
@@ -256,7 +273,6 @@ async def test_ac83_needs_files_stores_the_names_and_hands_the_row_back_with_its
         (BUILD_SOURCE_PACK_TASK, "connections-interactive")
     ]
     assert set(jobs[0].kwargs) == {"fix_id", "org_id"}
-    await _drop_jobs(ai_install, ai_tenant)
 
 
 @pytest.mark.parametrize(
@@ -337,10 +353,3 @@ async def test_without_an_explanation_the_files_numbers_are_the_evidence(
     assert run.fields_sent == ["files", "frames", "hint"]
     [sent] = provider_site.requests
     assert json.dumps(MODEL_INPUT["finding"]).encode() not in sent.body
-
-
-async def _drop_jobs(install: AsyncEngine, tenant: AlertTenant) -> None:
-    async with install.begin() as connection:
-        await connection.execute(
-            text("DELETE FROM jobs WHERE org_id = :org"), {"org": tenant.org_id}
-        )
