@@ -221,7 +221,7 @@ listed as "Started after this release". Read an old release whose numbers have e
 
 - [x] **T4.1** — *Built 2026-11-12. The finding's window is chosen by the API (`?finding=`, `nexovue_platform.releases.window_for_finding`); the web's copy and the link's `finding_at` are deleted. The time method reads `service_stats_1m`. No Postgres migration was needed.* `releases/queries.py`, `service.py` · `time_before_after`, last week, per-minute completeness, `versions_combined`, the window chosen from a finding, every FR21 reason, environment check, FR46's read on `GET /releases` · proved by `test_releases.py`, `test_releases_live.py` (AC29 including last week, AC30, AC32, AC36, AC64, AC65, AC67, AC78)
 - [x] **T4.2** — *Built 2026-11-12 as `000041_door_on_spans` and `000042_door_on_logs` (000039 and 000040 were taken; a migration here is one statement). Values are the edges rollup's, `browser` or `server`, from `consume.StoredDoor`.* `deploy/clickhouse/migrations/000039_door_on_spans_and_logs.up.sql`, `.down.sql` (*new*), `traceassembly/flatten.go`, the log pipeline's row builder · `door` on raw rows · proved by `flatten_test.go`, and a log pipeline test
-- [x] **T4.3** — *Built 2026-11-12. The errors read's cost at 24 hours and the 2-second target are not measured: performance measurements are deferred to hardening (status).* `releases/router.py`, `service.py`, `queries.py`, `errorgroups/queries.py` · `/errors`, `/rollout`, with two per-table version predicates in the pattern of `_ONE_SERVICE_PLACEHOLDER`, a door predicate, and timeout words. `/releases/{id}/sender-details`, with its role check · proved by `test_errorgroups.py`, `test_releases_live.py` (AC68, AC69, AC76), `test_tenant_chokepoint_structure.py`. The errors read's cost is measured at 24 hours on seeded data and reported, with the 1-hour default taken if it is poor. The 2-second target is measured once (AC67)
+- [x] **T4.3** — *Built 2026-11-12. The errors read's cost at 24 hours and the 2-second target were measured in Step 6, 2026-11-22 (status, *Step 6*).* `releases/router.py`, `service.py`, `queries.py`, `errorgroups/queries.py` · `/errors`, `/rollout`, with two per-table version predicates in the pattern of `_ONE_SERVICE_PLACEHOLDER`, a door predicate, and timeout words. `/releases/{id}/sender-details`, with its role check · proved by `test_errorgroups.py`, `test_releases_live.py` (AC68, AC69, AC76), `test_tenant_chokepoint_structure.py`. The errors read's cost is measured at 24 hours on seeded data and reported, with the 1-hour default taken if it is poor. The 2-second target is measured once (AC67)
 - [x] **T4.4** — *Built 2026-11-12.* `releases/service.py`, `queries.py` · later findings, activity, states, events on `GET /releases/{id}` · proved by `test_releases_live.py`
   (AC23, AC41)
 - [x] **T4.5** — *Built 2026-11-12. `TrendChart` needed no change: its `distinctColours` mode (F20) is the categorical mode. Design QA at 375px is not run (status).* `features/releases/ReleaseScreen.tsx`, `ReleasesScreen.tsx`, `comparison.ts`, `api.ts`, `shared/components/TrendChart.tsx` (categorical mode) · every section and
@@ -252,9 +252,9 @@ listed as "Started after this release". Read an old release whose numbers have e
 
 *Judgeable:* Read the allowed and banned sentences, the refreshed competitor table with dates, and watch a demo recording labelled as demo data.
 
-- [ ] **T6.1** — `docs/features/deployment-release-tracking/research.md` · refresh every competitor row within two weeks of announcing. Settle in a SigNoz install or repository where markers appear and which edition holds them, and install Coroot Community Edition once to settle its edition · proved by dated rows
-- [ ] **T6.2** — `docs/product/phase-2-foundation.md` section 12 · exact allowed and banned sentences, for example "Releases appear from `service.version`; a webhook adds failed states and same-version redeploys". Keep "seen is not a deploy" · proved by review, against `status.md`'s *What may be said*
-- [ ] **T6.3** — changelog entry, the setup page, a demo recording from `tools/release-demo` labelled as demo data · proved by review
+- [x] **T6.1** — *Built 2026-11-22: research section 10, every row dated and marked opened or extract; only Datadog's, Sentry's, SigNoz's and Coroot's pages or repositories could be opened from the build's network, and every price but Datadog's is not refreshed. SigNoz's markers are an open draft pull request (not installed, as an install of a release could settle nothing); Coroot's Community Edition image was installed and read, and contains deployment tracking, but was not seen working (needs Kubernetes and Prometheus). What remains is in the section.* `docs/features/deployment-release-tracking/research.md` · refresh every competitor row within two weeks of announcing. Settle in a SigNoz install or repository where markers appear and which edition holds them, and install Coroot Community Edition once to settle its edition · proved by dated rows
+- [x] **T6.2** — *Built 2026-11-22: 11 allowed and 15 banned sentences, each checked against the source named beside it. The plan's example "a webhook adds same-version redeploys" is true only of the deploy, not of a release: a redeploy opens no new period.* `docs/product/phase-2-foundation.md` section 12 · exact allowed and banned sentences, for example "Releases appear from `service.version`; a webhook adds failed states and same-version redeploys". Keep "seen is not a deploy" · proved by review, against `status.md`'s *What may be said*
+- [x] **T6.3** — *Built 2026-11-22: the setup page was read against the code and needed no change; the changelog entry is drafted in `status.md`, *Launch text* (no changelog file exists, open decision 1); the recording is described in `status.md`, *The demo recording*, and judging it is the founder's.* changelog entry, the setup page, a demo recording from `tools/release-demo` labelled as demo data · proved by review
 
 ## New risks
 
@@ -286,12 +286,12 @@ no test server is rented (item 9). The whole-server fit on 16 GB waits for Oracl
 - [x] Step 1a cost gate: passed on demo data, 2026-11-07 ([report](../../research/release-rollup-cost-2026-11-07.md)). Its alert evaluation start delay row was added to T1.10 by the founder's answer of 2026-11-08, measured there, and passed
 - [x] ~~The one round of customer conversations held, before Step 1b (foundation item 8)~~ No longer a gate (foundation item 27, 2026-11-08)
 - [x] F6 browser-door change, before Step 4: `docs/changes/browser-door`, done 2026-11-07; checked in the code on 2026-11-12 (status, *Step 4*)
-- [ ] Implementation
-- [ ] Tests
+- [x] Implementation (Steps 1a to 6)
+- [x] Tests — Playwright's `releases.spec.ts` and the two older specs that read F28's data passed 2026-11-22
 - [ ] Review
-- [ ] Design QA — the built screen against the approved design, including 375px on `/releases`, the release page, the finding section and Deploys
+- [ ] Design QA — the built screen against the approved design, including 375px on `/releases`, the release page, the finding section and Deploys. *375px on `/releases`, the release page and Deploys: built-in check and screenshots, 2026-11-22. Not done: the finding section (needs a real finding), and the founder's look at all four.*
 - [ ] Production-readiness assessment
-- [ ] Claims check — every competitor row refreshed within two weeks of announcing, and the foundation's section 12 updated
+- [ ] Claims check — every competitor row refreshed within two weeks of announcing, and the foundation's section 12 updated. *Section 12 updated and rows refreshed 2026-11-22, but only four vendors' pages could be opened and prices are mostly not refreshed; repeat once the hosts are reachable, within two weeks before announcing.*
 - [ ] Documentation and status update
 
 ## Validation plan
@@ -323,4 +323,4 @@ being treated as a formality.
 ## Outcome
 
 Steps 1a, 1b, 2 and 3 on `feature/phase-2` (T2.10 waits for the founder's test after Phase 2). Step 4 built
-2026-11-12, awaiting commit. Step 5 built 2026-11-12, awaiting commit. Step 6 not started.
+2026-11-12, committed. Step 5 built 2026-11-12, committed. **Step 6 built 2026-11-22, awaiting commit** (launch claims, Playwright, Design QA at 375px, measurements; one fix: the `#deploys` links).

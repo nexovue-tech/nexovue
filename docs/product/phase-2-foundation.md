@@ -641,9 +641,52 @@ These must stay in the future tense until shipped (competitors research).
 | Anything on DPDP, RBI or SEBI compliance | No lawyer has read it. State only where data goes |
 | Naming rivals in public | Their facts change monthly, and four are unresolved (competitors research) |
 
+### F28: releases and deploys, what may be said (checked against the code, 2026-11-22)
+
+*True of `feature/phase-2` as built; nothing is released, and nothing here is said to anyone until it ships.* Each allowed
+sentence below was checked against the source named beside it, on 2026-11-22, by the F28 launch step (plan T6.2). Each banned
+sentence names what in the code makes it false. **A sentence outside both lists is not cleared.** Rivals are never named in
+public (above); the refreshed competitor reading is in F28's `research.md`, section 10.
+
+**Allowed**
+
+| # | The sentence | True because (source) | Its limit, said with it |
+|---|---|---|---|
+| 1 | "Releases appear from `service.version`: when your spans carry a build id, each new value is a new release, with no webhook." | `releases/sync.py` reads `service_versions_1m` each minute; F28's Playwright spec showed two versions become two rows labelled "Seen in traffic" with no deploy reported (2026-11-22) | The build must set a *different* value per build (`latest` is one release that never ends). Server spans only: a browser key never makes a release (`derive` filter, AC17) |
+| 2 | "A webhook from your CI adds what traffic cannot show: a failed or rolled-back state, a commit, and a deploy of a version that was already running." | `deploys/service.py` stores each signed item; `releases/service._place_one` opens a release period only for `started` and `finished` and not for a version still in service, so a redeploy is stored, drawn as a marker and listed on the release (`queries.deploys_of`: "same-version redeploys and failed ones included"); the row says "CI reported it failed" (`release-words.stateWords`) | A redeploy is **not a new release** and is not compared. A failed report opens no period (founder, 2026-11-09). Nothing alerts on a failed deploy |
+| 3 | "Nexovue compares old and new in the same minutes when two versions run together, compares the new version with the previous one's equal stretch before it once a rollout is done, and, when your traffic carries no version, compares around the deploy your CI reported. Every comparison says which it used, or says why it cannot compare." | `nexovue_platform/releases.choose_method` (`side_by_side`, `version_before_after`, `time_before_after`, and the `REASONS`); `method` is a required field of each comparison block (`releases/schemas.py`); the page states it | Floors: failure share needs 20 requests a side and p95 200 (`FAILURE_FLOOR`, `P95_FLOOR`); under them the page says "too little traffic". All thresholds are starting guesses |
+| 4 | "Request and error counts are taken before Nexovue's own sampling, so they are exact for the spans Nexovue receives. p95 is an estimate from latency buckets, and leaves out each version's first 5 minutes." | The worker derives before it samples (`AGENTS.md`, data plane order; `000035`); `P95_RATIO` 1.2 is about one bucket; `WARM_UP` is 5 minutes and the page says it | If your SDK or Collector samples first, every count is short by that factor and nothing shows it (the setup page and the comparison say so). When too many versions arrive in one minute they are combined, and the page says "Versions were combined" (`VERSIONS_COMBINED`) |
+| 5 | "It compares numbers. It does not say why they moved." | The release page prints this line; no F28 string says "caused", enforced for AI-free code by `test_detection_has_no_ai.py` (F28's modules are walked) and by the words test | A release opens **no finding**: only F6 can. The list's *failure share higher* flag and the optional summary come from the same stored reading, not from detection |
+| 6 | "A version seen in your traffic is not called a deploy." | `release-words.BASIS_WORDS`: "Seen in traffic" and "Reported by your CI" are different words, and "both" is a third | None. Keep it |
+| 7 | "Per-minute version counts are kept for up to 35 days, less if your plan keeps less. An older release says its numbers have expired." | `service_versions_1m` TTL is `least(derived_retention_days, 35)` (ClickHouse `000035` family, `VERSION_ROLLUP_DAYS`); the `numbers_expired` reason | The release itself and its reported deploys stay as long as the project |
+| 8 | "Deploys can be reported up to 7 days back and 5 minutes ahead." | `deploys/service.py` `BEHIND_LIMIT` 7 days, `AHEAD_LIMIT` 5 minutes | None |
+| 9 | "Your pipeline and your AI assistant can read the same comparison through the API; deploy records they get carry no text a sender wrote." | `list_deploys` sends exactly id, service, version, state, commit and times (`DeployRow`, `test_mcp_tools.py`); `GET /deploys` the same | None |
+| 10 | "You can switch on a summary of each release to one channel your team reads, about 30 minutes after it starts. It is off by default." | `releases/summary.py`, `PUT /projects/{id}/release-summary`, `release_summary_channel_id` null by default, due 30 minutes after the start | **Not yet sent through a real Slack, Teams, Discord or email channel** (only the delivery path's fakes ran): say "a channel your team reads", never name one as working |
+| 11 | "On demo data on a development machine, counting by version added about 10% more rows and about 10% more disk than the per-service table, with every service rolling out once an hour." | `docs/research/release-rollup-cost-2026-11-07.md` | **Not a figure for a customer's traffic or for a 16 GB server**, and said so with it |
+
+**Banned, with what makes each false**
+
+| Do not say | Why (in the code) |
+|---|---|
+| "Every release is compared" | Floors and reasons: low traffic reads "too little traffic" or "not clearly different"; a redeploy of the running version is not a release; a service with no version and no deploy has no comparison (`REASONS`) |
+| "Exact p95", "exact latency" | p95 is read from 64 buckets, `P95_RATIO` 1.2, and leaves out the first 5 minutes |
+| "No CI work", "no setup", "zero config" | A per-build value in `service.version` is one change per service; reporting deploys is a secret and a pipeline step |
+| "Automatic deploy detection" | It detects a *new version in traffic*, which is not a deploy (seen is not a deploy); config-only changes and same-version redeploys are invisible to it |
+| "A release caused it", "bad release", "this deploy broke it", a verdict of any kind | Order is a fact, cause is not; no F28 text states a cause |
+| "Alerts you when a release goes bad", "tells you a release is bad" | A comparison opens no finding and sends nothing by itself; F6 judges the service as a whole, and whether it fires on a small rollout share is being measured. Only the optional summary and the list's flags carry a comparison |
+| "A redeploy shows as a release / is compared" | `_place_one`: a version still in service opens no new period |
+| "Native GitHub or GitLab deploy receipts" | Not built: only the signed JSON from a recipe (GitHub's own `deployment_status` payload was never confirmed, and that route is deferred) |
+| "Works with Kubernetes rollouts automatically" | There is no Kubernetes watcher; a rollout is seen only through `service.version` or a pipeline step |
+| "On your own server" to a hosted buyer; "no extra charge" or "no extra disk" to anyone who pays for their own disk | The cost report is demo data and says ~10% more |
+| "Fast", "within 2 seconds", or any speed figure | Measured once on a 4-CPU development container with 1 and 10 million seeded spans for one service, not on a server (F28 `status.md`, *Step 6*) |
+| "Sent to your Slack / Teams / Discord / inbox" for the summary | The real send has not been run |
+| "Comparisons for any two versions", "per-endpoint comparison", "suspect commits", "automatic faulty-deployment detection" | Not built (the rivals' lead: see below). F22 and F5 build on `commit_sha` |
+| "More accurate than" anyone; naming a rival in public | Nothing is measured against any rival; their pages change monthly |
+| The demo recording as customer evidence | It is demo data from `tools/release-demo` and is labelled so in the picture (F28 `status.md`, *Launch text*) |
+
 ### Where rivals are plainly ahead
 
-Maturity and customers: Nexovue is pre-deployment with none. Grafana on dashboards. Sentry and Datadog on tying problems to code. incident.io and Rootly on running an incident. HolmesGPT on data sources, and **free agents bolted onto an existing stack are the competitor most likely to be missed.** Security paperwork was not checked.
+Maturity and customers: Nexovue is pre-deployment with none. On releases: Datadog compares any two versions of a service and detects a faulty deployment by itself; Sentry names suspect commits and the people who committed; Coroot audits each Kubernetes rollout without CI (F28 `status.md`, *Known to lag rivals*). Grafana on dashboards. Sentry and Datadog on tying problems to code. incident.io and Rootly on running an incident. HolmesGPT on data sources, and **free agents bolted onto an existing stack are the competitor most likely to be missed.** Security paperwork was not checked.
 
 ### Answering "why not just use Claude?"
 

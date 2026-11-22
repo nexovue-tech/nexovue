@@ -2,16 +2,209 @@
 
 ## Lifecycle status
 
-**In development. Step 5 built 2026-11-12, committed 2026-11-12.** The founder approved the specification, design and
+**In development. Step 6 built 2026-11-22, awaiting commit.** (Step 5 built 2026-11-12, committed 2026-11-12.) The founder approved the specification, design and
 plan on 2026-11-02. Steps 1a, 1b, 2 and 3 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder
 tests after Phase 2). Step 4 (the whole release page) and Step 5 (what other features need, and telling people) are
-committed 2026-11-12, locally, not pushed. Step 6 (launch claims) is next.
+committed 2026-11-12, locally, not pushed. Step 6 (launch claims, and the deferred hardening) is built 2026-11-22 and awaits the coordinator's commit; every F28 step is now built.
 
 
 ## Current task
 
+**Step 6 built 2026-11-22, awaiting commit** (*Step 6, built 2026-11-22*, below). No migration, no ADR. One defect fixed
+(the `#deploys` links), the launch sentences written and checked, Playwright and the 375px check run, the errors read and
+the 2-second target measured, a labelled demo recording made; judging the recording is the founder's.
+
 **Step 5 built 2026-11-12, committed 2026-11-12** (*Step 5, built 2026-11-12*, below). Postgres migrations `0074`
 and `0075`, on F4's `0073`; no ClickHouse migration; ADR-066.
+
+## Step 6, built 2026-11-22
+
+Launch: say only what is true (plan T6.1 to T6.3), and F28's deferred hardening (Playwright, Design QA at 375px, the
+errors read at 24 hours, the 2-second target, the `tools/release-demo` judging), in `wt/f28s6` on `feature/phase-2`
+(b4d7c87). No migration, no ADR. **Awaiting commit.** One code defect found and fixed (below).
+
+### What was done, per task
+
+- **T6.1, competitor rows** (`research.md`, new section 10). Every row re-read on 2026-11-22 from the vendor's own page or
+  repository, each row saying *opened* or *extract*. This container could reach `docs.datadoghq.com`,
+  `www.datadoghq.com`, GitHub's raw files and `ghcr.io` only; 12 other vendor hosts were refused by the proxy.
+  - Opened: Datadog (deployment tracking, faulty deployment detection, price list: APM Pro is now $35 annual, $42
+    monthly, was $31 and $36; "rollbacks detected" not found on the page), Sentry's documentation source, the SigNoz
+    and Coroot repositories, the HyperDX changelog.
+  - Extracts only (page not opened, host refused): ClickStack, Observe, Honeycomb, New Relic, Grafana, Dynatrace,
+    OpenObserve. **Not refreshed at all: every price except Datadog's, Coroot's 30-minute and 3-minute figures.**
+  - **SigNoz, settled by reading, not by installing:** deployment markers are an open, unmerged draft pull request
+    (#13340, commits 2026-11-11) adding `POST /api/v1/annotations`. No released SigNoz found draws them, so no edition
+    holds them yet. **Not installed:** an install of a release could only show nothing; remaining is a re-read when
+    that pull request merges or closes.
+  - **Coroot, installed once:** the Community Edition image (1.29.4, Apache-2.0, built 2026-11-18) was pulled and
+    started; its binary contains deployment tracking, its screen and its Slack, Teams and webhook notices. **Not
+    seen working:** it needs Kubernetes metadata through Prometheus, and this container has neither. Remaining: run
+    it against a cluster, or read its licence manager for what it gates. Container and image removed.
+- **T6.2, the allowed and banned sentences** (`phase-2-foundation.md`, section 12, new subsection *F28: releases and
+  deploys*): 11 allowed sentences, each with its source in the code and its limit; 15 banned, each with what in the code
+  makes it false. Checking them against the source changed three things the plan's example would have said:
+  - "A webhook adds same-version redeploys" is only true as a *deploy*: `_place_one` opens no new period for a version
+    still in service, so a redeploy is stored, drawn as a marker and listed on the release, but is **not a new release and
+    is not compared**. Sentence 2 says so, and "a redeploy is a release" is banned.
+  - "Rollbacks detected" (Datadog) came off the competitor row as unconfirmed.
+  - The demo answer "How much more disk? Not known yet" was stale: the cost report exists (about 10% on demo data), and
+    sentence 11 carries it with its label. The table below is updated.
+  "Seen is not a deploy" is kept (sentence 6 and the banned list).
+- **T6.3, launch text and demo recording.** *The setup page* (`docs/product/setup/deploys.md`) was read in full against
+  the code and needed no change; the release summary's sentences there stay true, and its real-channel sends are not
+  run (below). *The changelog entry* has no file to go in (open decision 1): its text is under *Launch text*, below.
+  *The demo recording:* see *The demo recording*, below.
+
+### Playwright
+
+F28 had **written no Playwright spec** (the earlier steps' notes said "deferred", and nothing was in `tools/e2e`), so
+there was nothing "written but not run". `tools/e2e/tests/releases.spec.ts` and `support/releases.ts` are new.
+
+- **The spec:** a new organisation opens `/releases` (empty state), exports two versions of one service through the real
+  receiver, waits for the sync, reads the list ("Seen in traffic", not "Reported by your CI"), opens the release page
+  (comparison, share of traffic, facts, no verdict words), mints a secret in Settings, sends a **signed deploy** as the
+  setup page's recipe does and reads "Last deploy received"; then the same three screens at **375px**, asserting that
+  no element sticks out past the right edge unless it sits in a scroller made for it (a check shown to flag a 600px
+  element and to ignore one inside `overflow-x: auto`).
+- **First run failed at the Deploys step, a real defect:** the two links that end in `#deploys` (the releases list's
+  coverage strip, and the finding's deploy note) landed on Settings → Projects with
+  every project **closed**, so the section the link named was not on the page. Root fix: `ProjectsScreen` opens the
+  selected project when the address says `#deploys` and scrolls the section into view
+  (`useOpenDeploysWhenLinked`); the anchor is one constant, `DEPLOYS_ANCHOR`. **Test seen failing first**
+  (`ProjectsScreen.test.ts`: `expected ['false','false'] to deeply equal ['false','true']`), then passing; the second
+  test shows nothing opens without the link. Two later failures were the spec's own (a wrong selector for the minted
+  secret, which gave a 401; an expectation of loaded sections), fixed in the spec.
+- **Results, last runs:** `releases.spec.ts` **1 passed** (57.9 s, with the stack's setup test), including 375px on the
+  list, the release page and the Deploys section. Two specs that read F28's markers and an F28-fed screen:
+  `dashboards-marks.spec.ts` and `errors.spec.ts`, **2 passed** (1.2 min). Run with `--trace off`, one or two workers,
+  Chromium from the container (a symlink directory made the installed revision 1243 answer to the revision the project's
+  Playwright wants, 1248; nothing in the repository changed for it).
+- **375px, looked at, not only measured:** the list, the release page (opening sentence, tabs, comparison lines) and
+  the Deploys section (webhook address wraps, the copy button holds, the secret row keeps its button) were read as
+  screenshots at 375 by 812. **Not covered:** the finding section at 375px (it needs a finding, F6's detector to fire on
+  seeded data, which was not set up) and the markers' hover and pinned box on a touch screen. **Design QA stays unticked** for them.
+
+### Measurements, on demo data, on this machine
+
+**Machine:** one Linux container, 4 vCPU (Intel Xeon, 2.1 GHz), 16 GB, shared with another build running its own stack at
+the same time. ClickHouse 26.3.20.7 in Docker (5 GiB cap), Postgres 18, the API in Docker, one run per row below with
+**cold** meaning ClickHouse's mark, uncompressed and query caches dropped before the call (the operating system's page
+cache was not) and **warm** the median and slowest of 10 repeats straight after. **Seeded data:** one service, 49 hours
+of spans ending now, versions `build-2001` for the first 24 hours and `build-2002` after, 1% of spans failing on the
+first and 2% on the second, 6 exception types and one new on the second, plus logs at a tenth of the span count with 30%
+exceptions, plus per-minute rollup rows that agree with them. The release's period starts 25 hours back. Inserted by
+`INSERT … SELECT` into `spans`, `logs`, `service_versions_1m` and `service_stats_1m`, not through the receiver (the
+sync needed a cursor set back 49 hours to walk that far, which was done in Postgres). **Not a server figure; demo data.**
+
+| Read (24-hour window unless named) | 1 M spans + 0.1 M logs, cold / warm median (slowest) | 10 M spans + 1 M logs, cold / warm median (slowest) |
+|---|---|---|
+| The release, `GET /releases/{id}` | 22 / 22 (26) ms | 22 / 16 (24) ms |
+| Comparison, 1 hour | 125 / 59 (268) ms | 53 / 57 (63) ms |
+| Comparison, 24 hours | 226 / 152 (242) ms | 278 / 147 (513) ms |
+| Rollout share, 24 hours (150 KB answer) | 458 / 140 (455) ms | 166 / 147 (489) ms |
+| **Errors by version, 1 hour** | 146 / 71 (111) ms | 573 / 157 (251) ms |
+| **Errors by version, 6 hours** | 160 / 96 (132) ms | 297 / 270 (352) ms |
+| **Errors by version, 24 hours** | 301 / 135 (154) ms | **1,594 / 949 (1,224) ms** |
+
+- **The errors read at 24 hours:** under a second warm and 1.6 seconds cold at 10 million spans for one service (about 57
+  requests a second sustained), growing about with the rows read (10 times the rows, about 7 times the time warm).
+  Against the reader account's **30-second limit** that leaves room, by straight-line arithmetic from these two points, up
+  to a service of roughly 300 million spans in 49 hours (about 1,800 requests a second): an extrapolation, **not measured**. **A
+  third point was attempted and failed:** a 50-million-span seed filled the shared disk (the `span_trace_lookup` view stores
+  about as much again as `spans`), the insert did not finish and its data was dropped. The design's line ("if the
+  measurement is poor, the section defaults to the 1-hour window") is **not triggered**: the default stays as built (the
+  page's default is already one hour).
+- **The 2-second target (AC67):** the page's first numbers come from the comparison. At 10 M spans the comparison read took
+  53 to 278 ms cold and about 150 ms warm, so the read is far under 2 seconds. **Browser, first numbers after clicking
+  a release row: 631 ms** (one run, from the click to the comparison's opening sentence being on screen) (on the demo-recording data, small, same machine; not on the 10 M data, which had
+  been removed by then). So **the target is met on the demo, on this machine**; it is not a statement about a customer's
+  data or a server.
+- **Not measured:** more than 10 M spans for one service; many services at once; the other tables' pressure on the same
+  ClickHouse; any figure on the Oracle server (foundation item 9).
+
+### Found and fixed, and left as it is
+
+- **Fixed:** the `#deploys` links (above). Files: `ProjectsScreen.tsx`, `DeploysSection.tsx` (`DEPLOYS_ANCHOR`),
+  `ProjectsScreen.test.ts` (new).
+- **Left, low:** `ReleasesScreen` and `FindingScreen` still spell the anchor as the string `"deploys"`: features may not import
+  each other's modules, so the constant is not shared; a change of the anchor would need three edits and the new test names it.
+- **Left, medium, the founder's to weigh:** the release page's *Share of traffic by version* answer is **150 KB** for 24
+  hours of one service (about 1,440 minutes by 2 versions). It is read whole on every open. Fine here; worth a look at
+  50 versions. Recorded, not changed.
+
+### The demo recording
+
+`release-demo-2026-11-22.webm` (1.2 MB, 1280 by 720, 28 seconds, no sound), kept outside the repository (the
+repository holds no video) and sent to the founder to judge. **It is demo data and says so in every frame:** a bar along the bottom reads "DEMO DATA: traffic from
+tools/release-demo (rolling v1 to v2), local development stack, 2026-11-22. Not a customer's traffic."
+
+- **Traffic:** `tools/release-demo/send.py send rolling --minutes 16 --start-minute 5 --rollout-minutes 6 --rpm 120
+  --old-failure 0.002 --new-failure 0.03`, through the real receiver, Kafka, the worker and ClickHouse: 960 requests and 4
+  errors on `v1`, 943 and 42 on `v2`, 0 exports refused (`send.py`'s own ledger).
+- **What it shows:** `/releases` with two rows, both "Seen in traffic", `v2` flagged "Failure share higher: 4.2% (23 of 553)
+  against 0.6% (3 of 523)" (the stored reading the job wrote); opening `v2`; the comparison with its two blocks (*During the rollout*, *Since the rollout finished*) and the line "This compares numbers. It does not say why they moved."; the rollout share chart and
+  its table; errors by version; the finding section ("No finding on this service started while this version served");
+  the facts; the 6-hour window. Recorded with Playwright and Chromium against the stack's web server, signed in as the seeded
+  development owner. The script is not committed (a throwaway in the scratchpad): the setup is the traffic command above
+  and the page loads in `status.md`'s *Playwright* notes.
+- **Read it with this in mind (found while recording, not changed):** `rolling` mode sends failures **without
+  exceptions**, so *Errors by version* reads "No errors in either version during this window" beside a failure share of 4.2%.
+  That is true of what that section counts (exception groups, like the Errors screen) and reads as a contradiction to a
+  newcomer. `send.py ... exceptions` mode sends a `v2`-only exception and would fill the section; it was not recorded (16
+  more minutes, and the same service name would have mixed the two runs). **Open decision 2.**
+- **Judging it is the founder's.** Nothing here claims it is good: it shows the screens read as built.
+
+### Launch text
+
+The changelog entry, as a draft for the release notes that `docs/changes/ready-to-deploy` generates at release. It says only what
+section 12's allowed sentences say. **Not published, and not to be quoted before the release.**
+
+> **Releases and deploys.** nexovue now shows each release of each service: when it started, how far it rolled out, and
+> how its failure share and latency compare with the version before it. Releases appear on their own when your spans carry
+> a build id in `service.version`. Reporting deploys from your CI adds what traffic cannot show: failed and rolled-back
+> states, a commit link, and redeploys of a version that was already running. Request and error counts are taken before
+> nexovue's own sampling; p95 is an estimate. Every comparison says how it was made, and says so when there is too little
+> traffic to compare. A release's page compares numbers and does not say why they moved. You can switch on a summary of each
+> release to one channel your team reads. Setup: *Releases and deploys* in the setup guide.
+
+- **Found while recording, MEDIUM, not changed, the founder's to weigh (open decision 3):** the comparison's *Requests a
+  minute* is the new version's count divided by the whole window, silent minutes included. The demo's sender stopped at
+  08:04 and the page was read at 08:27, so `v2` shows 20.5 requests a minute and `v1` 19.4 when each took about 120
+  a minute while traffic flowed. For a service that never goes quiet the figure is right; for one that does (a worker, a
+  nightly job, the demo) it understates both and the pair still compares fairly. Recommendation: divide by the minutes
+  that had any traffic, and say so, or drop the row when the version was idle for more than a tenth of the window.
+- **Self-review (`/review-diff`), LOW, left:** `useOpenDeploysWhenLinked` scrolls again whenever the opened project changes
+  while the address still ends in `#deploys` (opening another project by hand scrolls to its Deploys section too); a
+  member who cannot manage credentials gets the project opened and no section (it is not rendered for them). Neither
+  loses anything. No other unintended files: the diff is the three web files, the new spec and support file, the demo
+  video, and documents.
+
+### What is the founder's
+
+- **Judge the demo recording** (T6.3 says "proved by review"; the review is the founder's).
+- **T2.10's timed new person** (the five-minute setup), and **Steps 3 and 4's Design QA** with a real finding: both as
+  before, after Phase 2.
+- **A real send of the release summary** through Slack, Teams, Discord and email: only the delivery path's fakes ran.
+  Until then section 12 forbids saying a channel works.
+- **Whether the released SigNoz and Coroot rows still stand at announcement:** re-read, if the announcement is after
+  2026-12-06 (two weeks from this refresh), and run Coroot against a cluster if a claim turns on its gating.
+- **Real GitHub and a hosted runner running a recipe** (as before, foundation item 28).
+
+### What did not run here, and why
+
+- `just check`, the Go suites, and the live Python suites: the coordinator's, and no F28 Python or Go code changed. The
+  Python and TypeScript checks named in the brief ran: `uv run mypy .` (1,287 files) clean; `ruff check .` and
+  `ruff format --check .` clean (1,700 files); `pnpm -r --if-present run typecheck` clean; `biome check` on the touched
+  folders clean at error level (four older warnings in other specs, not touched); the web suites for releases, projects
+  and findings: 28 files, 531 tests passed.
+- **The environment** was unkind: this container's one disk (about 39 GB in all) was shared with another build and was
+  filled to 0 MB free four times; once by this step's 50-million-span seed, which was then removed, and the rest by what
+  another build held. It broke one write of `research.md` (restored from git and written again), stopped Kafka, and lost
+  the image store partway, so the images could not be rebuilt (the container's TLS certificate authority is not trusted by
+  the image builds). The receiver, the worker, the API, the scheduler and the web server were then run from source as host
+  processes against Docker's stores, as the Step 1a cost run was. All figures above came from the first, container, stack,
+  except the browser figure and the recording.
 
 ## Step 5, built 2026-11-12
 
@@ -661,12 +854,36 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
-Steps 4 (ClickHouse `000041`, `000042`) and 5 (Postgres `0074`, `0075`; ADR-066) committed 2026-11-12. Next, Step 6. Deferred to hardening: the errors read's cost at 24 hours, the 2-second target, Design
-QA at 375px, Playwright and the `tools/release-demo` judging. T2.10's timed new person and Steps 3 and 4's Design QA
-are the founder's, after Phase 2. `docs/architecture/database.md` gains the new tables in T5.7, as planned.
+Step 6 is built 2026-11-22 and awaits the coordinator's commit. What is left is the founder's: judge the demo recording;
+T2.10's timed new person; Steps 3 and 4's Design QA and the finding section at 375px with a real finding; a real send of
+the release summary; decide the three open decisions from Step 6 below. The competitor reading must be repeated, with the
+hosts reachable, within two weeks before announcing (research section 10). The production-readiness assessment and the
+review gate in `plan.md` are the lifecycle's, not done here.
 
 
 ## Open decisions
+
+**From Step 6, none blocking; each recommended, open to overrule.**
+
+1. **Where does the changelog entry live?** No changelog file exists; release notes are to be generated at release
+   (`docs/changes/ready-to-deploy`). The draft is under *Launch text* in this file. Options: keep it here until the generator
+   exists (recommended: no new convention, nothing to drift); or create `CHANGELOG.md` now. **Recommendation: keep it here.**
+2. **Errors by version reads "No errors in either version" beside a higher failure share,** when the failing spans carry no
+   exception (the demo's `rolling` mode). It counts exception groups, as the Errors screen does. Options: leave (recommended
+   only if the founder is content that "errors" means "exceptions" everywhere); or say "No exceptions were recorded in either
+   version" when the failure share is above zero, so the two lines agree. **Recommendation: the second, a one-sentence change in
+   `ReleaseScreen.tsx` and its test.** It is the first thing a newcomer to the recording would ask about.
+3. **"Requests a minute" divides by the whole window, silent minutes included** (*Step 6*, MEDIUM). Options: leave; divide by
+   the minutes that had traffic (recommended); or drop the row for a version idle more than a tenth of the window. It
+   changes the comparison's rule (`nexovue_platform/releases.py`), so it is the founder's, not built here.
+4. **Allow the vendor sites for the competitor reading.** 12 hosts were refused in this build (research section 10). The
+   rows marked *extract* and every price except Datadog's need a second read before any public claim. Allow `signoz.io`,
+   `docs.coroot.com`, `coroot.com`, `sentry.io`, `docs.sentry.io`, `clickhouse.com`, `docs.honeycomb.io`,
+   `docs.newrelic.com`, `docs.observeinc.com`, `grafana.com`, `docs.dynatrace.com`, `openobserve.ai` in the build's network
+   settings, then repeat T6.1 once, within two weeks before announcing.
+5. **Two builds on one disk.** This container's disk (about 39 GB) was shared with another build and was full four times in
+   one step, once from this step's own seed. Not F28's to fix; recorded because it costs hours. Options: a disk each, or a
+   rule that a seed over a few million rows asks first. No F28 decision depends on it.
 
 **From Step 5, none blocking; each built as recommended, open to overrule.**
 
@@ -1101,6 +1318,8 @@ from latency buckets. If your deploy already passes a build id into `service.ver
 
 Only in the future tense until shipped, and re-checked in plan Step 6. **The earlier line is withdrawn.**
 
+**Re-checked in Step 6, 2026-11-22:** the list of allowed and banned sentences, each checked against the code, is now in `phase-2-foundation.md` section 12 (*F28: releases and deploys*) and is the one to use. The block above is kept as what was approved in 2026-11.
+
 **Do not say:** "every release is compared", "exact p95", "no CI work", "on your own server" to a hosted buyer, "no extra charge"
 to anyone paying for their own disk, "automatic deploy detection", "more accurate than" anyone, or a rival's name in public.
 
@@ -1113,7 +1332,7 @@ to anyone paying for their own disk, "automatic deploy detection", "more accurat
 | Will it compare my small service? | Not always. Low traffic reads "too little traffic" or "not clearly different" |
 | Is old against new fair? | They are the same minutes. They may not get the same mix of requests, and new instances start cold, so p95 leaves out each version's first 5 minutes |
 | I sample before sending | Counts are short by that factor, and nothing in the data shows it. The page says counts assume no sampling |
-| How much more disk? | Not known yet. The cost report will give figures per million requests. A self-hoster pays for that disk |
+| How much more disk? | On demo data on a development machine, about 10% more rows and disk than the per-service table when every service rolls out once an hour. Not a figure for your traffic or a 16 GB server. A self-hoster pays for that disk |
 | Can I import past deploys? | Up to 7 days back |
 | Why 35 days on a 395-day plan? | Per-minute version counts are kept 35 days at most, as detection's are. The screen states your project's limit |
 | Can a public browser key fake my numbers? | Not version numbers or a server release's errors. Totals in the time comparison can be, until the separate change lands, which is required before that page ships |
@@ -1158,6 +1377,8 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 - The browser-door change is now one record shared with F3 and F19 (plan, foundation section 9).
 
 ## Last updated
+
+2026-11-22: Step 6 built in `wt/f28s6`, awaiting commit: competitor rows re-read (research section 10), the launch sentences checked against the code (foundation section 12), Playwright and Design QA at 375px, the errors read and the 2-second target measured, a labelled demo recording, and the `#deploys` fix.
 
 2026-11-12: Steps 4 and 5 committed, Step 5's migrations re-chained to `0074` and `0075` on F4's `0073`. Earlier the same day: Step 5 built in `wt/f28s5`, and Step 4 in `wt/f28s4`.
 
