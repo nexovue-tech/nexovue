@@ -30,10 +30,28 @@ from sqlalchemy import TextClause, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 
+from nexovue_api import roles
+
 INSIGHT_ACCOUNT: Final = "nexovue_insight"
 PASSWORD_VARIABLE: Final = "POSTGRES_INSIGHT_PASSWORD"
-# One process with four children and its pools needs well under this (A58).
-CONNECTION_LIMIT: Final = 20
+# What the AI role may hold at its worst (A58): a child's pool is one connection and one
+# overflow (`process_engine.py`); the parent's claim pool is two and two, with one listener
+# (`__main__.py`). The spare is for a restart's overlap. The children are the role's own
+# `--concurrency` (`roles.py`), so a role that grows raises the limit with it: F5's eight made
+# the old fixed 20 one short.
+CHILD_CONNECTIONS: Final = 2
+PARENT_CONNECTIONS: Final = 5
+RESTART_OVERLAP: Final = 3
+
+
+def _insight_children() -> int:
+    arguments = roles.ROLES["scheduler-insight"]
+    return int(arguments[arguments.index("--concurrency") + 1])
+
+
+CONNECTION_LIMIT: Final = (
+    _insight_children() * CHILD_CONNECTIONS + PARENT_CONNECTIONS + RESTART_OVERLAP
+)
 # The account's own statements are short reads and single-row writes; the provider call
 # happens outside any transaction (design, *The wording decision and run*). Guesses.
 STATEMENT_TIMEOUT: Final = "10s"
