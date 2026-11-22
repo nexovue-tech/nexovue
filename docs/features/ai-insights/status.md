@@ -2,6 +2,7 @@
 
 ## Lifecycle status
 
+**Step 7 built 2026-11-22, awaiting commit** (worktree `wt/f3s7`, on `feature/phase-2` 4ad5d47): the record, the review and security review, the readiness result ([`readiness.md`](readiness.md): **NOT READY**, with every gate that waits on the founder's real runs, the fault bed's run and deploy named as open), Playwright run for the first time, the customer page `docs/product/setup/ai.md` (T4.8), and one defect fixed (the AI account's connection limit). No migration, no ADR. See *Step 7* under *Completed*.
 **Steps 2c and 6 (code) built 2026-11-21, committed** (worktree `wt/f3s6`, on `feature/phase-2` 96cbd81): the scoring tooling for the rules (T2.15, T2.16), the bed's harness and report generator against fake providers (T6.1, T6.2, the harness of T6.3). No migration, no ADR, no AI call. **Waiting, with what each needs:** T2.17's tune and report runs and the rules-only report (a machine that stays on for about 11.5 days, foundation item 9); T2.18 (the founder's bar); T6.3's real-model runs and the report with real numbers (the founder's, after Phase 2, foundation item 31); `--run forged` against the real receiver (the dev stack); T6.5 (nothing has passed AC63). See *Steps 2c and 6* under *Completed*.
 **Fix 2026-11-21, awaiting review** (worktree `wt/f3fix`): a wording run is settled once, and the wording suites read a clock per test. See [wording settles once](../../changes/wording-settles-once/bug.md) (T5.3 to T5.5; no migration).
 **Step 5 built 2026-11-11, committed** (worktree `wt/f3s5`, on `feature/phase-2` 9ad0188): wording, checked by code, with a limit that stops new runs (plan T5.1 to T5.11). Built and tested against fake providers only. T5.8 waits for its Playwright check (hardening pass); T5.9 is not built (it needs `just insight-fence` and Playwright). Migration 0072, after 0071 (re-chained at commit). No ADR.
@@ -24,6 +25,14 @@ Step 2 is committed (`55703b4`). Step 2b is the founder's after Phase 2 (foundat
 
 
 ## Completed
+
+### Step 7, built 2026-11-22 (worktree `wt/f3s7`)
+
+**T7.1.** Every ADR F3 cites exists and is in the index (ADR-039, 040, 047; the floor is inside ADR-028, which F19 filed). The foundation gained *F3 as built* and four *Must not be claimed* rows; the design's *Specification impact* now has a state per row; the catalog, `vision.md:135`, `phase-2-plan.md:14` and `team-and-api-access` FR1 were amended (T0.1 done; read the two founder-owned ones). `anomaly-detection/*` was not touched (decision 24).
+
+**T7.2.** Review, security review and readiness: [`readiness.md`](readiness.md). **Verdict NOT READY.** Open, waiting on: the founder's real-model runs (T2.10, T2.11, T4.10, T6.3, T6.5); the fault bed's 11.5-day run, then the founder's reading against the bar (T2.17, T2.18); deploy (capacity, sizing, the platform's own list). Fixed: `CONNECTION_LIMIT` (20) could not hold eight children, now worked out from the role (24).
+
+**Deferred hardening.** T4.7 and T5.8: Playwright run on this step's own stack (`tools/e2e/tests/ai-insights.spec.ts`): AC17 (both widths), AC85, AC90, AC103 pass; **AC70 fails** (decision 22). T5.9: `non-ai-screens.spec.ts` and `just e2e-insight-stopped` written; the spec passes on a stack with no AI container, seen failing on an injected 500; the other twelve specs it lists were not run (no receiver, Kafka or workers); the Python half (`test_ai_off_changes_nothing_live.py`) is **not built**: it needs the installed kit, and `just insight-fence` cannot run on this host (its preflight asks for 40 GiB free, this host had 11). **`just insight-fence` itself passed in CI** (run 44996057046 on `b4d7c87`; AC42 5 passed, AC46 48 passed) and records the metadata address as open. T4.8: written. T4.9: not run (needs an AWS account).
 
 ### Steps 2c and 6 (code), built 2026-11-21 (worktree `wt/f3s6`)
 
@@ -268,6 +277,14 @@ The founder reviews Step 2's diff; then commit. The founder's checks after Phase
 
 
 ## Open decisions
+
+**From Step 7, 2026-11-22:**
+
+22. **AC70 cannot hold with the page's one DOM order.** On 390 by 664 the case and signal controls (F22 D86, NFR8: work before evidence) come before the explanation, so *Look next* is below the fold; FR14 says it sits directly under the header line with no cause. The one link in view, the service in the header, carries no window. Seen by Playwright, kept as `test.fail`. **Recommendation:** make the header's service link carry the finding's window (`from`, `to`, `project`, `finding`; `/services/$name` already reads them): small, above the fold at any title length, no reorder of F22's page. Alternative: move *Look next* above the case, which reopens D86.
+23. **Candidate ADR: a likely cause is released rule by rule, only after a bar recorded before the report rounds** (FR50, A60, A83, A85; built, `CAUSE_BAR_RECORDED`). Material, settled and founder-approved, so it meets the ADR test, but ADR numbers are given at commit and parallel builders may collide. **Recommendation:** file it as the next free number when this is committed.
+24. **Two document-only gaps outside this feature:** F6's `status.md` and FR16 do not mention that a browser key can open a finding (F28 owns the change, built); and T0.2 (`tools/spec-check`, fails when an acceptance criterion is cited by no task) was never built, so the check was a one-off script (needs `pyproject.toml`'s two path lists, which other builders also edit). **Recommendation:** do both in the commit that merges the branches.
+25. **Security S1, S2, S4** (`readiness.md`): S2 is decision 7 again; S1 waits on F5 T4.11 (item 36c); S4 is a one-line save-time refusal of `0.0.0.0`. **Recommendation:** S4 now, in the hardening pass; the others as already decided.
+26. **Decisions 11 and 13 (owners' names on the consent view; FR26's quiet line)** are recommendations to build in the hardening pass; not built, since the founder has not said yes.
 
 **From Steps 2c and 6, 2026-11-21:**
 
@@ -654,6 +671,10 @@ Checked against: **code** (read at the cited path), **arith** (redone by hand), 
 
 ## Validation
 
+### Step 7, 2026-11-22
+
+Own containers (Postgres 18 on 35444, ClickHouse 26.3 on 38135 and 39015, project `f3s7`), migrated by `setup` (0084) and the Go setup (42). No real provider. **Final batch, `-n 4`: 4,634 passed** (F3's API, scheduler and platform suites, `tools/ai-eval`, the two new connection-limit tests). An earlier batch of 4,624 passed and 6 failed: five because this step's own shell exported `POSTGRES_INSIGHT_PASSWORD` into the compose-rendering tests (not a defect), one `TooManyConnectionsError` in `test_parallel_runs_past_the_limit...`, which was the connection-limit defect (S3), seen failing as `20 >= 21`, then passing. Pool tests seen failing by changing each pool, restored. `uv run mypy .` (1317 files) clean before the new tests; `ruff check`, `ruff format --check`, `pnpm -r --if-present run typecheck`, biome format and lint on the new specs clean; vitest for `aisettings`, `explanationsettings` and the docs plugin pass. Playwright: `readiness.md`. Not run: `just insight-fence` (CI did), `just check`, anything needing a real model, receiver, Kafka or worker.
+
 ### Steps 2c and 6 (code), 2026-11-21
 
 Own containers `f3s6-pg` (Postgres 18, port 25432) and `f3s6-ch` (ClickHouse 26.3, HTTP 28123), network `f3s6-net`, migrated with the `setup` step (Postgres at 0077; its last step, the object store, has none here and was not needed) and the Go setup (42 ClickHouse migrations). Live tests ran through a wrapper that refuses any store port but these two. No real provider, no dev stack, no Kafka. **Every test below was seen failing on a saved copy with its behaviour broken (restored byte-equal, checked by hash), then passing.** Four tests were first seen *passing* on a mutation, which showed they proved nothing, and were strengthened: a staged deploy always scored right, a cause with no data behind it, a decoy that never changed an outcome (now a counted column), a duplicate window, a no-outage cause counted false, a failed call that carried text, the clear time from the last start, and a payload leak ignored by the command.
@@ -876,7 +897,7 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 
 ## Last updated
 
-2026-11-21 (Steps 2c and 6 code built, committed); 2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
+2026-11-22 (Step 7 built, awaiting commit); 2026-11-21 (Steps 2c and 6 code built, committed); 2026-11-21 (fix: [wording settles once](../../changes/wording-settles-once/status.md)); 2026-11-11 (Step 5 built, committed; Steps 3 and 4 committed 2026-11-11; Step 2 committed 2026-11-09)
 
 ## Founder approval, 2026-11-02
 

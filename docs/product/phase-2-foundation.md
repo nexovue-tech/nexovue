@@ -77,7 +77,8 @@ The API is the exception to these rooms: it seals keys and must rotate them (`ke
 
 **What this means.** A successful injection can only change words, and those words are checked before anyone sees
 them. If the AI process itself were ever broken into, there would be no telemetry database, repository or alert
-channel within its reach.
+channel within its reach. **That holds for the stores and not for everything else** (F3 as built, below): its network
+is not an outbound firewall, and two Postgres rights no grant can take remain.
 
 **Rules the rooms create**
 
@@ -111,7 +112,7 @@ travel inside the worker; nothing here gives the model a write route, because th
 
 **The trap in `test_detection_has_no_ai.py`.** Its list of AI modules is fixed (`:37`), and it admits it cannot see a
 provider reached by plain HTTP (`:15-16`). So `nexovue_platform.ai` and `nexovue_scheduler.insight` must be added to
-that list in the same change that creates them, and all provider HTTP must live inside `nexovue_platform.ai`. The
+that list in the same change that creates them, and every provider call must leave through one function, `nexovue_scheduler.insight.transport.send` (the wire formats are in `nexovue_platform.ai`, which makes no call; F3 row 3). The
 evidence code must not import them either, and that gets the same test. **A walk from an API root needs one shared fix:** `lifespan.py:21` imports `mcp` only to type one argument, and every API route reaches it. Whichever of F5, F19 or F20 lands first types it as a small Protocol and moves the walker to `nexovue_platform/import_walk.py` (F19 D55, F20 D38).
 
 ## 2. One AI provider interface
@@ -640,6 +641,10 @@ These must stay in the future tense until shipped (competitors research).
 | "Better than Grafana" for dashboards | Parity is the aim |
 | Anything on DPDP, RBI or SEBI compliance | No lawyer has read it. State only where data goes |
 | Naming rivals in public | Their facts change monthly, and four are unresolved (competitors research) |
+| "No paid edition" | Open-core is deferred, not rejected (`vision.md`), and hosting is paid (F3 spec, *Must not be claimed*) |
+| "A forged span cannot alert you" | A browser key can move a rollup and so open a finding until the browser-door change ships (built on `feature/phase-2`, not yet in `main`; F3 row 8; decision 7). Say what the finding's basis line shows instead |
+| "Your names stay on your server" | A person's alert channel carries names, and the AI's facts carry stand-in names only: say which of the two is meant (F3 spec) |
+| "A hard limit" on AI spend, said alone | It counts only nexovue's own use of the key, not the customer's other uses of it (F3 spec) |
 
 ### F28: releases and deploys, what may be said (checked against the code, 2026-11-22)
 
@@ -811,6 +816,34 @@ What B costs, stated plainly:
 - Every memory ceiling in section 1, and every `sizing.md` row they add; item 6's raised retention default, which waits for the bed's disk figures.
 
 **Comes back to the founder at deployment:** which Oracle shape the measurements run on (the free allowance cannot show 16 GB), and whether the bed runs before the first customer or on its own instance.
+
+## F3 as built (2026-11-22): where the build departs from this document
+
+F3's design lists 33 differences from this document, by row, in its `design.md` (*Where this differs from the
+foundation*); each was applied to the sections above on 2026-11-02 and is not repeated here. Items 27 to 36 of the
+founder's decisions are not repeated either. What follows is only what the build found *after* that, each with where
+it is recorded:
+
+1. **The AI container's network is not an outbound firewall.** It reaches Postgres, and for F4 the API; Kafka,
+   ClickHouse and the object store are closed to it. But the same network is open to the Docker host's gateway and to the
+   cloud metadata address `169.254.169.254:80`, which the fence's own run records as open (CI run 44996057046, on
+   `b4d7c87`: AC42 5 passed with that warning). The application's address guard stops the code F3 wrote; it does not stop a
+   process that has been broken into and opens its own socket. Closed by the operator's host rules (the customer page,
+   F3 T4.8) or the optional outbound proxy (F5 T4.11, item 36c), both still to build. Until then, *a fence you can read*
+   (section 12) says "no telemetry database or repository key", never "no outbound route".
+2. **Two Postgres rights no grant takes away** (F3 open decision 7): `NOTIFY` needs no privilege, and a session may
+   change its own timeouts. A broken-into AI process can fill the notification queue or hold a transaction open, which stops
+   Run now and migrations until it is ended. Recommended: a watchdog on beat's leader (not built). The operator's
+   runbook (`docs/operations/ai.md`) says so.
+3. **A likely cause is held until the bar is recorded, rule by rule** (FR50, A60, A85). `CAUSE_BAR_RECORDED` is false and
+   `RELEASED_RULES` is empty, production refuses the development override, and no wording run starts while causes are held.
+   F3 therefore ships facts only until T2.17's report and T2.18's reading (item 9, A).
+4. **The wording label names the model as configured**, never as the provider reports it (F3 open decision 12; FR19
+   allows the reported name). A gateway's answer cannot then put a name on the page.
+5. **`AI_SECRET_KEY` has no development default** (F3 open decision 9), so `/settings/ai` on a fresh `just dev` says AI is
+   unavailable until a developer sets one. Every other key here has one.
+6. **Every real-model result is the founder's, after Phase 2** (item 31): no provider format is offered on the settings
+   screen until it has a dated real call (ADR-047), and F3's bed report and rules report are skeletons that say so.
 
 ## Not checked
 

@@ -11,8 +11,10 @@
     rest of the chain (F6 spec, D32). Detection and alerts already work with AI off, so Stage 1 can be judged
     by real installs before Stages 2 to 6 are built.
   - Each later stage is still specified and designed before its code is written.
-- **Selling reason.** "It finds the problem, explains it and suggests the fix, all on your own server, so your
-  data stays with you." See *Risks*: this is not unique.
+- **Selling reason.** "It finds the problem, explains it and suggests the fix." The line about where data goes is the
+  foundation's one approved wording ([`phase-2-foundation.md`](phase-2-foundation.md), founder decision 2, 2026-11-02),
+  because "all on your own server, so your data stays with you" is false for a customer using their own AI account.
+  See *Risks*: this is not unique.
 - **Where AI runs for a self-hosted install.** The customer chooses: their own AI account, or a model on their
   own server. nexovue runs no AI service of its own for them.
 - **Test bed.** The OpenTelemetry Demo. See *Risks*: it cannot prove the false-alarm rate on real traffic.

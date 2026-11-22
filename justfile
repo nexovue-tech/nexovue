@@ -338,6 +338,19 @@ e2e:
 e2e-headed:
     pnpm --filter @nexovue/e2e test --headed
 
+# F3 plan T5.9 (AC48, A77): with `scheduler-insight` stopped, every screen that is not AI's, and
+# the specs for the ones most likely to notice, still pass. Stops the role, runs them, and
+# starts it again whatever the result. Bring the stack up first. Run by hand: no CI job runs
+# Playwright, so its result is written in the feature's status.md.
+e2e-insight-stopped:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    compose=(docker compose -f {{compose}}/docker-compose.yaml)
+    "${compose[@]}" stop scheduler-insight
+    trap '"${compose[@]}" start scheduler-insight' EXIT
+    pnpm --filter @nexovue/e2e test non-ai-screens alerts errors first-span logs members \
+        profiles rum service-map services sign-in synthetics top-bar
+
 # The OpenTelemetry Demo — 16 services, 10 languages — against our receiver (P1-62).
 # Never part of `just check` or `just e2e`: it wants ~2.5 GB and several minutes,
 # and it is a realism gate run deliberately, not a dependency of anything.

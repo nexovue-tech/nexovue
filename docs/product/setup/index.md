@@ -17,6 +17,7 @@ to go next.
 | You want to see which code a service spends its CPU and memory in | [Continuous profiling](profiling/continuous-profiling.md) (preview) |
 | You want to *read* your data from a script, CI or an AI assistant | [api.md](api.md) — API tokens, the read surface, the MCP server |
 | You want releases, and deploys reported from CI | [deploys.md](deploys.md) — a build id in `service.version`, or a signed step in your pipeline |
+| You want plainer wording of a finding's facts from your own AI account or model (optional, off by default) | [ai.md](ai.md) |
 | You have set it all up and nothing has arrived | [troubleshooting.md](troubleshooting.md) |
 
 ## The two variables

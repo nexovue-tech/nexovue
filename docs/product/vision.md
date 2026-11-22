@@ -132,7 +132,7 @@ Special cases:
 | 2 | **Alerts & notifications — multiple connectors** | F21 | Email, Slack, Teams, Discord, PagerDuty and webhooks. WhatsApp and SMS were dropped (F21, D6). Flap guard and burst cap against alert fatigue. |
 | 3 | **Case management** | F22 | When an error/issue happens → automatically create a case/incident. Case dashboard with lifecycle (open → investigating → resolved). Connectors: GitHub Issues, Jira, etc. — push cases to the tools teams already use. |
 | 4 | **AI chatbot (with RAG)** | F4 | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. |
-| 5 | **AI insights** | F3 | Proactive plain-language findings: "Latency on /checkout jumped 4x at 14:32, correlated with deploy a41f2c9 and DB connection errors." Cross-signal correlation (metric → trace → log). |
+| 5 | **AI insights** | F3 | Proactive plain-language findings: "checkout is 4x slower than normal since 14:32." Beside it, the facts that line up, each linked to its data: a signed deploy 4 minutes before, and a slower call to `payments`, with how often deploys here are followed by a finding. Facts first, optional plain-language wording after; never a stated cause the data cannot back (F3). |
 | 6 | **AI solution** | F5 | Beyond diagnosis → suggested fix: "Probable cause: unindexed query in deploy a41f2c9. Suggested fix: add index on orders.user_id." Possibly draft the PR via GitHub connector. |
 
 **How the features chain together (the incident pipeline):**

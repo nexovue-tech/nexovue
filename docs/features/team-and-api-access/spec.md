@@ -307,6 +307,8 @@ and a read API has nobody to serve before that (D12).
   | Reliability targets: create, change, disable, delete, restore (F19 D20) | ✓ | ✓ | ✓ | ✗ |
   | Dashboards: create, change, delete, restore, preview a draft (F20 BR7) | ✓ | ✓ | ✓ | ✗ |
   | Finding explanation: read the facts again, ask for plainer wording (F3 A20; FR41) | ✓ | ✓ | ✓ | ✗ |
+  | AI wording: connect a provider, test it, set the limit, turn it on or off, keep a project out, read what was sent (F3 FR23, `manage_ai`) | ✓ | ✓ | ✗ | ✗ |
+  | AI wording: agree that facts go to the saved address (F3 FR26, `consent_ai_disclosure`) | ✓ | ✗ | ✗ | ✗ |
   | Ask chat a question (F4, `ask_assistant`) | ✓ | ✓ | ✓ | ✗ |
   | Write runbooks chat can find (F4 D48, `manage_knowledge`) | ✓ | ✓ | ✓ | ✗ |
   | Ask for a suggested fix: rung 2b's general suggestion, and rung 3's files and Send (F5 FR32, FR11, `request_fix`) | ✓ | ✓ | ✓ | ✗ |
