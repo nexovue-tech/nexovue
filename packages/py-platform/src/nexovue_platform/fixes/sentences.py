@@ -15,15 +15,27 @@ from typing import Final
 
 from nexovue_platform.fixes.pack import LEFT_OUT_REASONS
 from nexovue_platform.fixes.records import (
+    BRANCH_NOT_OURS,
+    CHANGED_SINCE_CHECK,
     CHECKS_REFUSED_AT_CLICK,
     CODE_DELETED_REASONS,
+    DID_NOT_FINISH,
+    DRAFT_REFUSALS,
+    DRAFTS_NOT_ALLOWED,
     FIX_CHECK_REASONS,
     FIX_REASONS,
     FIX_VERDICTS,
+    NEEDS_LIKELY_CAUSE,
+    NO_DRAFT_SUPPORT,
+    NO_WRITE_PERMISSION,
+    PUBLIC_NOT_ALLOWED,
+    PULL_REQUEST_STATES,
     STALE_REASONS,
     VERDICT_MERGE_AS_IS,
     VERDICT_USEFUL_START,
     VERDICT_WRONG,
+    WRITE_FAILURES,
+    WRITES_OFF,
 )
 
 
@@ -101,6 +113,11 @@ ELIGIBILITY_SENTENCES: Final[dict[str, FixSentence]] = {
     ),
     "already_running": FixSentence(
         "A suggested fix is being prepared.", "A suggested fix is being prepared."
+    ),
+    # FR9 row 13 (Step 7, BR8): one draft Nexovue can still see per finding.
+    "draft_open": FixSentence(
+        "A draft is open for this finding: {link}. Close it on GitHub to ask again.",
+        "A draft is open for this finding: {link}.",
     ),
 }
 
@@ -413,6 +430,123 @@ CHECK_REASON_SENTENCES: Final[dict[str, str]] = {
     CHECKS_REFUSED_AT_CLICK: REASON_SENTENCES[CHECKS_REFUSED_AT_CLICK].requester,
 }
 
+# Step 7: why a draft cannot be opened here (design, *Every sentence*; FR10c's hidden
+# button states). `writes_off` is Nexovue's own, while write access is off in code until
+# the founder's go (ADR-097): its words are the founder's call (status, open decision 90).
+DRAFT_REFUSAL_SENTENCES: Final[dict[str, str]] = {
+    WRITES_OFF: (
+        "Opening a draft pull request is switched off in this version of Nexovue, until its "
+        "safety evaluation is done. Download the patch instead."
+    ),
+    DRAFTS_NOT_ALLOWED: (
+        "An owner has not allowed draft pull requests for this repository. Download the "
+        "patch instead."
+    ),
+    PUBLIC_NOT_ALLOWED: (
+        "This repository is public. A branch would show that something is broken, and "
+        "where. An admin may allow it."
+    ),
+    NO_WRITE_PERMISSION: (
+        "The Nexovue suggestions App has no write access to this repository. An admin can "
+        "raise it, and GitHub's organization owner accepts."
+    ),
+    NO_DRAFT_SUPPORT: (
+        "GitHub refused a draft pull request for this repository. Download the patch instead."
+    ),
+    NEEDS_LIKELY_CAUSE: (
+        "A draft needs this service's own signed deploy as its likely cause. Download the "
+        "patch instead."
+    ),
+}
+CHECK_REASON_SENTENCES.update(DRAFT_REFUSAL_SENTENCES)
+# Why a draft was not opened, on `last_write_failure` (design, *Every sentence*).
+WRITE_FAILURE_SENTENCES: Final[dict[str, str]] = {
+    **DRAFT_REFUSAL_SENTENCES,
+    CHANGED_SINCE_CHECK: "A file changed after your check, so nothing was written. Check again.",
+    BRANCH_NOT_OURS: (
+        "A branch with this name exists and was not made by this suggestion. Nothing was "
+        "written. Delete it on GitHub to try again."
+    ),
+    DID_NOT_FINISH: (
+        "Opening the draft did not finish. A branch may already exist on GitHub: {branch}."
+    ),
+    "no_github_access": REASON_SENTENCES["no_github_access"].requester,
+    "not_linked": REASON_SENTENCES["not_linked"].requester,
+    "access_unknown": REASON_SENTENCES["access_unknown"].requester,
+    "permission_missing": REASON_SENTENCES["permission_missing"].requester,
+    "github_unavailable": REASON_SENTENCES["github_unavailable"].requester,
+    "consent_withdrawn": "An owner withdrew agreement while this was opening, so it stopped.",
+}
+# What GitHub says of the draft, followed by F5's poller (design, *Every sentence*).
+PULL_REQUEST_SENTENCES: Final[dict[str, FixSentence]] = {
+    "open": FixSentence(
+        "A draft pull request is open: {link}.", "A draft pull request is open: {link}."
+    ),
+    "merged": FixSentence(
+        "This pull request was merged: {link}.", "This pull request was merged: {link}."
+    ),
+    "closed": FixSentence(
+        "This pull request was closed without merging: {link}.",
+        "This pull request was closed without merging: {link}.",
+    ),
+    "not_opened": FixSentence(
+        "No pull request was opened. A branch may be left on GitHub: {branch}. You can "
+        "delete it here.",
+        "No pull request was opened.",
+    ),
+    "untracked": FixSentence(
+        "Nexovue can no longer see this pull request; check GitHub.",
+        "Nexovue can no longer see this pull request; check GitHub.",
+    ),
+}
+OPEN_DRAFT: Final = "Open draft pull request"
+CONFIRM_DRAFT: Final = "Open the draft"
+DELETE_BRANCH: Final = "Delete this branch"
+DRAFT_RUNNING_HEADING: Final = "Re-reading the files"
+DRAFT_READY_HEADING: Final = "Ready to confirm"
+OPENING_HEADING: Final = "Opening the draft"
+OPENING_REQUESTER: Final = "Opening the draft."
+OPENING_SLOW: Final = "This did not finish. A branch may already exist on GitHub: {branch}."
+OPENING_VIEWER: Final = "A draft is being opened."
+OPENED_HEADING: Final = "Draft pull request"
+# FR26, on the page: what holding CI means.
+CI_HELD_ON_PAGE: Final = (
+    "Nexovue's commit asked GitHub Actions to wait. Anything pushed since is not tracked "
+    "here; check GitHub."
+)
+# FR24's confirmation, each asserted by exact string (AC37e, AC62).
+CONFIRM_FACTS: Final = "{repository}, branch {branch}: {files} {files_word}, {lines} {lines_word}."
+CONFIRM_HOLDS: Final = (
+    "Asks GitHub Actions to hold `push` and `pull_request` runs. Other triggers, other CI "
+    "systems and apps connected to this repository may still run."
+)
+CONFIRM_CI_ON_OPEN: Final = (
+    "An owner chose to run CI when a draft opens here, so CI runs the model's code, possibly "
+    "with this repository's secrets, before anyone reviews it."
+)
+CONFIRM_CASE: Final = "This also starts a case on this finding."
+CONFIRM_AUTHOR: Final = (
+    "On GitHub this pull request's author is the App, so the person who requested it can "
+    "approve it. We have not yet shown that a GitHub rule can stop that."
+)
+CONFIRM_LOGIN: Final = (
+    "Your GitHub login is written into the pull request, and stays on GitHub if you leave."
+)
+CONFIRM_REACH: Final = (
+    "Write access reaches every repository you installed this App on; Nexovue restricts where "
+    "drafts open."
+)
+NOTE_LABEL: Final = "Why this change (optional, one line)"
+NOTE_PUBLIC_CONFIRM: Final = "This repository is public. Put my note in the pull request."
+NOTE_REFUSED: Final = (
+    "Write one plain line of at most 200 characters, with no address, email or markup."
+)
+NOTE_NOT_CONFIRMED: Final = (
+    "This repository is public: confirm that your note may go into the pull request, or "
+    "leave it out."
+)
+NOT_YOUR_CHECK: Final = "Check this yourself first, since GitHub's answer is about you."
+
 # Step 5: the patch (design, *State by role*, check rows; spec FR20a, FR21, UR6).
 PREPARE_PATCH: Final = "Prepare patch"
 PATCH_RUNNING_HEADING: Final = "Re-reading the files"
@@ -475,3 +609,6 @@ assert set(VERDICT_LABELS) == set(FIX_VERDICTS), "every verdict needs its words 
 assert set(CODE_DELETED_WHY) == set(CODE_DELETED_REASONS), (
     "every reason code is deleted needs its words here"
 )
+assert set(DRAFT_REFUSAL_SENTENCES) == set(DRAFT_REFUSALS), "every draft refusal needs words"
+assert set(WRITE_FAILURE_SENTENCES) == set(WRITE_FAILURES), "every write failure needs words"
+assert set(PULL_REQUEST_SENTENCES) == set(PULL_REQUEST_STATES), "every state needs words"

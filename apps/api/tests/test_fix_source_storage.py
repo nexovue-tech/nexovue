@@ -41,7 +41,7 @@ def _words(frozen: str) -> tuple[str, ...]:
     ("frozen", "shared"),
     [
         ("_FIX_KINDS", records.FIX_KINDS),
-        ("_FIX_STATES", records.FIX_STATES),
+        ("_FIX_STATES", records.STEP_3_FIX_STATES),
         ("_IN_FLIGHT", records.IN_FLIGHT_STATES),
         ("_WITH_A_REASON", records.STATES_WITH_A_REASON),
         ("_FIX_REASONS", records.STEP_3_FIX_REASONS),

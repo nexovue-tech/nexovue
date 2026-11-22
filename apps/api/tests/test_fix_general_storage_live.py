@@ -177,7 +177,7 @@ async def test_a_general_row_as_the_click_leaves_it_is_taken(db: AsyncConnection
             "reason_only_when_it_ended_short",
         ),
         ("a reason off the list", {"state": "failed", "reason": "oops"}, "reason_is_known"),
-        ("a state not yet built (Step 7)", {"state": "approved"}, "state_is_known"),
+        ("a state off the list", {"state": "merged"}, "state_is_known"),
         (
             "a general row with no version",
             {"explanation_version": None},

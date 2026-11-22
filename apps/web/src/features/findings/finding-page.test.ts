@@ -444,6 +444,19 @@ describe("a timeline row's words come from kinds and typed detail alone", () => 
       }),
     ).toBe("A suggested fix was written from the service's own files");
   });
+
+  it("F5 Step 7: an opened draft says so, never a bare fix (AC37)", () => {
+    expect(
+      eventSentence({
+        id: "e5",
+        kind: "fix_pull_request_opened",
+        at: "2026-11-22T12:00:00Z",
+        actor_kind: "system",
+        actor_name: null,
+        detail: { fix_id: "x-3", step_count: 1 },
+      }),
+    ).toBe("A suggested fix was opened as a draft pull request");
+  });
 });
 
 // ------------------------------------------------ keeping and ending (F22 T2.7)

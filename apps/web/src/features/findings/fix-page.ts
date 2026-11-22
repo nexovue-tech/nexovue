@@ -191,8 +191,17 @@ export function minutesLeft(lapsesAt: string, now: number): number {
 export function sourceTitle(state: string | undefined): string | null {
   if (state === "gathered") return "Files ready: confirm";
   if (state === "proposed") return "Suggestion ready";
+  if (state === "opened") return "Draft pull request open";
   return null;
 }
+
+/* ------------------------------------------------ rung 5: the draft pull request (Step 7) */
+
+/** The few words the draft's controls say themselves; every sentence is the API's. */
+export const DRAFT_WORDS = {
+  cancel: "Not now",
+  deleteAsked: "Asked GitHub to delete this branch.",
+} as const;
 
 /* ------------------------------------------- rung 3: the written suggestion (Step 4) */
 

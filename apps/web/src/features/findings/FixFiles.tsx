@@ -17,6 +17,7 @@ import {
   useStartGitHubLink,
 } from "./api";
 import { FixDiff } from "./FixDiff";
+import { FixDraft } from "./FixDraft";
 import { FixVerdict } from "./FixVerdict";
 import { askedAgo, DIFF_WORDS, minutesLeft, SOURCE_WORDS, sourceTitle } from "./fix-page";
 
@@ -173,6 +174,14 @@ function SourceState({ findingId, fix, now }: { findingId: string; fix: SourceFi
       {fix.proposal ? <Written proposal={fix.proposal} now={now} /> : null}
       {fix.code_withheld ? <CheckMyAccess findingId={findingId} fix={fix} /> : null}
       {fix.patch_action || fix.patch ? <PreparePatch findingId={findingId} fix={fix} /> : null}
+      {fix.draft ? (
+        <FixDraft
+          findingId={findingId}
+          fixId={fix.id}
+          draft={fix.draft}
+          linkStep={(sentence) => <LinkStep sentence={sentence} />}
+        />
+      ) : null}
       {fix.verdict ? (
         <FixVerdict findingId={findingId} fixId={fix.id} verdict={fix.verdict} />
       ) : null}

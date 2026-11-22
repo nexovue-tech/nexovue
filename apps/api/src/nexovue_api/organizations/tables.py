@@ -135,6 +135,8 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "finding_fix_code_views": "finding_fixes",
     "service_code_locations": "connection_repositories",
     "fix_source_consents": "connection_repositories",
+    # F5 Step 7 (migration 0083): an owner's per-repository draft choices go with it.
+    "fix_repository_settings": "connection_repositories",
     "github_user_links": "users",
     "github_link_attempts": "users",
     # F3. A rating goes with the version it rates.

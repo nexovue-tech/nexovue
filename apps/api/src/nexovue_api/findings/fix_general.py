@@ -167,6 +167,7 @@ def _line(state: FixState, viewer: Viewer, latest: FindingFix | None) -> FixSect
             date=_limit_lifts(state).date().isoformat(),
             dependency=_dependency(state),
             host="the AI provider" if state.connection is None else _host(state.connection),
+            link=state.draft_link,
         ),
     )
 

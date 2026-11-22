@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Query, status
+from nexovue_platform.fixes import write_gate
 
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayConsentAIDisclosure, MayManageConnections
@@ -33,6 +34,9 @@ from nexovue_api.connections.fix_schemas import (
     GitHubLinkStarted,
     GitHubLinkView,
     ReadinessCounts,
+    RepositoryDraftSettings,
+    RepositoryDraftSettingsRequest,
+    RepositoryDraftSettingsView,
     SourceConsentOverview,
     SourceConsentRequest,
     SourceConsentView,
@@ -46,7 +50,7 @@ from nexovue_api.connections.schemas import (
     GitHubSetupStarted,
 )
 from nexovue_api.deps import AppSettings, CurrentSession, DbSession
-from nexovue_api.findings import fix_consent, fix_locations, fix_readiness
+from nexovue_api.findings import fix_consent, fix_locations, fix_readiness, fix_settings
 
 router = APIRouter(prefix="/connections/github", tags=["connections"])
 code_locations_router = APIRouter(prefix="/code-locations", tags=["connections"])
@@ -182,6 +186,38 @@ async def withdraw_source_consent(
         identity=identity,
         repository_id=repository_id,
         folder_scope=fix_consent.scope_of(folder, scope),
+        now=datetime.now(UTC),
+    )
+
+
+@router.get(
+    "/repositories/fix-settings",
+    summary="Each repository's draft pull request choices, set by an owner",
+)
+async def read_draft_settings(
+    identity: CurrentIdentity, db: DbSession
+) -> RepositoryDraftSettingsView:
+    return await fix_settings.overview(
+        db, identity=identity, go=write_gate.WRITE_ACCESS_GO, now=datetime.now(UTC)
+    )
+
+
+@router.put(
+    "/repositories/{repository_id}/fix-settings",
+    summary="Allow draft pull requests, or CI when a draft opens, for one repository",
+)
+async def change_draft_settings(
+    identity: MayConsentAIDisclosure,
+    db: DbSession,
+    repository_id: uuid.UUID,
+    request: RepositoryDraftSettingsRequest,
+) -> RepositoryDraftSettings:
+    """BR14, D45: an owner's act, audited; Nexovue's limit, not GitHub's."""
+    return await fix_settings.change(
+        db,
+        identity=identity,
+        repository_id=repository_id,
+        request=request,
         now=datetime.now(UTC),
     )
 

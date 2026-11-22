@@ -281,6 +281,12 @@ CROSS_TENANT_STATEMENTS: Final = (
     ),
     _across(
         "connections.fix_sweep",
+        "_DRAFTS_DID_NOT_FINISH",
+        f"{_SWEEP}: drafts whose job did not finish within its expiry, hard limit and margin "
+        "(F5 Step 7, AC26a); each row goes back to `proposed` by its own id",
+    ),
+    _across(
+        "connections.fix_sweep",
         "_UNRECORDED",
         f"{_SWEEP}: ended source suggestions whose result is not yet recorded (Step 4); the "
         "rules' re-run reads, the event, the audit entry, the cleared code and the mark each "

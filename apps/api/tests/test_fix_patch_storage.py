@@ -42,7 +42,7 @@ def _words(frozen: str) -> tuple[str, ...]:
     [
         ("_FIX_REASONS", records.FIX_REASONS),
         ("_CODE_DELETED_REASONS", records.CODE_DELETED_REASONS),
-        ("_CHECK_REASONS", records.FIX_CHECK_REASONS),
+        ("_CHECK_REASONS", records.STEP_5_FIX_CHECK_REASONS),
         ("_VERDICTS", records.FIX_VERDICTS),
     ],
 )
@@ -74,7 +74,7 @@ def test_the_model_checks_the_same_verdicts_and_deleted_reasons() -> None:
 def test_step_5_s_codes_are_new_to_0082() -> None:
     assert set(records.TAKEN_BACK_REASONS).isdisjoint(records.STEP_4_FIX_REASONS)
     assert records.PROJECT_DELETED not in records.STEP_3_CODE_DELETED_REASONS
-    assert set(records.FIX_CHECK_REASONS) - set(records.STEP_4_FIX_CHECK_REASONS) == {
+    assert set(records.STEP_5_FIX_CHECK_REASONS) - set(records.STEP_4_FIX_CHECK_REASONS) == {
         *records.STALE_REASONS,
         records.CHECKS_REFUSED_AT_CLICK,
     }

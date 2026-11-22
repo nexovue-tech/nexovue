@@ -46,6 +46,14 @@ export const FIX_APP_WORDS = {
   notCreated: "The Nexovue suggestions App is not set up yet. Create it first.",
   failed: "The Nexovue suggestions App could not be loaded",
   permissions: "Permissions GitHub granted",
+  // Required before anyone raises the App to write (design, *Fix App*; foundation, section 6).
+  raiseHeading: "Before raising the App to write branches and pull requests",
+  raiseWarning:
+    "Write access reaches every repository you installed this App on, including branches and tags that may start your deploys. Nexovue only writes to nexovue/suggestion-* branches, and only in repositories an owner has allowed, but GitHub does not enforce that. Protect your main and release branches and tags. Private repositories need GitHub Team or Enterprise Cloud for drafts; check your plan first.",
+  raiseSteps:
+    "To raise it: on GitHub, open this App's settings, add Contents: read and write and Pull requests: read and write, and save. GitHub's organization owner then accepts the new permissions.",
+  signedCommits:
+    "If a branch rule requires signed commits, a draft's commit may not count as signed, and that can stop its merge.",
   reachable: "reachable",
   unreachable: "not reachable",
   unknown: "—",
@@ -172,6 +180,12 @@ export function FixAppPanel() {
                   .map(([name, level]) => `${name}: ${level}`)
                   .join(", ")}
           </p>
+          <div className="flex flex-col gap-1" data-testid="fix-app-raise">
+            <h3 className="font-medium text-ink text-sm">{FIX_APP_WORDS.raiseHeading}</h3>
+            <p className="max-w-prose text-ink text-sm">{FIX_APP_WORDS.raiseWarning}</p>
+            <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.raiseSteps}</p>
+            <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.signedCommits}</p>
+          </div>
           <ul className="flex flex-col gap-1 text-sm">
             {view.repositories.map((repository) => (
               <li key={repository.id} className="[overflow-wrap:anywhere]">

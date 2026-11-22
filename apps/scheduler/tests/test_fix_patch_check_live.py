@@ -164,6 +164,8 @@ async def _run(engine: AsyncEngine, world: SourceWorld, check_id: str, now: date
         check_id=check_id,
         keys=KEYS,
         endpoints=world.endpoints(),
+        go=None,
+        show_held_causes=False,
         now=now,
     )
 
@@ -382,7 +384,7 @@ async def test_ac29a_a_withdrawal_before_the_store_leaves_no_patch(
 
     fix_id = await _proposed(engine, world, now)
     check = await _check(engine, world, fix_id, now)
-    real = fix_patch._audit_read
+    real = fix_patch.audit_read
 
     async def withdraw_then_audit(*args: Any, **kwargs: Any) -> None:
         async with engine.begin() as connection:
@@ -395,7 +397,7 @@ async def test_ac29a_a_withdrawal_before_the_store_leaves_no_patch(
             )
         await real(*args, **kwargs)
 
-    monkeypatch.setattr(fix_patch, "_audit_read", withdraw_then_audit)
+    monkeypatch.setattr(fix_patch, "audit_read", withdraw_then_audit)
 
     assert await _run(engine, world, check, now) == "failed"
 

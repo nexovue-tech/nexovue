@@ -31,6 +31,7 @@ from nexovue_platform.fixes.prose import why_segments
 from nexovue_platform.fixes.records import (
     BACKUPS_KEPT_FOR,
     CHECK_ANSWERS_WITHIN,
+    CHECK_FOR_DRAFT,
     CHECK_FOR_PATCH,
     CHECK_FOR_READ,
     CHECK_PASSED,
@@ -86,11 +87,13 @@ from nexovue_api.data.postgres.models import (
     FindingFixCodeView,
     FixSourceConsent,
 )
-from nexovue_api.findings import explanation_queries
+from nexovue_api.findings import explanation_queries, fix_draft_read
+from nexovue_api.findings.fix_draft_read import DraftContext
 from nexovue_api.findings.fix_source_schemas import (
     CheckView,
     DiffHunk,
     DiffLine,
+    DraftView,
     LeftOutFile,
     ListedFile,
     PatchView,
@@ -121,6 +124,7 @@ class ProposalRead:
     line_count: int | None = None
     patch_action: str | None = None
     patch: PatchView | None = None
+    draft: DraftView | None = None
 
 
 def code_deleted(row: FindingFix) -> ProposalRead:
@@ -181,9 +185,11 @@ async def read_proposed(
     files_read: tuple[list[ListedFile], list[LeftOutFile]],
     now: datetime,
     actions: bool = True,
+    draft: DraftContext | None = None,
 ) -> ProposalRead:
     """A written row, checked again, in this person's shape. `actions` is False for an
-    out-of-date row, which shows its old diff and nothing to act on."""
+    out-of-date row, which shows its old diff and nothing to act on. `draft` is Step 7's
+    offer, for a requester who may read the code."""
     if row.checks_version != CHECKS_VERSION:
         sentence = REASON_SENTENCES["rules_changed"]
         return ProposalRead(
@@ -230,13 +236,32 @@ async def read_proposed(
             line_count=line_count,
         )
     await _record_first_view(db, row, user_id=user_id)
-    patch_check = await _own_patch_check(db, row, user_id=user_id) if actions else None
+    patch_check = (
+        await _own_rebuilding_check(db, row, user_id=user_id, now=now) if actions else None
+    )
     rebuilt = _rebuilt(checked, patch_check, now=now)
     proposal = _proposal(
         row, checked, book, repository_key=repository_key, files_read=files_read, rebuilt=rebuilt
     )
-    patch = None if patch_check is None else _patch_view(patch_check, rebuilt, now=now)
+    patch = (
+        None
+        if patch_check is None or patch_check.purpose != CHECK_FOR_PATCH
+        else _patch_view(patch_check, rebuilt, now=now)
+    )
     running = patch is not None and patch.status == CHECK_RUNNING
+    draft_view = (
+        None
+        if draft is None or not actions
+        else await fix_draft_read.offer(
+            db,
+            row,
+            user_id=user_id,
+            context=draft,
+            file_count=file_count,
+            line_count=line_count,
+            now=now,
+        )
+    )
     return ProposalRead(
         SECTION_HEADING,
         None,
@@ -246,6 +271,7 @@ async def read_proposed(
         line_count=line_count,
         patch_action=PREPARE_PATCH if actions and not running else None,
         patch=patch,
+        draft=draft_view,
     )
 
 
@@ -310,19 +336,27 @@ async def _own_read_check(
     return None if chosen is None else check_view(chosen, now=now)
 
 
-async def _own_patch_check(
-    db: AsyncSession, row: FindingFix, *, user_id: uuid.UUID
+async def _own_rebuilding_check(
+    db: AsyncSession, row: FindingFix, *, user_id: uuid.UUID, now: datetime
 ) -> FindingFixCheck | None:
-    """This person's own `patch` check, never another's (AC40)."""
-    found: FindingFixCheck | None = await db.scalar(
-        select(FindingFixCheck).where(
-            FindingFixCheck.org_id == row.org_id,
-            FindingFixCheck.fix_id == row.id,
-            FindingFixCheck.requested_by == user_id,
-            FindingFixCheck.purpose == CHECK_FOR_PATCH,
+    """This person's own check that rebuilt the patch, never another's (AC40): a passed
+    `draft` check replaces the diff in place for the confirm (FR24); otherwise the `patch`
+    check, whatever its state."""
+    checks = {
+        each.purpose: each
+        for each in await db.scalars(
+            select(FindingFixCheck).where(
+                FindingFixCheck.org_id == row.org_id,
+                FindingFixCheck.fix_id == row.id,
+                FindingFixCheck.requested_by == user_id,
+                FindingFixCheck.purpose.in_((CHECK_FOR_PATCH, CHECK_FOR_DRAFT)),
+            )
         )
-    )
-    return found
+    }
+    drafted = checks.get(CHECK_FOR_DRAFT)
+    if drafted is not None and drafted.status in CHECK_PASSED and drafted.expires_at > now:
+        return drafted
+    return checks.get(CHECK_FOR_PATCH)
 
 
 @dataclass(frozen=True, slots=True)

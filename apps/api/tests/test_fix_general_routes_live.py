@@ -382,10 +382,12 @@ async def test_ac77_older_suggestions_are_listed_quietly_and_an_earlier_reading_
 # ------------------------------------------------------------------ AC73
 
 
-# The patch is a download since Step 5 (`GET`); the rest are clicks.
+# The patch is a download since Step 5 (`GET`); the rest are clicks. The draft's click
+# refuses `writes_off` first while write access is off in code (ADR-097), and a general
+# row with this code once it is on: `test_fix_draft_live.py` holds both.
 @pytest.mark.parametrize(
     ("method", "action"),
-    [("POST", "check"), ("GET", "patch"), ("POST", "draft-pull-request"), ("POST", "run-ci")],
+    [("POST", "check"), ("GET", "patch"), ("POST", "run-ci")],
 )
 async def test_ac73_a_general_row_refuses_every_action_on_code_with_a_named_code(
     db: AsyncSession, now: datetime, method: str, action: str

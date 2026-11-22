@@ -131,6 +131,8 @@ DESIGN_COLUMNS = {
     "requested_paths",
     "withheld_refs",
     "files_digest",
+    "requester_note",
+    "approved_digest",
 }
 DESIGN_TABLES = {"finding_fix_source_packs", "finding_fix_checks"}
 
@@ -148,6 +150,7 @@ def test_clear_stored_code_binds_the_tenant_everywhere() -> None:
     assert CLEAR_STORED_CODE.count("org_id = CAST(:org_id AS uuid)") == 1 + len(STORED_CODE_TABLES)
 
 
-def test_clear_stored_code_names_no_column_of_step_seven() -> None:
-    assert "requester_note" not in CLEAR_STORED_CODE
-    assert "approved_digest" not in CLEAR_STORED_CODE
+def test_clear_stored_code_names_step_seven_s_columns() -> None:
+    """T7.1: the requester's note and the approved digest join the one list with 0083."""
+    assert "requester_note = NULL" in CLEAR_STORED_CODE
+    assert "approved_digest = NULL" in CLEAR_STORED_CODE

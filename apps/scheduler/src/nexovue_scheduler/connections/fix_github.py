@@ -1,10 +1,13 @@
 """The Fix App's GitHub client: one method per route, on a fixed host (F5 design, *GitHub
 routes allowed*; spec AC7; ADR-082).
 
-**Reads only in Step 3.** Nothing here writes to a repository: the write routes (blobs,
-trees, commits, the one `nexovue/suggestion-<id>` ref, the draft) come with Step 7, behind
-the founder's written go (foundation item 33). `ROUTES` is the checked-in list, and a test
-fails when a method is added without it.
+**Reads on `FixGitHub`; writes only on `FixWrites`** (Step 7, T7.2): blobs, a tree, a
+commit, the one `nexovue/suggestion-<id>` ref and the draft. `FixWrites` cannot be built
+without the founder's recorded go (`write_gate.py`, ADR-097; foundation item 33): while
+`write_access_on()` is False its constructor refuses, so no write token is minted and no
+write route is called. A write method takes a suggestion's id and builds the ref itself,
+so another branch or a tag cannot be expressed (FR23, AC7). `ROUTES` and `WRITE_ROUTES`
+are the checked-in lists, and a test fails when a method is added without them.
 
 - Every call goes through the guarded libcurl client, **never follows a redirect**, and
   checks `body_truncated` first: a body cut at the client's 1 MiB is invalid JSON with no
@@ -26,6 +29,8 @@ from typing import Any, Final
 from urllib.parse import quote
 
 from nexovue_platform.connections import is_manifest_code, is_repository_key
+from nexovue_platform.fixes.records import fix_branch
+from nexovue_platform.fixes.write_gate import WriteGo, write_access_on
 
 from nexovue_scheduler.connections.github import (
     GITHUB_API,
@@ -46,6 +51,12 @@ _HEADERS: Final = (
 TIMEOUT_SECONDS: Final = 30
 # Rungs 3 and 4 need only this (design, *Fix App*, tiers).
 CONTENTS_READ: Final = {"contents": "read", "metadata": "read"}
+# The draft job reads with this and writes with the next, narrowed to one repository, since
+# whether a narrowed write token can call the permission route is untested (trial).
+PULL_REQUEST_READ: Final = {"contents": "read", "metadata": "read", "pull_requests": "read"}
+CONTENTS_AND_PULL_REQUESTS_WRITE: Final = {"contents": "write", "pull_requests": "write"}
+# What a draft needs the person to hold on GitHub (D6).
+WRITE_LEVELS: Final = frozenset({"write", "maintain", "admin"})
 # The access a person needs to read quoted code under the owner's requirement (D20).
 READ_LEVELS: Final = frozenset({"read", "triage", "write", "maintain", "admin"})
 _SHA: Final = frozenset("0123456789abcdef")
@@ -65,7 +76,25 @@ ROUTES: Final = (
     ("GET", "/repos/{r}/compare/{sha}...{default}", "is_ancestor"),
     ("POST", "https://github.com/login/oauth/access_token", "exchange_code"),
     ("GET", "/user", "user_of_token"),
+    ("POST", "/app/installations/{id}/access_tokens", "pull_request_read_token"),
+    ("GET", "/repos/{r}/git/ref/heads/nexovue/suggestion-{id}", "fix_branch_head"),
+    ("GET", "/repos/{r}/pulls?head={owner}:nexovue/suggestion-{id}&state=all", "pulls_for"),
 )
+# The write routes (Step 7), each on `FixWrites` only, behind the founder's go (ADR-097).
+# Step 8 adds the `PATCH` of the same ref for Run CI.
+WRITE_ROUTES: Final = (
+    ("POST", "/app/installations/{id}/access_tokens", "token"),
+    ("POST", "/repos/{r}/git/blobs", "create_blob"),
+    ("POST", "/repos/{r}/git/trees", "create_tree"),
+    ("POST", "/repos/{r}/git/commits", "create_commit"),
+    ("POST", "/repos/{r}/git/refs", "create_branch"),
+    ("DELETE", "/repos/{r}/git/refs/heads/nexovue/suggestion-{id}", "delete_branch"),
+    ("POST", "/repos/{r}/pulls", "open_draft"),
+)
+# Why GitHub refused a write, by the words its 422 carries (from GitHub's documents and
+# the trial's questions, not yet checked against the service: foundation item 28).
+_ALREADY_EXISTS: Final = "already exists"
+_DRAFT_WORD: Final = "draft"
 
 
 class GitHubFailure(Exception):  # noqa: N818 — named for what it reports
@@ -133,6 +162,27 @@ class TreeEntry:
     kind: str
     sha: str
     size: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PullFacts:
+    """A pull request as the draft job needs it; never its title or body."""
+
+    number: int
+    url: str
+    head_sha: str
+    state: str
+    merged: bool
+    draft: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TreeChange:
+    """One changed file in the commit's tree: its path, mode and new blob."""
+
+    path: str
+    mode: str
+    blob_sha: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +272,39 @@ def _ok(answer: _Answer) -> Any:
     raise GitHubFailure("unexpected", answer.status)
 
 
+def _refused_words(answer: _Answer) -> str:
+    """A 422's message and its errors' messages, lower case, to tell refusals apart."""
+    try:
+        parsed = json.loads(answer.body)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    words = [str(parsed.get("message") or "")]
+    for error in parsed.get("errors") or []:
+        if isinstance(error, dict):
+            words.append(str(error.get("message") or ""))
+    return " ".join(words).lower()
+
+
+def _pull_facts(item: Any) -> PullFacts:
+    if not isinstance(item, dict):
+        raise GitHubFailure("unexpected")
+    number, url, head = item.get("number"), item.get("html_url"), item.get("head")
+    state, merged, draft = item.get("state"), item.get("merged"), item.get("draft")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    if not isinstance(number, int) or not isinstance(url, str) or not isinstance(state, str):
+        raise GitHubFailure("unexpected")
+    return PullFacts(
+        number=number,
+        url=url,
+        head_sha=_sha(head_sha),
+        state=state,
+        merged=merged is True,
+        draft=draft is True,
+    )
+
+
 def convert_manifest(endpoints: FixEndpoints, code: str) -> ConvertedFixApp:
     """F5's manifest conversion: unlike F22's, it keeps the client id and secret, which the
     account link's OAuth exchange needs (design, *Fix App*)."""
@@ -286,8 +369,21 @@ class FixGitHub:
         except TrackerFailure as failure:
             raise from_tracker(failure) from failure
 
+    def pull_request_read_token(self, installation_id: int, repository_id: int) -> str:
+        """The draft job's read token: contents, metadata and pull requests, read only."""
+        try:
+            return self._app.token(
+                installation_id, dict(PULL_REQUEST_READ), repository_ids=[int(repository_id)]
+            )
+        except TrackerFailure as failure:
+            raise from_tracker(failure) from failure
+
     def revoke(self, token: str) -> None:
         self._app.revoke(token)
+
+    def writes(self, go: WriteGo | None) -> FixWrites:
+        """The write routes, only with the founder's recorded go (ADR-097)."""
+        return FixWrites(self._endpoints, self._app, go)
 
     # ------------------------------------------------------------ reading
 
@@ -371,6 +467,34 @@ class FixGitHub:
             raise
         return isinstance(answer, dict) and answer.get("status") in ("ahead", "identical")
 
+    # ------------------------------------------------- the suggestion's branch
+
+    def fix_branch_head(self, token: str, key: str, fix_id: str) -> str | None:
+        """The head of `nexovue/suggestion-<id>`, or None when the branch does not exist."""
+        url = (
+            f"{self._endpoints.api}/repos/{_repository(key)}/git/ref/heads/"
+            f"{quote(fix_branch(fix_id), safe='/')}"
+        )
+        try:
+            answer = _ok(_send(self._endpoints, "GET", url, bearer=token))
+        except GitHubFailure as failure:
+            if failure.code == "not_found":
+                return None
+            raise
+        target = answer.get("object") if isinstance(answer, dict) else None
+        return _sha(target.get("sha") if isinstance(target, dict) else None)
+
+    def pulls_for(self, token: str, key: str, fix_id: str) -> list[PullFacts]:
+        """Every pull request, in any state, whose head is this suggestion's branch (design,
+        step 4: adoption). Needs `pull_requests: read`."""
+        owner = key.split("/", 1)[0]
+        head = quote(f"{owner}:{fix_branch(fix_id)}", safe="")
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/pulls?head={head}&state=all"
+        answer = _ok(_send(self._endpoints, "GET", url, bearer=token))
+        if not isinstance(answer, list):
+            raise GitHubFailure("unexpected")
+        return [_pull_facts(item) for item in answer]
+
     # --------------------------------------------------------- people
 
     def login_of(self, token: str, github_user_id: int) -> str:
@@ -423,3 +547,111 @@ def user_of_token(endpoints: FixEndpoints, token: str) -> GitHubPerson:
     if not isinstance(user_id, int) or user_id <= 0 or not isinstance(login, str) or not login:
         raise GitHubFailure("unexpected")
     return GitHubPerson(user_id=user_id, login=login)
+
+
+class WritesOff(Exception):  # noqa: N818 — named for what it reports
+    """Write access is off in code until the founder's recorded go (ADR-097)."""
+
+
+class FixWrites:
+    """The write routes of one repository, for one suggestion's branch (FR23, AC7).
+
+    Built only through `FixGitHub.writes(go)`, and refused while `write_access_on(go)` is
+    False, before any token is minted. Every method takes the suggestion's id where a ref
+    is named and builds `refs/heads/nexovue/suggestion-<id>` itself; `POST /pulls` always
+    asks for a draft, a constant, and never falls back to a pull request that is not one.
+    """
+
+    def __init__(self, endpoints: FixEndpoints, app: GitHubApp, go: WriteGo | None) -> None:
+        if not write_access_on(go):
+            raise WritesOff
+        self._endpoints = endpoints
+        self._app = app
+
+    def token(self, installation_id: int, repository_id: int) -> str:
+        """A one-hour token narrowed to one repository, to write its contents and pull
+        requests; minted, never stored."""
+        try:
+            return self._app.token(
+                installation_id,
+                dict(CONTENTS_AND_PULL_REQUESTS_WRITE),
+                repository_ids=[int(repository_id)],
+            )
+        except TrackerFailure as failure:
+            raise from_tracker(failure) from failure
+
+    def _post(self, token: str, url: str, body: dict[str, Any]) -> _Answer:
+        return _send(self._endpoints, "POST", url, bearer=token, body=body)
+
+    def create_blob(self, token: str, key: str, content: bytes) -> str:
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/git/blobs"
+        body = {"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"}
+        answer = _ok(self._post(token, url, body))
+        return _sha(answer.get("sha") if isinstance(answer, dict) else None)
+
+    def create_tree(self, token: str, key: str, base_tree: str, changes: list[TreeChange]) -> str:
+        """A tree on `base_tree` with the changed files' new blobs, and nothing else."""
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/git/trees"
+        body = {
+            "base_tree": _sha(base_tree),
+            "tree": [
+                {"path": each.path, "mode": each.mode, "type": "blob", "sha": _sha(each.blob_sha)}
+                for each in changes
+            ],
+        }
+        answer = _ok(self._post(token, url, body))
+        return _sha(answer.get("sha") if isinstance(answer, dict) else None)
+
+    def create_commit(self, token: str, key: str, *, message: str, tree: str, parent: str) -> str:
+        """One commit, authored by the App (no author named, so GitHub uses the token's)."""
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/git/commits"
+        body = {"message": message, "tree": _sha(tree), "parents": [_sha(parent)]}
+        answer = _ok(self._post(token, url, body))
+        return _sha(answer.get("sha") if isinstance(answer, dict) else None)
+
+    def create_branch(self, token: str, key: str, fix_id: str, commit: str) -> None:
+        """`refs/heads/nexovue/suggestion-<id>` at `commit`. GitHub's 422 says whether the
+        branch already exists (`branch_exists`) or the commit is gone (`commit_missing`)."""
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/git/refs"
+        body = {"ref": f"refs/heads/{fix_branch(fix_id)}", "sha": _sha(commit)}
+        answer = self._post(token, url, body)
+        if answer.status == 422:
+            exists = _ALREADY_EXISTS in _refused_words(answer)
+            raise GitHubFailure("branch_exists" if exists else "commit_missing", 422)
+        _ok(answer)
+
+    def delete_branch(self, token: str, key: str, fix_id: str) -> None:
+        url = (
+            f"{self._endpoints.api}/repos/{_repository(key)}/git/refs/heads/"
+            f"{quote(fix_branch(fix_id), safe='/')}"
+        )
+        answer = _send(self._endpoints, "DELETE", url, bearer=token)
+        if answer.status != 204:
+            _ok(answer)
+
+    def open_draft(
+        self, token: str, key: str, fix_id: str, *, base: str, title: str, body: str
+    ) -> PullFacts:
+        """`POST /pulls` with `draft: true`. A second pull request for the branch is
+        `pull_request_exists` (adopt it); a refused draft is `draft_refused`, never retried
+        as a pull request that is not a draft (AC27a)."""
+        owner = key.split("/", 1)[0]
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/pulls"
+        answer = self._post(
+            token,
+            url,
+            {
+                "title": title,
+                "body": body,
+                "head": f"{owner}:{fix_branch(fix_id)}",
+                "base": base,
+                "draft": True,
+            },
+        )
+        if answer.status == 422:
+            words = _refused_words(answer)
+            if _ALREADY_EXISTS in words:
+                raise GitHubFailure("pull_request_exists", 422)
+            if _DRAFT_WORD in words:
+                raise GitHubFailure("draft_refused", 422)
+        return _pull_facts(_ok(answer))

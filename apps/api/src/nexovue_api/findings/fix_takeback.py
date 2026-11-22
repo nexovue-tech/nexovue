@@ -9,7 +9,13 @@ verdict, and every audit entry.
 
 - **An owner withdraws** (`fix_consent.withdraw`): the folders that consent alone covered.
 - **The Fix App is disconnected** (F22's disconnect hook, in its transaction): every consent
-  on the App's repositories is withdrawn, and all their stored code goes.
+  on the App's repositories is withdrawn, and all their stored code goes. A draft Nexovue
+  can no longer follow reads `untracked` (BR8, AC48).
+
+A draft being opened (`approved`, Step 7) goes back to `proposed` with `consent_withdrawn`
+in the same transaction, so its job finds the state moved before its next write (AC48); a
+branch it already stored keeps the one-draft hold after a withdrawal, until its pull
+request is followed.
 - **A project is deleted** (`projects.service.delete`, in its transaction): its suggestions
   of either kind still being prepared stop, and its stored code goes (ADR-094). Nothing
   more is sent for a project that is gone.
@@ -26,6 +32,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from nexovue_platform.fixes.records import (
+    APPROVED,
     CODE_DISCONNECTED,
     CONSENT_ENDED_IN_FLIGHT,
     CONSENT_WITHDRAWN_BY_DISCONNECT,
@@ -33,6 +40,9 @@ from nexovue_platform.fixes.records import (
     IN_FLIGHT_STATES,
     KIND_SOURCE,
     PROJECT_DELETED,
+    PROPOSED,
+    PULL_REQUEST_OPEN,
+    PULL_REQUEST_UNTRACKED,
 )
 from nexovue_platform.fixes.statements import CLEAR_STORED_CODE
 from sqlalchemy import delete, select, text, update
@@ -64,6 +74,8 @@ async def end_and_clear(
     for row in rows:
         if row.state in IN_FLIGHT_STATES:
             await _end_in_flight(db, row, reason=in_flight_reason, now=now)
+        elif row.state == APPROVED:
+            await _stop_draft(db, row, now=now)
     deleted = 0
     for row in rows:
         if row.kind != KIND_SOURCE or row.code_deleted_at is not None:
@@ -97,6 +109,16 @@ async def _end_in_flight(db: AsyncSession, row: FindingFix, *, reason: str, now:
         delete(FindingFixSourcePack).where(
             FindingFixSourcePack.org_id == row.org_id, FindingFixSourcePack.fix_id == row.id
         )
+    )
+
+
+async def _stop_draft(db: AsyncSession, row: FindingFix, *, now: datetime) -> None:
+    """A draft being opened stops: its job reads the state before every write (AC48)."""
+    await db.execute(
+        update(FindingFix)
+        .where(FindingFix.org_id == row.org_id, FindingFix.id == row.id)
+        .values(state=PROPOSED, state_changed_at=now, last_write_failure="consent_withdrawn")
+        .execution_options(synchronize_session=False)
     )
 
 
@@ -138,6 +160,19 @@ async def on_disconnect(db: AsyncSession, org_id: uuid.UUID, connection_id: uuid
         in_flight_reason=CONSENT_ENDED_IN_FLIGHT,
         code_reason=CODE_DISCONNECTED,
         now=now,
+    )
+    # BR8, AC48: a draft Nexovue can no longer read stops holding the finding.
+    await db.execute(
+        update(FindingFix)
+        .where(
+            FindingFix.org_id == org_id,
+            FindingFix.connection_repository_id.in_(repositories),
+            FindingFix.pull_request_branch.is_not(None),
+            FindingFix.pull_request_state.is_(None)
+            | (FindingFix.pull_request_state == PULL_REQUEST_OPEN),
+        )
+        .values(pull_request_state=PULL_REQUEST_UNTRACKED)
+        .execution_options(synchronize_session=False)
     )
     for consent in consents:
         consent.withdrawn_at = now

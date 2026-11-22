@@ -22,7 +22,15 @@ PATH_MAX_CHARACTERS: Final = 200
 DIGEST_CHARACTERS: Final = 64
 
 SourceState = Literal[
-    "gathering", "gathered", "proposing", "proposed", "refused", "failed", "stale"
+    "gathering",
+    "gathered",
+    "proposing",
+    "proposed",
+    "refused",
+    "failed",
+    "stale",
+    "approved",
+    "opened",
 ]
 SourceResult = Literal["ready", "ready_without_stack"]
 
@@ -222,6 +230,49 @@ class PatchView(BaseModel):
     expires_at: datetime | None
 
 
+class DraftConfirm(BaseModel):
+    """FR24's confirmation, from this person's own passed `draft` check: the facts in real
+    values, the CI mode, every warning by exact string, and the digest the click carries."""
+
+    repository: str
+    branch: str
+    file_count: int
+    line_count: int
+    facts: str
+    ci_mode: str
+    warnings: list[str]
+    digest: str
+    public: bool
+    note_label: str
+    note_public_confirm: str | None
+    action: str
+    expires_at: datetime
+
+
+class DraftView(BaseModel):
+    """Step 7, in this person's shape (design, *State by role*; FR10c, FR24, FR26).
+
+    `action` is **Open draft pull request**, or None with `refusal` in its place (a hidden
+    button, never a disabled one). `check` is this person's own `draft` check; `confirm`
+    shows once it passed. `pull_request` and `failure` describe what was written, or why
+    not. While write access is off in code, `refusal` says so and nothing else is offered.
+    """
+
+    action: str | None = None
+    refusal: str | None = None
+    needs_link: bool = False
+    # D6: the account link step's sentence, when this person has none yet.
+    link_sentence: str | None = None
+    check: PatchView | None = None
+    confirm: DraftConfirm | None = None
+    failure: str | None = None
+    pull_request_state: str | None = None
+    pull_request_url: str | None = None
+    pull_request_sentence: str | None = None
+    ci_note: str | None = None
+    delete_branch_action: str | None = None
+
+
 class SourceFix(BaseModel):
     id: uuid.UUID
     state: SourceState
@@ -246,6 +297,28 @@ class SourceFix(BaseModel):
     patch_action: str | None = None
     patch: PatchView | None = None
     verdict: VerdictView | None = None
+    # Step 7: the draft pull request, for a requester; a viewer reads the state's sentence.
+    draft: DraftView | None = None
+
+
+class DraftRequest(BaseModel):
+    """`POST .../draft-pull-request` (FR22, FR24a): the digest of this person's own passed
+    `draft` check, and their one optional line, confirmed for a public repository."""
+
+    digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    note: str | None = Field(default=None, max_length=400)
+    note_confirmed: bool = False
+
+
+class DraftStarted(BaseModel):
+    """The click's answer: the suggestion is `approved`, and its job is queued."""
+
+    fix_id: uuid.UUID
+    state: SourceState
+
+
+class DeleteBranchStarted(BaseModel):
+    fix_id: uuid.UUID
 
 
 class EarlierSource(BaseModel):
@@ -283,6 +356,6 @@ class BriefFiles(BaseModel):
 
 class CheckRequest(BaseModel):
     """`POST .../check`: `read` is **Check my access** (Step 4), `patch` is **Prepare
-    patch** (Step 5). The draft's `draft` is Step 7's."""
+    patch** (Step 5), `draft` opens the draft's confirm (Step 7)."""
 
-    for_: Literal["read", "patch"] = Field(alias="for")
+    for_: Literal["read", "patch", "draft"] = Field(alias="for")

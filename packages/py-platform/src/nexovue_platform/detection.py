@@ -84,6 +84,8 @@ FINDING_EVENT_KINDS: Final = (
     "explained",
     # F5 (design, Step 2b): a general suggestion passed its rules, by ids and counts.
     "fix_proposed",
+    # F5 Step 7: a suggestion opened as a draft pull request, by ids and counts (FR28a).
+    "fix_pull_request_opened",
 )
 
 # Losing traffic, failing more and slower (FR1 to FR3), as the simulation names them.

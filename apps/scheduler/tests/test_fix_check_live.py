@@ -119,6 +119,8 @@ async def _run(engine: AsyncEngine, world: SourceWorld, check_id: str, now: date
         check_id=check_id,
         keys=KEYS,
         endpoints=world.endpoints(),
+        go=None,
+        show_held_causes=False,
         now=now,
     )
 

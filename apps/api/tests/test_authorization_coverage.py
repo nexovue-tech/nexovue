@@ -208,7 +208,6 @@ POLICY_OF: Final = {
     # every working role's and no viewer's. The four actions on code refuse a general row
     # (AC73) and carry the same gate, which their source rows will need (Steps 4 to 7).
     "nexovue_api/findings/fixes/general_router.py:ask_general_fix": "MayRequestFix",
-    "nexovue_api/findings/fixes/general_router.py:draft_pull_request": "MayRequestFix",
     "nexovue_api/findings/fixes/general_router.py:run_ci": "MayRequestFix",
     # F5 Step 3: rung 3's Ask, list, Send and Cancel, and the brief's paths (FR5c, FR11).
     "nexovue_api/findings/fixes/source/router.py:ask_source_fix": "MayRequestFix",
@@ -219,6 +218,14 @@ POLICY_OF: Final = {
     # F5 Step 4 (T4.12): Check my access, one route for both kinds (AC73's general half).
     "nexovue_api/findings/fixes/source/router.py:check_source_fix": "MayRequestFix",
     "nexovue_api/findings/fixes/source/router.py:record_verdict": "MayRequestFix",
+    # F5 Step 7: opening a draft and deleting its branch are `OPEN_FIX_PULL_REQUEST` (design,
+    # *Routes*), each refusing `writes_off` while write access is off in code (ADR-097).
+    "nexovue_api/findings/fixes/source/router.py:open_draft_pull_request": (
+        "MayOpenFixPullRequest"
+    ),
+    "nexovue_api/findings/fixes/source/router.py:delete_suggestion_branch": (
+        "MayOpenFixPullRequest"
+    ),
     # F5's Fix App and code locations are an admin's; consent an owner's (FR6, AC10a).
     "nexovue_api/connections/fix/router.py:start_fix_app": "MayManageConnections",
     "nexovue_api/connections/fix/router.py:complete_fix_app": "MayManageConnections",
@@ -227,6 +234,8 @@ POLICY_OF: Final = {
     "nexovue_api/connections/fix/router.py:remove_code_locations": "MayManageConnections",
     "nexovue_api/connections/fix/router.py:agree_source_consent": "MayConsentAIDisclosure",
     "nexovue_api/connections/fix/router.py:withdraw_source_consent": "MayConsentAIDisclosure",
+    # F5 Step 7: an owner's per-repository draft choices (BR14, D45).
+    "nexovue_api/connections/fix/router.py:change_draft_settings": "MayConsentAIDisclosure",
     "nexovue_api/explanations/router.py:stop_rule": "MayConfigureDetection",
     "nexovue_api/explanations/router.py:resume_rule": "MayConfigureDetection",
     # F19: reliability targets, every working role's (D20, foundation section 5).

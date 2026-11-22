@@ -28,8 +28,11 @@ a `proposed` row has the pure rules run again first (D18's tamper signal: a refu
 is `failed`, `checks_refused_at_click`, audited), then the timeline's `fix_proposed`; a
 rule's refusal writes `fix.withheld` with the rule and the files it named, resolved
 through `files_read`; and every row the requester must hear about owes one email
-(`email_due`, D46), which `fixes.notify_requesters` sends from `light`. Step 7 adds the
-pull request rows.
+(`email_due`, D46), which `fixes.notify_requesters` sends from `light`.
+
+Step 7 (T7.5, AC26a): an `approved` row whose draft job did not finish within its expiry,
+hard limit and a margin goes back to `proposed`, `did_not_finish`, so **Try again** works; a
+branch it stored keeps the one-draft hold until the poller (Step 8) settles it.
 """
 
 from __future__ import annotations
@@ -53,6 +56,7 @@ from nexovue_platform.fixes.policy import CHECKS_VERSION, OwnerLists
 from nexovue_platform.fixes.records import (
     ACCESS_GONE_AFTER,
     AI_SOURCE_DISCLOSURE_WITHDRAWN,
+    APPROVED_STUCK_AFTER,
     CALL_SECONDS_LONGEST,
     CANCELLED,
     CHECKS_REFUSED_AT_CLICK,
@@ -114,6 +118,23 @@ _ENDED_WAITING: Final = text(
 )
 _DROP_PACK: Final = text(
     "DELETE FROM finding_fix_source_packs WHERE org_id = :org_id AND fix_id = :fix_id"
+)
+# Across every organization: drafts whose job never finished (AC26a). A late retry then
+# finds the state moved and stops.
+_DRAFTS_DID_NOT_FINISH: Final = text(
+    """
+    UPDATE finding_fixes AS fix
+    SET state = 'proposed', state_changed_at = :at, last_write_failure = 'did_not_finish'
+    WHERE fix.id IN (
+        SELECT waiting.id FROM finding_fixes AS waiting
+        WHERE waiting.state = 'approved' AND waiting.state_changed_at < :before
+          AND (CAST(:only_org AS uuid) IS NULL OR waiting.org_id = CAST(:only_org AS uuid))
+        ORDER BY waiting.state_changed_at
+        LIMIT :batch
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING fix.org_id, fix.id
+    """
 )
 # Across every organization: source rows that ended, whose result is not yet recorded.
 _UNRECORDED: Final = text(
@@ -291,6 +312,19 @@ async def sweep(
             for row in rows:
                 await connection.execute(_DROP_PACK, {"org_id": row.org_id, "fix_id": row.id})
         ended += len(rows)
+    async with engine.begin() as connection:
+        returned = (
+            await connection.execute(
+                _DRAFTS_DID_NOT_FINISH,
+                {
+                    "before": now - APPROVED_STUCK_AFTER,
+                    "at": now,
+                    "batch": BATCH,
+                    "only_org": only_org,
+                },
+            )
+        ).all()
+    ended += len(returned)
     cleared = await _record_results(engine, now=now, only_org=only_org)
     cleared += await _clear_due(engine, now=now, only_org=only_org)
     async with engine.begin() as connection:

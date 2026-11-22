@@ -157,6 +157,8 @@ _KIND_FIELDS: Final[dict[str, frozenset[str]]] = {
     "tracker_write_failed": frozenset({"link_id", "failure"}),
     "explained": frozenset({"explanation_version"}),
     "fix_proposed": frozenset({"fix_id", "fix_kind", "step_count"}),
+    # The changed file count, as `fix_proposed` carries it (F5 decision 50).
+    "fix_pull_request_opened": frozenset({"fix_id", "step_count"}),
 }
 
 assert sorted(_KIND_FIELDS) == sorted(FINDING_EVENT_KINDS), (

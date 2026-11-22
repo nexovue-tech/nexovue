@@ -55,6 +55,9 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
         "nexovue_scheduler.connections.fix_sweep",
         # F5 Step 4: a person's check run (plan T4.12).
         "nexovue_scheduler.connections.fix_check",
+        # F5 Step 7: the draft job and **Delete this branch** (plan T7.5, T7.10), each
+        # refusing before any GitHub call while write access is off (ADR-097).
+        "nexovue_scheduler.connections.fix_writer",
     ),
     # F3: the AI role, on its own account and network: the connection test (Step 4), the
     # wording job and its sweep (Step 5). `all` never loads these.

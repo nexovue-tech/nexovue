@@ -185,3 +185,32 @@ class GitHubLinkView(BaseModel):
     linked: bool
     login: str | None
     linked_at: datetime | None
+
+
+class RepositoryDraftSettings(BaseModel):
+    """One repository's draft choices (BR14, D45): off until an owner sets them."""
+
+    repository_id: uuid.UUID
+    repository: str
+    is_private: bool | None
+    drafts_allowed: bool
+    ci_on_open: bool
+    # GitHub refused a draft here in the last 24 hours (AC27a).
+    draft_refused_recently: bool
+    set_at: datetime | None
+
+
+class RepositoryDraftSettingsView(BaseModel):
+    """`GET /connections/github/repositories/fix-settings`. `writes_off` is the sentence
+    shown while write access is off in code (ADR-097); None once the founder's go is in."""
+
+    available: bool
+    writes_off: str | None
+    repositories: list[RepositoryDraftSettings]
+
+
+class RepositoryDraftSettingsRequest(BaseModel):
+    """`PUT .../{repository_id}/fix-settings`: an owner's two choices, each stated."""
+
+    drafts_allowed: bool
+    ci_on_open: bool

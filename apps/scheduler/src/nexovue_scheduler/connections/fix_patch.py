@@ -1,9 +1,13 @@
-"""A person's check run for a patch (F5 design, *The check run*, steps 3 to 6; spec FR20a,
-FR21, AC10a's patch half, AC19, AC24, AC28a, AC29a, AC40, AC55; plan T5.1).
+"""A person's check run for a patch or a draft (F5 design, *The check run*, steps 3 to 6;
+spec FR20a, FR21, FR22, AC10a, AC19, AC24, AC28a, AC29a, AC40, AC55; plan T5.1, T7.4).
 
 After the check job's step 1, on `scheduler-connections`, with a read-only token only:
 
-3. Under the owner's requirement, GitHub must say the person can read the repository.
+3. Under the owner's requirement, GitHub must say the person can read the repository. **For a
+   draft** (Step 7) the draft's own conditions come first, with no GitHub call
+   (`draft_rules.py`): an owner allowed drafts here, the App holds write, GitHub has not
+   just refused a draft, and the likely cause is this service's signed deploy (D58); then
+   the repository's live visibility (BR13) and the person's write access, always (D6).
 4. **Out of date, with no read:** today's rules and the owner's list against those the
    suggestion was written under, this service's code location against the copy on the row,
    and F3's likely cause against the one it started from. Any change moves the suggestion
@@ -18,7 +22,9 @@ After the check job's step 1, on `scheduler-connections`, with a read-only token
    still covering its folder, taken under the suggestion's row lock: an owner's
    withdrawal, which takes that lock to delete code, can never be overtaken (AC29a).
 
-Nothing here writes to GitHub (AC28a). Logs carry ids and codes only.
+Nothing here writes to GitHub (AC28a). Logs carry ids and codes only. The draft job
+(`fix_writer.py`) reads and re-checks the files through the same functions, so what a person
+confirmed and what is committed are rebuilt by one piece of code (BR3).
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ from nexovue_platform.fixes.recheck import (
 )
 from nexovue_platform.fixes.records import (
     CHECK_FAILED,
-    CHECK_FOR_PATCH,
+    CHECK_FOR_DRAFT,
     CHECK_REFUSED,
     CHECK_STALE,
     CHECKS_REFUSED_AT_CLICK,
@@ -62,8 +68,13 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from nexovue_scheduler.connections import check_rows
-from nexovue_scheduler.connections.fix_github import FixEndpoints, FixGitHub, GitHubFailure
+from nexovue_scheduler.connections import check_rows, draft_rules
+from nexovue_scheduler.connections.fix_github import (
+    WRITE_LEVELS,
+    FixEndpoints,
+    FixGitHub,
+    GitHubFailure,
+)
 from nexovue_scheduler.connections.source_pack import (
     Ending,
     check_access,
@@ -83,10 +94,13 @@ _UNREADABLE: Final = frozenset({"repository_too_large", "not_found"})
 # Every statement binds the job's own `org_id`.
 _SUGGESTION: Final = text(
     """
-    SELECT fix.id, fix.org_id, fix.project_id, fix.finding_id, fix.state, fix.reason,
-           fix.code_deleted_at, fix.connection_repository_id, fix.folder, fix.edits,
-           fix.files_read, fix.checks_version, fix.extra_list_hash,
-           fix.explanation_version, finding.service_name
+    SELECT fix.id, fix.org_id, fix.project_id, fix.finding_id, fix.kind, fix.state,
+           fix.reason, fix.code_deleted_at, fix.connection_repository_id, fix.folder,
+           fix.edits, fix.files_read, fix.checks_version, fix.extra_list_hash,
+           fix.explanation_version, fix.approved_by, fix.approved_digest,
+           fix.requester_note, fix.requester_note_confirmed, fix.pull_request_branch,
+           fix.pull_request_commit_sha,
+           finding.service_name, finding.signals
     FROM finding_fixes AS fix
     JOIN findings AS finding ON finding.org_id = fix.org_id AND finding.id = fix.finding_id
     WHERE fix.org_id = :org_id AND fix.id = :fix_id
@@ -159,7 +173,10 @@ _REFUSED_AT_CHECK: Final = text(
 
 
 @dataclass(frozen=True, slots=True)
-class _Reading:
+class ChangedFiles:
+    """The default branch's head, each changed file there by ref, each moved file's base,
+    and the paths read, for the audit entry."""
+
     head_sha: str
     head: dict[str, CurrentFile | None]
     base: dict[str, str | None]
@@ -173,56 +190,86 @@ async def check_patch(
     *,
     keys: ConfiguredKeys,
     endpoints: FixEndpoints,
+    show_held_causes: bool,
     now: datetime,
 ) -> str | None:
-    """Steps 3 to 6 for one `patch` check. Returns the status it left."""
+    """Steps 3 to 6 for one `patch` or `draft` check. Returns the status it left."""
     org_id = str(row.org_id)
-    suggestion = await _suggestion(engine, org_id, str(check.fix_id))
+    suggestion = await suggestion_of(engine, org_id, str(check.fix_id))
     if suggestion is None:
         # Gone with its finding since the click, and this check row with it.
         return None
     ended = _not_proposed(suggestion)
     if ended is not None:
         return await check_rows.finish(engine, org_id, check, *ended, now=now)
-    consent = await _covering_consent(engine, suggestion)
+    consent = await covering_consent(engine, suggestion)
     if consent is None:
         return await check_rows.finish(
             engine, org_id, check, CHECK_FAILED, "consent_withdrawn", now=now
         )
     owner, require_access = consent
+    for_draft = check.purpose == CHECK_FOR_DRAFT
+    if for_draft:
+        refused = await draft_rules.refusal_before_github(
+            engine, suggestion, show_held_causes=show_held_causes, now=now
+        )
+        if refused is not None:
+            return await check_rows.finish(engine, org_id, check, CHECK_REFUSED, refused, now=now)
     try:
         github = fix_client(row, keys, endpoints)
         token = github.read_token(row.github_installation_id, int(row.external_id))
         try:
-            if require_access:
+            if for_draft:
+                live = github.repository(token, row.key)
+                public = await draft_rules.public_refusal(engine, row, live)
+                if public is not None:
+                    return await check_rows.finish(
+                        engine, org_id, check, CHECK_REFUSED, public, now=now
+                    )
+            if require_access or for_draft:
                 linked = await check_rows.github_user_id(engine, org_id, check)
-                check_access(github, token, row.key, linked)
-            stale = await _out_of_date(engine, suggestion, owner)
+                levels = WRITE_LEVELS if for_draft else None
+                check_access(github, token, row.key, linked, levels=levels)
+            stale = await out_of_date(engine, suggestion, owner)
             if stale is not None:
                 return await _stale(engine, check, suggestion, stale, now=now)
-            reading = _read(github, token, row.key, suggestion)
+            reading = read_changed(github, token, row.key, suggestion)
         finally:
             github.revoke(token)
     except Ending as ending:
         return await check_rows.end_on_refusal(engine, org_id, check, ending, now=now)
     except GitHubFailure as failure:
         return await check_rows.end_on_github_failure(engine, org_id, check, failure, now=now)
-    await _audit_read(engine, check, suggestion, reading)
-    explanation = await _explanation(engine, suggestion)
-    outcome = recheck(
+    await audit_read(
+        engine,
+        actor=check.requested_by,
+        suggestion=suggestion,
+        paths=reading.paths,
+        purpose=check.purpose,
+        check_id=check.id,
+    )
+    outcome = await rechecked(engine, suggestion, owner, reading)
+    return await _store(engine, check, suggestion, outcome, reading, now=now)
+
+
+async def rechecked(
+    engine: AsyncEngine, suggestion: Any, owner: OwnerLists, reading: ChangedFiles
+) -> Outcome:
+    """The re-check (`fixes/recheck.py`) against the files as just read (D18)."""
+    explanation = await explanation_of(engine, suggestion)
+    return recheck(
         suggestion.edits,
         suggestion.files_read,
         folder=suggestion.folder,
         owner=owner,
-        allowed_evidence=_allowed_evidence(explanation, suggestion.files_read),
+        allowed_evidence=allowed_evidence(explanation, suggestion.files_read),
         aliases=None if explanation is None else AliasBook(explanation.aliases),
         head=reading.head,
         base=reading.base,
     )
-    return await _store(engine, check, suggestion, outcome, reading, now=now)
 
 
-async def _suggestion(engine: AsyncEngine, org_id: str, fix_id: str) -> Any | None:
+async def suggestion_of(engine: AsyncEngine, org_id: str, fix_id: str) -> Any | None:
     async with engine.connect() as connection:
         return (
             await connection.execute(_SUGGESTION, {"org_id": org_id, "fix_id": fix_id})
@@ -241,7 +288,7 @@ def _not_proposed(suggestion: Any) -> tuple[str, str] | None:
     return CHECK_FAILED, "nexovue_error"
 
 
-async def _covering_consent(engine: AsyncEngine, suggestion: Any) -> tuple[OwnerLists, bool] | None:
+async def covering_consent(engine: AsyncEngine, suggestion: Any) -> tuple[OwnerLists, bool] | None:
     """The unwithdrawn consent the pack job would have chosen for this folder: its owner's
     lists, and whether it asks for GitHub access (D20, any covering consent asking)."""
     async with engine.connect() as connection:
@@ -265,7 +312,7 @@ async def _covering_consent(engine: AsyncEngine, suggestion: Any) -> tuple[Owner
     return owner, any(each.require_github_access for each in covering)
 
 
-async def _out_of_date(engine: AsyncEngine, suggestion: Any, owner: OwnerLists) -> str | None:
+async def out_of_date(engine: AsyncEngine, suggestion: Any, owner: OwnerLists) -> str | None:
     """Step 5's comparisons that need no file (FR21)."""
     if (
         suggestion.checks_version != CHECKS_VERSION
@@ -315,7 +362,7 @@ def _cause(explanation: Any) -> tuple[Any, Any] | None:
     return None if not cause else (cause.get("rule"), cause.get("evidence_id"))
 
 
-def _read(github: FixGitHub, token: str, key: str, suggestion: Any) -> _Reading:
+def read_changed(github: FixGitHub, token: str, key: str, suggestion: Any) -> ChangedFiles:
     """The default branch's head, each changed file there, and each moved file's base."""
     listed = {
         str(each["ref"]): each
@@ -344,7 +391,7 @@ def _read(github: FixGitHub, token: str, key: str, suggestion: Any) -> _Reading:
         head[ref] = CurrentFile(entry.sha, entry.mode, _text_of(github, token, key, entry.sha))
         if entry.sha != listed[ref].get("blob_sha"):
             base[ref] = _text_of(github, token, key, str(listed[ref].get("blob_sha")))
-    return _Reading(
+    return ChangedFiles(
         head_sha=head_sha,
         head=head,
         base=base,
@@ -371,7 +418,7 @@ def _text_of(github: FixGitHub, token: str, key: str, sha: str) -> str | None:
         return None
 
 
-async def _explanation(engine: AsyncEngine, suggestion: Any) -> Any | None:
+async def explanation_of(engine: AsyncEngine, suggestion: Any) -> Any | None:
     if suggestion.explanation_version is None:
         return None
     async with engine.connect() as connection:
@@ -388,7 +435,7 @@ async def _explanation(engine: AsyncEngine, suggestion: Any) -> Any | None:
     return next((each for each in found if each.version == suggestion.explanation_version), None)
 
 
-def _allowed_evidence(explanation: Any | None, files_read: Any) -> set[str]:
+def allowed_evidence(explanation: Any | None, files_read: Any) -> set[str]:
     """U3 as at the call: the explanation's fact ids, else the files' numbers."""
     model_input = None if explanation is None else explanation.model_input
     if isinstance(model_input, dict):
@@ -404,22 +451,29 @@ def _allowed_evidence(explanation: Any | None, files_read: Any) -> set[str]:
     }
 
 
-async def _audit_read(engine: AsyncEngine, check: Any, suggestion: Any, reading: _Reading) -> None:
-    """`repository.read`, naming the person and the purpose, with the paths (FR28a)."""
+async def audit_read(
+    engine: AsyncEngine,
+    *,
+    actor: Any,
+    suggestion: Any,
+    paths: list[dict[str, str]],
+    purpose: str,
+    check_id: Any = None,
+) -> None:
+    """`repository.read`, naming the person and the purpose, with the paths (FR28a, AC57):
+    a check run's `patch` or `draft`, or the draft job's `draft`."""
+    detail: dict[str, Any] = {"fix_id": str(suggestion.id), "purpose": purpose, "paths": paths}
+    if check_id is not None:
+        detail["check_id"] = str(check_id)
     async with engine.begin() as connection:
         await connection.execute(
             text(RECORD_CASE_AUDIT_SQL),
             case_audit_parameters(
                 org_id=suggestion.org_id,
-                actor_user_id=check.requested_by,
+                actor_user_id=actor,
                 action=REPOSITORY_READ,
                 target=f"{FINDING_AUDIT_TARGET}:{suggestion.finding_id}",
-                detail={
-                    "fix_id": str(suggestion.id),
-                    "check_id": str(check.id),
-                    "purpose": CHECK_FOR_PATCH,
-                    "paths": reading.paths,
-                },
+                detail=detail,
             ),
         )
 
@@ -429,7 +483,7 @@ async def _store(
     check: Any,
     suggestion: Any,
     outcome: Outcome,
-    reading: _Reading,
+    reading: ChangedFiles,
     *,
     now: datetime,
 ) -> str | None:
@@ -445,7 +499,7 @@ async def _passed(
     check: Any,
     suggestion: Any,
     outcome: Rechecked,
-    reading: _Reading,
+    reading: ChangedFiles,
     *,
     now: datetime,
 ) -> str | None:

@@ -1260,7 +1260,9 @@ export type SourceState =
   | "proposed"
   | "refused"
   | "failed"
-  | "stale";
+  | "stale"
+  | "approved"
+  | "opened";
 
 export interface ListedFile {
   ref: string;
@@ -1388,6 +1390,43 @@ export interface PatchView {
   expires_at: string | null;
 }
 
+/** FR24's confirm, from this person's own passed `draft` check (Step 7). */
+export interface DraftConfirm {
+  repository: string;
+  branch: string;
+  file_count: number;
+  line_count: number;
+  facts: string;
+  ci_mode: string;
+  warnings: string[];
+  digest: string;
+  public: boolean;
+  note_label: string;
+  note_public_confirm: string | null;
+  action: string;
+  expires_at: string;
+}
+
+/**
+ * The draft pull request in this person's shape (Step 7; FR10c). `action` is the button, or
+ * null with `refusal` in its place: while write access is off in code, `refusal` is the
+ * sentence saying so and nothing else is offered.
+ */
+export interface DraftView {
+  action: string | null;
+  refusal: string | null;
+  needs_link: boolean;
+  link_sentence: string | null;
+  check: PatchView | null;
+  confirm: DraftConfirm | null;
+  failure: string | null;
+  pull_request_state: string | null;
+  pull_request_url: string | null;
+  pull_request_sentence: string | null;
+  ci_note: string | null;
+  delete_branch_action: string | null;
+}
+
 export interface SourceFix {
   id: string;
   state: SourceState;
@@ -1407,6 +1446,7 @@ export interface SourceFix {
   patch_action: string | null;
   patch: PatchView | null;
   verdict: VerdictView | null;
+  draft: DraftView | null;
 }
 
 export interface FindingSourceFix {
@@ -1518,6 +1558,61 @@ export function usePreparePatch(findingId: string, fixId: string) {
       apiClient.post<CheckView>(
         `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/check`,
         { for: "patch" },
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+/** **Open draft pull request** (Step 7): this person's own `draft` check, whose answer the
+    section polls; while write access is off the API refuses with its sentence. */
+export function useCheckForDraft(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", "draft-check", findingId, fixId],
+    mutationFn: () =>
+      apiClient.post<CheckView>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/check`,
+        { for: "draft" },
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+export interface DraftClick {
+  digest: string;
+  note: string | null;
+  note_confirmed: boolean;
+}
+
+/** The confirm's click (FR22): the digest of this person's own passed check, and a note. */
+export function useOpenDraft(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", "draft", findingId, fixId],
+    mutationFn: (click: DraftClick) =>
+      apiClient.post<{ fix_id: string; state: SourceState }>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/draft-pull-request`,
+        click,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+/** **Delete this branch** (FR23): a job, on Nexovue's own branch and head only. */
+export function useDeleteBranch(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", "delete-branch", findingId, fixId],
+    mutationFn: () =>
+      apiClient.post<{ fix_id: string }>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/delete-branch`,
+        {},
       ),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });

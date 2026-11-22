@@ -502,6 +502,8 @@ export function eventSentence(event: TimelineEvent): string {
       return detail.fix_kind === "source"
         ? "A suggested fix was written from the service's own files"
         : "A general fix suggestion was written";
+    case "fix_pull_request_opened":
+      return "A suggested fix was opened as a draft pull request";
     default:
       return issueEventSentence(event) ?? event.kind.replaceAll("_", " ");
   }

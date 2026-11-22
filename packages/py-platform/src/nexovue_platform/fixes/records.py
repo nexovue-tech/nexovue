@@ -20,7 +20,8 @@ from nexovue_platform.jobs import JobRequest
 KIND_SOURCE: Final = "source"
 KIND_GENERAL: Final = "general"
 FIX_KINDS: Final = (KIND_SOURCE, KIND_GENERAL)
-# Spec, *States*. Step 7 joins `approved` and `opened`.
+# Spec, *States*. Step 7 joins `approved` (a person clicked **Open draft pull request**,
+# its job is running) and `opened` (the draft exists on GitHub).
 GATHERING: Final = "gathering"
 GATHERED: Final = "gathered"
 PROPOSING: Final = "proposing"
@@ -28,7 +29,11 @@ PROPOSED: Final = "proposed"
 REFUSED: Final = "refused"
 FAILED: Final = "failed"
 STALE: Final = "stale"
-FIX_STATES: Final = (GATHERING, GATHERED, PROPOSING, PROPOSED, REFUSED, FAILED, STALE)
+APPROVED: Final = "approved"
+OPENED: Final = "opened"
+# Migration 0079's list, before Step 7: its frozen copy is held to this.
+STEP_3_FIX_STATES: Final = (GATHERING, GATHERED, PROPOSING, PROPOSED, REFUSED, FAILED, STALE)
+FIX_STATES: Final = (*STEP_3_FIX_STATES, APPROVED, OPENED)
 ENDED_STATES: Final = (PROPOSED, REFUSED, FAILED)
 # BR8: at most one of these per finding, held by a unique index.
 IN_FLIGHT_STATES: Final = (GATHERING, GATHERED, PROPOSING)
@@ -246,11 +251,12 @@ def suggest_general_fix_request(
 # Step 5 `patch`; `draft` is Step 7's.
 CHECK_FOR_READ: Final = "read"
 CHECK_FOR_PATCH: Final = "patch"
+CHECK_FOR_DRAFT: Final = "draft"
 # Who may ask for a suggested fix, as the API's action table says for `REQUEST_FIX`; the
 # check run reads it again, so a role removed since the click refuses (design, step 1).
 # `test_fix_check_routes.py` holds it equal to the API's table.
 ROLES_WHO_ASK: Final = ("owner", "admin", "member")
-FIX_CHECK_PURPOSES: Final = (CHECK_FOR_PATCH, "draft", CHECK_FOR_READ)
+FIX_CHECK_PURPOSES: Final = (CHECK_FOR_PATCH, CHECK_FOR_DRAFT, CHECK_FOR_READ)
 CHECK_RUNNING: Final = "running"
 CHECK_UNCHANGED: Final = "unchanged"
 CHECK_MOVED: Final = "moved"
@@ -280,7 +286,29 @@ STEP_4_FIX_CHECK_REASONS: Final = (
 )
 # Step 5 (migration 0082): a patch check also ends out of date, by the row's own reason, or
 # refused by the rules on the same inputs (D18's tamper signal).
-FIX_CHECK_REASONS: Final = (*STEP_4_FIX_CHECK_REASONS, *STALE_REASONS, CHECKS_REFUSED_AT_CLICK)
+STEP_5_FIX_CHECK_REASONS: Final = (
+    *STEP_4_FIX_CHECK_REASONS,
+    *STALE_REASONS,
+    CHECKS_REFUSED_AT_CLICK,
+)
+# Step 7 (migration 0083): a `draft` check also refuses for the draft's own conditions
+# (design, *The check run*, step 3; FR22), and while write access is off in code
+# (`write_gate.py`, ADR-097) it refuses before any GitHub call.
+WRITES_OFF: Final = "writes_off"
+DRAFTS_NOT_ALLOWED: Final = "drafts_not_allowed"
+PUBLIC_NOT_ALLOWED: Final = "public_not_allowed"
+NO_WRITE_PERMISSION: Final = "no_write_permission"
+NO_DRAFT_SUPPORT: Final = "no_draft_support"
+NEEDS_LIKELY_CAUSE: Final = "needs_likely_cause"
+DRAFT_REFUSALS: Final = (
+    WRITES_OFF,
+    DRAFTS_NOT_ALLOWED,
+    PUBLIC_NOT_ALLOWED,
+    NO_WRITE_PERMISSION,
+    NO_DRAFT_SUPPORT,
+    NEEDS_LIKELY_CAUSE,
+)
+FIX_CHECK_REASONS: Final = (*STEP_5_FIX_CHECK_REASONS, *DRAFT_REFUSALS)
 # D20's guess: a passed `read` check lets this person read quoted code for an hour.
 READ_CHECK_LIFETIME: Final = timedelta(hours=1)
 # A passed `patch` check is served for this long, from when it finished (design: 15
@@ -531,4 +559,106 @@ def check_fix_request(*, check_id: Any, org_id: Any) -> JobRequest:
         max_attempts=PACK_MAX_ATTEMPTS,
         soft_limit_seconds=CHECK_SOFT_LIMIT_SECONDS,
         hard_limit_seconds=CHECK_HARD_LIMIT_SECONDS,
+    )
+
+
+# ---------------------------------------------- the draft pull request (Step 7)
+
+# What GitHub says of a draft Nexovue made, followed by F5's own poller (FR27, Step 8);
+# `not_opened` when `POST /pulls` was refused or never answered and nothing was found.
+PULL_REQUEST_OPEN: Final = "open"
+PULL_REQUEST_NOT_OPENED: Final = "not_opened"
+PULL_REQUEST_UNTRACKED: Final = "untracked"
+PULL_REQUEST_STATES: Final = (
+    PULL_REQUEST_OPEN,
+    "merged",
+    "closed",
+    PULL_REQUEST_NOT_OPENED,
+    PULL_REQUEST_UNTRACKED,
+)
+# Why a draft was not opened, on `last_write_failure` (design, *The draft click*, *Exits*).
+# The row goes back to `proposed`; each code has a sentence (`sentences.py`, AC8).
+CHANGED_SINCE_CHECK: Final = "changed_since_check"
+BRANCH_NOT_OURS: Final = "branch_not_ours"
+DID_NOT_FINISH: Final = "did_not_finish"
+WRITE_FAILURES: Final = (
+    WRITES_OFF,
+    CHANGED_SINCE_CHECK,
+    BRANCH_NOT_OURS,
+    DID_NOT_FINISH,
+    NO_DRAFT_SUPPORT,
+    DRAFTS_NOT_ALLOWED,
+    PUBLIC_NOT_ALLOWED,
+    NO_WRITE_PERMISSION,
+    NEEDS_LIKELY_CAUSE,
+    "no_github_access",
+    "not_linked",
+    "access_unknown",
+    "permission_missing",
+    "github_unavailable",
+    "consent_withdrawn",
+)
+# The one branch a suggestion may write (FR23): nothing else can be expressed.
+FIX_BRANCH_PREFIX: Final = "nexovue/suggestion-"
+# A draft click needs this person's own `draft` check, passed within this long (FR22, a guess).
+DRAFT_CHECK_WITHIN: Final = timedelta(minutes=15)
+# The sweep returns an `approved` row whose job never finished: the job's 15-minute expiry,
+# its hard limit and a margin (design, *The sweep*, step 2; a guess).
+APPROVED_STUCK_AFTER: Final = timedelta(minutes=20)
+# GitHub's refusal of a draft blocks the repository this long, then is ignored (AC27a, a guess).
+DRAFT_REFUSAL_HOLDS_FOR: Final = timedelta(hours=24)
+# FR24a: the requester's one line, "Why this change".
+REQUESTER_NOTE_MAX_CHARACTERS: Final = 200
+# The timeline's kind for an opened draft, by ids and counts (FR28a).
+FIX_PULL_REQUEST_OPENED_EVENT: Final = "fix_pull_request_opened"
+# Audit actions (design, *Observability*): the click, committed with the claim (AC32a); the
+# draft opened; a branch deleted; an owner's per-repository choice.
+FIX_PULL_REQUEST_ATTEMPTED: Final = "fix.pull_request_attempted"
+FIX_PULL_REQUEST_OPENED: Final = "fix.pull_request_opened"
+FIX_BRANCH_DELETED: Final = "fix.branch_deleted"
+FIX_REPOSITORY_SETTINGS_CHANGED: Final = "fix.repository_settings_changed"
+# `repository.read`'s purpose when the draft job reads the files again.
+READ_FOR_DRAFT: Final = "draft"
+
+OPEN_FIX_PULL_REQUEST_TASK: Final = "nexovue_scheduler.connections.open_fix_pull_request"
+DELETE_FIX_BRANCH_TASK: Final = "nexovue_scheduler.connections.delete_fix_branch"
+WRITER_EXPIRES_SECONDS: Final = 15 * 60
+WRITER_SOFT_LIMIT_SECONDS: Final = 60
+WRITER_HARD_LIMIT_SECONDS: Final = 90
+# Three attempts on a passing GitHub failure; adoption makes each safe (AC26).
+WRITER_MAX_ATTEMPTS: Final = 3
+DELETE_BRANCH_SOFT_LIMIT_SECONDS: Final = 30
+DELETE_BRANCH_HARD_LIMIT_SECONDS: Final = 60
+
+
+def fix_branch(fix_id: Any) -> str:
+    """`nexovue/suggestion-<id>`, the only ref a suggestion writes (FR23)."""
+    return f"{FIX_BRANCH_PREFIX}{fix_id}"
+
+
+def open_fix_pull_request_request(*, fix_id: Any, org_id: Any) -> JobRequest:
+    """The draft job (design, *The draft click*). Ids only."""
+    return JobRequest(
+        task=OPEN_FIX_PULL_REQUEST_TASK,
+        queue=INTERACTIVE_QUEUE,
+        kwargs={"fix_id": str(fix_id), "org_id": str(org_id)},
+        org_id=str(org_id),
+        expires_seconds=WRITER_EXPIRES_SECONDS,
+        max_attempts=WRITER_MAX_ATTEMPTS,
+        soft_limit_seconds=WRITER_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=WRITER_HARD_LIMIT_SECONDS,
+    )
+
+
+def delete_fix_branch_request(*, fix_id: Any, org_id: Any, requested_by: Any) -> JobRequest:
+    """**Delete this branch** (FR23, AC66): one attempt, ids only."""
+    return JobRequest(
+        task=DELETE_FIX_BRANCH_TASK,
+        queue=INTERACTIVE_QUEUE,
+        kwargs={"fix_id": str(fix_id), "org_id": str(org_id), "requested_by": str(requested_by)},
+        org_id=str(org_id),
+        expires_seconds=WRITER_EXPIRES_SECONDS,
+        max_attempts=1,
+        soft_limit_seconds=DELETE_BRANCH_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=DELETE_BRANCH_HARD_LIMIT_SECONDS,
     )

@@ -9,6 +9,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { useCan } from "@/shared/identity";
 import { useProjectSelection } from "@/shared/projects";
+import { FixRepositorySettings } from "./FixRepositorySettings";
 
 /* F5 Step 3 (plan T3.5, T3.6): an owner's consent per repository and folder, and the
  * readiness counts, on `/settings/ai`. Other roles read the state without the controls. */
@@ -125,6 +126,7 @@ export function FixConsentPanel() {
     <div className="flex flex-col gap-6">
       <FixReadinessPanel projectId={projectId ?? null} />
       <ConsentList />
+      <FixRepositorySettings />
     </div>
   );
 }

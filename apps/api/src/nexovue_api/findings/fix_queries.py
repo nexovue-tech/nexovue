@@ -11,10 +11,12 @@ from datetime import datetime
 from typing import Final
 
 from nexovue_platform.fixes.records import (
+    APPROVED,
     COUNTED_STATES,
     IN_FLIGHT_STATES,
     KIND_GENERAL,
     PROPOSING,
+    PULL_REQUEST_OPEN,
     GeneralLanguage,
 )
 from nexovue_platform.jobs import ENQUEUE, WAKE, JobRequest
@@ -88,6 +90,28 @@ async def in_flight(session: AsyncSession, *, org_id: uuid.UUID, finding_id: uui
         )
     )
     return bool(found)
+
+
+async def holding_draft(
+    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID
+) -> FindingFix | None:
+    """BR8 (Step 7): the suggestion holding this finding's one draft Nexovue can still see,
+    by the one-draft index's own condition (migration 0083), or None."""
+    found: FindingFix | None = await session.scalar(
+        select(FindingFix).where(
+            FindingFix.org_id == org_id,
+            FindingFix.finding_id == finding_id,
+            (FindingFix.state == APPROVED)
+            | (
+                FindingFix.pull_request_branch.is_not(None)
+                & (
+                    FindingFix.pull_request_state.is_(None)
+                    | (FindingFix.pull_request_state == PULL_REQUEST_OPEN)
+                )
+            ),
+        )
+    )
+    return found
 
 
 def new_general(

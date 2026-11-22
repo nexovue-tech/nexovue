@@ -59,6 +59,15 @@ class CurrentFile:
 
 
 @dataclass(frozen=True, slots=True)
+class NewFile:
+    """A changed file as the draft job commits it (Step 7): held in memory only."""
+
+    path: str
+    mode: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class Rechecked:
     status: Literal["unchanged", "moved"]
     patch: str
@@ -66,6 +75,8 @@ class Rechecked:
     # Each changed file's path, and its blob id at the head the patch applies to.
     blob_ids: dict[str, str]
     moved_refs: tuple[str, ...]
+    # The digest's own new contents, so the draft commits exactly what was checked (BR3).
+    files: tuple[NewFile, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +167,9 @@ def recheck(
         ),
         blob_ids={each.path: current[each.ref].blob_sha for each in ruled.files},
         moved_refs=moved,
+        files=tuple(
+            NewFile(each.path, current[each.ref].mode, each.new_content) for each in ruled.files
+        ),
     )
 
 

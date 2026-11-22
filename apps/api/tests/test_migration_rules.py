@@ -45,6 +45,7 @@ ENV: Final = VERSIONS.parent / "env.py"
 # 0077 holds F5's general suggestions: what was sent to a provider and what came back.
 # 0078 holds an organization's sealed embedding key (F4).
 # 0082 holds a person's verdict on an F5 suggestion.
+# 0083 holds an owner's per-repository draft choices and a person's approval of a draft.
 ROLL_FORWARD_ONLY: Final = (
     "0020",
     "0022",
@@ -69,6 +70,7 @@ ROLL_FORWARD_ONLY: Final = (
     "0078",
     "0079",
     "0082",
+    "0083",
 )
 # The concurrent-index rule came with group 9, after 0039; earlier revisions ran before it.
 FIRST_HELD_TO_CONCURRENT_INDEXES: Final = "0040"

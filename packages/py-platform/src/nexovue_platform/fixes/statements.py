@@ -6,9 +6,8 @@ database driver (`test_cross_service_contracts.py`). Every trigger runs this one
 statement: a refusal or failure, the time limits, a withdrawal, AI switched off, lost
 GitHub access, and the restore.
 
-**The columns and tables are Step 3's migration's** (plan T2.5, T3.1). Until the third
-migration (Step 7) exists, `requester_note` and `approved_digest` are left out, and
-T7.1 adds them, so this never names a column that is not there. The fact, state,
+**The columns and tables are Step 3's migration's** (plan T2.5, T3.1), and the third
+migration's (Step 7, T7.1, 0083) `requester_note` and `approved_digest`. The fact, state,
 reason, counts, timestamps, the verdict and pull request details stay.
 
 **The restore** (Step 5, T5.5, ADR-095) runs the same list over every row, by `psql`, from
@@ -29,6 +28,9 @@ STORED_CODE_COLUMNS: Final = (
     "requested_paths",
     "withheld_refs",
     "files_digest",
+    # Step 7 (0083): the person's own words, and the digest that names the changed content.
+    "requester_note",
+    "approved_digest",
 )
 # Tables whose every row for the suggestion is source: the pack, and each check's patch.
 STORED_CODE_TABLES: Final = ("finding_fix_source_packs", "finding_fix_checks")
@@ -84,6 +86,12 @@ def restore_sql() -> str:
         + "SET state = 'failed', reason = 'consent_ended_in_flight', state_changed_at = now(),\n"
         + "    finished_at = now(), path_candidates = NULL, requested_paths = NULL\n"
         + f"WHERE state IN ({_IN_FLIGHT});\n"
+        # A draft's job is gone too: back to `proposed`, as the sweep does (Step 7). A
+        # branch it stored keeps the one-draft hold until the poller settles it.
+        + "UPDATE finding_fixes\n"
+        + "SET state = 'proposed', state_changed_at = now(),\n"
+        + "    last_write_failure = 'did_not_finish'\n"
+        + "WHERE state = 'approved';\n"
         + deletes
         + "UPDATE finding_fixes\n"
         + f"SET {_EMPTIED},\n"

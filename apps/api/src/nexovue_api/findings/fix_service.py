@@ -30,8 +30,11 @@ from datetime import datetime, timedelta
 from typing import Any, Final, cast, get_args
 from urllib.parse import quote
 
+from nexovue_platform.fixes import write_gate
+from nexovue_platform.fixes.draft import DRAFT_CAUSE_RULES
 from nexovue_platform.fixes.prose import prose_refusal
 from nexovue_platform.fixes.records import (
+    APPROVED,
     BASIS_LIKELY_CAUSE,
     BASIS_NAMED_FILES,
     BASIS_STACK_ONLY,
@@ -50,6 +53,7 @@ from nexovue_platform.fixes.records import (
     GATHERING,
     KIND_SOURCE,
     MAX_TYPED_PATHS,
+    OPENED,
     PROPOSED,
     PROPOSING,
     REFUSED,
@@ -92,6 +96,7 @@ from nexovue_platform.fixes.sentences import (
     TYPED_REFUSED,
     WHOLE_REPOSITORY,
 )
+from nexovue_platform.fixes.write_gate import WriteGo
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,12 +116,14 @@ from nexovue_api.data.postgres.models import (
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import (
     fix_access,
+    fix_draft_read,
     fix_paths,
     fix_proposal,
     fix_queries,
     fix_state,
     fix_verdict,
 )
+from nexovue_api.findings.fix_draft_read import DraftContext
 from nexovue_api.findings.fix_general import Viewer
 from nexovue_api.findings.fix_schemas import FixSectionLine
 from nexovue_api.findings.fix_source_schemas import (
@@ -126,6 +133,7 @@ from nexovue_api.findings.fix_source_schemas import (
     BriefFiles,
     BriefFilesStarted,
     BriefPath,
+    DraftView,
     EarlierSource,
     FindingSourceFix,
     LeftOutFile,
@@ -172,8 +180,10 @@ async def read_source(
     finding_id: uuid.UUID,
     settings: Settings,
     now: datetime,
+    go: WriteGo | None,
 ) -> FindingSourceFix:
-    """`GET /findings/{id}/fixes/source`. Postgres only: no GitHub, no ClickHouse."""
+    """`GET /findings/{id}/fixes/source`. Postgres only: no GitHub, no ClickHouse. `go` is
+    `write_gate.WRITE_ACCESS_GO` from the route (Step 7's draft offer reads it)."""
     finding = await find_finding(db, org_id=identity.org_id, finding_id=finding_id)
     if finding is None:
         raise NotFoundError(NOT_FOUND)
@@ -189,7 +199,7 @@ async def read_source(
         offer=await _offer(db, state, viewer, identity),
         latest=None
         if latest is None
-        else await _view(db, latest, viewer, state, user_id=identity.user.id),
+        else await _view(db, latest, viewer, state, user_id=identity.user.id, go=go),
         earlier=[
             EarlierSource(id=row.id, state=_state_of(row), requested_at=row.requested_at)
             for row in rows[1:]
@@ -261,14 +271,29 @@ def _state_of(row: FindingFix) -> SourceState:
 
 
 async def _view(
-    db: AsyncSession, row: FindingFix, viewer: Viewer, state: FixState, *, user_id: uuid.UUID
+    db: AsyncSession,
+    row: FindingFix,
+    viewer: Viewer,
+    state: FixState,
+    *,
+    user_id: uuid.UUID,
+    go: WriteGo | None,
 ) -> SourceFix:
     reason = row.reason
     neutral = reason in NEUTRAL_REASONS
     files = None
     sentence: str | None
     shown: fix_proposal.ProposalRead | None = None
-    if row.state == GATHERING:
+    draft: DraftView | None = None
+    if row.state == APPROVED:
+        heading, sentence = fix_draft_read.opening(
+            row, may_request=viewer.may_request, now=state.now
+        )
+    elif row.state == OPENED:
+        heading, sentence, draft = await fix_draft_read.opened(
+            db, row, may_request=viewer.may_request
+        )
+    elif row.state == GATHERING:
         heading = GATHERING_HEADING
         sentence = GATHERING_REQUESTER if viewer.may_request else BEING_PREPARED_VIEWER
     elif row.state == PROPOSING:
@@ -292,8 +317,14 @@ async def _view(
             repository_key=key,
             files_read=_listing(row, key) if viewer.may_request else ([], []),
             now=state.now,
+            **(
+                {"draft": DraftContext(go, _signed_deploy_cause(state), key)}
+                if row.state == PROPOSED
+                else {}
+            ),
         )
         heading, sentence = shown.heading, shown.sentence
+        draft = shown.draft
     else:
         heading = (
             NO_SUGGESTION_HEADING if neutral or row.state == REFUSED else COULD_NOT_FINISH_HEADING
@@ -325,7 +356,13 @@ async def _view(
         verdict=fix_verdict.view(row.verdict)
         if viewer.may_request and fix_verdict.answerable(row)
         else None,
+        draft=draft,
     )
+
+
+def _signed_deploy_cause(state: FixState) -> bool:
+    """D58: only this service's own signed deploy, released, reaches a draft."""
+    return state.released_rule in DRAFT_CAUSE_RULES
 
 
 async def _repository_key(db: AsyncSession, row: FindingFix) -> str | None:
@@ -579,7 +616,12 @@ async def ask(
         )
     await db.commit()
     return await read_source(
-        db, identity=identity, finding_id=finding_id, settings=settings, now=now
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        settings=settings,
+        now=now,
+        go=write_gate.WRITE_ACCESS_GO,
     )
 
 
@@ -661,7 +703,12 @@ async def change_files(
     )
     await db.commit()
     return await read_source(
-        db, identity=identity, finding_id=finding_id, settings=settings, now=now
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        settings=settings,
+        now=now,
+        go=write_gate.WRITE_ACCESS_GO,
     )
 
 
@@ -684,7 +731,12 @@ async def send(
         # Nothing was changed, so the new list is read in the same transaction: a rollback
         # would expire the caller's identity mid-request.
         fresh = await read_source(
-            db, identity=identity, finding_id=finding_id, settings=settings, now=now
+            db,
+            identity=identity,
+            finding_id=finding_id,
+            settings=settings,
+            now=now,
+            go=write_gate.WRITE_ACCESS_GO,
         )
         raise ConflictError(LIST_CHANGED, code=LIST_CHANGED_CODE, fix=fresh.model_dump(mode="json"))
     if (row.files_read or {}).get("top_left_out") and not request.confirm_top_left_out:
@@ -711,7 +763,12 @@ async def send(
     await _send_round(db, row, identity=identity, connection=connection, hint=request.hint, now=now)
     await db.commit()
     return await read_source(
-        db, identity=identity, finding_id=finding_id, settings=settings, now=now
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        settings=settings,
+        now=now,
+        go=write_gate.WRITE_ACCESS_GO,
     )
 
 
@@ -814,7 +871,12 @@ async def cancel(
     )
     await db.commit()
     return await read_source(
-        db, identity=identity, finding_id=finding_id, settings=settings, now=now
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        settings=settings,
+        now=now,
+        go=write_gate.WRITE_ACCESS_GO,
     )
 
 

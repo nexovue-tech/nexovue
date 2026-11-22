@@ -415,8 +415,16 @@ def _read(
         github.revoke(token)
 
 
-def check_access(github: FixGitHub, token: str, key: str, github_user_id: int | None) -> None:
-    """D20, before any blob: the person must be linked, and GitHub must say they can read."""
+def check_access(
+    github: FixGitHub,
+    token: str,
+    key: str,
+    github_user_id: int | None,
+    *,
+    levels: frozenset[str] | None = None,
+) -> str:
+    """D20, before any blob: the person must be linked, and GitHub must say they can read;
+    a draft passes `WRITE_LEVELS` (D6). Returns their current login, held in memory."""
     if github_user_id is None:
         raise Ending(FAILED, "not_linked")
     try:
@@ -426,8 +434,9 @@ def check_access(github: FixGitHub, token: str, key: str, github_user_id: int | 
         if failure.passing:
             raise
         raise Ending(FAILED, "access_unknown") from failure
-    if permission not in READ_LEVELS:
+    if permission not in (READ_LEVELS if levels is None else levels):
         raise Ending(FAILED, "no_github_access")
+    return login
 
 
 def folder_files(

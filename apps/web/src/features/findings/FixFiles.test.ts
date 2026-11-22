@@ -67,6 +67,7 @@ const GATHERED: SourceFix = {
   patch_action: null,
   patch: null,
   verdict: null,
+  draft: null,
   files: {
     asked_round: null,
     files: [
@@ -511,6 +512,240 @@ describe("Step 5: the patch and the verdict (T5.2, FR20a, FR21, FR29)", () => {
     await waitFor(
       () => readable(section as Element).includes("Recorded. This changes nothing else."),
       "the recorded line",
+    );
+  });
+});
+
+describe("Step 7: the draft pull request (T7.8; FR10c, FR22, FR24, FR24a, FR26)", () => {
+  const WRITES_OFF =
+    "Opening a draft pull request is switched off in this version of Nexovue, until its safety evaluation is done. Download the patch instead.";
+  const draft = (overrides: Partial<NonNullable<SourceFix["draft"]>> = {}) => ({
+    action: null,
+    refusal: null,
+    needs_link: false,
+    link_sentence: null,
+    check: null,
+    confirm: null,
+    failure: null,
+    pull_request_state: null,
+    pull_request_url: null,
+    pull_request_sentence: null,
+    ci_note: null,
+    delete_branch_action: null,
+    ...overrides,
+  });
+  const CONFIRM = {
+    repository: "acme/shop",
+    branch: "nexovue/suggestion-s-1",
+    file_count: 1,
+    line_count: 2,
+    facts: "acme/shop, branch nexovue/suggestion-s-1: 1 file, 2 lines.",
+    ci_mode:
+      "Asks GitHub Actions to hold `push` and `pull_request` runs. Other triggers, other CI systems and apps connected to this repository may still run.",
+    warnings: [
+      "This also starts a case on this finding.",
+      "On GitHub this pull request's author is the App, so the person who requested it can approve it. We have not yet shown that a GitHub rule can stop that.",
+      "Your GitHub login is written into the pull request, and stays on GitHub if you leave.",
+      "Write access reaches every repository you installed this App on; Nexovue restricts where drafts open.",
+    ],
+    digest: "a".repeat(64),
+    public: false,
+    note_label: "Why this change (optional, one line)",
+    note_public_confirm: null,
+    action: "Open the draft",
+    expires_at: "2026-11-21T12:14:00Z",
+  };
+  const buttons = (section: Element | null) => [...(section?.querySelectorAll("button") ?? [])];
+
+  it("while write access is off, shows only the API's sentence and no draft button", async () => {
+    const { section } = await page(
+      source({
+        latest: {
+          ...PROPOSED,
+          patch_action: "Prepare patch",
+          draft: draft({ refusal: WRITES_OFF }),
+        },
+      }),
+    );
+
+    expect(readable(section as Element)).toContain(WRITES_OFF);
+    expect(buttons(section).some((each) => each.textContent === "Open draft pull request")).toBe(
+      false,
+    );
+    expect(buttons(section).some((each) => each.textContent === "Prepare patch")).toBe(true);
+  });
+
+  it("Open draft pull request asks this person's own draft check", async () => {
+    const { api, section } = await page(
+      source({ latest: { ...PROPOSED, draft: draft({ action: "Open draft pull request" }) } }),
+      {
+        "POST /findings/f-1/fixes/s-1/check": json({
+          id: "c-3",
+          purpose: "draft",
+          status: "running",
+          heading: "Re-reading the files",
+          sentence: null,
+          passed: false,
+          expires_at: null,
+        }),
+      },
+    );
+
+    click(buttons(section).find((each) => each.textContent === "Open draft pull request"));
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const posted = api.calls.find((call) => call.path === "/findings/f-1/fixes/s-1/check");
+    expect(posted?.body).toEqual({ for: "draft" });
+  });
+
+  it("with no linked account, the button opens the link step and asks no check", async () => {
+    const { api, section } = await page(
+      source({
+        latest: {
+          ...PROPOSED,
+          draft: draft({
+            action: "Open draft pull request",
+            needs_link: true,
+            link_sentence:
+              "Connect your GitHub account so GitHub can tell us what access you have.",
+          }),
+        },
+      }),
+    );
+
+    click(buttons(section).find((each) => each.textContent === "Open draft pull request"));
+    await settle();
+
+    expect(readable(section as Element)).toContain("Connect your GitHub account so GitHub");
+    expect(api.calls.some((call) => call.path.endsWith("/check"))).toBe(false);
+  });
+
+  it("FR24: the confirm states every fact and warning by exact string and posts the digest and note", async () => {
+    const { api, section } = await page(
+      source({ latest: { ...PROPOSED, draft: draft({ confirm: CONFIRM }) } }),
+      {
+        "POST /findings/f-1/fixes/s-1/draft-pull-request": json({
+          fix_id: "s-1",
+          state: "approved",
+        }),
+      },
+    );
+
+    const text = readable(section as Element);
+    expect(text).toContain(CONFIRM.facts);
+    expect(text).toContain(CONFIRM.ci_mode);
+    for (const warning of CONFIRM.warnings) expect(text).toContain(warning);
+    const note = section?.querySelector<HTMLInputElement>("input[name=requester-note]");
+    act(() => {
+      if (note) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        setter?.call(note, "Retries stop the timeouts.");
+        note.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    click(buttons(section).find((each) => each.textContent === "Open the draft"));
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const posted = api.calls.find(
+      (call) => call.path === "/findings/f-1/fixes/s-1/draft-pull-request",
+    );
+    expect(posted?.body).toEqual({
+      digest: "a".repeat(64),
+      note: "Retries stop the timeouts.",
+      note_confirmed: false,
+    });
+  });
+
+  it("FR24a: a public repository's confirm asks before the note goes in", async () => {
+    const publicConfirm = {
+      ...CONFIRM,
+      public: true,
+      warnings: CONFIRM.warnings.filter((each) => !each.startsWith("Your GitHub login")),
+      note_public_confirm: "This repository is public. Put my note in the pull request.",
+    };
+    const { section } = await page(
+      source({ latest: { ...PROPOSED, draft: draft({ confirm: publicConfirm }) } }),
+    );
+
+    const text = readable(section as Element);
+    expect(text).toContain("This repository is public. Put my note in the pull request.");
+    expect(text).not.toContain("Your GitHub login is written into the pull request");
+  });
+
+  it("a refused check shows its sentence and the button again", async () => {
+    const { section } = await page(
+      source({
+        latest: {
+          ...PROPOSED,
+          draft: draft({
+            action: "Open draft pull request",
+            check: {
+              status: "refused",
+              heading: "Not available",
+              sentence: "GitHub says you do not have the access to acme/shop that this needs.",
+              downloadable: false,
+              expires_at: null,
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(readable(section as Element)).toContain("GitHub says you do not have the access");
+    expect(buttons(section).some((each) => each.textContent === "Open draft pull request")).toBe(
+      true,
+    );
+  });
+
+  it("FR26: an opened draft links to GitHub and says what holding CI means", async () => {
+    const opened: SourceFix = {
+      ...PROPOSED,
+      state: "opened",
+      heading: "Draft pull request",
+      sentence: "A draft pull request is open: https://github.com/acme/shop/pull/7.",
+      proposal: null,
+      draft: draft({
+        pull_request_state: "open",
+        pull_request_url: "https://github.com/acme/shop/pull/7",
+        pull_request_sentence: "A draft pull request is open: https://github.com/acme/shop/pull/7.",
+        ci_note:
+          "Nexovue's commit asked GitHub Actions to wait. Anything pushed since is not tracked here; check GitHub.",
+      }),
+    };
+    const { section } = await page(source({ latest: opened }));
+
+    const text = readable(section as Element);
+    expect(text).toContain(
+      "Nexovue's commit asked GitHub Actions to wait. Anything pushed since is not tracked here; check GitHub.",
+    );
+    const link = section?.querySelector<HTMLAnchorElement>(
+      "a[href='https://github.com/acme/shop/pull/7']",
+    );
+    expect(link).not.toBeNull();
+  });
+
+  it("FR23: Delete this branch posts once its pull request is closed", async () => {
+    const closed: SourceFix = {
+      ...PROPOSED,
+      state: "opened",
+      heading: "Draft pull request",
+      proposal: null,
+      draft: draft({
+        pull_request_state: "closed",
+        pull_request_sentence:
+          "This pull request was closed without merging: https://github.com/acme/shop/pull/7.",
+        delete_branch_action: "Delete this branch",
+      }),
+    };
+    const { api, section } = await page(source({ latest: closed }), {
+      "POST /findings/f-1/fixes/s-1/delete-branch": json({ fix_id: "s-1" }),
+    });
+
+    click(buttons(section).find((each) => each.textContent === "Delete this branch"));
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    expect(api.calls.some((call) => call.path === "/findings/f-1/fixes/s-1/delete-branch")).toBe(
+      true,
     );
   });
 });

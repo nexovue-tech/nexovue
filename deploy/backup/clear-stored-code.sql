@@ -7,13 +7,17 @@ UPDATE finding_fixes
 SET state = 'failed', reason = 'consent_ended_in_flight', state_changed_at = now(),
     finished_at = now(), path_candidates = NULL, requested_paths = NULL
 WHERE state IN ('gathering', 'gathered', 'proposing');
+UPDATE finding_fixes
+SET state = 'proposed', state_changed_at = now(),
+    last_write_failure = 'did_not_finish'
+WHERE state = 'approved';
 DELETE FROM finding_fix_source_packs;
 DELETE FROM finding_fix_checks;
 DELETE FROM github_link_attempts;
 UPDATE finding_fixes
-SET edits = NULL, files_read = NULL, path_candidates = NULL, requested_paths = NULL, withheld_refs = NULL, files_digest = NULL,
+SET edits = NULL, files_read = NULL, path_candidates = NULL, requested_paths = NULL, withheld_refs = NULL, files_digest = NULL, requester_note = NULL, approved_digest = NULL,
     code_deleted_at = COALESCE(code_deleted_at, now()),
     code_deleted_reason = COALESCE(code_deleted_reason, 'restored')
-WHERE kind = 'source' AND (edits IS NOT NULL OR files_read IS NOT NULL OR path_candidates IS NOT NULL OR requested_paths IS NOT NULL OR withheld_refs IS NOT NULL OR files_digest IS NOT NULL);
+WHERE kind = 'source' AND (edits IS NOT NULL OR files_read IS NOT NULL OR path_candidates IS NOT NULL OR requested_paths IS NOT NULL OR withheld_refs IS NOT NULL OR files_digest IS NOT NULL OR requester_note IS NOT NULL OR approved_digest IS NOT NULL);
 UPDATE fix_source_consents SET withdrawn_at = now(), withdrawn_reason = 'restored'
 WHERE withdrawn_at IS NULL;

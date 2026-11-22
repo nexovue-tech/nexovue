@@ -10,7 +10,8 @@ then needs F3's facts to be sendable and to hold a cause or an `error_N` alias (
 otherwise nothing about it is shown, not even a refusal.
 
 `cause_is_elsewhere` (row 7) stops nobody from naming files (FR9): rung 3 stays open to
-typed paths when no later reason applies. Row 13 (`draft_open`) comes with Step 7.
+typed paths when no later reason applies. Row 13 (`draft_open`, Step 7): a draft Nexovue
+can still see holds the finding (BR8).
 
 Imports no AI code, so a later rung 1 or 2 read may ask it too.
 """
@@ -37,6 +38,7 @@ Reason = Literal[
     "no_consent",
     "limit_reached",
     "already_running",
+    "draft_open",
 ]
 SourceResult = Literal["ready", "ready_without_stack"]
 # FR9, row 5: closed as not a problem, so there is nothing to change.
@@ -70,6 +72,8 @@ class EligibilityFacts:
     code_location: bool = False
     read_permission: bool = False
     consent_live: bool = False
+    # FR9 row 13 (Step 7): a draft Nexovue can still see holds this finding (BR8).
+    draft_open: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +98,7 @@ NOTHING: Final = Eligibility(reason=None, offered=False)
 
 
 def first_reason(facts: EligibilityFacts, *, now: datetime) -> Reason | None:
-    """FR9's list, in order, to the first that applies (row 13 comes with Step 7)."""
+    """FR9's list, in order, to the first that applies."""
     return _stopping_reason(facts, now=now) or _access_reason(facts) or _limit_reason(facts)
 
 
@@ -160,4 +164,6 @@ def _limit_reason(facts: EligibilityFacts) -> Reason | None:
         return "limit_reached"
     if facts.in_flight:
         return "already_running"
+    if facts.draft_open:
+        return "draft_open"
     return None

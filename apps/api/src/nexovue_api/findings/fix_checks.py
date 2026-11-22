@@ -5,6 +5,9 @@ UR6, AC10a, AC40, AC47's half; design, *The check run*; plan T4.12, T5.1, T5.2).
   with a linked GitHub account (otherwise the link step comes first).
 - `patch` is **Prepare patch**: a written suggestion that still holds its code; under the
   owner's requirement the person must be linked, since the check asks GitHub about them.
+- `draft` opens the draft's confirm (Step 7): the person must be linked, since GitHub's
+  answer on their write access is about them (D6). **While write access is off in code**
+  (`write_gate.py`, ADR-097) it is refused here, `writes_off`, and no job is added.
 
 One check row per person and purpose. A repeat click while one runs returns the running
 check; a click within 60 seconds of a finished one returns that one (a guess), since each
@@ -26,6 +29,7 @@ from typing import Final
 
 from nexovue_platform.fixes.consent import folder_covered
 from nexovue_platform.fixes.records import (
+    CHECK_FOR_DRAFT,
     CHECK_FOR_PATCH,
     CHECK_FOR_READ,
     CHECK_PASSED,
@@ -35,15 +39,18 @@ from nexovue_platform.fixes.records import (
     FIX_PATCH_DOWNLOADED,
     KIND_SOURCE,
     PROPOSED,
+    WRITES_OFF,
     check_fix_request,
 )
 from nexovue_platform.fixes.sentences import (
     CHECK_EXPIRED,
+    DRAFT_REFUSAL_SENTENCES,
     GENERAL_HAS_NO_CODE,
     LINK_SENTENCE,
     NO_WRITTEN_SUGGESTION,
     PATCH_NOT_PREPARED,
 )
+from nexovue_platform.fixes.write_gate import WriteGo, write_access_on
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,9 +85,13 @@ async def ask_check(
     finding_id: uuid.UUID,
     fix_id: uuid.UUID,
     purpose: str,
+    go: WriteGo | None,
     now: datetime,
 ) -> CheckView:
+    """`go` is `write_gate.WRITE_ACCESS_GO` from the route; only a test passes another."""
     org_id, user_id = identity.org_id, identity.user.id
+    if purpose == CHECK_FOR_DRAFT and not write_access_on(go):
+        raise ConflictError(DRAFT_REFUSAL_SENTENCES[WRITES_OFF], code=WRITES_OFF)
     row = await _source_row(db, org_id=org_id, finding_id=finding_id, fix_id=fix_id)
     if row.state != PROPOSED or row.code_deleted_at is not None:
         sentence = NOT_PROPOSED if purpose == CHECK_FOR_READ else NO_WRITTEN_SUGGESTION
@@ -88,7 +99,8 @@ async def ask_check(
     required = await _owner_requires_access(db, row)
     if purpose == CHECK_FOR_READ and not required:
         raise ConflictError(NOT_REQUIRED, code="not_required")
-    if required and not await _linked(db, org_id=org_id, user_id=user_id):
+    needs_link = required or purpose == CHECK_FOR_DRAFT
+    if needs_link and not await _linked(db, org_id=org_id, user_id=user_id):
         raise ConflictError(LINK_SENTENCE, code=NOT_LINKED_CODE)
     existing: FindingFixCheck | None = await db.scalar(
         select(FindingFixCheck)

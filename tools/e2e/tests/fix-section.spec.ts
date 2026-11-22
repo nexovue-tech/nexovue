@@ -470,3 +470,104 @@ for (const width of WIDTHS) {
     });
   }
 }
+
+// F5 Step 7 (T7.8, AC37d): the draft as shipped (off in code, its sentence in the action's
+// place), the draft confirm with a 60-character host, a 200-character path and a long
+// branch name, and an opened draft, at both widths. Written 2026-11-22; **not run**
+// (hardening pass).
+const LONG_REPOSITORY = `${"acme-".repeat(8)}org/${"checkout-".repeat(6)}service`;
+const LONG_BRANCH = "nexovue/suggestion-0193c3f2-0000-7000-8000-000000000001";
+const draftView = (overrides: Record<string, unknown>) => ({
+  action: null,
+  refusal: null,
+  needs_link: false,
+  link_sentence: null,
+  check: null,
+  confirm: null,
+  failure: null,
+  pull_request_state: null,
+  pull_request_url: null,
+  pull_request_sentence: null,
+  ci_note: null,
+  delete_branch_action: null,
+  ...overrides,
+});
+const STEP_7_STATES: [string, Record<string, unknown>][] = [
+  [
+    "as shipped, with write access off",
+    {
+      proposal: PROPOSAL,
+      patch_action: "Prepare patch",
+      draft: draftView({
+        refusal:
+          "Opening a draft pull request is switched off in this version of Nexovue, until its safety evaluation is done. Download the patch instead.",
+      }),
+    },
+  ],
+  [
+    "with the draft confirm open",
+    {
+      proposal: PROPOSAL,
+      draft: draftView({
+        confirm: {
+          repository: LONG_REPOSITORY,
+          branch: LONG_BRANCH,
+          file_count: 1,
+          line_count: 2,
+          facts: `${LONG_REPOSITORY}, branch ${LONG_BRANCH}: 1 file, 2 lines.`,
+          ci_mode:
+            "Asks GitHub Actions to hold `push` and `pull_request` runs. Other triggers, other CI systems and apps connected to this repository may still run.",
+          warnings: [
+            "This also starts a case on this finding.",
+            "On GitHub this pull request's author is the App, so the person who requested it can approve it. We have not yet shown that a GitHub rule can stop that.",
+            "Your GitHub login is written into the pull request, and stays on GitHub if you leave.",
+            "Write access reaches every repository you installed this App on; Nexovue restricts where drafts open.",
+          ],
+          digest: "a".repeat(64),
+          public: false,
+          note_label: "Why this change (optional, one line)",
+          note_public_confirm: null,
+          action: "Open the draft",
+          expires_at: STARTED,
+        },
+      }),
+    },
+  ],
+  [
+    "opened",
+    {
+      state: "opened",
+      heading: "Draft pull request",
+      sentence: `A draft pull request is open: https://github.com/${LONG_REPOSITORY}/pull/7.`,
+      draft: draftView({
+        pull_request_state: "open",
+        pull_request_url: `https://github.com/${LONG_REPOSITORY}/pull/7`,
+        pull_request_sentence: `A draft pull request is open: https://github.com/${LONG_REPOSITORY}/pull/7.`,
+        ci_note:
+          "Nexovue's commit asked GitHub Actions to wait. Anything pushed since is not tracked here; check GitHub.",
+      }),
+    },
+  ],
+];
+
+for (const width of WIDTHS) {
+  for (const [name, latest] of STEP_7_STATES) {
+    test(`AC37d: the draft ${name} fits ${width} px with its targets`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await signUp(page, newAccount());
+      await stubFinding(page, LINE);
+      await page.route(`**/api/v1/findings/${FINDING_ID}/fixes/source`, (route) =>
+        route.fulfill({ json: proposedSource(latest) }),
+      );
+      await page.goto(`/findings/${FINDING_ID}`);
+      await expect(
+        page.getByRole("heading", { name: String(latest.heading ?? "Suggested fix") }),
+      ).toBeVisible();
+      await fitsTheWindow(page);
+      for (const target of await page.locator("#suggested-fix button").all()) {
+        const box = await target.boundingBox();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(TARGET_PX);
+      }
+    });
+  }
+}

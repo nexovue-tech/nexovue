@@ -603,6 +603,17 @@ def test_f5s_step_4_jobs_are_exactly_what_their_workers_run() -> None:
             "connections",
             CONNECTIONS_INTERACTIVE_QUEUE,
         ),
+        # F5 Step 7: the draft job and Delete this branch (plan T7.5, T7.10).
+        (
+            records.open_fix_pull_request_request(fix_id="f", org_id="o"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
+        (
+            records.delete_fix_branch_request(fix_id="f", org_id="o", requested_by="u"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
     ):
         tasks = registered(TASK_SETS[task_set])
         parameters = inspect.signature(tasks[request.task]).parameters.values()
@@ -612,6 +623,7 @@ def test_f5s_step_4_jobs_are_exactly_what_their_workers_run() -> None:
         assert required <= set(request.kwargs) <= accepted, request.task
     assert "nexovue_scheduler.insight.propose_fix" not in TASK_MODULES
     assert "nexovue_scheduler.connections.fix_check" not in TASK_MODULES
+    assert "nexovue_scheduler.connections.fix_writer" not in TASK_MODULES
     assert records.NOTIFY_REQUESTERS_TASK in registered(TASK_MODULES)
     tree = ast.parse(Path(notify.__file__).read_text(encoding="utf-8"))
     imported = {

@@ -48,6 +48,8 @@ class FixState:
     tokens_out: bool
     released_rule: str | None
     now: datetime
+    # BR8 (Step 7): where the draft holding this finding is, for `draft_open`'s sentence.
+    draft_link: str = "GitHub"
 
 
 async def gather(
@@ -80,6 +82,7 @@ async def gather(
     likely_cause = None if explanation is None else explanation.likely_cause
     released = _released_rule(likely_cause, override=settings.show_held_causes)
     model_input = None if explanation is None else explanation.model_input
+    holder = await fix_queries.holding_draft(session, org_id=org_id, finding_id=finding.id)
     facts = EligibilityFacts(
         hosted=hosted,
         ai_on=connection is not None,
@@ -95,6 +98,7 @@ async def gather(
         tokens_left=not tokens_out,
         tries_used=len(tries),
         in_flight=await fix_queries.in_flight(session, org_id=org_id, finding_id=finding.id),
+        draft_open=holder is not None,
         code_location=access.location is not None,
         read_permission=access.read_permission,
         consent_live=access.consent is not None,
@@ -111,6 +115,7 @@ async def gather(
         tokens_out=tokens_out,
         released_rule=released,
         now=now,
+        draft_link=(None if holder is None else holder.pull_request_url) or "GitHub",
     )
 
 

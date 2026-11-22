@@ -77,6 +77,7 @@ from nexovue_platform.fixes.records import (
     CANDIDATE_SOURCES,
     CODE_DELETED_REASONS,
     CONSENT_WITHDRAWN_REASONS,
+    FIX_BRANCH_PREFIX,
     FIX_CHECK_PURPOSES,
     FIX_CHECK_REASONS,
     FIX_CHECK_STATUSES,
@@ -91,8 +92,11 @@ from nexovue_platform.fixes.records import (
     HINT_MAX_CHARACTERS,
     IN_FLIGHT_STATES,
     MAX_ROUNDS,
+    PULL_REQUEST_STATES,
+    REQUESTER_NOTE_MAX_CHARACTERS,
     RETRY_CODES,
     STATES_WITH_A_REASON,
+    WRITE_FAILURES,
 )
 from nexovue_platform.knowledge import (
     CHUNK_SPLIT_CHARACTERS,
@@ -2382,6 +2386,24 @@ class FindingFix(Base):
     verdict: Mapped[str | None] = mapped_column(Text, nullable=True)
     verdict_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     verdict_at: Mapped[OptionalTimestamp]
+    # The write path (migration 0083, Step 7). Written only behind the founder's go
+    # (`write_gate.py`, ADR-097). The note and the digest are on the deletion list.
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    approved_at: Mapped[OptionalTimestamp]
+    approved_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requester_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requester_note_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    ci_requested_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    ci_requested_at: Mapped[OptionalTimestamp]
+    pull_request_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pull_request_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pull_request_branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pull_request_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pull_request_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ci_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_write_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -2424,6 +2446,18 @@ class FindingFix(Base):
             ["users.org_id", "users.id"],
             ondelete="SET NULL (requested_by)",
             name="fk_finding_fixes_requested_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "approved_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (approved_by)",
+            name="fk_finding_fixes_approved_by",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "ci_requested_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (ci_requested_by)",
+            name="fk_finding_fixes_ci_requested_by",
         ),
         UniqueConstraint("org_id", "id", name="uq_finding_fixes_org_id_id"),
         CheckConstraint(f"kind IN ({_quoted(FIX_KINDS)})", name="kind_is_known"),
@@ -2484,6 +2518,46 @@ class FindingFix(Base):
         ),
         CheckConstraint("explanation_version >= 1", name="explanation_version_counts_from_one"),
         CheckConstraint("tokens_used >= 0", name="tokens_used_count_up"),
+        CheckConstraint(
+            f"pull_request_state IS NULL OR pull_request_state IN ({_quoted(PULL_REQUEST_STATES)})",
+            name="pull_request_state_is_known",
+        ),
+        CheckConstraint(
+            f"last_write_failure IS NULL OR last_write_failure IN ({_quoted(WRITE_FAILURES)})",
+            name="last_write_failure_is_known",
+        ),
+        CheckConstraint(
+            f"requester_note IS NULL OR length(requester_note) <= {REQUESTER_NOTE_MAX_CHARACTERS}",
+            name="requester_note_is_short",
+        ),
+        CheckConstraint(
+            f"pull_request_branch IS NULL OR pull_request_branch = '{FIX_BRANCH_PREFIX}' "
+            "|| id::text",
+            name="branch_is_its_own",
+        ),
+        CheckConstraint(
+            "(pull_request_commit_sha IS NULL OR pull_request_commit_sha ~ '^[0-9a-f]{40}$') "
+            "AND (ci_commit_sha IS NULL OR ci_commit_sha ~ '^[0-9a-f]{40}$')",
+            name="commits_are_shas",
+        ),
+        CheckConstraint(
+            "state <> 'approved' OR (approved_at IS NOT NULL AND approved_digest IS NOT NULL)",
+            name="approved_names_when",
+        ),
+        CheckConstraint(
+            "kind = 'source' OR (approved_at IS NULL AND pull_request_branch IS NULL)",
+            name="only_a_source_row_is_written",
+        ),
+        # BR8: one draft Nexovue can still see, from the moment before `POST /pulls`.
+        Index(
+            "uq_finding_fixes_one_draft",
+            "finding_id",
+            unique=True,
+            postgresql_where=text(
+                "state = 'approved' OR (pull_request_branch IS NOT NULL "
+                "AND (pull_request_state IS NULL OR pull_request_state = 'open'))"
+            ),
+        ),
         Index(
             "uq_finding_fixes_one_working",
             "finding_id",
@@ -2666,6 +2740,46 @@ class ServiceCodeLocation(Base):
             postgresql_nulls_not_distinct=True,
         ),
         Index("ix_service_code_locations_repository", "org_id", "connection_repository_id"),
+    )
+
+
+class FixRepositorySettings(Base):
+    """An owner's per-repository choices for drafts (F5 BR14, D45; migration 0083): "Allow
+    draft pull requests" and "Run CI when a draft opens", each off by default, and when
+    GitHub last refused a draft (ignored after 24 hours, AC27a). Apart from consent, so an
+    ended or withdrawn consent does not lose them. Each change is audited."""
+
+    __tablename__ = "fix_repository_settings"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    connection_repository_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    drafts_allowed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    ci_on_open: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    draft_refused_at: Mapped[OptionalTimestamp]
+    set_by: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    set_at: Mapped[datetime] = mapped_column(TimestampTz, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "connection_repository_id"],
+            ["connection_repositories.org_id", "connection_repositories.id"],
+            ondelete="CASCADE",
+            name="fk_fix_repository_settings_repository",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "set_by"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL (set_by)",
+            name="fk_fix_repository_settings_set_by",
+        ),
     )
 
 

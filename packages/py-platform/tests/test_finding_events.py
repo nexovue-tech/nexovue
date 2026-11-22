@@ -84,6 +84,8 @@ WRITABLE: Final[dict[str, dict[str, Any]]] = {
         "fix_kind": "general",
         "step_count": 2,
     },
+    # F5 Step 7: a suggestion opened as a draft pull request; ids and counts only.
+    "fix_pull_request_opened": {"actor_kind": "system", "fix_id": uuid.uuid4(), "step_count": 1},
 }
 
 
