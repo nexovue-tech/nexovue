@@ -10,8 +10,9 @@ news apart (AC54 to AC56). A service's snooze holds a burn's messages and lets t
 once (AC59). On PagerDuty one problem is one alert (AC27, AC30), and a webhook gets
 everything (AC28).
 
-Rows are decided and claimed a month from now, as the alert suites do, so the stack's
-own deliveries worker never takes them; AC53 runs the real job on real minutes instead.
+The suite runs on a database of its own on the stack's server (`slo_database`): AC53 runs
+the real job on real minutes, which the stack's own sweep would judge beside it. Rows are
+still decided and claimed a month from now, as the alert suites do.
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
@@ -21,7 +22,7 @@ import json
 import os
 import socket
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -40,6 +41,7 @@ from alert_fixtures import (
 from clickhouse_connect.driver.client import Client
 from live import require_stack
 from nexovue_platform.alerts.model import check_subject, service_subject
+from slo_database import engine_on, slo_database
 from slo_rows import minutes, write_service
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -75,6 +77,20 @@ require_stack(
     suite="F19's one-message suite",
     remedy="start the dev stack with `just dev`",
 )
+
+
+@pytest.fixture(scope="module")
+def database() -> Iterator[str]:
+    """This suite's own Postgres, which the stack's sweep never judges (`slo_database`)."""
+    with slo_database() as dsn:
+        yield dsn
+
+
+@pytest.fixture
+async def engine(database: str) -> AsyncIterator[AsyncEngine]:
+    async with engine_on(database) as created:
+        yield created
+
 
 MINUTE: Final = timedelta(minutes=1)
 SERVICE: Final = "checkout"

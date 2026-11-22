@@ -19,12 +19,13 @@ AC62 (the warning waits while building history), AC93 (a burn through a silence 
 once judging resumes), AC94's closing (a stopped source closes a burn after a measured
 day, and says so), and AC104 (a lower rate without a severity change).
 
-The jobs the hand-out (`due_jobs`) gives this test's organization alone are run by name,
-in claim order, as a worker would; they are never added to `jobs`, so the stack's workers
-cannot take them, and the hand-out never reaches another test's organization. A test that
-counts days holds the install's settled minute (`settled_minute`) at its own clock. Each
-test reads that clock when it starts. This suite fails rather than skips when the stack
-is down; see tests/helpers/live.
+The suite runs on a database of its own on the stack's server (`slo_database`), so the
+stack's own sweep, which judges and counts every project's targets on the real clock, never
+judges or counts this suite's. The jobs the hand-out (`due_jobs`) gives this test's
+organization alone are run by name, in claim order, as a worker would; the hand-out never
+reaches another test's organization. A test that counts days holds the database's settled
+minute (`settled_minute`) at its own clock. Each test reads that clock when it starts. This
+suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from __future__ import annotations
 import os
 import socket
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -47,6 +48,7 @@ from live import require_stack
 from nexovue_platform import slo
 from nexovue_platform.jobs import JobRequest
 from settled_minute import settled_minute
+from slo_database import engine_on, slo_database
 from slo_rows import minutes, write_service
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -87,6 +89,19 @@ def slo_store() -> SloStore:
     return connect_store(READER_DSN)
 
 
+@pytest.fixture(scope="module")
+def database() -> Iterator[str]:
+    """This suite's own Postgres, which the stack's sweep never judges (`slo_database`)."""
+    with slo_database() as dsn:
+        yield dsn
+
+
+@pytest.fixture
+async def engine(database: str) -> AsyncIterator[AsyncEngine]:
+    async with engine_on(database) as created:
+        yield created
+
+
 @pytest.fixture
 def now() -> datetime:
     """This test's clock, on the minute, read when it starts."""
@@ -95,8 +110,8 @@ def now() -> datetime:
 
 @pytest.fixture
 async def settled_at_now(engine: AsyncEngine, now: datetime) -> AsyncIterator[None]:
-    """A count reads how far to count from the install's settled minute, which the release
-    suites set hours back while the stack's sweep moves it on: held at this test's clock."""
+    """A count reads how far to count from the install's settled minute, which no sweep
+    moves in this suite's database: held at this test's clock."""
     async with settled_minute(engine) as settle:
         await settle(now)
         yield
@@ -729,25 +744,15 @@ def _traffic(
     write_service(client, tenant, SERVICE, counts)
 
 
-# The incidents `judge_slos` writes are about one target each (`slo:<id>`, its burn and
-# its notices). The dev stack's delivery sweep, which CI runs beside this suite, also
-# files a project's *not being judged* notice under `slo_burn` (`slo-project:<id>:blind`,
-# FR13b): rightly, since these tests judge minutes hours old. It is not this suite's
-# subject (`test_slo_blind_live.py` is), so each read here leaves it out.
-_ABOUT_A_TARGET: Final = "subject_key LIKE 'slo:%'"
-
-
 async def _incidents(engine: AsyncEngine, tenant: AlertTenant) -> list[Any]:
     async with engine.connect() as connection:
         return list(
             await connection.execute(
                 text(
-                    f"""
+                    """
                     SELECT id, subject_key, subject_label, severity, resolved_at, detail,
                            rule_name, is_event
-                    FROM incidents
-                    WHERE org_id = :org_id AND condition_kind = 'slo_burn'
-                      AND {_ABOUT_A_TARGET}
+                    FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn'
                     ORDER BY opened_at, id
                     """
                 ),
@@ -760,11 +765,10 @@ async def _notifications(engine: AsyncEngine, tenant: AlertTenant) -> list[tuple
     async with engine.connect() as connection:
         rows = await connection.execute(
             text(
-                f"""
+                """
                 SELECT n.kind, n.severity FROM notifications n
                 JOIN incidents i ON i.id = n.incident_id
                 WHERE n.org_id = :org_id AND i.condition_kind = 'slo_burn'
-                  AND i.{_ABOUT_A_TARGET}
                 ORDER BY n.created_at, n.id
                 """
             ),
@@ -1411,8 +1415,7 @@ async def test_t5_2_a_burn_s_incident_says_which_service_and_type_it_is_about(
             await connection.execute(
                 text(
                     "SELECT about_key, about_signal, about_endpoint, about_check_id "
-                    "FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn' "
-                    f"AND {_ABOUT_A_TARGET}"
+                    "FROM incidents WHERE org_id = :org_id AND condition_kind = 'slo_burn'"
                 ),
                 {"org_id": project.org_id},
             )
