@@ -19,8 +19,12 @@ AC62 (the warning waits while building history), AC93 (a burn through a silence 
 once judging resumes), AC94's closing (a stopped source closes a burn after a measured
 day, and says so), and AC104 (a lower rate without a severity change).
 
-The jobs `queue_jobs` hands out are read back from `jobs` and run by name, as a worker
-would. This suite fails rather than skips when the stack is down; see tests/helpers/live.
+The jobs the hand-out (`due_jobs`) gives this test's organization alone are run by name,
+in claim order, as a worker would; they are never added to `jobs`, so the stack's workers
+cannot take them, and the hand-out never reaches another test's organization. A test that
+counts days holds the install's settled minute (`settled_minute`) at its own clock. Each
+test reads that clock when it starts. This suite fails rather than skips when the stack
+is down; see tests/helpers/live.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final
@@ -40,6 +45,8 @@ from alert_fixtures import AlertTenant, add_rule
 from clickhouse_connect.driver.client import Client
 from live import require_stack
 from nexovue_platform import slo
+from nexovue_platform.jobs import JobRequest
+from settled_minute import settled_minute
 from slo_rows import minutes, write_service
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -81,12 +88,18 @@ def slo_store() -> SloStore:
 
 
 @pytest.fixture
-async def clean_jobs(engine: AsyncEngine, project: AlertTenant) -> AsyncIterator[None]:
-    yield
-    async with engine.begin() as connection:
-        await connection.execute(
-            text("DELETE FROM jobs WHERE org_id = :org_id"), {"org_id": project.org_id}
-        )
+def now() -> datetime:
+    """This test's clock, on the minute, read when it starts."""
+    return datetime.now(UTC).replace(second=0, microsecond=0)
+
+
+@pytest.fixture
+async def settled_at_now(engine: AsyncEngine, now: datetime) -> AsyncIterator[None]:
+    """A count reads how far to count from the install's settled minute, which the release
+    suites set hours back while the stack's sweep moves it on: held at this test's clock."""
+    async with settled_minute(engine) as settle:
+        await settle(now)
+        yield
 
 
 async def _target(
@@ -130,31 +143,41 @@ async def _target(
     return made
 
 
-async def _run_queued(
-    engine: AsyncEngine, store: SloStore, tenant: AlertTenant, *, now: datetime
-) -> list[str]:
-    """Run, by name and in claim order, every job `queue_jobs` queued for this tenant:
-    history first, as its own queue would finish it before the next minute's judging."""
-    async with engine.begin() as connection:
-        rows = list(
-            await connection.execute(
-                text("DELETE FROM jobs WHERE org_id = :org_id RETURNING task, kwargs, run_after"),
-                {"org_id": tenant.org_id},
-            )
-        )
-    order = {slo.READ_SLO_HISTORY_TASK: 0, slo.COUNT_SLOS_TASK: 1, slo.JUDGE_SLOS_TASK: 2}
+# The order a worker claims a minute's jobs in: history first, as its own queue would
+# finish it before the next minute's judging, then by each job's place in the hand-out.
+_CLAIM_ORDER: Final = {slo.READ_SLO_HISTORY_TASK: 0, slo.COUNT_SLOS_TASK: 1, slo.JUDGE_SLOS_TASK: 2}
+
+
+def _claim_order(request: JobRequest) -> tuple[int, float]:
+    return _CLAIM_ORDER[request.task], request.countdown_seconds
+
+
+async def _due(
+    engine: AsyncEngine, tenant: AlertTenant, settled: datetime, *, now: datetime
+) -> job.DueJobs:
+    """What the hand-out gives this tenant's organization alone."""
+    async with engine.connect() as connection:
+        return await job.due_jobs(connection, settled, now=now, only_org=tenant.org_id)
+
+
+async def _hand_out_and_run(
+    engine: AsyncEngine, store: SloStore, tenant: AlertTenant, settled: datetime, *, now: datetime
+) -> tuple[int, list[str]]:
+    """Run, by name and in claim order, every job the hand-out gives this tenant. Returns
+    the projects it judged and the tasks run."""
+    due = await _due(engine, tenant, settled, now=now)
     ran = []
-    for row in sorted(rows, key=lambda row: (order[row.task], row.run_after)):
-        kwargs: dict[str, Any] = row.kwargs
-        if row.task == slo.READ_SLO_HISTORY_TASK:
+    for request in sorted(due.requests, key=_claim_order):
+        kwargs: dict[str, Any] = request.kwargs
+        if request.task == slo.READ_SLO_HISTORY_TASK:
             await job.read_slo_history(engine, store, uuid.UUID(kwargs["target_id"]), now=now)
-        elif row.task == slo.COUNT_SLOS_TASK:
+        elif request.task == slo.COUNT_SLOS_TASK:
             await job.count_slos(engine, store, uuid.UUID(kwargs["project_id"]), now=now)
         else:
-            settled = datetime.fromisoformat(kwargs["settled_minute"])
-            await job.judge_slos(engine, store, uuid.UUID(kwargs["project_id"]), settled)
-        ran.append(row.task)
-    return ran
+            judged_at = datetime.fromisoformat(kwargs["settled_minute"])
+            await job.judge_slos(engine, store, uuid.UUID(kwargs["project_id"]), judged_at)
+        ran.append(request.task)
+    return due.projects_judged, ran
 
 
 async def _status(engine: AsyncEngine, target_id: uuid.UUID, *, now: datetime) -> slo.Status:
@@ -202,10 +225,6 @@ async def _status(engine: AsyncEngine, target_id: uuid.UUID, *, now: datetime) -
     return slo.status_of(facts)
 
 
-def _now() -> datetime:
-    return datetime.now(UTC).replace(second=0, microsecond=0)
-
-
 # ------------------------------------------------------------------------- AC8
 
 
@@ -226,12 +245,12 @@ async def test_ac8_a_stopped_service_reads_no_recent_requests_never_on_track(
     administrator: Client,
     project: AlertTenant,
     slo_store: SloStore,
-    clean_jobs: None,
+    now: datetime,
+    settled_at_now: None,
     silence: timedelta,
     failures: int,
     figure: str,
 ) -> None:
-    now = _now()
     last = now - silence - MINUTE
     busy = minutes(last - timedelta(minutes=119), 120)
     # 10,000 requests over two hours, with the one failure that makes 99.99%.
@@ -240,13 +259,11 @@ async def test_ac8_a_stopped_service_reads_no_recent_requests_never_on_track(
     write_service(administrator, project, SERVICE, counts)
     target = await _target(engine, project)
 
-    judged = await job.queue_jobs(engine, now - MINUTE, now=now)
-    ran = await _run_queued(engine, slo_store, project, now=now)
+    judged, ran = await _hand_out_and_run(engine, slo_store, project, now - MINUTE, now=now)
     # The next minute: history is read, so its judging finds the stored days.
-    await job.queue_jobs(engine, now, now=now + MINUTE)
-    ran += await _run_queued(engine, slo_store, project, now=now + MINUTE)
+    await _hand_out_and_run(engine, slo_store, project, now, now=now + MINUTE)
 
-    assert judged >= 1 and slo.JUDGE_SLOS_TASK in ran
+    assert judged == 1 and slo.JUDGE_SLOS_TASK in ran
     status = await _status(engine, target, now=now + MINUTE)
     assert status.state is slo.State.NO_RECENT_REQUESTS, (figure, status)
     assert status.quiet_minutes is not None
@@ -257,9 +274,12 @@ async def test_ac8_a_stopped_service_reads_no_recent_requests_never_on_track(
 
 
 async def test_ac66_an_older_minute_never_overwrites_a_newer_status(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    now = _now()
     write_service(administrator, project, SERVICE, {now - 10 * MINUTE: (5, 0)})
     target = await _target(engine, project, history_read_version=1)
 
@@ -275,7 +295,7 @@ async def test_ac66_an_older_minute_never_overwrites_a_newer_status(
 
 
 async def test_ac66_two_overlapping_runs_do_not_both_judge_a_project(
-    engine: AsyncEngine, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine, project: AlertTenant, slo_store: SloStore, now: datetime
 ) -> None:
     await _target(engine, project, history_read_version=1)
     lock = "SELECT pg_advisory_lock(hashtextextended(:key, 0))"
@@ -283,7 +303,7 @@ async def test_ac66_two_overlapping_runs_do_not_both_judge_a_project(
         key = {"key": f"detection:slo-judge:{project.project_id}"}
         await holder.execute(text(lock), key)
         try:
-            assert await job.judge_slos(engine, slo_store, project.project_id, _now()) == 0
+            assert await job.judge_slos(engine, slo_store, project.project_id, now) == 0
         finally:
             await holder.execute(text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"), key)
 
@@ -292,18 +312,11 @@ async def test_ac66_two_overlapping_runs_do_not_both_judge_a_project(
 
 
 async def test_ac64_a_crash_between_commit_and_queueing_is_picked_up_by_the_next_minute(
-    engine: AsyncEngine, project: AlertTenant, clean_jobs: None
+    engine: AsyncEngine, project: AlertTenant, now: datetime
 ) -> None:
     target = await _target(engine, project, definition_version=2, history_read_version=1)
-    await job.queue_jobs(engine, _now(), now=_now())
-    async with engine.connect() as connection:
-        queued = list(
-            await connection.execute(
-                text("SELECT task, kwargs FROM jobs WHERE org_id = :org_id"),
-                {"org_id": project.org_id},
-            )
-        )
-    reads = [row.kwargs for row in queued if row.task == slo.READ_SLO_HISTORY_TASK]
+    due = await _due(engine, project, now, now=now)
+    reads = [each.kwargs for each in due.requests if each.task == slo.READ_SLO_HISTORY_TASK]
     assert reads == [{"target_id": str(target)}]
 
 
@@ -313,8 +326,9 @@ async def test_ac64_a_definition_change_during_a_read_reads_again_under_the_new_
     project: AlertTenant,
     slo_store: SloStore,
     monkeypatch: pytest.MonkeyPatch,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     write_service(administrator, project, SERVICE, {now - timedelta(days=2): (9, 0)})
     target = await _target(engine, project)
     changed = False
@@ -359,11 +373,23 @@ async def test_ac64_a_definition_change_during_a_read_reads_again_under_the_new_
 # ------------------------------------------------------------------------ AC65
 
 
-async def test_ac65_the_project_waiting_longest_is_handed_out_first(
-    engine: AsyncEngine, project: AlertTenant, clean_jobs: None, slo_store: SloStore
+async def _second_project(engine: AsyncEngine, tenant: AlertTenant) -> AlertTenant:
+    """The tenant with another project of the same organization in its place."""
+    project_id = uuid.uuid4()
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO projects (id, org_id, slug, name) "
+                "VALUES (:id, :org_id, 'staging', 'Staging')"
+            ),
+            {"id": project_id, "org_id": tenant.org_id},
+        )
+    return replace(tenant, project_id=project_id)
+
+
+async def _judged_at(
+    engine: AsyncEngine, tenant: AlertTenant, target: uuid.UUID, minute: datetime
 ) -> None:
-    waited = await _target(engine, project, history_read_version=1)
-    now = _now()
     async with engine.begin() as connection:
         await connection.execute(
             text(
@@ -371,31 +397,40 @@ async def test_ac65_the_project_waiting_longest_is_handed_out_first(
                 "VALUES (:id, :org_id, :project_id, :minute)"
             ),
             {
-                "id": waited,
-                "org_id": project.org_id,
-                "project_id": project.project_id,
-                "minute": now - timedelta(days=3650),
+                "id": target,
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "minute": minute,
             },
         )
-    await job.queue_jobs(engine, now, now=now)
-    async with engine.connect() as connection:
-        first = (
-            await connection.execute(
-                text("SELECT org_id FROM jobs WHERE task = :task ORDER BY run_after, id LIMIT 1"),
-                {"task": slo.JUDGE_SLOS_TASK},
-            )
-        ).one()
-    # Ten years unjudged is longer than any other project's wait on this store.
-    assert first.org_id == project.org_id
+
+
+async def test_ac65_the_project_waiting_longest_is_handed_out_first(
+    engine: AsyncEngine, project: AlertTenant, now: datetime
+) -> None:
+    recent = await _second_project(engine, project)
+    await _judged_at(engine, recent, await _target(engine, recent, history_read_version=1), now)
+    waited = await _target(engine, project, history_read_version=1)
+    await _judged_at(engine, project, waited, now - timedelta(days=3650))
+
+    due = await _due(engine, project, now, now=now)
+    judgings = [each for each in due.requests if each.task == slo.JUDGE_SLOS_TASK]
+    first = min(judgings, key=lambda each: each.countdown_seconds)
+
+    assert len(judgings) == 2
+    assert first.kwargs["project_id"] == str(project.project_id)
 
 
 # ------------------------------------------------------------------------ AC48
 
 
 async def test_ac48_status_the_job_stopped_writing_reads_not_up_to_date(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    now = _now()
     write_service(
         administrator,
         project,
@@ -476,9 +511,13 @@ async def _change_what_is_counted(engine: AsyncEngine, target: uuid.UUID, versio
 
 
 async def test_ac7_a_final_day_is_rewritten_only_by_a_definition_change_inside_the_limit(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     today = now.date()
     inside, beyond = today - timedelta(days=10), today - timedelta(days=32)
     await _on_a_paid_plan(engine, project)
@@ -521,9 +560,13 @@ async def test_ac7_a_final_day_is_rewritten_only_by_a_definition_change_inside_t
 
 
 async def test_a_recount_that_changes_nothing_marks_no_day_changed(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     inside = now.date() - timedelta(days=10)
     write_service(
         administrator,
@@ -542,9 +585,13 @@ async def test_a_recount_that_changes_nothing_marks_no_day_changed(
 
 
 async def test_a_count_never_writes_an_older_definition_over_a_newer_day(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     write_service(administrator, project, SERVICE, {now - 30 * MINUTE: (40, 0)})
     target = await _target(engine, project, history_read_version=1)
     async with engine.begin() as connection:
@@ -567,8 +614,9 @@ async def test_ac64_a_change_during_a_read_recounts_final_days_inside_the_limit_
     project: AlertTenant,
     slo_store: SloStore,
     monkeypatch: pytest.MonkeyPatch,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     inside = now.date() - timedelta(days=10)
     write_service(
         administrator,
@@ -731,9 +779,13 @@ def _fast_burn(start: datetime) -> dict[datetime, int]:
 
 
 async def test_ac17_a_fast_burn_fires_critical_and_resolves_ten_minutes_after_no_tier_holds(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -764,9 +816,13 @@ async def test_ac17_a_fast_burn_fires_critical_and_resolves_ten_minutes_after_no
 
 
 async def test_ac18_two_targets_on_one_service_under_one_rule_hold_two_incidents(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -785,11 +841,15 @@ async def test_ac18_two_targets_on_one_service_under_one_rule_hold_two_incidents
 
 
 async def test_ac19_a_slow_burn_opens_a_warning_and_escalates_once_through_the_job(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
     """0.5% failing for a day: only the slow tier holds. Then half failing for five
     minutes: the fast tier holds, and the one incident escalates with one row."""
-    slow = _now() - timedelta(hours=2)
+    slow = now - timedelta(hours=2)
     first = slow - timedelta(hours=25)
     steady = {minute: 1 for minute in minutes(first, 26 * 60) if minute.minute % 2 == 0}
     later = slow + MINUTE * 5
@@ -819,11 +879,15 @@ async def test_ac19_a_slow_burn_opens_a_warning_and_escalates_once_through_the_j
 
 
 async def test_ac104_a_burn_falling_without_a_severity_change_shows_the_lower_rate(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
     """Five minutes on, the fast tier's short window is clean and the medium tier holds
     alone: still critical, at its lower rate."""
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -844,9 +908,13 @@ async def test_ac104_a_burn_falling_without_a_severity_change_shows_the_lower_ra
 
 
 async def test_ac23_a_repeated_or_restarted_judging_writes_no_second_incident_or_row(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -866,11 +934,15 @@ async def test_ac23_a_repeated_or_restarted_judging_writes_no_second_incident_or
 
 
 async def test_ac21_a_restart_in_the_resolving_wait_resumes_it(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
     """The wait is the position in Postgres, so a new process continues it: judged at
     +30 (first minute not holding), then by a fresh store at +40, it resolves at +40."""
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -890,11 +962,15 @@ async def test_ac21_a_restart_in_the_resolving_wait_resumes_it(
 
 
 async def test_ac20_with_every_tier_short_of_coverage_a_burn_does_not_move(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
     """Minutes nexovue lost judge nothing (FR17): no incident opens, the position does
     not move, and the status says since when no tier could judge (FR13b)."""
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -936,9 +1012,13 @@ async def test_ac20_with_every_tier_short_of_coverage_a_burn_does_not_move(
 
 
 async def test_ac93_a_burn_open_through_a_silence_resolves_ten_minutes_after_judging_resumes(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=23)
+    burning = now - timedelta(hours=23)
     _traffic(
         administrator,
         project,
@@ -962,9 +1042,13 @@ async def test_ac93_a_burn_open_through_a_silence_resolves_ten_minutes_after_jud
 
 
 async def test_ac94_a_burn_on_a_stopped_source_closes_after_a_measured_day_and_says_so(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=26)
+    burning = now - timedelta(hours=26)
     _traffic(
         administrator,
         project,
@@ -992,11 +1076,15 @@ async def test_ac94_a_burn_on_a_stopped_source_closes_after_a_measured_day_and_s
 
 
 async def test_ac22_nothing_left_sends_one_warning_to_a_channel_two_rules_name(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
     """With a burn open at that moment. Then not again while it hovers at zero, nor
     within 7 days of the last, and again once back above 5% and run out again."""
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -1063,9 +1151,13 @@ async def test_ac22_nothing_left_sends_one_warning_to_a_channel_two_rules_name(
 
 
 async def test_ac62_while_building_history_the_warning_waits_and_burns_still_judge(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -1141,10 +1233,27 @@ async def _day(engine: AsyncEngine, target: uuid.UUID, day: Any) -> Any:
         ).one()
 
 
+async def _summed_days(engine: AsyncEngine, target: uuid.UUID) -> Any:
+    async with engine.connect() as connection:
+        return (
+            await connection.execute(
+                text(
+                    "SELECT sum(failures) AS failures, sum(excluded_minutes) AS excluded_minutes "
+                    "FROM slo_daily_counts WHERE slo_id = :id"
+                ),
+                {"id": target},
+            )
+        ).one()
+
+
 async def test_ac60_failures_inside_an_exclusion_count_nowhere_fire_nothing_and_come_back(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     burning = now - timedelta(minutes=30)
     _traffic(
         administrator,
@@ -1162,8 +1271,8 @@ async def test_ac60_failures_inside_an_exclusion_count_nowhere_fire_nothing_and_
     await job.judge_slos(engine, slo_store, project.project_id, burning)
     assert [row for row in await _incidents(engine, project) if not row.is_event] == []
     await job.count_slos(engine, slo_store, project.project_id, now=now)
-    today = burning.astimezone(UTC_ZONE).date()
-    counted = await _day(engine, target, today)
+    # Summed over the target's days: run from 00:20 to 00:40, the exclusion spans two.
+    counted = await _summed_days(engine, target)
     assert counted.excluded_minutes == 20
     assert counted.failures == 0
 
@@ -1173,14 +1282,18 @@ async def test_ac60_failures_inside_an_exclusion_count_nowhere_fire_nothing_and_
             {"id": exclusion},
         )
     await job.count_slos(engine, slo_store, project.project_id, now=now + MINUTE)
-    restored = await _day(engine, target, today)
+    restored = await _summed_days(engine, target)
     assert (restored.excluded_minutes, restored.failures) == (0, 5 * (BUSY // 2))
 
 
 async def test_ac102_a_future_exclusion_changes_nothing_until_it_starts(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
+    settled_at_now: None,
 ) -> None:
-    now = _now()
     _traffic(administrator, project, first=now - timedelta(hours=3), count=3 * 60)
     target = await _counted_target(engine, project)
     await job.count_slos(engine, slo_store, project.project_id, now=now)
@@ -1196,9 +1309,12 @@ async def test_ac102_a_future_exclusion_changes_nothing_until_it_starts(
 
 
 async def test_ac60_each_exclusion_sends_one_notice_under_a_muted_rule_with_no_reason(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    now = _now()
     _traffic(administrator, project, first=now - timedelta(hours=2), count=120)
     async with engine.begin() as connection:
         await add_rule(
@@ -1223,9 +1339,12 @@ async def test_ac60_each_exclusion_sends_one_notice_under_a_muted_rule_with_no_r
 
 
 async def test_ac60_with_no_rule_an_exclusion_notice_goes_to_the_owners(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    now = _now()
     _traffic(administrator, project, first=now - timedelta(hours=2), count=120)
     target = await _counted_target(engine, project)
     await _exclude(engine, project, target, now - timedelta(hours=1), now)
@@ -1244,9 +1363,13 @@ async def test_ac60_with_no_rule_an_exclusion_notice_goes_to_the_owners(
 
 
 async def test_ac60_an_exclusion_overlapping_an_open_burn_shows_on_its_incident(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,
@@ -1264,10 +1387,14 @@ async def test_ac60_an_exclusion_overlapping_an_open_burn_shows_on_its_incident(
 
 
 async def test_t5_2_a_burn_s_incident_says_which_service_and_type_it_is_about(
-    engine: AsyncEngine, administrator: Client, project: AlertTenant, slo_store: SloStore
+    engine: AsyncEngine,
+    administrator: Client,
+    project: AlertTenant,
+    slo_store: SloStore,
+    now: datetime,
 ) -> None:
     """Step 5 (T5.2): the job writes what a burn is about, which links and withholding read."""
-    burning = _now() - timedelta(hours=2)
+    burning = now - timedelta(hours=2)
     _traffic(
         administrator,
         project,

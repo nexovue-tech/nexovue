@@ -64,6 +64,27 @@ WHERE NOT EXISTS (
 )
 """
 
+# `ENQUEUE` for a hand-out across organizations, which reads their work and then adds
+# it in a transaction of its own: a job whose organization was deleted in between is
+# left out, as its deletion would have removed it, rather than failing every other
+# organization's job with it. `FOR KEY SHARE` waits out a deletion still in flight, and
+# holds back one that starts later until the hand-out commits.
+ENQUEUE_UNLESS_ORGANIZATION_GONE: Final = """
+INSERT INTO jobs (
+    queue, task, kwargs, org_id, run_after, expires_at,
+    max_attempts, soft_limit_seconds, hard_limit_seconds
+)
+SELECT
+    :queue, :task, CAST(:kwargs AS jsonb), CAST(:org_id AS uuid),
+    now() + make_interval(secs => CAST(:countdown_seconds AS double precision)),
+    now() + make_interval(secs => CAST(:expires_seconds AS double precision)),
+    :max_attempts, :soft_limit_seconds, :hard_limit_seconds
+WHERE CAST(:org_id AS uuid) IS NULL
+   OR EXISTS (
+       SELECT 1 FROM organizations WHERE id = CAST(:org_id AS uuid) FOR KEY SHARE
+   )
+"""
+
 WAKE: Final = "SELECT pg_notify(:channel, :queue)"
 
 

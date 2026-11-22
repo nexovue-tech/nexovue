@@ -27,7 +27,7 @@ from typing import Any, Final
 from nexovue_platform.assistant_records import ASSISTANT_QUEUE
 from nexovue_platform.evidence import INSIGHT_QUEUE
 from nexovue_platform.fixes.records import FIX_QUEUE
-from nexovue_platform.jobs import ENQUEUE, WAKE, JobRequest
+from nexovue_platform.jobs import ENQUEUE, ENQUEUE_UNLESS_ORGANIZATION_GONE, WAKE, JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -167,12 +167,14 @@ async def enqueue(connection: AsyncConnection, request: JobRequest, *, wake: boo
 
 
 async def enqueue_all(engine: AsyncEngine, requests: list[JobRequest]) -> None:
-    """Add jobs together, in one transaction."""
+    """Add a hand-out's jobs together, in one transaction, leaving out any whose
+    organization was deleted since the hand-out read it."""
     if not requests:
         return
+    statement = text(ENQUEUE_UNLESS_ORGANIZATION_GONE)
     async with engine.begin() as connection:
         for request in requests:
-            await enqueue(connection, request)
+            await connection.execute(statement, request.parameters())
 
 
 async def claim(

@@ -34,7 +34,7 @@ from nexovue_platform.ai.testing import FAKE_INPUT_TOKENS, FAKE_OUTPUT_TOKENS
 from nexovue_platform.assistant_records import QUESTION_RESERVATION_TOKENS
 from nexovue_platform.jobs import JobRequest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from structlog.testing import capture_logs
 
 from nexovue_api.roles import ROLES
@@ -181,6 +181,92 @@ async def test_each_job_runs_once_however_many_workers_claim(
 
     assert sorted(_lines(notes), key=int) == [str(number) for number in range(20)]
     assert await _jobs_left(engine, lane) == 0
+
+
+# ------------------------------------------------- a hand-out across organizations
+#
+# A hand-out (beat, the detection and SLO sweeps, baselines, release syncs) reads every
+# organization's work, then adds it in a transaction of its own. An organization deleted
+# in between once failed the whole hand-out for everyone: the stack's beat logged "could
+# not add due jobs" while test tenants were dropped, and F19's suite failed the same way.
+
+
+@pytest.fixture
+async def two_organizations(engine: AsyncEngine) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
+    """Two bare organizations; deleting them takes their jobs."""
+    made = (uuid.uuid4(), uuid.uuid4())
+    async with engine.begin() as connection:
+        for org_id in made:
+            await connection.execute(
+                text("INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'Hand-out')"),
+                {"id": org_id, "slug": f"hand-out-{org_id.hex[:12]}"},
+            )
+    yield made
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM organizations WHERE id = ANY(:ids)"), {"ids": list(made)}
+        )
+
+
+def _hand_out(lane: str, *org_ids: uuid.UUID) -> list[JobRequest]:
+    """A job for each organization, then one for none (install-wide work)."""
+    return [
+        *(JobRequest(task=job_fixtures.NOTE, queue=lane, org_id=str(org)) for org in org_ids),
+        JobRequest(task=job_fixtures.NOTE, queue=lane),
+    ]
+
+
+async def _queued_for(engine: AsyncEngine, lane: str) -> list[uuid.UUID | None]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text("SELECT org_id FROM jobs WHERE queue = :q ORDER BY run_after, created_at"),
+            {"q": lane},
+        )
+        return [row.org_id for row in rows]
+
+
+async def _delete_organization(connection: AsyncConnection, org_id: uuid.UUID) -> None:
+    await connection.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})
+
+
+async def test_an_organization_deleted_before_its_job_is_added_is_left_out_alone(
+    engine: AsyncEngine, lane: str, two_organizations: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    gone, live = two_organizations
+    async with engine.begin() as connection:
+        await _delete_organization(connection, gone)
+
+    await queue.enqueue_all(engine, _hand_out(lane, gone, live))
+
+    assert await _queued_for(engine, lane) == [live, None]
+
+
+async def test_a_hand_out_waits_out_an_organization_deletion_in_flight(
+    engine: AsyncEngine, lane: str, two_organizations: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """The deletion has begun, not committed, when the hand-out adds its jobs: the
+    hand-out waits for it and leaves out what it deleted."""
+    gone, live = two_organizations
+    async with engine.connect() as deleter:
+        await _delete_organization(deleter, gone)
+        deleter_pid = await deleter.scalar(text("SELECT pg_backend_pid()"))
+        adding = asyncio.create_task(queue.enqueue_all(engine, _hand_out(lane, gone, live)))
+        await _until_blocked_by(engine, deleter_pid)
+        await deleter.commit()
+        await asyncio.wait_for(adding, PATIENCE_SECONDS)
+
+    assert await _queued_for(engine, lane) == [live, None]
+
+
+async def _until_blocked_by(engine: AsyncEngine, pid: int) -> None:
+    """Until some session waits on `pid`'s locks, within `PATIENCE_SECONDS`."""
+    waiting = text("SELECT count(*) FROM pg_stat_activity WHERE :pid = ANY(pg_blocking_pids(pid))")
+    deadline = asyncio.get_running_loop().time() + PATIENCE_SECONDS
+    async with engine.connect() as watcher:
+        while not await watcher.scalar(waiting, {"pid": pid}):
+            await watcher.rollback()
+            assert asyncio.get_running_loop().time() < deadline, "the hand-out never waited"
+            await asyncio.sleep(0.05)
 
 
 async def test_a_job_nobody_started_in_time_is_dropped_unrun(

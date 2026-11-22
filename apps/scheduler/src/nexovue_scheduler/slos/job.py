@@ -116,6 +116,7 @@ _PROJECTS_TO_JUDGE: Final = text(
     JOIN project_retention AS live ON live.org_id = t.org_id AND live.project_id = t.project_id
     LEFT JOIN slo_status AS s ON s.org_id = t.org_id AND s.slo_id = t.id
     WHERE t.deleted_at IS NULL
+      AND (CAST(:only_org AS uuid) IS NULL OR t.org_id = CAST(:only_org AS uuid))
     GROUP BY t.org_id, t.project_id
     ORDER BY oldest, t.org_id, t.project_id
     """
@@ -130,6 +131,7 @@ _PROJECTS_TO_COUNT: Final = text(
     JOIN project_retention AS live ON live.org_id = t.org_id AND live.project_id = t.project_id
     JOIN projects AS p ON p.org_id = t.org_id AND p.id = t.project_id
     WHERE t.deleted_at IS NULL AND t.first_event_at IS NOT NULL
+      AND (CAST(:only_org AS uuid) IS NULL OR t.org_id = CAST(:only_org AS uuid))
       AND (
         NOT EXISTS (
             SELECT 1 FROM slo_daily_counts AS today
@@ -159,6 +161,7 @@ _TARGETS_TO_READ: Final = text(
     FROM slo_targets AS t
     JOIN project_retention AS live ON live.org_id = t.org_id AND live.project_id = t.project_id
     WHERE t.deleted_at IS NULL AND t.history_read_version < t.definition_version
+      AND (CAST(:only_org AS uuid) IS NULL OR t.org_id = CAST(:only_org AS uuid))
     ORDER BY t.updated_at, t.id
     """
 )
@@ -199,29 +202,51 @@ def count_request(org_id: object, project_id: object) -> JobRequest:
     )
 
 
-async def queue_jobs(engine: AsyncEngine, settled: datetime, *, now: datetime) -> int:
-    """Queue this minute's SLO work: a judging per project with a live target, the counts
-    that are due, and the history reads that are behind. Returns the projects judged."""
-    keys = {
+@dataclass(frozen=True, slots=True)
+class DueJobs:
+    """One minute's SLO work, in the order it is handed out."""
+
+    projects_judged: int
+    requests: list[JobRequest]
+
+
+async def due_jobs(
+    connection: AsyncConnection,
+    settled: datetime,
+    *,
+    now: datetime,
+    only_org: uuid.UUID | None = None,
+) -> DueJobs:
+    """This minute's SLO work: a judging per project with a live target, the counts that
+    are due, and the history reads that are behind. `only_org` narrows it to one
+    organization, for a test, so a test's hand-out never reaches another test's rows."""
+    scope = {"only_org": only_org}
+    keys = scope | {
         "now": now,
         "recent": now - RECENT_DAYS_DUE_AFTER,
         "older": now - OLDER_DAYS_DUE_AFTER,
         "zone": DEFAULT_TIMEZONE,
     }
-    async with engine.connect() as connection:
-        judged = [
-            ProjectToJudge(row.org_id, row.project_id)
-            for row in await connection.execute(_PROJECTS_TO_JUDGE)
-        ]
-        due = list(await connection.execute(_PROJECTS_TO_COUNT, keys))
-        behind = list(await connection.execute(_TARGETS_TO_READ))
+    judged = [
+        ProjectToJudge(row.org_id, row.project_id)
+        for row in await connection.execute(_PROJECTS_TO_JUDGE, scope)
+    ]
+    due = list(await connection.execute(_PROJECTS_TO_COUNT, keys))
+    behind = list(await connection.execute(_TARGETS_TO_READ, scope))
     requests = [
         *judge_requests(judged, settled),
         *(count_request(row.org_id, row.project_id) for row in due),
         *(slo.history_request(row.org_id, row.id) for row in behind),
     ]
-    await enqueue_all(engine, requests)
-    return len(judged)
+    return DueJobs(projects_judged=len(judged), requests=requests)
+
+
+async def queue_jobs(engine: AsyncEngine, settled: datetime, *, now: datetime) -> int:
+    """Queue every organization's SLO work for this minute. Returns the projects judged."""
+    async with engine.connect() as connection:
+        due = await due_jobs(connection, settled, now=now)
+    await enqueue_all(engine, due.requests)
+    return due.projects_judged
 
 
 # ----------------------------------------------------------------- the targets
