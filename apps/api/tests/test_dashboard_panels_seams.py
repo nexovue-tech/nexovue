@@ -9,9 +9,10 @@ disconnect, a real uvicorn server:
   deadline, ClickHouse answers `TIMEOUT_EXCEEDED` and the panel reads `timed_out`,
   never `refused` or `failed`, and the response is a 200 carrying the panels that read,
   inside the batch's deadline counted from the request's arrival.
-- **AC18.** A client that drops mid-batch: scans not started do not start, and every
-  cap place is free once the statement ends. What ClickHouse did with the running
-  statement is recorded in `system.processes` and printed.
+- **AC18.** A client that drops mid-batch, once its organization's share of places is
+  scanning: scans not started do not start, and every cap place is free once the
+  statement ends. What ClickHouse did with the running statement is recorded in
+  `system.processes` and printed.
 - **AC63.** A statement whose readers have all gone ends on the server within its fixed
   limit plus 1 s, and sooner if `cancel_http_readonly_queries_on_client_close` works.
 """
@@ -43,7 +44,7 @@ from test_dashboard_panels_live import (  # noqa: F401  shared fixtures and help
 from test_findings_cases_live import Team, _team, db  # noqa: F401
 
 from nexovue_api.dashboardpanels import scans, service, shared_reads
-from nexovue_api.dashboardpanels.caps import DASHBOARD_SCANS_PER_PROCESS
+from nexovue_api.dashboardpanels.caps import DASHBOARD_SCANS_PER_PROCESS, ORGANIZATION_SCANS
 from nexovue_api.dashboardpanels.scans import ScanContext
 from nexovue_api.dashboardpanels.shared_reads import (
     TIMEOUT_EXCEEDED,
@@ -52,7 +53,6 @@ from nexovue_api.dashboardpanels.shared_reads import (
     SharedReads,
 )
 from nexovue_api.dashboards.compile import PROJECT_TREND, ScanKey
-from nexovue_api.dashboards.limits import CODE_LIMITS
 from nexovue_api.data.clickhouse.base import TenantScopedRepository, server_error_code
 from nexovue_api.ratelimit.policy import PANEL_READ_DEADLINE_SECONDS
 from nexovue_api.settings import API_PREFIX
@@ -144,6 +144,17 @@ async def _until_none_running(admin: AsyncClient, limit_seconds: float) -> float
     return float("inf")
 
 
+async def _until_running(admin: AsyncClient, count: int, limit_seconds: float) -> None:
+    """Until `count` slow statements run in ClickHouse; fails, saying how many did, after
+    `limit_seconds`."""
+    began = time.monotonic()
+    while (running := await _running(admin)) < count:
+        assert time.monotonic() - began < limit_seconds, (
+            f"{running} of {count} statements running after {limit_seconds} s"
+        )
+        await asyncio.sleep(0.05)
+
+
 # --------------------------------------------------------------------- AC19
 
 
@@ -202,9 +213,11 @@ async def test_ac18_a_client_that_drops_starts_nothing_more_and_frees_every_plac
     reader: AsyncClient,  # noqa: F811
     admin: AsyncClient,
     slow_reader: list[float],
+    stopped_with: list[int | None],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(service, "SHARED_READ_STATEMENT_SECONDS", 6)
+    limit = 6
+    monkeypatch.setattr(service, "SHARED_READ_STATEMENT_SECONDS", limit)
     # Six slow scans: one key per panel, through distinct services' trends read slowly.
     monkeypatch.setitem(scans.READERS, "service_trend", scans.READERS[PROJECT_TREND])
     dashboard = await _dashboard(
@@ -224,20 +237,27 @@ async def test_ac18_a_client_that_drops_starts_nothing_more_and_frees_every_plac
         await asyncio.sleep(0.05)
 
     try:
-        left_at = time.monotonic() + 1.5
-        with pytest.raises(httpx.ReadTimeout):
-            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as leaving:
-                await leaving.get(
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as leaving:
+            reading = asyncio.create_task(
+                leaving.get(
                     f"{API_PREFIX}/dashboard-panels/read",
                     params={
                         "dashboard_id": str(dashboard.id),
                         "project_id": str(acme.project_id),
                         "range": "1h",
                     },
-                    timeout=1.5,
+                    timeout=PANEL_READ_DEADLINE_SECONDS,
                 )
+            )
+            # The client leaves once the batch is mid-scan: its organization's share of
+            # places running in ClickHouse and the rest waiting. Leaving on a fixed clock
+            # instead left before any scan began whenever the machine was busy (CI run 123).
+            await _until_running(admin, ORGANIZATION_SCANS, PANEL_READ_DEADLINE_SECONDS)
+            reading.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reading
         running_after_drop = await _running(admin)
-        ended_after = await _until_none_running(admin, 6 + CANCEL_MARGIN_SECONDS + 2)
+        ended_after = await _until_none_running(admin, limit + CANCEL_MARGIN_SECONDS + 2)
         await asyncio.sleep(0.5)
     finally:
         server.should_exit = True
@@ -247,11 +267,13 @@ async def test_ac18_a_client_that_drops_starts_nothing_more_and_frees_every_plac
         f"AC18: {len(slow_reader)} of 6 scans started; {running_after_drop} statements still "
         f"running just after the client left; none running {ended_after:.1f} s later"
     )
-    # A hosted install holds one organization to 3 of the 5 places, so at most three
-    # start, and the rest wait for a place or a permit; none may start once it has gone.
-    assert 1 <= len(slow_reader) <= CODE_LIMITS.scans_at_once
-    assert all(start < left_at for start in slow_reader), "a scan started after the client left"
-    assert ended_after <= 6 + CANCEL_MARGIN_SECONDS
+    # A hosted install holds one organization to 3 of the 5 places, so three start and
+    # the rest wait for a place or a permit; none may start once the client has gone.
+    assert len(slow_reader) == ORGANIZATION_SCANS, "a scan started after the client left"
+    # Each statement still running when the client left ran to its own fixed limit and no
+    # further: ClickHouse stopped it with TIMEOUT_EXCEEDED, which only that limit answers.
+    assert ended_after < float("inf"), "a statement was still running past its limit"
+    assert stopped_with == [TIMEOUT_EXCEEDED] * ORGANIZATION_SCANS
     reads = app.state.dashboard_reads
     # One organization each, so the hosted share does not hide a place still held.
     places = [
