@@ -9,6 +9,12 @@ workers alone take the jobs its routes and workers add.
 
 The database is created empty, brought to the newest migration by `python -m nexovue_api.setup`
 as a deployment's is, and dropped afterwards with every connection to it.
+
+`setup` also prepares the narrow roles' accounts, and a role belongs to the whole server, not to
+one database. `setup`'s own lock is an advisory lock, which holds within one database only, so
+while `setup` runs here it would not wait for the stack database's suites provisioning the same
+account, and the two would collide on the role's row ("tuple concurrently updated"). So the
+stack database's lock is held for the whole run.
 """
 
 from __future__ import annotations
@@ -24,6 +30,9 @@ from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from nexovue_api import role_accounts
 
 # A bound well past a migration from empty (about 4 s measured on the dev stack, 2026-11-22).
 SETUP_TIMEOUT_SECONDS: Final = 300
@@ -35,6 +44,27 @@ async def _admin(server_dsn: str, statement: str) -> None:
         await connection.execute(statement)
     finally:
         await connection.close()
+
+
+async def _setup_holding_the_server_lock(
+    server_dsn: str, environment: Mapping[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """`setup` on another database, while `server_dsn`'s database holds `setup`'s lock."""
+    engine = create_async_engine(server_dsn.replace("postgresql://", "postgresql+asyncpg://", 1))
+    try:
+        async with engine.begin() as connection:
+            await role_accounts.serialised(connection)
+            return await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, "-m", "nexovue_api.setup"],
+                env=dict(environment),
+                capture_output=True,
+                text=True,
+                timeout=SETUP_TIMEOUT_SECONDS,
+                check=False,
+            )
+    finally:
+        await engine.dispose()
 
 
 def _named(dsn: str, database: str) -> str:
@@ -54,18 +84,12 @@ def private_database(
     asyncio.run(_admin(server_dsn, f'CREATE DATABASE "{name}"'))
     try:
         dsn = _named(server_dsn, name).replace("postgresql://", "postgresql+asyncpg://", 1)
-        prepared = subprocess.run(
-            [sys.executable, "-m", "nexovue_api.setup"],
-            env={
-                **{k: v for k, v in os.environ.items() if not k.startswith(("POSTGRES", "S3_"))},
-                **(environment or {}),
-                "POSTGRES_DSN": dsn,
-            },
-            capture_output=True,
-            text=True,
-            timeout=SETUP_TIMEOUT_SECONDS,
-            check=False,
-        )
+        setup_environment = {
+            **{k: v for k, v in os.environ.items() if not k.startswith(("POSTGRES", "S3_"))},
+            **(environment or {}),
+            "POSTGRES_DSN": dsn,
+        }
+        prepared = asyncio.run(_setup_holding_the_server_lock(server_dsn, setup_environment))
         assert prepared.returncode == 0, f"setup failed:\n{prepared.stdout}\n{prepared.stderr}"
         yield dsn
     finally:

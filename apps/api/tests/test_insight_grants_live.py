@@ -430,8 +430,10 @@ async def test_a_right_given_by_hand_is_taken_back_by_the_next_setup(
 ) -> None:
     """`setup` takes everything away first, so its list is all the account has after it.
     On `dashboards`, which the account suite beside this one never asks about, so a run of
-    both at once cannot see the stray right."""
+    both at once cannot see the stray right. The hand grant takes `setup`'s own lock, so a
+    suite provisioning at the same time cannot collide with it on the catalog."""
     async with engine.begin() as connection:
+        await role_accounts.serialised(connection)
         await connection.execute(text(f"GRANT SELECT, UPDATE ON dashboards TO {INSIGHT_ACCOUNT}"))
 
     assert await insight_account.provision(ASYNC_DSN, say=lambda _line: None)
@@ -458,6 +460,7 @@ async def test_setup_under_an_account_that_cannot_manage_roles_warns_and_goes_on
     account) is refused, and `setup` says what to do instead of failing."""
     probe = f"insight_setup_probe_{uuid.uuid4().hex[:12]}"
     async with engine.begin() as connection:
+        await role_accounts.serialised(connection)
         await connection.execute(text(f"CREATE ROLE {probe} LOGIN PASSWORD 'probe'"))
         # Only so the refusal comes from managing the role, not from the setup's own lock.
         await connection.execute(
@@ -471,6 +474,8 @@ async def test_setup_under_an_account_that_cannot_manage_roles_warns_and_goes_on
         ready = await insight_account.provision(probe_dsn, say=said.append)
     finally:
         async with engine.begin() as connection:
+            # Taking back the probe's right on the lock function rewrites the function's row.
+            await role_accounts.serialised(connection)
             await connection.execute(text(f"DROP OWNED BY {probe}"))
             await connection.execute(text(f"DROP ROLE {probe}"))
 

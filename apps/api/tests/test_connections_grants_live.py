@@ -696,6 +696,8 @@ async def test_setup_under_an_account_that_cannot_manage_roles_warns_and_goes_on
         ready = await connections_account.provision(probe_dsn, say=said.append)
     finally:
         async with engine.begin() as connection:
+            # Taking back the probe's right on the lock function rewrites the function's row.
+            await role_accounts.serialised(connection)
             await connection.execute(text(f"DROP OWNED BY {probe}"))
             await connection.execute(text(f"DROP ROLE {probe}"))
 

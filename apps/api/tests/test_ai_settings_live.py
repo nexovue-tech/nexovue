@@ -35,6 +35,7 @@ from nexovue_platform.import_walk import direct_imports_matching, package_module
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from nexovue_api import role_accounts
 from nexovue_api.ai import service
 from nexovue_api.ai.schemas import SaveConnection
 from nexovue_api.data.postgres.models import (
@@ -978,10 +979,12 @@ async def test_owners_and_admins_are_told_when_the_beat_lock_is_exposed(
 ) -> None:
     """AC43's screen half: shown when the AI account can still take advisory locks, read
     from `has_function_privilege`, and not where `setup`'s revoke held. The grant is made
-    inside this test's transaction and rolled back with it."""
+    inside this test's transaction and rolled back with it, under `setup`'s own lock, since
+    `setup` rewrites the same function's row."""
     held = await service.settings_view(
         db, org_id=tenant.organization.id, may_manage=True, availability=SELF_HOSTED
     )
+    await role_accounts.serialised(await db.connection())
     await db.execute(
         text("GRANT EXECUTE ON FUNCTION pg_try_advisory_lock(bigint) TO nexovue_insight")
     )
