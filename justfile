@@ -157,6 +157,13 @@ fault-bed *args:
 ai-eval *args:
     uv run python tools/ai-eval/run.py {{args}}
 
+# F4 plan Step 4: chat's bed (`run`, `render`, `answers`), against the bed's own Postgres and ClickHouse
+# with no scheduler running. `--fake` tests the harness; a real option is the founder's run after Phase 2,
+# its key in AI_EVAL_KEY. Records and the report stay outside the repository. See tools/ai-eval/chat/bed.py.
+# Run chat's question, injection and cost bed (run, render, answers)
+chat-bed *args:
+    cd tools/ai-eval && uv run --all-packages python -m chat.bed {{args}}
+
 # Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
 # govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
 # dependencies, not the dev tools; pnpm audit reads the console's and SDK's runtime packages, high
