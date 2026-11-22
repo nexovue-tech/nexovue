@@ -241,15 +241,17 @@ async def test_deleting_a_project_takes_its_rules_and_closes_its_incidents(
 
 
 def _backfill_statement() -> str:
-    """Migration 0058's own statement, run here against a project that predates it."""
+    """Migration 0058's own statement, limited to the `:project_id` this test owns.
+
+    Unlimited it would insert for every project in the shared database, and fail when
+    another test's organization is deleted mid-statement.
+    """
     [path] = (Path(__file__).resolve().parents[1] / "migrations" / "versions").glob("0058_*.py")
     spec = importlib.util.spec_from_file_location("revision_0058", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    statement = module.BACKFILL_SLO_RULE_SQL
-    assert isinstance(statement, str)
-    return statement
+    return str(module.backfill_slo_rule_sql(only=" AND projects.id = :project_id"))
 
 
 async def test_an_existing_project_gains_the_reliability_rule_to_its_owners(
@@ -261,7 +263,7 @@ async def test_an_existing_project_gains_the_reliability_rule_to_its_owners(
             AlertRule.project_id == tenant.project.id, AlertRule.name == SLO_RULE_NAME
         )
     )
-    await db.execute(text(_backfill_statement()))
+    await db.execute(text(_backfill_statement()), {"project_id": tenant.project.id})
     [reliability] = [
         rule for rule in await _rules(db, tenant.project.id) if rule.name == SLO_RULE_NAME
     ]

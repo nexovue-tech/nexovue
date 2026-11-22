@@ -77,9 +77,16 @@ _SLO_RULE_CONDITION = '{"kind": "slo_burn", "slo_ids": null, "minimum_severity":
 # FR29: a reason of 10 to 500 characters.
 _REASON_SHORTEST = 10
 _REASON_LONGEST = 500
-# Every live project of a live organization gains the rule, to its owners. A module
-# constant, so `test_alert_defaults_live.py` runs this very statement (AC76).
-BACKFILL_SLO_RULE_SQL = f"""
+
+
+def backfill_slo_rule_sql(*, only: str = "") -> str:
+    """Every live project of a live organization gains the rule, to its owners.
+
+    `only` is an extra condition on `projects`; the migration passes none. A test passes
+    its own project, so it runs this very statement (AC76) without reaching rows of
+    other tests sharing the database.
+    """
+    return f"""
     WITH created AS (
         INSERT INTO alert_rules
             (org_id, project_id, name, condition_kind, condition, is_default)
@@ -87,7 +94,7 @@ BACKFILL_SLO_RULE_SQL = f"""
                CAST('{_SLO_RULE_CONDITION}' AS jsonb), true
         FROM projects
         JOIN organizations ON organizations.id = projects.org_id
-        WHERE projects.deleted_at IS NULL AND organizations.deleted_at IS NULL
+        WHERE projects.deleted_at IS NULL AND organizations.deleted_at IS NULL{only}
           AND NOT EXISTS (
               SELECT 1 FROM alert_rules AS held
               WHERE held.org_id = projects.org_id AND held.project_id = projects.id
@@ -199,7 +206,7 @@ def _create_slo_exclusions() -> None:
 
 def _backfill_the_default_rule() -> None:
     """What project creation now does, for what already exists (FR25)."""
-    op.execute(BACKFILL_SLO_RULE_SQL)
+    op.execute(backfill_slo_rule_sql())
 
 
 def downgrade() -> None:
