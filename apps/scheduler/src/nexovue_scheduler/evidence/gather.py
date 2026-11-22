@@ -227,7 +227,13 @@ async def _gather_locked(
             await _enqueue_retry(engine, finding_id, org_id)
         if follow_up:
             async with engine.begin() as connection:
-                await explained.write(connection, org_id=org_id, finding_id=finding_id, now=now)
+                await explained.write(
+                    connection,
+                    org_id=org_id,
+                    finding_id=finding_id,
+                    now=now,
+                    explanation_version=latest.version,
+                )
         return Gathered(version=None, reads_failed=record.reads_failed, likely_rule=_rule(cause))
     version = 1 if latest is None else latest.version + 1
     decided = wording.decide(
@@ -293,7 +299,13 @@ async def _gather_locked(
                 ),
             )
         if follow_up:
-            await explained.write(connection, org_id=org_id, finding_id=finding_id, now=now)
+            await explained.write(
+                connection,
+                org_id=org_id,
+                finding_id=finding_id,
+                now=now,
+                explanation_version=version,
+            )
     return Gathered(version=version, reads_failed=record.reads_failed, likely_rule=_rule(cause))
 
 

@@ -803,7 +803,7 @@ All arithmetic or guesses. Nothing is measured.
 | `PATCH /case`, assign | `case.assigned` |
 | `PATCH /case`, resolve; `false-alarm`, `new-normal` on a root | `case.resolved` |
 | `PATCH /case`, reopen | `case.reopened` |
-| `POST /notes` | None: the timeline records it, and FD9 keeps audit for what is worth a trail. The note deletion below is audited because it destroys text |
+| `POST /notes` | None for the note: the timeline records it, and FD9 keeps audit for what is worth a trail. A note on a finding with no case starts one, and that is audited as `case.started`. The note deletion below is audited because it destroys text |
 | `DELETE /notes/{id}` | `note.deleted` |
 | `POST /links`, create | `link.issue_requested`, because data leaves to a third party |
 | `POST /links`, reference | `link.added` |
@@ -816,7 +816,7 @@ All arithmetic or guesses. Nothing is measured.
 | `DELETE /connections/{id}` | `connection.deleted` |
 | `PATCH /places/{id}`, allow | `connection.public_repository_allowed` |
 | `PATCH /places/{id}`, withdraw | `connection.public_repository_withdrawn` |
-| `PATCH /places/{id}`, other | `connection.place_changed` |
+| `PATCH /places/{id}`, other | None exists: the route changes only the public allowance, so `connection.place_changed` is not defined until Step 7 (Jira) adds an issue type and transitions |
 | `PUT`, `DELETE /service-repositories` | `service_repository.changed` |
 | `POST /connections/webhook/{id}` | None: it changes no record but when to read next |
 | `sync_connection`, `cases_sweep` | `case.resolved`, `case.reopened`, system actor |

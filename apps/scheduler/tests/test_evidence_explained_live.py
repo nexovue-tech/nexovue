@@ -138,7 +138,11 @@ async def follow_ups(engine: AsyncEngine, tenant: AlertTenant, **where: Any) -> 
 async def write(engine: AsyncEngine, tenant: AlertTenant, finding_id: uuid.UUID, **at: Any) -> int:
     async with engine.begin() as connection:
         return await explained.write(
-            connection, org_id=tenant.org_id, finding_id=finding_id, now=at.get("now", SETTLED)
+            connection,
+            org_id=tenant.org_id,
+            finding_id=finding_id,
+            now=at.get("now", SETTLED),
+            explanation_version=1,
         )
 
 
@@ -301,7 +305,13 @@ async def test_two_gathers_at_once_never_pass_the_cap(
     # channel's lock, the second would count the window before the first committed.
     async with engine.connect() as first:
         await first.begin()
-        await explained.write(first, org_id=acme.org_id, finding_id=racing[0], now=SETTLED)
+        await explained.write(
+            first,
+            org_id=acme.org_id,
+            finding_id=racing[0],
+            now=SETTLED,
+            explanation_version=1,
+        )
         second = asyncio.create_task(write(engine, acme, racing[1]))
         await asyncio.sleep(0.5)
         assert not second.done()

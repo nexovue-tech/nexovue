@@ -32,6 +32,7 @@ from typing import Any, Final
 
 from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 from nexovue_platform.alerts.model import EXPLAINED
+from nexovue_platform.cases import RECORD_FINDING_EVENT_SQL, finding_event_parameters
 from nexovue_platform.detection import FINDING_TOLD_KINDS
 from nexovue_platform.evidence import (
     EXPLAINED_FIRST_SEQUENCE,
@@ -142,10 +143,13 @@ async def write(
     org_id: uuid.UUID,
     finding_id: uuid.UUID,
     now: datetime,
+    explanation_version: int,
 ) -> int:
-    """Write the follow-up for each channel it is owed to, in the caller's transaction.
-    The caller has decided the cause qualifies and the read is after settling. Returns
-    the rows written."""
+    """Write the follow-up for each channel it is owed to, in the caller's transaction,
+    and one `explained` event on the finding's timeline when any row was written (F22
+    FR16, T2.9). The caller has decided the cause qualifies and the read is after
+    settling; `explanation_version` is the version the follow-up rests on. Returns the
+    rows written."""
     finding = (
         await connection.execute(_FINDING, {"org_id": org_id, "finding_id": finding_id, "now": now})
     ).first()
@@ -182,6 +186,18 @@ async def write(
             },
         )
         written += len(inserted.fetchall())
+    if written:
+        await connection.execute(
+            text(RECORD_FINDING_EVENT_SQL),
+            finding_event_parameters(
+                "explained",
+                org_id=org_id,
+                finding_id=finding_id,
+                actor_kind="system",
+                at=now,
+                explanation_version=explanation_version,
+            ),
+        )
     return written
 
 

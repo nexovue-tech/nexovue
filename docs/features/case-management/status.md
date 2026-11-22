@@ -2,18 +2,21 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR. **Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.7; migration 0085, the tracker role's own Postgres account). Step 7 (Jira) is out of Phase 2 (foundation item 32).
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR. **Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.9, and T2.9, which T8.8 found unwritten; migration 0085, the tracker role's own Postgres account; the Design QA list is written and **not run**, it is the founder's). Step 7 (Jira) is out of Phase 2 (foundation item 32).
 
 
 ## Current task
 
-**Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.7; T8.8 and T8.9 not built). Customer
+**Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.9, with T2.9). Customer
 documents, the AI-off case test with a real worker and its CI job, the timeline measured at
 D65's worst shape, the connections end-to-end test with real workers and a credential search,
 the claims check dated 2026-11-22, and the tracker role's own Postgres account
-`nexovue_connections` (migration 0085). Three new open decisions (20 to 22), none blocking the
-commit. Every real-GitHub check stays the founder's after Phase 2 (foundation item 28); Jira is
-out of Phase 2 (foundation item 32), so no `jira.md` was written.
+`nexovue_connections` (migration 0085). Five open decisions (20 to 24), none blocking the
+commit. One test for each timeline event kind and the audit coverage test (T8.8); the first
+found that `explained` was never written, and T2.9 now writes it. The Design QA hand list for
+AC66, AC67 and AC108 is written below and **has not been run: it is the founder's**. Every
+real-GitHub check stays the founder's after Phase 2 (foundation item 28); Jira is out of Phase 2
+(foundation item 32), so no `jira.md` was written.
 
 
 ## Step 8 built, 2026-11-22
@@ -102,6 +105,49 @@ simulated GitHub only. Worktree `wt/f22s8` on `feature/phase-2` at 4ad5d47; own 
     as it. `test_connections_account_live.py` holds the functions to the shared statements and
     proves they never reach another queue.
 
+- **T8.8 (AC70, AC77), and T2.9 found by it.**
+  - **`apps/api/tests/test_finding_event_kinds_live.py`:** 27 tests, one per kind in FR16, each
+    named `test_<kind>_…`; a first test holds the list against the frozen vocabulary (FR16's 27
+    plus F5's two, `fix_proposed` and `fix_pull_request_opened`, whose tests F5's suites hold). Each makes the event happen by the code that
+    writes it, then shows the event, its actor and its fields. A person's acts go through the
+    API's routes and are read back from `GET /findings/{id}/timeline` as a member sees it
+    (kind, `actor_kind`, `actor_id`, `actor_name`, `detail`, a note's words). The job's five
+    kinds go through `detection/events.py`. The tracker's six (`issue_created`, `issue_closed`,
+    `issue_reopened`, `issue_gone`, `issue_moved`, `tracker_write_failed`) go through the real
+    `sync_connection` with a scripted tracker where GitHub would be. `explained` goes through
+    F3's real `gather`. The first half runs in one rolled-back transaction, the second commits
+    and removes its organization. **`new_normal` is the one kind not driven through its route:**
+    the route needs ClickHouse readings (`test_findings_actions_live.py` runs it), so the test
+    reads that the route calls the shared operation and runs the operation.
+  - **`apps/api/tests/test_case_audit_coverage.py`:** reads `findings/router.py`,
+    `connections/router.py` and `connections/test_router.py`, finds every mutating handler, and
+    holds each to `AUDITED` (the entries its work must reach, found through the functions it
+    calls inside `findings/` and `connections/`) or `UNAUDITED` (with `design.md`'s reason, and
+    the test fails if such a route starts writing an F22 entry). A route in neither table fails,
+    as does a table entry for a route that is gone, and a check that the scan finds the same
+    routes the application mounts. Two more rules, for the API's and the scheduler's writers
+    alike: every function that resolves, reopens or starts a case (`_start_case`,
+    `_resolve_root`, `reopen`, `end_case`, the sync's `_reopen`) writes its audit row, and
+    `audit/service.py` never commits or begins a transaction, so an entry joins its act.
+    **What it cannot tell:** that an entry is the right one, or written beside the act it
+    records; the live suites read the rows back for that. The scan reads names, so two functions
+    with one name are both followed, which can only over-report what a route reaches.
+  - **T2.9, the gap.** `explained` was in the frozen vocabulary and nothing wrote it: T2.9 had
+    waited on F3 (founder, 2026-11-07) and was not revisited when F3's `gather.py` landed.
+    `evidence/explained.write` now takes the version the follow-up rests on and writes one
+    `explained` event (system, `explanation_version`) when it wrote any follow-up row, in that
+    transaction; both `gather` call sites pass it, so the settled read of an unchanged version
+    still writes its one event. No migration (the kind and its field are frozen already), no
+    new grant (`scheduler-light` writes `finding_events` as the install's account). Open
+    decision 23.
+  - **Two lines of `design.md`'s *Audit* table were wrong** and are corrected: a note on a
+    finding with no case starts one, and is audited as `case.started`; `connection.place_changed`
+    is not defined, since the route changes only the public allowance (open decision 24).
+- **T8.9.** This section, the plan's *Outcome*, and the Design QA hand list below. **The list
+  has not been run.** AC66, AC67 and AC108 are not claimed: their DOM-order and focus halves
+  are in the suite (`FindingScreen.test.ts`, `ConnectionsScreen.test.ts`), their layout halves
+  are the founder's.
+
 ### The claims check (T8.6), read 2026-11-22
 
 Rivals' pages were read through this session's allowed hosts. **Unreachable, so not re-read:**
@@ -179,12 +225,37 @@ a container; one reading set, not a benchmark.
   (the webhook secret added to a log line, reverted) made the search fail with "the webhook
   secret in worker logs".
 - AI-off: a session held open as `nexovue_insight` made it fail (`ai_sessions: 1`).
+- **Event kinds (T8.8).** `explained`: the test failed before the fix with "the follow-up was
+  owed and no explained event was written" (the first run: `ValueError: not enough values to
+  unpack`), the one real gap. **Every kind, one at a time:** a scratch edit of
+  `RECORD_FINDING_EVENT_SQL` in `nexovue_platform/cases.py` (the one writer all of them use)
+  made it insert nothing for the kind named by an environment variable `MUTE_KIND` and still
+  return an id, so the callers ran on; each of the 27 kinds' own test then failed on "no event of this
+  kind" (all 27 were run, one at a time; the log is in the scratchpad, not the repository).
+  Restored byte for byte (sha256 compared) before any suite ran. One half-way run of the same
+  edit, which returned no id, made the API's kinds fail by 500 instead; that is why the edit
+  was changed, and it is not counted.
+- **Audit coverage (T8.8).** Four scratch edits, each restored byte for byte (sha256 compared):
+  (1) the `link.removed` audit call deleted from `links.remove`: `an_audited_route_reaches_each_entry_it_must_write[remove_issue]`
+  failed; (2) a new `POST` route added to `connections/router.py` with no entry:
+  `every_write_route_is_audited_or_says_why_not` failed; (3) `_audit(... CASE_REOPENED ...)`
+  deleted from `cases.reopen`: `[change_case]` and the function-level rule failed; (4) the
+  `record_audit` call deleted from the scheduler's `case_endings.end_case`: the function-level
+  rule failed.
+
+### Validation run for T8.8 and T8.9
+
+`uv run --no-sync mypy .`: no issues in 1,332 files. `ruff check .` and `ruff format --check .`:
+clean (1,757 files). The combined run of F22's API and scheduler suites (the two new files,
+authorization coverage, audit, findings, cases, links, AI-off, connections, grants, migration
+rules, tenancy structure, the transition parity, F5's audit suite, the explained, gather,
+sweep, detection-events, sync and account suites, and the platform event test), against
+Postgres and ClickHouse of its own: **1,015 passed**, 5 SQLAlchemy warnings. Not run: `just check`, a browser, any real-GitHub step.
 
 ### Not built in Step 8
 
-T8.8 (finding event kinds, audit coverage) and T8.9 (Design QA by hand) are outside this
-step's brief. **No F22 Playwright spec exists**, so none was run; the browser job is
-*Not in this plan*, step L.
+**No F22 Playwright spec exists**, so none was run; the browser job is *Not in this plan*,
+step L. Design QA is by hand, and is the founder's (below).
 
 ### Validation run (read, not inferred)
 
@@ -219,6 +290,140 @@ On the worktree's own stores (Postgres 18 with pgvector, ClickHouse 26.3; migrat
 - A managed Postgres without `CREATEROLE` leaves tracker sync off; setup says so.
 - The `ai-off` CI job and the end-to-end test's worker launcher have not run on GitHub's
   runners.
+
+
+## Design QA hand list (T8.9): the founder's, and not run
+
+**Written 2026-11-22. Nothing below has been run, and no result is recorded.** It is the
+hand list `design.md` (D84) and the plan's *Validation plan* promise, because jsdom has no
+layout: the suite proves DOM order and focus targets, and cannot prove that a line wraps, that
+a page scrolls sideways or that a button is tall enough to press. It owns **AC66, AC67 and
+AC108**; they stay unproved until someone fills in the boxes. Tick a box only after looking at
+the real screen, and write what was seen beside any that fails.
+
+**Set-up.** The seeded development stack (`just dev`) and `docs/features/case-management/demo.md`,
+which makes a case, a note, a recovery and a return; a real browser with its responsive mode
+(or a phone for 375). Widths: **375, 768, 1280 and 1920 px** (the page's two-column break is
+measured on the content area, about 1,024 px, after the 13rem sidebar, so 1280 is two columns
+and 768 is one). Sign in as an owner, a member and a viewer. Make the long text yourself: a
+note holding one 500-character line with no spaces, and a note of 15 short lines.
+
+**How to read "no sideways scroll".** The page itself must not scroll sideways: press the
+arrow keys and drag on a phone, and in devtools check that the document is no wider than the
+window. A table, the diff or a code block may scroll inside its own box, and nothing else may.
+
+### 1. The finding page (AC66, AC67, FR46, NFR7, NFR8)
+
+Open one finding in each state from `design.md`'s state table, at each of the four widths. The
+states that change the layout:
+
+- [ ] No case (open); no case (closed); case, nobody assigned; case, mine; case, someone
+      else's; joined finding; closed joined finding whose root is resolved; resolved; resolved
+      with the signal still open
+- [ ] An earlier case on the service (resolved by a person; ended by itself, with **Reopen that
+      case**); a quiet case exists (FR9)
+- [ ] Issue closed with the signal open (a hold); about to end (idle); about to end (untouched)
+- [ ] A synced link, a failing link, a reference link; no connection as an admin and as a member
+- [ ] A viewer, and a support view (note bodies read "Hidden during support view")
+- [ ] A finding with an empty timeline in a flapping spell, and a case with a flapping joiner
+- [ ] Each panel open: reassign, create an issue, attach an issue, resolve with a synced link
+      (confirmation), delete a note (confirmation), resolve in the feed
+
+For each, at each width:
+
+- [ ] **No sideways scroll** (AC66).
+- [ ] **Order at 375 px**, top to bottom: the sentence; the *Evidence* jump link under it;
+      *The case* actions; *The signal* actions (behind a labelled disclosure only if they need
+      more than one row); one "What moved" line per signal with its current and normal values;
+      the note box; links; the newest **5** timeline rows with **Show earlier**; the full
+      evidence (AC66).
+- [ ] **Order at 1280 px:** work on the left (case actions, signal actions, links, note box,
+      timeline), evidence on the right (*What lines up with this* first, with the last deploy
+      as its first row); *Suggested fix* full width underneath. At 768 px it stacks in the same
+      order as at 375 (`design.md`, *One order, everywhere*).
+- [ ] **Each case action is at least 44 px tall and on its own row** at 375 px, and **Resolve
+      is never next to Reassign** (FR46). Measure one with the browser's inspector.
+- [ ] **The case sentence is whole**: not cut with an ellipsis, and wrapping instead (AC108's
+      page half).
+- [ ] **A 500-character line in a note wraps** inside the page, and a **note over 10 lines
+      collapses** with a way to open it (AC66).
+- [ ] The note box's label and its sentence ("Visible to everyone in your organization. Do not
+      paste secrets.") are visible and not covered; typing in it on a phone does not make the
+      page zoom or jump (the design's guess about iOS, untested).
+- [ ] The timeline shows **5 rows at 375 px and 20 at 1280 px**, a day heading when the date
+      changes, and **Show earlier** adds rows and puts focus on the first new one.
+- [ ] A state is always said in words, never by colour alone (NFR8).
+
+**Tab order matches what is seen (AC67)**, at each width, in at least: no case, mine, resolved,
+and with a panel open:
+
+- [ ] Press Tab from the top and walk the whole page. The focus ring moves down the screen in
+      the order the eye reads, with no jump to something off-screen, hidden or in the other
+      column. At 1280 px it finishes the left column before the right; at 768 and 375 it is
+      one column.
+- [ ] The jump links (*Evidence*, *Fix*) land where they say, and the focus ring follows.
+- [ ] **Focus after an act** lands on the updated case line (the page's own one-line statement)
+      after **Take this**, **Resolve**, **Reopen** and **closing a panel**; after **deleting a
+      note**, on the next timeline row, or on the note box when none is left. Do each with the
+      keyboard, not the mouse, and look where the ring is.
+
+### 2. The feed (AC108, FR21 to FR23)
+
+At each width, in each filter (**All**, **Active cases**, **Assigned to me**, **Resolved
+cases**), with rows in each tier, with the empty state of each filter, and with more than 200
+cases if the seed allows ("Showing the newest 200"):
+
+- [ ] **No sideways scroll.** The *Show* filter fits at 375 px and is usable by touch.
+- [ ] **No case sentence is truncated**: the full sentence, not one quiet line cut short; the
+      title is whole; the case severity is in words.
+- [ ] In the case filters: the **project name** on each row, no sparkline, no "Acked", "Across
+      all your projects" shown, the detection headline hidden; on *All*, a closed finding with
+      an active case keeps its row in its own tier, and a joined finding says "Part of a case",
+      linked.
+- [ ] **Resolve** on a row with no synced link (*Active cases*, *Assigned to me*) is at least 44
+      px tall at 375 px, and a row with a synced link has none.
+- [ ] The warning in the last 14 days before an idle end is whole and not truncated.
+- [ ] Tab order down the rows matches what is seen, and the filter keeps to the address (reload
+      the page; the filter holds).
+
+### 3. `/settings/connections` (AC108)
+
+At each width, in each state the page can show (use the dev stack's switches and the simulated
+GitHub where a state needs a connection; mark any state you could not reach as *not seen*, not
+passed): hosted; connections off; empty; working; failing; needs attention (and the console-wide
+banner on any other page); email off; test running; repositories (a public one with **Allow**
+and the warning, an allowed one with **Withdraw**); the service-to-repository mapping, empty and
+with rows; replace credential; disconnect (with its real counts); each GitHub setup screen
+(starting, abandoned, link not valid, link expired, App made but not installed, no repository
+chosen, first test failed, returning later).
+
+- [ ] **No sideways scroll** (AC108).
+- [ ] **Tables stack** into rows at 375 px (repositories, mapping), and each row keeps every
+      fact it has at 1280 px.
+- [ ] **No sentence is truncated**, including the "What leaves this server" block at the top
+      and every failure sentence.
+- [ ] Buttons (**Test**, **Replace credential**, **Disconnect**, **Allow**, **Withdraw**,
+      **Continue to GitHub**) are at least 44 px tall at 375 px and not beside a destructive one.
+- [ ] Tab order matches what is seen, and a destructive confirmation takes focus and returns it.
+- [ ] The settings rail lists **Connections** for an owner and an admin, and not for a member or
+      a viewer.
+
+### Not on this list
+
+The form post to github.com in a real browser (the page's `form-action` header) and every other
+real-GitHub step are **T3.0**, **T4.8** and **T5.2**, the founder's after Phase 2 (foundation
+item 28). This list is the layout, the order and the focus of screens only.
+
+### Result
+
+| Section | 375 px | 768 px | 1280 px | 1920 px | Run by | Date |
+|---|---|---|---|---|---|---|
+| 1. Finding page | not run | not run | not run | not run | | |
+| 2. Feed | not run | not run | not run | not run | | |
+| 3. `/settings/connections` | not run | not run | not run | not run | | |
+
+The plan's gate *Design QA* stays unticked until this table is filled in and every box above is
+ticked or has its failure written down and decided.
 
 
 ## Step 6 built, 2026-11-11
@@ -893,8 +1098,8 @@ test store only. No Kafka, ClickHouse or object store.
 ## Step 2 built, 2026-11-07
 
 Plan tasks T2.1 to T2.8, T2.10 and T2.11, as written, with the notes below. T2.9
-waits on F3 (founder, 2026-11-07): F3's `evidence/gather.py` is not on the
-branch, and Step 2 is committed without it. **No migration:** every
+waited on F3 (founder, 2026-11-07): F3's `evidence/gather.py` was not on the
+branch, and Step 2 was committed without it. **Built 2026-11-22 with Step 8** (above). **No migration:** every
 column, table and index Step 2 reads was created by 0051. ClickHouse untouched.
 
 - **T2.1, joining at birth.** `project_job._OPEN` sets `root_finding_id` from a
@@ -1165,12 +1370,11 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
-The coordinator commits Step 8. The founder answers open decisions 12 to 22 below, with Steps
-4's and 5's. Then T8.8 and T8.9 (event kinds and audit coverage; Design QA by hand). Step 7
-(Jira) is out of Phase 2. T4.9 measures
-the built container. After Phase 2, the founder runs T3.0, T3.9's hand
-checks and T4.8 against real GitHub and a real browser (foundation item 28). T2.9 waits
-on F3; Step 7 on Atlassian.
+The coordinator commits Step 8. The founder answers open decisions 12 to 24 below, with Steps
+4's and 5's, and runs the Design QA hand list (below). Step 7 (Jira) is out of Phase 2. T4.9
+measures the built container. After Phase 2, the founder runs T3.0, T3.9's hand
+checks and T4.8 against real GitHub and a real browser (foundation item 28). Step 7 waits on
+Atlassian.
 
 
 ## Open decisions
@@ -1201,6 +1405,24 @@ role, so `TO nexovue_connections` cannot be written there. Only an account allow
 roles could make another account of that name, and the install's is the only one. *Option A
 (recommended):* keep it. *Option B:* have `setup` create the policies `TO nexovue_connections`
 after the role, which puts schema objects outside Alembic.
+
+**23. What the `explained` event records (T2.9).** FR16 lists `explained` and says nothing of
+when it is written or what it carries. Built: one event, for the system, whenever
+`explained.write` wrote at least one follow-up row, carrying the number of the explanation
+version the follow-up rests on (`explanation_version`, already in the event's frozen fields). So
+a second channel owed its follow-up by a later read adds a second event. *Option A
+(recommended):* keep it: the timeline shows each time a follow-up went out, and it never shows
+one that did not. *Option B:* one `explained` event per finding however many channels, which
+needs a check for an earlier one. *Option C:* write it whenever a qualifying cause stands, even
+when every channel is off or capped, which says something that was not sent.
+
+**24. `design.md`'s audit table disagreed with the code in two lines (T8.8).** A note on a
+finding with no case starts one, and starting a case is audited (`case.started`), though the
+table said a note writes none; and `connection.place_changed` is not defined, since the places
+route changes only the public allowance. Built: the table is corrected to the code. *Option A
+(recommended):* keep the code. *Option B:* stop auditing the case a note starts, which loses a
+record of who started a case. Jira's issue type and transitions (Step 7, out of Phase 2) would
+bring `place_changed` back if built.
 
 **From Step 6 (2026-11-11).** None blocks the commit; each is built as recommended.
 
