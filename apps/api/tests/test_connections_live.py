@@ -42,6 +42,7 @@ from nexovue_api.connections import places, service
 from nexovue_api.connections.schemas import Availability
 from nexovue_api.data.postgres.models import AuditLogEntry, Connection, ConnectionRepository
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
+from nexovue_api.keys import SEALED_COLUMNS
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -682,6 +683,47 @@ async def test_disconnecting_deletes_every_secret_at_once_and_tells_the_hooks(
             connection_id=connection_id,
             hooks=(),
         )
+
+
+async def test_disconnecting_the_fix_app_deletes_every_sealed_column_a_connection_has(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """FR32 for F5's Fix App, whose converted row also holds its OAuth client secret. The
+    columns are read from the key-rotation list, so a sealed column added to connections
+    later must be cleared here too, or the database refuses the disconnect."""
+    sealed_columns = [
+        column.name.removeprefix("connections.")
+        for column in SEALED_COLUMNS
+        if column.name.startswith("connections.")
+    ]
+    connection_id = uuid.uuid4()
+    db.add(
+        Connection(
+            id=connection_id,
+            org_id=tenant.organization.id,
+            kind="github_fix",
+            state="working",
+            github_app_id=7,
+            github_client_id="Iv1.fixapp",
+            **dict.fromkeys(sealed_columns, b"sealed"),
+        )
+    )
+    await db.flush()
+
+    await service.disconnect(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        connection_id=connection_id,
+        hooks=(),
+    )
+    await db.flush()
+
+    row = await _row(db, connection_id)
+    assert row.state == "disconnected"
+    assert {column: getattr(row, column) for column in sealed_columns} == dict.fromkeys(
+        sealed_columns
+    )
 
 
 async def test_waiting_for_a_test_holds_no_transaction_and_keeps_what_was_loaded(

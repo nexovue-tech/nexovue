@@ -505,6 +505,8 @@ async def disconnect(
         raise NotFoundError(_NO_SUCH_CONNECTION)
     row.state = DISCONNECTED
     row.sealed_credential = row.sealed_webhook_secret = row.sealed_manifest_code = None
+    # F5's Fix App: its OAuth client secret (ADR-082).
+    row.sealed_client_secret = None
     row.setup_state_hash = None
     row.sync_lease_until = None
     # FR32, AC37: every link stops in this transaction and frees its case's synced slot;
