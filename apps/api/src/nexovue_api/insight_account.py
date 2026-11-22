@@ -25,10 +25,8 @@ from nexovue_platform.knowledge import VECTOR_COLUMNS
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 
-from nexovue_api import role_accounts
+from nexovue_api import role_accounts, roles
 from nexovue_api.role_accounts import RoleAccount, Say, function_grants
-
-from nexovue_api import roles
 
 INSIGHT_ACCOUNT: Final = "nexovue_insight"
 PASSWORD_VARIABLE: Final = "POSTGRES_INSIGHT_PASSWORD"
