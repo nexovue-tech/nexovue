@@ -59,6 +59,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-094 — A suggestion's stored code is taken back at every end, through one list](ADR-094-stored-code-is-taken-back-at-every-end-through-one-list.md) — with F5 Step 5, 2026-11-21. Adds a deleted project and a removed member to BR9's ends
 - [ADR-095 — Backups hold no pack, patch or link code, and a restore takes code back again](ADR-095-backups-hold-no-pack-patch-or-link-code-and-a-restore-takes-code-back.md) — with F5 Step 5, 2026-11-21
 - [ADR-096 — A patch is rebuilt by the person's own check run, and a refusal on the same inputs alerts](ADR-096-a-patch-is-rebuilt-by-the-persons-own-check-and-a-refusal-on-the-same-inputs-alerts.md) — with F5 Step 5, 2026-11-21. Settles F5 open decision 52
+- [ADR-097 — Write access is off in code until the founder's recorded go](ADR-097-write-access-is-off-in-code-until-the-founders-recorded-go.md) — with F5 Step 6 (code), 2026-11-22. Builds foundation item 33's switch
+- [ADR-098 — F5's evaluation runs the product's own code at every step](ADR-098-f5s-evaluation-runs-the-products-own-code-at-every-step.md) — with F5 Step 6 (code), 2026-11-22
 - [ADR-088 — A case note is chat's knowledge by copy, gone with its note, inert, and ranked above nexovue's own lines](ADR-088-a-note-is-chat-knowledge-by-copy-and-ranks-above-composed-lines.md) — with F4 Step 7, 2026-11-21. Extends ADR-067 to F22's notes
 
 ## Earlier decisions, 0001–0112

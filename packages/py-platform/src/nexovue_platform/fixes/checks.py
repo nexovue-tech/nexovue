@@ -373,14 +373,14 @@ def _size_rule(files: Sequence[ChangedFile]) -> list[Refusal]:
 
 def _line_rules(changed: ChangedFile) -> list[Refusal]:
     refusals = []
-    known = _addresses_in_file(changed.old_content)
+    known = addresses_in_file(changed.old_content)
     for line_number, line in changed.added_lines():
-        for rule, detail in _added_line_breaks(line, known):
+        for rule, detail in added_line_breaks(line, known):
             refusals.append(Refusal(rule, changed.ref, line=line_number, detail=detail))
     return refusals
 
 
-def _addresses_in_file(content: str) -> frozenset[str]:
+def addresses_in_file(content: str) -> frozenset[str]:
     """K6's "already in that file": each whole address the file held, read anywhere in it,
     and compared case-insensitively, never as part of a longer one (`devil.com` does not
     hold `evil.com`)."""
@@ -391,8 +391,9 @@ def _addresses_in_file(content: str) -> frozenset[str]:
     )
 
 
-def _added_line_breaks(line: str, known_addresses: frozenset[str]) -> list[tuple[Rule, str]]:
-    """K6 to K10 on one added line, with the file before the change."""
+def added_line_breaks(line: str, known_addresses: frozenset[str]) -> list[tuple[Rule, str]]:
+    """K6 to K10 on one added line, with the file before the change. T6.3's replay over
+    real commit history (`tools/ai-eval/fix/replay_rules.py`) runs this same code."""
     found: list[tuple[Rule, str]] = []
     new_addresses = [
         a for a in addresses_in(line, hosts_anywhere=False) if a.casefold() not in known_addresses

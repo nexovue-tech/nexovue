@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -32,6 +31,7 @@ from fix.fixtures import (
     Case,
     load_cases,
     read,
+    run_seeded_test,
 )
 
 CASES = load_cases()
@@ -219,30 +219,6 @@ def test_an_address_already_in_the_file_passes_k6_by_design() -> None:
 # ------------------------------------------------ the seeded tests, run for Python
 
 
-def run_seeded_test(case: Case, root: Path) -> int:
-    folder = root / case.service.folder
-    done = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-c",
-            str(folder / "pytest.ini"),
-            "--rootdir",
-            str(folder),
-            str(root / case.seeded_test),
-        ],
-        cwd=folder,
-        env={"PYTHONPATH": str(folder), "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True,
-        check=False,
-    )
-    return done.returncode
-
-
 PYTHON_CASES = [c for c in CASES if c.service.language == "python"]
 
 
@@ -262,3 +238,12 @@ def test_the_seeded_test_fails_on_the_bug_and_passes_with_the_reference_change(
         text.replace(case.reference_edit.old_text, case.reference_edit.new_text), encoding="utf-8"
     )
     assert run_seeded_test(case, copy) == 0
+
+
+def test_a_seeded_test_past_its_time_is_stopped(tmp_path: Path) -> None:
+    [case] = [c for c in CASES if c.id == "py_stack_average"]
+    copy = tmp_path / "repository"
+    shutil.copytree(REPOSITORY, copy, ignore=shutil.ignore_patterns("__pycache__"))
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_seeded_test(case, copy, timeout=0.001)

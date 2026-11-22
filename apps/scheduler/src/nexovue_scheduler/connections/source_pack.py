@@ -34,7 +34,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from nexovue_platform.cases import RECORD_CASE_AUDIT_SQL, case_audit_parameters
 from nexovue_platform.checks.sealing import ConfiguredKeys, SealError
@@ -78,6 +78,8 @@ from nexovue_scheduler.connections.fix_github import (
     FixEndpoints,
     FixGitHub,
     GitHubFailure,
+    RepositoryFacts,
+    TreeEntry,
 )
 from nexovue_scheduler.connections.store import box
 from nexovue_scheduler.jobs.registry import Retry, attempt, task
@@ -244,7 +246,7 @@ class Ending(Exception):  # noqa: N818 — a way out, carried to the one place t
 
 
 @dataclass(slots=True)
-class _Reading:
+class PackReading:
     builder: PackBuilder
     commit: str
     commit_known: bool
@@ -299,13 +301,13 @@ async def load_fix_row(engine: AsyncEngine, org_id: str, fix_id: str) -> Any | N
 
 
 @dataclass(frozen=True, slots=True)
-class _Context:
+class PackContext:
     path_in_production: str | None
     github_user_id: int | None
     pack_files: list[dict[str, Any]]
 
 
-async def _context(engine: AsyncEngine, row: Any) -> _Context:
+async def _context(engine: AsyncEngine, row: Any) -> PackContext:
     ids = {"org_id": row.org_id}
     async with engine.connect() as connection:
         production = await connection.scalar(
@@ -324,7 +326,7 @@ async def _context(engine: AsyncEngine, row: Any) -> _Context:
             else await connection.scalar(_LINK, {**ids, "user_id": row.requested_by})
         )
         pack = await connection.scalar(_PACK, {**ids, "fix_id": row.id})
-    return _Context(
+    return PackContext(
         path_in_production=production,
         github_user_id=linked,
         pack_files=list(pack or []),
@@ -394,16 +396,16 @@ def fix_client(row: Any, keys: ConfiguredKeys, endpoints: FixEndpoints) -> FixGi
 def _read(
     row: Any,
     consent: _Consent,
-    context: _Context,
+    context: PackContext,
     keys: ConfiguredKeys,
     endpoints: FixEndpoints,
-) -> _Reading:
+) -> PackReading:
     github = fix_client(row, keys, endpoints)
     token = github.read_token(row.github_installation_id, int(row.external_id))
     try:
         if consent.require_github_access:
             check_access(github, token, row.key, context.github_user_id)
-        reader = _Reader(github, token, row.key, row.folder)
+        reader = PackReader(github, token, row.key, row.folder)
         return reader.read(row, consent.owner, context)
     finally:
         github.revoke(token)
@@ -425,7 +427,7 @@ def check_access(github: FixGitHub, token: str, key: str, github_user_id: int | 
 
 
 def folder_files(
-    github: FixGitHub, token: str, key: str, folder: str | None, commit: str
+    github: RepositoryReads, token: str, key: str, folder: str | None, commit: str
 ) -> list[TreeFile]:
     """The folder's files only, at `commit`, walked down by name, so nothing outside can
     match. Repository paths. The pack job and the check run both read through this."""
@@ -441,17 +443,35 @@ def folder_files(
     return [TreeFile(prefix + e.path, e.mode, e.sha, e.size) for e in entries if e.kind == "blob"]
 
 
-class _Reader:
-    """One repository folder, read at one commit, for one job."""
+class RepositoryReads(Protocol):
+    """The Fix App client's read routes that choosing a pack uses. `FixGitHub` is one;
+    the evaluation bed reads its fixture repository from disk through another
+    (`tools/ai-eval/fix/eval_pack.py`), so the bed's packs are chosen by this code."""
 
-    def __init__(self, github: FixGitHub, token: str, key: str, folder: str | None) -> None:
+    def repository(self, token: str, key: str) -> RepositoryFacts: ...
+
+    def head_of(self, token: str, key: str, branch: str) -> str: ...
+
+    def is_ancestor(self, token: str, key: str, commit: str, default_branch: str) -> bool: ...
+
+    def tree_of_commit(self, token: str, key: str, commit: str) -> str: ...
+
+    def tree(self, token: str, key: str, sha: str, *, recursive: bool) -> list[TreeEntry]: ...
+
+    def blob(self, token: str, key: str, sha: str) -> bytes: ...
+
+
+class PackReader:
+    """One repository folder, read at one commit, for one job (and for the bed)."""
+
+    def __init__(self, github: RepositoryReads, token: str, key: str, folder: str | None) -> None:
         self._github = github
         self._token = token
         self._key = key
         self._folder = folder
         self._prefix = f"{folder}/" if folder else ""
 
-    def read(self, row: Any, owner: OwnerLists, context: _Context) -> _Reading:
+    def read(self, row: Any, owner: OwnerLists, context: PackContext) -> PackReading:
         facts = self._github.repository(self._token, self._key)
         head = self._github.head_of(self._token, self._key, facts.default_branch)
         commit, known = head, False
@@ -462,7 +482,7 @@ class _Reader:
         tree = self.subtree(commit)
         builder = PackBuilder(tree={file.path: file for file in tree}, owner=owner)
         index = TreeIndex(self._relative(file.path) for file in tree)
-        reading = _Reading(builder=builder, commit=commit, commit_known=known)
+        reading = PackReading(builder=builder, commit=commit, commit_known=known)
         if row.candidates_from == FROM_MODEL:
             reading.asked = self._asked(row, context, builder, index)
         else:
@@ -489,7 +509,7 @@ class _Reader:
     # ------------------------------------------------------ the first round
 
     def _first_round(
-        self, row: Any, context: _Context, reading: _Reading, index: TreeIndex
+        self, row: Any, context: PackContext, reading: PackReading, index: TreeIndex
     ) -> None:
         builder = reading.builder
         candidates = [c for c in row.path_candidates or [] if isinstance(c, dict)]
@@ -517,8 +537,8 @@ class _Reader:
     def _chosen(
         self,
         candidates: Sequence[dict[str, Any]],
-        context: _Context,
-        reading: _Reading,
+        context: PackContext,
+        reading: PackReading,
         index: TreeIndex,
     ) -> list[tuple[str, Any, dict[str, Any]]]:
         """Each candidate as `(repository path, role, why)`, in order, matched to the tree."""
@@ -574,7 +594,7 @@ class _Reader:
     # ------------------------------------------------- asked-for names (FR15b)
 
     def _asked(
-        self, row: Any, context: _Context, builder: PackBuilder, index: TreeIndex
+        self, row: Any, context: PackContext, builder: PackBuilder, index: TreeIndex
     ) -> set[str]:
         """T3.19: the pack as it stands, then each name the model asked for, checked like a
         stack file. A name matching no file is counted, never kept (AC84). The model's
@@ -641,7 +661,7 @@ def _kept_file(stored: dict[str, Any], tree_file: TreeFile, files_read: Any) -> 
 # ------------------------------------------------------------------ writing it
 
 
-def files_read_of(reading: _Reading, *, round_number: int, earlier: Any) -> dict[str, Any]:
+def files_read_of(reading: PackReading, *, round_number: int, earlier: Any) -> dict[str, Any]:
     """The listing a person reads (design, `files_read`): paths in the tree only, and a
     count of names matching nothing (AC12g)."""
     builder = reading.builder
@@ -682,7 +702,7 @@ def files_read_of(reading: _Reading, *, round_number: int, earlier: Any) -> dict
 
 
 async def _store(
-    engine: AsyncEngine, row: Any, reading: _Reading, consent: _Consent, *, now: datetime
+    engine: AsyncEngine, row: Any, reading: PackReading, consent: _Consent, *, now: datetime
 ) -> str | None:
     builder = reading.builder
     ids = {"org_id": row.org_id, "fix_id": row.id}
@@ -844,7 +864,7 @@ def _brief_matches(
     github = fix_client(row, keys, endpoints)
     token = github.read_token(source.github_installation_id, int(source.external_id))
     try:
-        reader = _Reader(github, token, source.key, source.folder)
+        reader = PackReader(github, token, source.key, source.folder)
         facts = github.repository(token, source.key)
         tree = reader.subtree(github.head_of(token, source.key, facts.default_branch))
     finally:

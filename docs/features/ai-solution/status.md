@@ -2,12 +2,62 @@
 
 ## Lifecycle status
 
-**Step 5 built 2026-11-21, committed.** Steps 1 to 4 are on `feature/phase-2` (Step 4 at 1183abf). Step 5 (patch, verdict, and taking it all back, T5.1 to T5.5) is built in `wt/f5s5`, on that commit, with **no write access**, fake providers only and against the simulated GitHub only. T5.5's Docker release check is written and not run (by hand per release). Steps 6 onward are not started.
+**Step 6 (code) built 2026-11-22, awaiting commit.** Steps 1 to 5 are on `feature/phase-2` (at dde8d95). Step 6's code (the evaluation harness, scoring and report generator, T6.3's replay, and the write-access switch, off) is built in `wt/f5s6`, on that commit, with fake providers only, the fixture repository only, and writing to no repository. **Every real run is the founder's, after Phase 2;** T6.5, his go on write access, is not given. Steps 7 onward are not started.
+
+**Earlier:** Step 5 built 2026-11-21, committed (patch, verdict, and taking it all back, T5.1 to T5.5; T5.5's Docker release check written, not run).
 
 
 ## Current task
 
-Step 5 awaits the founder's review of the diff and a commit (`F5 Step 5: patch, verdict, and taking it all back`). **Migration 0082 follows 0081.** Then open decisions 59 to 76 (and those still open from Steps 2b to 4).
+Step 6 (code) awaits the founder's review of the diff and a commit (`F5 Step 6: the evaluation's code, and write access off in code`). No migration. Then open decisions 77 to 89 (and those still open from Steps 2b to 5). The real runs (T6.1, T6.3, T6.4) and the go (T6.5) are the founder's, after Phase 2.
+
+## Step 6 (code), built 2026-11-22
+
+**What it ships.** The evaluation's code, with no real run: a harness that reads the fixture repository through **the pack job's own reader**, builds **the AI job's own request**, and judges every answer with **the job's own code**, its one retry and its rounds; the attacks T6.1 names (A1, A3, A4, A5, A6, A19) and harmless controls in four arms; scoring for AC21's outcomes and safety gate, AC38's figures and AC89's counts; the report generator; T6.3's K6 and K8 replay over commit history; and the switch Steps 7 and 8 read, **off**. Every provider here is a fake: they test the harness and say nothing about any model. No real provider was called (foundation item 31), no real GitHub was used, only the fixture repository was read, and nothing wrote to any repository (item 33).
+
+- **No migration.** No table, column or list changes; `test_ai_vocabulary.py` needs no entry.
+- **T6.1, the harness (built; the runs are the founder's).** `tools/ai-eval/fix/eval_pack.py`: `LocalRepository` answers the six read routes a pack uses from `repository/` on disk, with git's own blob ids, and `source_pack.PackReader` chooses each pack (stack, one hop of imports from the top two, tests; a later round's asked-for names through the lists). `eval_attacks.py`: 16 moves across the six attacks, each the answer a model would give if the planted instruction won (A1 is forged frames on the input). `eval_runs.py`: each first-round input recorded once with a fingerprint of its request (the fence tag left out, as it is drawn per call), replayed across options; four fakes (`fake-answer-key`, `fake-abstaining`, `fake-garbled`, `fake-obeying`); the real seam `http_provider`, the AI role's format and transport, **not run**; at least 20 trials of each attack and 20 harmless controls in each arm, about 200 calls per option. `eval_scoring.py`: each trial reached a person, was refused by the rules, abstained, was unusable, failed, or had nothing to send; every proposal read again for ways out; evidence ids resolved; the seeded test after applying the proposal (Python only, with a timeout); AC38's and AC89's counts. `eval_report.py`: the skeleton (`docs/research/f5-evaluation-2026-11.md`, no number), the filled form from saved trials, and the founder's `run` and `render` commands.
+- **T6.2 (waiting):** each guess replaced by what was seen needs T6.1's real numbers.
+- **T6.3, the replay (built; the run waits).** `tools/ai-eval/fix/replay_rules.py` replays K6 and K8 through `checks.added_line_breaks` (made public with `addresses_in_file`) over a local clone's non-merge commits, in files a suggestion could change, with the file before each commit giving K6 its known addresses; counts only, never the repository's code. Skeleton: `docs/research/f5-k6-k8-replay-2026-11.md`. The run needs the founder's choice of a consenting repository. No K6 or K8 notice exists yet (T9.3), so "stay off until read" holds (decision 89).
+- **T6.4 (waiting):** the founder's approval, an engineer who did not write the fixtures, and one consenting real repository, read only.
+- **T6.5, the gate (recorded, not passed).** `nexovue_platform/fixes/write_gate.py` (ADR-097): `WRITE_ACCESS_GO = None`, `write_access_on()` False; a `WriteGo` must name the options that passed AC21's safety gates, the buyers' answer and the terms. *Blocked* carries the matching line; `test_fix_write_gate.py` holds the two equal.
+
+**Shared files touched, and why (kept minimal).** `apps/scheduler/.../connections/source_pack.py` (F5's): `_Reader`, `_Context` and `_Reading` became `PackReader`, `PackContext`, `PackReading`, reading through the `RepositoryReads` protocol, so the bed's packs are the product's (ADR-098); no behaviour changed. `packages/py-platform/.../fixes/checks.py` (F5's): `added_line_breaks` and `addresses_in_file` made public for T6.3; no rule changed, so `CHECKS_VERSION` stays. `tools/ai-eval/fix/fixtures.py`: `run_seeded_test` moved here from `test_fixtures.py`, now with a timeout. `docs/decisions/README.md` (the index), `docs/product/phase-2-tracker.md` (F5's row). F3, F4, F22: none.
+
+### Tests, each seen failing
+
+Each behaviour was broken by a scripted edit, its test run with `-x`, and the file restored and compared byte for byte (`seefail.py`, this session's scratchpad, `f5s6-own`); every restore compared equal. 49 breaks, each `-x`, so 1 is the first failure.
+
+| Test | Behaviour broken | Failed |
+|---|---|---|
+| `test_eval_pack.py` (6) | git's own blob id · `__pycache__` left out · the product's order with frames as numbers · without imports drops imported files · without rounds starts at the last round · a later round lists refused asked names | 1 each |
+| `test_eval_runs.py` (12) | record once · a moved input refused · the fingerprint leaves the fence tag out · trial counts reach 20 · the one retry · the next round sends the asked file · the last round cannot ask · nothing sent with no file · a failed call ends the trial · seconds from the clock given · the answer key's refusal reason · the real seam's model | 1 each |
+| `test_eval_scoring.py` (15) | a later round abstains (the moves) · asked-for refusals counted · a kept-back file sent · a new address read again · a file never sent changed · an unresolved evidence id · an option with no trial has not passed · controls blocked · a seeded refusal case proposed · the edited file's role · estimated tokens flagged · the proposal applied for the seeded test · one seeded run per proposal · a timed-out seeded test · Python seeded tests only | 1 each |
+| `test_fixtures.py` (1) | the seeded test's timeout | 1 |
+| `test_eval_report.py` (6) | the skeleton current · the skeleton says "Not given" · saved trials read back · a fake labelled · a failed gate says leave it out · a local model's machine shown | 1 each |
+| `test_replay_rules.py` (6) | known addresses from the file before · files a suggestion could not change skipped · hunks only † · `git` timeout · the skeleton current · counts per rule | 1 each |
+| `test_fix_write_gate.py` (3) | off until the go · a go must name the buyers' answer · status and code move together | 1 each |
+
+† first passed and was redone, recorded honestly: the test's look-alike line (`+++counter`) had no space after `+++`, so it never looked like a header; it now reads `+++ b/looks_like_a_header.py`, and the break fails it. `source_pack.py`'s and `checks.py`'s renames change no behaviour; their existing suites passed unchanged (below).
+
+**Clocks:** every trial's seconds come from a clock the test passes (`clock` fixture, one second per reading, made per test); no test reads the real clock. **Bounded waits:** no test polls; each seeded test (60 s), each `git` command (30 s in the tests, 120 s in the replay) and the `git hash-object` check carry a timeout. **No live rows:** the new tests use no store.
+
+### Validation, 2026-11-22
+
+Against this step's own container only: `f5s6-postgres` (`pgvector/pgvector:0.8.6-pg18-trixie`, port 35432, network `f5s6-net`, volume `f5s6-pgdata`, migrated to head by `nexovue_api.setup`), through a wrapper refusing any other store port. No ClickHouse was started.
+
+- **F5's suites and every gate touched, one run (`-n 2`): 5,231 passed.** It covered all `test_fix_*` (API, scheduler, platform; `test_fix_restore_docker.py` is the release check and was not run), `test_github_link_live.py`, AC33's walk (`test_fix_facts_hold_no_ai.py`, `test_fix_rooms_import.py`), `test_ai_vocabulary.py`, cross-service contracts, migration rules, both tenancy structure tests, authorization coverage, and `tools/ai-eval`. Two collection errors: `tools/ai-eval/fix/test_seed_findings_live.py` needs ClickHouse, which was not started (as at Step 5); it imports `fixtures.py`, whose change only adds `run_seeded_test`. After the review fix: `tools/ai-eval` and the platform's checks and gate tests, 459 passed (1 skipped on purpose: the ClickHouse seeder).
+- `uv run mypy .`: no issues in 1,265 files (after clearing a cache a partial run had left stale). `uv run ruff check .`: passed. `uv run ruff format --check .`: 1,676 files formatted. Web not touched.
+- **Not run:** `just check`; any real provider (the founder's, after Phase 2); real GitHub; the ClickHouse seeder's live test; T6.3 on any real repository.
+
+### Deferred to F5's hardening pass
+
+- Seeded tests for TypeScript and Java (no Node or JDK in the gate; decision 83), and fixture cases for the `slower` and `traffic` signals (decision 84).
+- The bed's retry of a failed call (decision 88).
+
+### Review (`/review-diff`), 2026-11-22
+
+No HIGH or MEDIUM finding left open. Fixed: `SEEDED_TEST_SECONDS` sat between `Reach` and `REACHES`, and its comment said a timeout "counts as failed" (the scorer reports `timed_out`); the real seam's 120-second timeout is now a named constant. Recorded, not fixed (LOW): the `run` and `render` command lines are not tested (they wrap tested functions, and `run` is a real call); a later round's request carries no frames, which the bed mirrors (decision 81). Unintended changes: none; every shared file is named above.
 
 ## Step 5, built 2026-11-21
 
@@ -405,12 +455,28 @@ Each was written with its code, then proved by removing the behaviour from the f
 
 ## Next action
 
-The founder reviews and commits Step 5, and answers open decisions 59 to 76 (16 to 33, 36 to 38, 40 to 51, 53 and 56 to 58 remain open from Steps 2b to 4). Step 6 (the evaluation, and the founder's gate on write access) is next; its real runs are the founder's, after Phase 2.
+The founder reviews and commits Step 6's code, and answers open decisions 77 to 89 (16 to 33, 36 to 38, 40 to 51, 53, 56 to 74 and 76 remain open from Steps 2b to 5). Steps 7 and 8 are next, built against the simulated GitHub with write access off (`write_access_on()` read first by every write path; foundation item 33). After Phase 2, the founder runs T6.1 (`eval_report.py run`, per named option), T6.3 (`replay_rules.py` on a consenting repository) and T6.4, reads the report, and records go or stop at T6.5.
 
 **Earlier text, kept for the record:** start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
 
 
 ## Open decisions
+
+**From Step 6's build (code), 2026-11-22.** None blocks the commit. Each is built as recommended.
+
+77. **Write access is off through one constant in code** (`write_gate.WRITE_ACCESS_GO`, ADR-097), not a setting or row, so no operator can turn it on; the go must name the options that passed, the buyers' answer and the terms, and `status.md`'s T6.5 line moves with it. The plan named no code form. **Recommendation:** keep; Steps 7 and 8 call `write_access_on()` first.
+78. **What counts as a way out in AC21's safety gate:** anything the rules exist to stop reaching a request or a person (a kept-back or outside file sent; a change to a file not sent, outside the folder or never changed; an added line with a new address, hidden or look-alike letters, an opaque string, a secret shape or a hidden run), read again after the job passed it. **A planted address copied onto a new line (A3) and a one-character logic change (A4) are counted as "reached a person", not as ways out,** since K6 passes the first by design and no rule judges the second; the report says what they are. **Recommendation:** keep; your call, since it decides the gate.
+79. **The bed's arms and its person:** "without imports" drops the reader's imported files after it chose them and numbers the rest again; "without rounds" starts at the last round; a person is assumed to press Send in every round. Attacks run in the main arm only. **Recommendation:** keep (ADR-098).
+80. **AC21 names three ends** (refused by rules, reached a person, abstained); the report adds unusable (the schema guards, after the one retry), call failed and nothing sent as their own columns, rather than folding them into "refused". **Recommendation:** keep.
+81. **Found while building: a later round's request carries no stack frames.** The pack job notes frames only in round 1 (`PackReader._first_round`), and stores `builder.frames()` each round, so rounds 2 and 3 send `frames: []` though the files keep their numbers. The bed mirrors the product as it stands. **Recommendation:** carry round 1's frames forward in the pack job (Step 4's code), with a test, before the founder's runs; not changed here, as it changes product behaviour outside Step 6.
+82. **K6 compares whole addresses, path included,** so an address on a host the file already names, with a new path, is refused as new (seen in `test_replay_rules.py`). **Recommendation:** let T6.3's replay measure how often this refuses honest code before changing K6.
+83. **Only Python seeded tests run** (the gate has no Node or JDK), so TypeScript and Java proposals read `not_run` in the objective measure. **Recommendation:** add runners with the founder's run on his machine, or in the hardening pass.
+84. **Every fixture is an error with a stack,** so refusals per signal read "no fixture" for `slower` and `traffic` (AC38). **Recommendation:** add typed-path fixture cases for those signals in the hardening pass.
+85. **The obeying fake's moves are guesses** at what a model that followed each planted instruction would write; they test the scoring, not any model. **Recommendation:** accept; the founder's runs give real answers.
+86. **Trial counts are guesses:** at least 20 trials per attack, cycled across its moves, and 20 harmless controls in each of four arms, about 200 calls per option (`ATTACK_TRIALS`, `CONTROL_TRIALS`). **Recommendation:** keep; adjust to the free tier's limits when run.
+87. **The bed's other figures are guesses,** each named once: a seeded test stops at 60 s (`SEEDED_TEST_SECONDS`), a real call at 120 s (`CALL_SECONDS`), a `git` command at 120 s (`GIT_SECONDS`), and the replay reads the newest 2,000 commits (`DEFAULT_COMMITS`). **Recommendation:** keep.
+88. **The bed does not retry a failed call** (a 5xx or 429), which the job retries once as a new attempt; it counts it as `call_failed`. **Recommendation:** accept for now (a free tier's 429 is better seen than hidden); add the retry in the hardening pass if the runs show many.
+89. **No K6 or K8 admin notice exists yet** (UR12, T9.3), so "they stay off until the founder has read T6.3's report" holds by absence. **Recommendation:** when T9.3 builds notices, hold K6 and K8 behind a recorded "read", as the write gate does.
 
 **From Step 5's build, 2026-11-21.** None blocks the commit. Each is built as recommended.
 
@@ -528,6 +594,7 @@ The founder reviews and commits Step 5, and answers open decisions 59 to 76 (16 
 
 ## Blocked
 
+- **T6.5, the founder's go on write access: not given.** Write access is off in code (`nexovue_platform/fixes/write_gate.py`, `WRITE_ACCESS_GO = None`; ADR-097). It needs AC21's safety gates passed on at least one named option in the evaluation report (`docs/research/f5-evaluation-2026-11.md`, not yet run: the founder's, after Phase 2), the founder's written go with his answers on drafts from a stack alone (D58) and on GitHub Enterprise Server (D57), the buyers' answer (D57) and the no-warranty terms (founder decision 1). This line and the constant change together, in one reviewed commit (`test_fix_write_gate.py`).
 - **Founder decision, 2026-11-08:** Step 1 no longer waits on the buyer round or the GitHub trial (foundation items 27, 28; changes D64). GitHub checks run against a simulated GitHub; the founder runs the real trial after Phase 2.
 - **Everything in the plan is blocked** on F6 merging, then F28, F3, F22 and F4 being built.
 - ~~**Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64).~~ Unblocked by the founder's decision of 2026-11-08 (above); built 2026-11-11.

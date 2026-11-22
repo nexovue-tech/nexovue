@@ -8,6 +8,8 @@ most, a reference change. `test_fixtures.py` holds every case to its own claims.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -22,6 +24,8 @@ LANGUAGES: Final = ("python", "typescript", "java")
 # files, or neither (a person must name it).
 Reach = Literal["stack", "import", "neither"]
 REACHES: Final = ("stack", "import", "neither")
+# How long one seeded test may run before it is stopped (a guess; each takes about 1 s).
+SEEDED_TEST_SECONDS: Final = 60
 # A refusal is right for these, the model's abstain reasons and the job's own codes.
 REFUSAL_REASONS: Final = (
     "not_in_these_files",
@@ -120,3 +124,33 @@ def load_cases(path: Path = CASES_FILE) -> list[Case]:
 
 def read(path: str) -> str:
     return (REPOSITORY / path).read_text(encoding="utf-8")
+
+
+def run_seeded_test(case: Case, root: Path, *, timeout: float = SEEDED_TEST_SECONDS) -> int:
+    """pytest's exit code for `case`'s seeded test in the copy of the repository at `root`:
+    0 passed, 1 failed. Python only: the gate has no Node or JDK. A test still running at
+    `timeout` raises `subprocess.TimeoutExpired`."""
+    if case.service.language != "python":
+        raise ValueError(f"{case.id}: only Python seeded tests run here")
+    folder = root / case.service.folder
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-c",
+            str(folder / "pytest.ini"),
+            "--rootdir",
+            str(folder),
+            str(root / case.seeded_test),
+        ],
+        cwd=folder,
+        env={"PYTHONPATH": str(folder), "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        check=False,
+        timeout=timeout,
+    )
+    return done.returncode
