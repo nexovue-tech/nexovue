@@ -44,13 +44,14 @@ import hashlib
 import hmac
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
 from alert_fixtures import ASYNC_DSN, AlertTenant, postgres_reachable
+from held_jobs import jobs_held
 from live import require_stack
 from nexovue_platform.cases import CASE_IDLE_LIMIT
 from nexovue_platform.checks.sealing import ConfiguredKeys, SealedBox, generate_key, keyring_from
@@ -135,7 +136,16 @@ def github() -> Iterator[FakeGitHub]:
 
 
 @pytest.fixture
-async def world(engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub) -> World:
+async def world(
+    engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub
+) -> AsyncIterator[World]:
+    """The tenant's connection, its every job held from the stack's own connections worker:
+    this suite runs each job itself, and counts the jobs the sweep adds."""
+    with jobs_held(engine, tenant.org_id):
+        yield await _built_world(engine, tenant, github)
+
+
+async def _built_world(engine: AsyncEngine, tenant: AlertTenant, github: FakeGitHub) -> World:
     clock = Clock()
     github.clock = clock.seconds
     # An App and installation of this test's own: the pair is unique across every

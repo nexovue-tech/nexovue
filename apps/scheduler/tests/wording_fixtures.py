@@ -15,10 +15,10 @@ leaves `started`. A test that runs the sweep itself starts its run a few minutes
 well inside `DIED_AFTER`) and sweeps just past that run, so its sweep, which reads every
 organization's rows, never reaches another test's run in flight.
 
-A test that runs a real `gather` and then plays the worker itself holds the jobs that gather
-adds (`hold_added_jobs`). The stack's own `scheduler-insight` claims every due word job within
-a second and, being the hosted service (`NEXOVUE_DEPLOYMENT: hosted`), where AI is off, leaves
-the version `off` before the test's own run.
+A test that runs a real `gather` and then plays the worker itself holds its organization's jobs
+(`held_jobs.jobs_held`). The stack's own `scheduler-insight` claims every due word job within a
+second and, being the hosted service (`NEXOVUE_DEPLOYMENT: hosted`), where AI is off, leaves the
+version `off` before the test's own run.
 """
 
 from __future__ import annotations
@@ -45,15 +45,13 @@ from nexovue_platform.checks.sealing import (
     generate_key,
 )
 from nexovue_platform.evidence.model_facts import SCHEMA_VERSION
-from nexovue_platform.jobs import JobRequest
 from recording_site import RecordingSite, Reply, json_reply, serve_recording_site
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from nexovue_api import insight_account
 from nexovue_scheduler.insight import sweep, transport, word
-from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.probes.addresses import PrivateEndpoints
 
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -73,18 +71,6 @@ ALIASES: Final = {
 # sweep cannot take it first, and far enough that a sweep just past it reaches no other test's
 # run in flight.
 SWEPT_RUN_AGE: Final = timedelta(minutes=3)
-# Who holds a job a test plays the worker for: a name no stack worker claims under.
-TEST_HOLDER: Final = "held-by-a-live-test"
-# Leased until `infinity`, a job never lapses back to the queue while its test runs; the
-# organization's removal deletes it.
-_HOLD: Final = text(
-    """
-    UPDATE jobs SET leased_by = :holder, lease_until = 'infinity'
-    WHERE org_id = CAST(:org_id AS uuid) AND task = :task AND kwargs = CAST(:kwargs AS jsonb)
-      AND leased_by IS NULL
-    RETURNING id
-    """
-)
 
 
 class Killed(BaseException):
@@ -93,29 +79,6 @@ class Killed(BaseException):
 
 def killed(*_: Any, **__: Any) -> transport.Answer:
     raise Killed
-
-
-def hold_added_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every job the code under test adds through `queue.enqueue` is leased to this test in
-    the transaction that adds it, so no stack worker can claim it once it commits. The row
-    keeps its queue, task, arguments and limits, for the test to read."""
-    enqueue = queue.enqueue
-
-    async def held(connection: AsyncConnection, request: JobRequest, *, wake: bool = False) -> None:
-        await enqueue(connection, request, wake=wake)
-        parameters = request.parameters()
-        leased = await connection.execute(
-            _HOLD,
-            {
-                "holder": TEST_HOLDER,
-                "org_id": parameters["org_id"],
-                "task": parameters["task"],
-                "kwargs": parameters["kwargs"],
-            },
-        )
-        assert len(leased.all()) == 1, f"the {request.task} job just added was not found"
-
-    monkeypatch.setattr(queue, "enqueue", held)
 
 
 def just_past(started: datetime) -> datetime:

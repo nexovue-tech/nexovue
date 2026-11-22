@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any, Final
 
@@ -25,11 +26,12 @@ import pytest
 from alert_fixtures import AlertTenant, add_finding, postgres_reachable
 from clickhouse_cleanup import delete_after_run
 from detection_history import CLICKHOUSE_DSN, READER_DSN
+from held_jobs import jobs_held
 from live import require_stack
 from recording_site import RecordingSite
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wording_fixtures import CHAT_PATH, answer, connect, hold_added_jobs, openai_reply, run_word
+from wording_fixtures import CHAT_PATH, answer, connect, openai_reply, run_word
 
 from nexovue_scheduler.evidence.gather import gather
 from nexovue_scheduler.evidence.store import connect_store
@@ -240,30 +242,26 @@ async def _stored(engine: AsyncEngine, finding_id: uuid.UUID) -> Any:
 
 @pytest.fixture
 async def planted(
-    ai_install: AsyncEngine,
-    ai_tenant: AlertTenant,
-    provider_site: RecordingSite,
-    now: datetime,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Any, Any]:
+    ai_install: AsyncEngine, ai_tenant: AlertTenant, provider_site: RecordingSite, now: datetime
+) -> AsyncIterator[tuple[Any, Any]]:
     """The markers planted and gathered, the gather's word job held for the test's own run."""
-    hold_added_jobs(monkeypatch)
-    connected = await connect(ai_install, ai_tenant, provider_site, now=now)
-    start = now - OPENED_BEFORE
-    _plant_telemetry(ai_tenant, start)
-    finding_id = await _plant_records(ai_install, ai_tenant, start)
-    store = connect_store(READER_DSN)
-    await gather(
-        ai_install,
-        store,
-        finding_id=finding_id,
-        org_id=ai_tenant.org_id,
-        reason="opened",
-        deployment="self-hosted",
-        now=now,
-        show_held_causes=True,
-    )
-    return connected, await _stored(ai_install, finding_id)
+    with jobs_held(ai_install, ai_tenant.org_id):
+        connected = await connect(ai_install, ai_tenant, provider_site, now=now)
+        start = now - OPENED_BEFORE
+        _plant_telemetry(ai_tenant, start)
+        finding_id = await _plant_records(ai_install, ai_tenant, start)
+        store = connect_store(READER_DSN)
+        await gather(
+            ai_install,
+            store,
+            finding_id=finding_id,
+            org_id=ai_tenant.org_id,
+            reason="opened",
+            deployment="self-hosted",
+            now=now,
+            show_held_causes=True,
+        )
+        yield connected, await _stored(ai_install, finding_id)
 
 
 async def test_no_planted_marker_reaches_the_bytes_sent_to_the_provider(

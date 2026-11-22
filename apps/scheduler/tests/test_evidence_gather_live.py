@@ -23,6 +23,7 @@ import pytest
 from alert_fixtures import AlertTenant, add_finding, drop_tenant, make_tenant, postgres_reachable
 from clickhouse_cleanup import delete_after_run
 from detection_history import CLICKHOUSE_DSN, READER_DSN
+from held_jobs import jobs_held
 from live import require_stack
 from nexovue_platform.ai.connection import consent_fingerprint
 from nexovue_platform.evidence import (
@@ -36,7 +37,6 @@ from nexovue_platform.evidence import (
 )
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wording_fixtures import hold_added_jobs
 
 from nexovue_scheduler.evidence import gather as gather_module
 from nexovue_scheduler.evidence.gather import gather, lock_key
@@ -477,7 +477,7 @@ PROVIDER_URL = "https://provider.example/v1"
 async def ai_on(engine: AsyncEngine, tenant: AlertTenant, *, call_seconds: int = 45) -> None:
     """An organization's connection, switched on after the whole flow (BR4), its consent real.
     Nothing is ever sent to it: a test whose gather adds a word job holds that job from the
-    stack's own AI role (`hold_added_jobs`), which would otherwise run it first."""
+    stack's own AI role (`jobs_held`), which would otherwise run it first."""
     fingerprint = consent_fingerprint(
         wire_format="openai_chat", base_url=PROVIDER_URL, region=None, key_id=None
     )
@@ -553,39 +553,36 @@ async def gather_as_released(
 
 
 async def test_with_ai_on_a_new_version_waits_for_words_and_adds_one_job_by_name(
-    engine: AsyncEngine,
-    acme: AlertTenant,
-    telemetry: EvidenceStore,
-    monkeypatch: pytest.MonkeyPatch,
+    engine: AsyncEngine, acme: AlertTenant, telemetry: EvidenceStore
 ) -> None:
     """T5.2, AC60: the gather decides `pending`, the first generation, and adds the word job
     in its own transaction, ids only, on the AI role's queue, limited by the connection."""
-    hold_added_jobs(monkeypatch)
-    await ai_on(engine, acme, call_seconds=45)
-    found = await open_finding(engine, acme)
-    await signed_deploy(engine, acme, at=START - timedelta(minutes=4))
+    with jobs_held(engine, acme.org_id):
+        await ai_on(engine, acme, call_seconds=45)
+        found = await open_finding(engine, acme)
+        await signed_deploy(engine, acme, at=START - timedelta(minutes=4))
 
-    await gather_as_released(engine, None, acme, found)
+        await gather_as_released(engine, None, acme, found)
 
-    [row] = await wordings(engine, acme, found)
-    assert (row.wording_state, row.wording_generation) == ("pending", 1)
-    [job] = await word_jobs(engine, acme)
-    assert job.queue == INSIGHT_QUEUE and job.hard_limit_seconds == 45 + 40
-    assert job.kwargs == {
-        "explanation_id": str(row.id),
-        "org_id": str(acme.org_id),
-        "generation": 1,
-        "requested_by": None,
-    }
+        [row] = await wordings(engine, acme, found)
+        assert (row.wording_state, row.wording_generation) == ("pending", 1)
+        [job] = await word_jobs(engine, acme)
+        assert job.queue == INSIGHT_QUEUE and job.hard_limit_seconds == 45 + 40
+        assert job.kwargs == {
+            "explanation_id": str(row.id),
+            "org_id": str(acme.org_id),
+            "generation": 1,
+            "requested_by": None,
+        }
 
-    # AC56: a version that changes only absences is not material, but over `pending` it
-    # gets its own job, so it never stays pending once the older job stops.
-    await gather_as_released(engine, telemetry, acme, found, now=NOW + timedelta(minutes=1))
+        # AC56: a version that changes only absences is not material, but over `pending` it
+        # gets its own job, so it never stays pending once the older job stops.
+        await gather_as_released(engine, telemetry, acme, found, now=NOW + timedelta(minutes=1))
 
-    rows = await wordings(engine, acme, found)
-    assert [(r.version, r.wording_state) for r in rows] == [(1, "pending"), (2, "pending")]
-    jobs = await word_jobs(engine, acme)
-    assert [job.kwargs["explanation_id"] for job in jobs] == [str(r.id) for r in rows]
+        rows = await wordings(engine, acme, found)
+        assert [(r.version, r.wording_state) for r in rows] == [(1, "pending"), (2, "pending")]
+        jobs = await word_jobs(engine, acme)
+        assert [job.kwargs["explanation_id"] for job in jobs] == [str(r.id) for r in rows]
 
 
 async def test_while_causes_are_held_or_on_the_hosted_service_no_wording_job_is_added(
