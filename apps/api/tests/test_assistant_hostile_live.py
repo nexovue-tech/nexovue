@@ -12,7 +12,7 @@ Held:
   read record, the count tables, `ai_runs` and `ai_usage_monthly` may change. Anything else
   fails. ClickHouse's row counts must not change. The running stack and the other test files
   write their own organizations' rows meanwhile, so a table that reaches an organization is
-  read for this test's two, and five of the stack's own clocks are left out (`STACK_CLOCKS`).
+  read for this test's two, and six of the stack's own clocks are left out (`STACK_CLOCKS`).
 - **AC9.** Another organization's finding, project and service never reach the provider.
 
 The rows are committed, since the API and the worker each use their own connections; each
@@ -82,7 +82,9 @@ ALLOWED_TABLES: Final = frozenset(
 # this test's every minute, with no question asked. The loop's role has no grant on it, and
 # no API route writes it. `intake_refusals` is the receiver's count of what it refused per
 # minute for want of a broker (F6, C5): keyed by receiver, written only by the receiver and
-# the scheduler's own tests, pruned by the expiry sweep.
+# the scheduler's own tests, pruned by the expiry sweep. `fix_sweep_status` (migration 0086)
+# has no organization either: the stack's `sweep_fixes` records the end of each pass in it
+# every minute, and the loop's role has no grant on it (measured on the dev stack, 2026-11-22).
 STACK_CLOCKS: Final = frozenset(
     {
         "alert_evaluation_status",
@@ -90,6 +92,7 @@ STACK_CLOCKS: Final = frozenset(
         "usage_ingest_offsets",
         "detection_project_runs",
         "intake_refusals",
+        "fix_sweep_status",
     }
 )
 MESSAGE_COLUMNS_WRITTEN: Final = frozenset(
