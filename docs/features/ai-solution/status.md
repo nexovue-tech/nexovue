@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Step 6 (code) built 2026-11-22, awaiting commit.** Steps 1 to 5 are on `feature/phase-2` (at dde8d95). Step 6's code (the evaluation harness, scoring and report generator, T6.3's replay, and the write-access switch, off) is built in `wt/f5s6`, on that commit, with fake providers only, the fixture repository only, and writing to no repository. **Every real run is the founder's, after Phase 2;** T6.5, his go on write access, is not given. Steps 7 onward are not started.
+**Step 6 (code) built 2026-11-22, committed.** Steps 1 to 5 are on `feature/phase-2` (at dde8d95). Step 6's code (the evaluation harness, scoring and report generator, T6.3's replay, and the write-access switch, off) is built in `wt/f5s6`, on that commit, with fake providers only, the fixture repository only, and writing to no repository. **Every real run is the founder's, after Phase 2;** T6.5, his go on write access, is not given. Steps 7 onward are not started.
 
 **Earlier:** Step 5 built 2026-11-21, committed (patch, verdict, and taking it all back, T5.1 to T5.5; T5.5's Docker release check written, not run).
 
