@@ -32,6 +32,9 @@ import {
   webhookUrl,
 } from "./deploys-api";
 
+/** The section's anchor: the links that name it end in `#deploys`. */
+export const DEPLOYS_ANCHOR = "deploys";
+
 /**
  * Project settings, *Deploys* (F28 FR1, design *Project settings*): the URL CI posts
  * to, the secrets that sign for it, the recipes, and what last arrived. Shown only to
@@ -45,7 +48,7 @@ export function DeploysSection({ projectId }: { projectId: string }) {
   const settings = useDeploySettings(projectId, openedAt);
 
   return (
-    <section id="deploys" className="flex flex-col gap-5">
+    <section id={DEPLOYS_ANCHOR} className="flex flex-col gap-5">
       <div className="max-w-2xl">
         <h3 className="font-medium font-serif text-ink text-base tracking-tight">Deploys</h3>
         <p className="mt-1 text-ink-dim text-sm leading-relaxed">
