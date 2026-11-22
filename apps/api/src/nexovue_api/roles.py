@@ -19,6 +19,8 @@ CONSOLE_FILES: Final = Path("/srv/web")
 ROLES: Final[dict[str, list[str]]] = {
     # `--no-access-log` (F4, AC65): uvicorn's access line carries the query string, where a
     # chat tool's search phrase travels; `middleware/request_log.py` records each request.
+    # The app's logging setup silences that line too: uvicorn applies this flag before it
+    # imports the app, so the flag alone holds only where the app is imported first.
     "api": [
         *("uvicorn", "nexovue_api.main:app", "--host", "0.0.0.0", "--port", "8000"),
         "--no-access-log",
