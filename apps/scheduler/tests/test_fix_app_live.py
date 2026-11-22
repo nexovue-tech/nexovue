@@ -42,7 +42,9 @@ require_stack(
 
 @pytest.fixture
 def now() -> datetime:
-    return datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+    """This test's clock, read when it starts: the stack's own sweep reads the real clock,
+    so a row dated in the past is one it may expire or end under the test."""
+    return datetime.now(UTC).replace(microsecond=0)
 
 
 @pytest.fixture
