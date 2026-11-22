@@ -8,8 +8,11 @@ The customer-facing guide is [`docs/self-hosting/backup.md`](../self-hosting/bac
 
 1. `deploy/backup/backup.sh` — `pg_dump` (custom format, zstd), ClickHouse `BACKUP DATABASE`, a manifest
    of row counts, schema versions and ingest watermarks. The Postgres counts and revision are read
-   out of `postgres.dump` itself, so they are exact while the stack runs; the ClickHouse counts are
-   read live after the backup and are exact only without ingest
+   out of `postgres.dump` itself, and the ClickHouse counts and schema version out of
+   `clickhouse.zip` (opened read-only as a `Backup` database; the tables FINAL cannot read in place
+   and `schema_migrations` are restored into a scratch database, which costs their size in disk
+   until the backup ends), so they are exact while the stack runs. Only the watermark lines are
+   live, and are never compared
    ([backup-manifest-counts](../changes/backup-manifest-counts/bug.md));
 2. the bundled object store's bucket as `bucket.tar` (`nexovue backup bucket-export`);
 3. `SHA256SUMS` over all of it;

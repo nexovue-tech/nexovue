@@ -17,6 +17,9 @@ None.
   of `postgres.dump` itself (`pg_dump_rows` in `common.sh`).
 - Regression test `apps/api/tests/test_backup_manifest_live.py`, seen failing and then passing.
 
+- ClickHouse's `ch.*` counts and `clickhouse_schema_version` read from `clickhouse.zip` (`ch_backup_open`
+  in `common.sh`, used by `backup.sh`), with a regression test seen failing, 2026-11-22.
+
 ## Next action
 
 Founder reviews the diff. Once it is on the branch, push and read the `insight-fence` run: AC46's
@@ -24,17 +27,8 @@ verify should pass, and what follows it (the grant check, the AI account suites)
 
 ## Open decisions
 
-- **ClickHouse has the same flaw, and it is not fixed here.** `ch.*` counts are still read live after
-  `BACKUP DATABASE`. Under live ingest, a backup can record more rows than it holds, so a restore of
-  a daily backup would fail verification and leave nexovue stopped. The manifest's header already
-  says this. The fence has no ingest, so it is not affected. The candidate fix is to count the
-  artifact. On ClickHouse 26.3 here, `CREATE DATABASE … ENGINE = Backup('nexovue', Disk('backups',
-  '<name>.zip'))` attached every MergeTree-family table of a snapshot read-only, with no setting
-  needed. It did not attach `schema_migrations` (TinyLog) or the KeeperMap tables. So
-  `clickhouse_schema_version` would still be read live (it only moves on a migration). This could
-  not be checked against ClickHouse's documentation (clickhouse.com is not reachable from this
-  session), so it is a measurement, not a researched recommendation. The decision needed is whether
-  to make that change.
+- None. ClickHouse's counts were the open decision; the founder settled it on 2026-11-22
+  (foundation item 35d): count the archive, as Postgres's are. Done, see `bug.md`, *Second fix*.
 
 ## Blocked
 
@@ -44,12 +38,16 @@ Nothing.
 
 - Reading the dump back costs one decompression of `postgres.dump` per backup, about the same time
   as the dump itself. That is negligible today. Not measured at scale.
+- The second fix restores the row-merging tables (rollups, `detection_readings`) into a scratch
+  database for each backup, so a backup briefly needs their size in extra ClickHouse disk. Not
+  measured at scale; the runbook's "What it costs" is not updated because that section does not exist
+  in `docs/operations/backup-and-restore.md` today.
 - The new test runs a whole backup of the dev stack inside `just check`. Here it takes 17 to 30
   seconds. It has not been run under CI's `-n 6` alongside the other suites.
 
 ## Validation
 
-See `bug.md`, *Fix plan and validation*. Not run here: the `insight-fence` job itself, because its
+See `bug.md`, *Fix plan and validation* and *Second fix*. Not run here: the `insight-fence` job itself, because its
 preflight wants more disk than this machine has, and `just check` whole.
 
 ## Specification impact
@@ -63,4 +61,4 @@ None.
 
 ## Last updated
 
-2026-11-21
+2026-11-22

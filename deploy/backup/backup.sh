@@ -50,22 +50,49 @@ docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" "$POSTGRES_CONTAINER" \
 echo "clickhouse: backing up"
 staged="$CLICKHOUSE_BACKUP_STAGE/$taken_at.zip"
 docker exec "$CLICKHOUSE_CONTAINER" rm -f "$staged"
+# The staged copy and the two scratch databases below go on any exit, a failed one included.
+view_db="nexovue_backup_view_${taken_at//[^0-9A-Za-z]/}"
+extras_db="nexovue_backup_extras_${taken_at//[^0-9A-Za-z]/}"
+trap 'ch_backup_close "$view_db" "$extras_db"; docker exec "$CLICKHOUSE_CONTAINER" rm -f "$staged" >/dev/null 2>&1 || true' EXIT
 ch --query "BACKUP DATABASE $CLICKHOUSE_DB TO Disk('$CLICKHOUSE_BACKUP_DISK', '$taken_at.zip')"
 docker cp "$CLICKHOUSE_CONTAINER:$staged" "$snapshot/clickhouse.zip"
-docker exec "$CLICKHOUSE_CONTAINER" rm -f "$staged"
 
-# ---------- what the dump holds ----------
-# Postgres's facts are read out of postgres.dump itself, never from the live
-# database afterwards: the stack keeps running during a backup, so a table read
-# a moment after the dump can already differ from it. The insight-fence run
-# recorded jobs=2 beside a dump holding one, a job the scheduler queued in
+# ---------- what the backups hold ----------
+# Both stores' facts are read out of the artifacts themselves, never from the
+# live databases afterwards: the stack keeps running during a backup, so a table
+# read a moment after the backup can already differ from it. The insight-fence
+# run recorded jobs=2 beside a dump holding one, a job the scheduler queued in
 # between, and the restore then failed verification with nothing lost
-# (docs/changes/backup-manifest-counts). Reading the dump back also proves it
+# (docs/changes/backup-manifest-counts). Reading an artifact back also proves it
 # is readable before anyone needs it.
 echo "postgres: counting the dump"
 pg_dump_facts=$(pg_dump_rows "$snapshot/postgres.dump") \
     || die "postgres.dump could not be read back; this snapshot is not usable"
 dump_fact() { printf '%s\n' "$pg_dump_facts" | awk -F'\t' -v k="$1" -v t="$2" '$1 == k && $2 == t { print $3 }'; }
+
+# ClickHouse: the archive staged above, opened read-only. A table the archive
+# cannot show, or that the live database has and the archive does not, would
+# leave a count missing from the manifest, and a restore would never be checked
+# for it, so either one fails the backup.
+echo "clickhouse: counting the backup"
+ch_counted=$(ch_backup_open "$taken_at.zip" "$view_db" "$extras_db") \
+    || die "clickhouse.zip could not be read back; this snapshot is not usable"
+ch_live_tables=$(ch --query "
+    SELECT name FROM system.tables
+    WHERE database = '$CLICKHOUSE_DB'
+      AND engine NOT IN ('MaterializedView', 'View', 'KeeperMap')
+    ORDER BY name FORMAT TSV")
+for table in $ch_live_tables; do
+    printf '%s\n' "$ch_counted" | cut -f2 | grep -qx "$table" \
+        || die "clickhouse table $table is not in the backup in a form that can be counted; see CLICKHOUSE_TABLES_NOT_ATTACHABLE in common.sh"
+done
+ch_schema_version=$(ch --query "SELECT max(version) FROM \`$extras_db\`.schema_migrations")
+[ -n "$ch_schema_version" ] || die "clickhouse.zip holds no schema version; this snapshot is not usable"
+# A failed count must fail the backup, never leave an empty value for verify.sh to compare.
+ch_counts=$(printf '%s\n' "$ch_counted" | while IFS=$'\t' read -r database table; do
+    rows=$(ch_row_count "$table" "$database") || die "clickhouse: could not count $table in the backup"
+    echo "ch.$table=$rows"
+done)
 
 # ---------- manifest ----------
 # Not decoration. This is what `just backup-verify` compares a restored system
@@ -74,26 +101,17 @@ echo "manifest: measuring"
 {
     echo "# nexovue backup manifest"
     echo "# Postgres counts are the rows postgres.dump holds, exact under any load."
-    echo "# ClickHouse counts are read after the backup completes. They are exact only"
-    echo "# if ingest was stopped for the duration; under live ingest a restored table"
-    echo "# can legitimately hold fewer rows than the count recorded here."
+    echo "# ClickHouse counts are the rows clickhouse.zip holds, read from the archive."
+    echo "# Only the watermark lines below are live, and they are never compared."
     echo "taken_at=$taken_at"
     echo "clickhouse_image=$(docker inspect -f '{{.Config.Image}}' "$CLICKHOUSE_CONTAINER")"
     echo "postgres_image=$(docker inspect -f '{{.Config.Image}}' "$POSTGRES_CONTAINER")"
     echo "alembic_revision=$(dump_fact first_row alembic_version)"
-    echo "clickhouse_schema_version=$(ch --query 'SELECT max(version) FROM schema_migrations')"
+    echo "clickhouse_schema_version=$ch_schema_version"
 
     # Data-bearing tables only. A materialized view with a TO clause stores
     # nothing of its own, so counting it would count its target table twice.
-    ch_tables=$(ch --query "
-        SELECT name FROM system.tables
-        WHERE database = '$CLICKHOUSE_DB'
-          AND engine NOT IN ('MaterializedView', 'View')
-          AND engine != 'KeeperMap'
-        ORDER BY name FORMAT TSV")
-    for table in $ch_tables; do
-        echo "ch.$table=$(ch_row_count "$table")"
-    done
+    printf '%s\n' "$ch_counts"
 
     # The meter's watermark is recorded below rather than here: it is deliberately
     # not restored, so comparing its row count after a restore would fail by

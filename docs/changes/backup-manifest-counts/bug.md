@@ -128,6 +128,59 @@ Validation (this machine, own containers):
   `probes/dns_check.py` and `test_tcp_and_dns.py`. These files are untouched and dnspython is not
   installed in this environment. None of the errors is in a changed file.
 
+## Second fix: ClickHouse's counts (founder, 2026-11-22, foundation item 35d)
+
+Same flaw, same cure. `ch.*` counts and `clickhouse_schema_version` were read live after `BACKUP
+DATABASE`, so a backup taken under ingest could record more rows than it holds, and a restore would
+fail verification with nothing lost and leave nexovue stopped. They are now read from the archive.
+This is a second fix on this record, not a sibling: one cause (counting outside the artifact), one
+manifest, one `verify.sh` rule, and the first fix's open decision named it.
+
+**How** (`ch_backup_open` in `common.sh`, used by `backup.sh`). The staged `<name>.zip` is opened
+with `CREATE DATABASE … ENGINE = Backup('nexovue', Disk('backups', '<name>.zip'))`, which shows the
+MergeTree-family tables read-only with no data copied. Two things it cannot do, both measured on
+ClickHouse 26.3.20 here (clickhouse.com was not reachable, so this is measurement, not researched
+documentation):
+
+- It does not attach `schema_migrations` (TinyLog) or the KeeperMap tables. `schema_migrations` is
+  restored into a scratch database (`CLICKHOUSE_TABLES_NOT_ATTACHABLE`), and `clickhouse_schema_version`
+  and `ch.schema_migrations` are read there. The KeeperMap watermarks stay live lines, which
+  `verify.sh` only prints.
+- `FINAL` fails in place (`CANNOT_SEEK_THROUGH_FILE`, "Seek in compressed archive is not supported")
+  when the table has parts whose key ranges overlap. `verify.sh` counts the Aggregating, Replacing,
+  Summing and Collapsing engines with `FINAL` (a merge changes `count()`), so those tables are
+  restored into the scratch database and counted there, by the same `ch_row_count`. Cost: their size
+  in disk until `backup.sh` ends (both scratch databases and the staged zip are dropped on any exit).
+  The rollups are the smaller tables; `spans`, `logs` and the metrics stay zero-copy.
+
+A live data table the archive does not give us (a new engine nobody taught `common.sh` about, or a
+table created mid-backup) fails the backup, naming it, rather than leaving a count out of the
+manifest. A count that errors fails the backup too: the first version of this fix recorded an empty
+`ch.detection_readings=` because an error inside `$( )` was swallowed, which would have made
+`verify.sh` fail on every restore.
+
+Rejected: restoring every table into a scratch database (exact, and proves the restore, but doubles
+the disk for the whole store on every daily backup); grouping by sorting key instead of `FINAL`
+(not the same number for Summing and Collapsing engines, and not what `verify.sh` runs).
+
+**Regression test.** `test_each_clickhouse_count_is_the_rows_the_backup_holds` in
+`test_backup_manifest_live.py`. The pass-through `docker` writes a row to a MergeTree table and a
+Replacing table and a migration row the instant `BACKUP DATABASE` returns; the archive is restored
+into a database of the test's own as the oracle. Seen failing on the original scripts:
+`manifest["ch.events"]` was `'2'` (the live count), the archive held `1`. Seen failing on the
+attach-only first version (mutated so no table is restored): `backup.sh` exits 1 with
+`CANNOT_SEEK_THROUGH_FILE`. It passes with the fix. The Replacing table's parts are kept unmerged
+(`SYSTEM STOP MERGES`) with overlapping key ranges, because background merges would otherwise hide
+the failure.
+
+Validation of the second fix (own containers, ClickHouse 26.3.20, Postgres 18, migrated to head): a
+round trip on the real schema (`detection_readings` with 30,000 rows over unmerged overlapping parts,
+`stored_payload_digests`, `schema_migrations`): manifest `ch.detection_readings=30000`, drop the
+database, `restore-clickhouse.sh`, `verify.sh`: `PASS`. `test_backup_manifest_live.py` 2 passed;
+`test_fix_backup_scripts.py`, `test_backup_retention.py`, `test_install_script.py`: 33 passed; shellcheck
+v0.11.0 over `lint-deploy`'s backup files: clean; ruff check and format: clean. Not run: the
+`insight-fence` job, `test_backups_live.py` (bucket half, no SeaweedFS here), `mypy .`.
+
 ## Status
 
 Implemented, not yet seen in CI. See `status.md`.
