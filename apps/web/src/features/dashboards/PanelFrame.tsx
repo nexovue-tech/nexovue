@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { CHART_HEIGHT } from "@/shared/components/TrendChart";
 import { adoptScreenOverride } from "@/shared/selection";
@@ -17,6 +18,7 @@ export function PanelFrame({
   title,
   span,
   watch,
+  holdHeight = false,
   children,
 }: {
   panelId: string;
@@ -25,12 +27,39 @@ export function PanelFrame({
   span: string;
   /** Told when the frame mounts, to follow whether it is on screen (FR53). */
   watch?: (element: HTMLElement | null) => void;
+  /**
+   * True while a placeholder stands where the reading was: the frame keeps the height it
+   * had, so a new window does not pull the rows below it into view and read them too.
+   */
+  holdHeight?: boolean;
   children: ReactNode;
 }) {
   const headingId = `panel-${panelId}-title`;
+  const section = useRef<HTMLElement | null>(null);
+  // The height as of the last time the frame showed a reading: a placeholder cannot know it.
+  const readingHeight = useRef(0);
+  const own = useCallback(
+    (element: HTMLElement | null) => {
+      section.current = element;
+      watch?.(element);
+    },
+    [watch],
+  );
+  useEffect(() => {
+    const element = section.current;
+    if (holdHeight || !element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      readingHeight.current = entry?.borderBoxSize[0]?.blockSize ?? element.offsetHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [holdHeight]);
   return (
     <section
-      ref={watch}
+      ref={own}
+      style={
+        holdHeight && readingHeight.current > 0 ? { minHeight: readingHeight.current } : undefined
+      }
       {...{ [PANEL_ID_ATTRIBUTE]: panelId }}
       id={`panel-${panelId}`}
       aria-labelledby={headingId}

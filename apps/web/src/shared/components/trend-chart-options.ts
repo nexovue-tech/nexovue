@@ -18,6 +18,14 @@ const X_LABEL_OVERHANG = 24;
 /** Room above the tallest bucket, so the peak is not clipped by the axis. */
 const Y_HEADROOM = 1.1;
 
+/**
+ * The x span drawn around a lone reading, centred on it. A line needs two points to have a
+ * width; uPlot's own answer for one point is `86400 / ms` seconds, about 2.7 years in its
+ * seconds mode (read in uPlot 1.6.32, `autoScaleX`), and a drag across that is a 2027 window.
+ * An hour is a guess at what reads as "one reading" at every bucket size (F20 decision 39).
+ */
+export const ONE_READING_SPAN_SECONDS = 3600;
+
 /** A y range of [0, 0] draws no axis at all, so a quiet series still gets a scale. */
 const MINIMUM_Y_TOP = 1;
 
@@ -227,6 +235,14 @@ function selectRange(
   if (to > from) onSelectRange(from, to);
 }
 
+/** The x range as uPlot worked it out, except a single reading, which gets a span of its own. */
+function readingsRange(chart: uPlot, min: number, max: number): [number, number] {
+  const [xs] = chart.data;
+  if (xs.length !== 1) return [min, max];
+  const at = xs[0] ?? min;
+  return [at - ONE_READING_SPAN_SECONDS / 2, at + ONE_READING_SPAN_SECONDS / 2];
+}
+
 export function chartOptions(
   palette: ChartPalette,
   width: number,
@@ -286,7 +302,7 @@ export function chartOptions(
       drag: { x: onSelectRange !== undefined, y: false, setScale: false },
     },
     scales: {
-      x: { time: true },
+      x: { time: true, range: readingsRange },
       // Zero stays on the axis. A rate chart cropped to its own minimum turns a steady
       // service into a mountain range.
       y:

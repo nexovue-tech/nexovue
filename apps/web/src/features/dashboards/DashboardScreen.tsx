@@ -898,6 +898,7 @@ function PanelCell(
       title={title.text}
       span={asTable ? "" : span}
       watch={props.watch}
+      holdHeight={answer?.panels[panel.id] === undefined}
     >
       {body}
       {toggle}

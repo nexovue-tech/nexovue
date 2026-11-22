@@ -155,9 +155,13 @@ function TrendCanvas({
     latest.current = { labels, data, formatValue, markers, spans, band, onSelectRange, readout };
   });
   const bandKey = band === undefined ? "" : `${band.upper}:${band.lower}`;
+  // Marks, spans and the band are painted in `drawClear`, so the series' paths stay as they
+  // are: `redraw(false)` only asks for another paint. A plain `redraw()` re-sets the x scale
+  // from its current min and max, which are null until uPlot's first commit, and a mark
+  // arriving in the same flush as the chart threw the scale away (F20 decision 39).
   // biome-ignore lint/correctness/useExhaustiveDependencies: what the overlays draw is read through the ref; these are when to draw again.
   useEffect(() => {
-    chartRef.current?.redraw();
+    chartRef.current?.redraw(false);
   }, [markers, spans, bandKey]);
 
   useEffect(() => {

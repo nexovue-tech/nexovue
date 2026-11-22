@@ -8,8 +8,8 @@
  * performance trace on the founder's machine, recorded in `status.md` with the machine;
  * a tap on a phone is the founder's hand check (plan, *What these tests cannot prove*).
  *
- * Address change: the dashboard's address carries the window from T6.2. Until then the
- * address must not change on a drag, and this spec says so; T6.2 turns that line round.
+ * Address change: the dashboard's address carries the window since T6.2, so the drag's one
+ * window is the address's `from` and `to`, the same two the batch read asked for.
  */
 
 import { expect, type Page, test } from "@playwright/test";
@@ -96,7 +96,6 @@ test("one cursor across thirty charts, and one drag reads once", async ({ page, 
   expect(timeOnFourth).toBe(timeOnFirst);
 
   // One drag: one window change and one batch read, however many charts are linked.
-  const addressBefore = page.url();
   const readsBefore = reads.length;
   await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2);
   await page.mouse.down();
@@ -108,6 +107,7 @@ test("one cursor across thirty charts, and one drag reads once", async ({ page, 
   const window = new URL(reads.at(-1) ?? "").searchParams;
   expect(window.get("from")).toMatch(/:00(\.000)?Z$/);
   expect(window.get("to")).toMatch(/:00(\.000)?Z$/);
-  // Until T6.2 puts the window in the address, a drag must not change it.
-  expect(page.url()).toBe(addressBefore);
+  const address = new URL(page.url()).searchParams;
+  expect(address.get("from")).toBe(window.get("from"));
+  expect(address.get("to")).toBe(window.get("to"));
 });

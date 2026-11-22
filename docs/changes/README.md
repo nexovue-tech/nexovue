@@ -6,6 +6,7 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 
 ## Records
 
+- [Dashboard chart scale](dashboard-chart-scale/bug.md) — F20 decision 39: `redraw()` before uPlot's first commit left the x scale null, a chart with one reading drew a 2.7-year axis (the 2027 zoom), and a drag shrank the page so a second read joined it; each fixed at its root.
 - [Request holds one connection](request-holds-one-connection/bug.md) — the identity lookup kept its Postgres connection to the end of every request, and a route asking for a person and a reader took a second one while holding it, so twenty dashboard readers deadlocked the pool for 10 s and got 500; the lookup now gives its connection back and a full pool answers 503 busy (ADR-102).
 - [Test workers hold memory](test-workers-hold-memory/bug.md) — each pytest worker reached 2 GB and six froze CI's 16 GB runner: a parametrized suite copied its data per case, three structural suites kept parsed source for the whole run, and FastAPI's caches kept every test's session and engine alive; a worker now peaks at about 700 MB.
 - [Backup manifest counts](backup-manifest-counts/bug.md) — `backup.sh` counted Postgres rows live after `pg_dump`, so a job the running scheduler queued in between made the fence's restore fail `jobs expected 2, got 1` with nothing lost; the counts are now read from the dump itself.
