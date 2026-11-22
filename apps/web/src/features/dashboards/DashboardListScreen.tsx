@@ -25,6 +25,7 @@ import {
   filterByTitle,
   isStale,
   nextOrder,
+  notReadingCell,
   notReadingWords,
   STALE_AFTER_DAYS,
   sortRows,
@@ -274,11 +275,17 @@ function columnsFor(now: number): Column<DashboardSummary>[] {
       header: "Not reading",
       sortable: true,
       wideOnly: true,
-      cell: (row) => (
-        <span className="text-warning-text">{notReadingWords(row.panels_not_reading)}</span>
-      ),
+      cell: (row) => <NotReadingCell row={row} />,
     },
   ];
+}
+
+/** Amber only for a count that needs attention; "None" and the dash are plain. */
+function NotReadingCell({ row }: { row: DashboardSummary }) {
+  const attention = row.last_viewed_at !== null && row.panels_not_reading > 0;
+  return (
+    <span className={attention ? "text-warning-text" : "text-ink-dim"}>{notReadingCell(row)}</span>
+  );
 }
 
 /** On a phone the row is its title and last opened, and the rest sits under the title. */

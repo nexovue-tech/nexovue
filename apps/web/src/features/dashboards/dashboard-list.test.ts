@@ -6,6 +6,7 @@ import {
   filterByTitle,
   isStale,
   nextOrder,
+  notReadingCell,
   notReadingWords,
   sortRows,
   startingPoints,
@@ -123,6 +124,17 @@ describe("marks (AC45)", () => {
     expect(notReadingWords(3)).toBe("3 panels not reading");
     expect(notReadingWords(1)).toBe("1 panel not reading");
     expect(notReadingWords(0)).toBeUndefined();
+  });
+
+  it("reads a value in the Not reading column for every row, never a blank cell", () => {
+    const opened = { last_viewed_at: ago(0.1) };
+    expect(notReadingCell(row("x", { ...opened, panels_not_reading: 3 }))).toBe(
+      "3 panels not reading",
+    );
+    // A true zero is a word, and never the dash, which means "not known".
+    expect(notReadingCell(row("x", { ...opened, panels_not_reading: 0 }))).toBe("None");
+    // No read has stamped a count on a dashboard nobody has opened.
+    expect(notReadingCell(row("x", { last_viewed_at: null, panels_not_reading: 0 }))).toBe("—");
   });
 });
 

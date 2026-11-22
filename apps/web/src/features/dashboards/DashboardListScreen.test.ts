@@ -110,6 +110,21 @@ describe("rows", () => {
     ).toEqual(["Title", "Owner", "Panels", "Last opened", "Last changed", "Not reading"]);
   });
 
+  it("never leaves the Not reading cell blank: None for a zero, a dash for a row never opened", async () => {
+    const { container } = await mountScreen(
+      screen(),
+      lists([
+        row("Reads fine", { panels_not_reading: 0 }),
+        row("Never opened", { last_viewed_at: null }),
+      ]),
+    );
+
+    const lastCells = [...container.querySelectorAll("tbody tr")].map((each) =>
+      text(each.querySelector("td:last-child")),
+    );
+    expect(lastCells).toEqual(["—", "None"]); // Title order: Never opened, Reads fine.
+  });
+
   it("reads Former member for a dashboard whose owner left, and still links to it (AC47)", async () => {
     const { container } = await mountScreen(screen(), lists([row("Orphan", { owner: null })]));
 

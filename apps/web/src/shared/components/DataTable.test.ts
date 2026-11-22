@@ -121,3 +121,25 @@ describe("the table's other states", () => {
     expect(header(container, "Name")?.className).not.toContain("hidden");
   });
 });
+
+describe("the gap between columns", () => {
+  const gapRight = (element: Element | null | undefined) =>
+    (element?.className ?? "").split(" ").includes("pr-4");
+
+  it("follows a right-aligned column too, so its digits never touch the next column's words", () => {
+    const container = mount(undefined);
+
+    // "Opened" is right-aligned and the "Kind" column starts at its right edge.
+    expect(gapRight(header(container, "Opened"))).toBe(true);
+    expect(gapRight(container.querySelectorAll("tbody tr:first-child td")[1])).toBe(true);
+  });
+
+  it("leaves none after the last column, which ends at the table's edge", () => {
+    const container = mount(undefined);
+    const lastHeader = [...container.querySelectorAll("th")].at(-1);
+    const lastCell = [...container.querySelectorAll("tbody tr:first-child td")].at(-1);
+
+    expect(gapRight(lastHeader)).toBe(false);
+    expect(gapRight(lastCell)).toBe(false);
+  });
+});

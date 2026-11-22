@@ -66,14 +66,14 @@ export function DataTable<Row>({
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
-            {columns.map((column) => (
+            {columns.map((column, index) => (
               <th
                 key={column.key}
                 scope="col"
                 aria-sort={column.sortable && sort ? ariaSort(sort, column.key) : undefined}
                 className={`border-line border-b pt-0 pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps ${
-                  column.numeric ? "pl-4 text-right" : "pr-4 text-left"
-                } ${column.wideOnly ? "hidden md:table-cell" : ""}`}
+                  column.numeric ? "pl-4 text-right" : "text-left"
+                } ${gapAfter(index, columns.length)} ${column.wideOnly ? "hidden md:table-cell" : ""}`}
               >
                 {column.sortable && sort ? (
                   <SortButton header={column.header} columnKey={column.key} sort={sort} />
@@ -87,12 +87,12 @@ export function DataTable<Row>({
         <tbody>
           {rows.map((row) => (
             <tr key={rowKey(row)}>
-              {columns.map((column) => (
+              {columns.map((column, index) => (
                 <td
                   key={column.key}
                   className={`border-line-subtle border-b py-2.5 align-top text-ink ${
-                    column.numeric ? "pl-4 text-right tabular-nums" : "pr-4"
-                  } ${column.wideOnly ? "hidden md:table-cell" : ""}`}
+                    column.numeric ? "pl-4 text-right tabular-nums" : ""
+                  } ${gapAfter(index, columns.length)} ${column.wideOnly ? "hidden md:table-cell" : ""}`}
                 >
                   {column.cell(row)}
                 </td>
@@ -103,6 +103,15 @@ export function DataTable<Row>({
       </table>
     </div>
   );
+}
+
+/**
+ * Every column but the last keeps a gap on its right, a right-aligned one included: its digits
+ * end at the cell's edge, and without the gap the next column's words start against them
+ * ("12" and "4 min. ago" read "124 min. ago").
+ */
+function gapAfter(index: number, count: number): string {
+  return index < count - 1 ? "pr-4" : "";
 }
 
 /** Only the sorted header says a direction; the others say "none", so each carries the attribute. */

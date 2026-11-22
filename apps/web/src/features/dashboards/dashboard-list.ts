@@ -1,5 +1,6 @@
 import type { SortDirection } from "@/shared/components/DataTable";
 import { savedUnder } from "@/shared/dashboards-for-service";
+import { UNKNOWN } from "@/shared/format/number";
 
 import type { DashboardSummary, DashboardTemplate } from "./api";
 
@@ -96,6 +97,18 @@ export function isStale(row: DashboardSummary, now: number): boolean {
 export function notReadingWords(count: number): string | undefined {
   if (count <= 0) return undefined;
   return `${count} ${count === 1 ? "panel" : "panels"} not reading`;
+}
+
+/** The word for a count of nothing: a true zero, which a dash would make read as unknown. */
+export const NONE_NOT_READING = "None";
+
+/**
+ * The Not reading column's cell, never blank (principle 2). A dashboard nobody has opened has no
+ * stamped count, so it is a dash ("not known"); a stamped zero is a word.
+ */
+export function notReadingCell(row: DashboardSummary): string {
+  if (row.last_viewed_at === null) return UNKNOWN;
+  return notReadingWords(row.panels_not_reading) ?? NONE_NOT_READING;
 }
 
 /** One of FR39's starting points: open the one saved from it, or start a draft from it. */
