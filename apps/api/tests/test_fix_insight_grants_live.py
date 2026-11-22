@@ -7,8 +7,11 @@ needs of it: F3's three job functions claim, retry and finish an `insight-fix` j
 still match no queue outside the AI role's; and the job's reads of `finding_fixes` and of
 the version's `model_input` work, while the evidence and the names stay out of reach.
 
-The job rows and tenant are this test's own, committed for the AI account's session, and
-removed at the end.
+The job tests write their tenant and job, act as the AI role (`SET LOCAL ROLE`, so the role's
+own grants decide each call), and claim, all in one transaction that is rolled back. The dev
+stack's own `scheduler-insight` claims every due job on these queues, whichever organization
+it is for, so a due job this test committed could be claimed by it first (ai-solution
+status, *CI fix 2026-11-22*). The reads sign in as the AI account itself.
 
 This suite fails rather than skips when Postgres is down; see tests/helpers/live.
 """
@@ -19,16 +22,17 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
-from insight_login import DEV_INSIGHT_PASSWORD, insight_dsn
+from insight_login import DEV_INSIGHT_PASSWORD, INSIGHT_ACCOUNT, insight_dsn
 from live import require_stack
 from nexovue_platform.fixes.records import FIX_QUEUE
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from nexovue_api import insight_account
 
@@ -37,6 +41,9 @@ DSN: Final = os.environ.get(
 )
 ASYNC_DSN: Final = DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 WORKER: Final = "fix-grants-test"
+_ADD_ORGANIZATION: Final = text(
+    "INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'Grants')"
+)
 _ADD_JOB: Final = text(
     """
     INSERT INTO jobs (queue, task, kwargs, org_id, max_attempts, run_after,
@@ -46,6 +53,8 @@ _ADD_JOB: Final = text(
     """
 )
 _CLAIM: Final = text("SELECT id FROM insight_claim_jobs(:worker, :queues, 10, 30)")
+_ACT_AS_AI: Final = text(f"SET LOCAL ROLE {INSIGHT_ACCOUNT}")
+_STOP_ACTING: Final = text("RESET ROLE")
 
 
 def _reachable() -> bool:
@@ -81,65 +90,63 @@ async def as_insight(install: AsyncEngine) -> AsyncIterator[AsyncEngine]:
     await built.dispose()
 
 
-@pytest.fixture
-async def org(install: AsyncEngine) -> AsyncIterator[uuid.UUID]:
-    made = uuid.uuid4()
-    async with install.begin() as db:
-        await db.execute(
-            text("INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'Grants')"),
-            {"id": made, "slug": f"grants-{made.hex[:12]}"},
-        )
-    try:
-        yield made
-    finally:
-        async with install.begin() as db:
-            await db.execute(text("DELETE FROM jobs WHERE org_id = :id"), {"id": made})
-            await db.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": made})
+@asynccontextmanager
+async def _unseen(install: AsyncEngine) -> AsyncIterator[AsyncConnection]:
+    """A transaction on the install's account, rolled back: no other session, the stack's
+    workers included, ever sees what is written in it."""
+    async with install.connect() as db:
+        transaction = await db.begin()
+        try:
+            yield db
+        finally:
+            await transaction.rollback()
 
 
-async def _job(install: AsyncEngine, org: uuid.UUID, queue: str) -> uuid.UUID:
-    async with install.begin() as db:
-        made = await db.scalar(
-            _ADD_JOB, {"queue": queue, "task": f"fix-grants-test.{queue}", "org": org}
-        )
+async def _add_job(db: AsyncConnection, queue: str) -> uuid.UUID:
+    """A due job on `queue` for an organization of its own, as the install's account."""
+    org = uuid.uuid4()
+    await db.execute(_ADD_ORGANIZATION, {"id": org, "slug": f"grants-{org.hex[:12]}"})
+    made = await db.scalar(
+        _ADD_JOB, {"queue": queue, "task": f"fix-grants-test.{queue}", "org": org}
+    )
     assert isinstance(made, uuid.UUID)
     return made
 
 
-async def test_the_ai_account_claims_retries_and_finishes_an_insight_fix_job(
-    install: AsyncEngine, as_insight: AsyncEngine, org: uuid.UUID
-) -> None:
-    job = await _job(install, org, FIX_QUEUE)
+async def _claimed(db: AsyncConnection, queues: list[str]) -> set[uuid.UUID]:
+    return set((await db.execute(_CLAIM, {"worker": WORKER, "queues": queues})).scalars())
 
-    async with as_insight.begin() as db:
-        claimed = set(
-            (await db.execute(_CLAIM, {"worker": WORKER, "queues": [FIX_QUEUE]})).scalars()
-        )
-        assert job in claimed
+
+async def test_the_ai_account_claims_retries_and_finishes_an_insight_fix_job(
+    install: AsyncEngine,
+) -> None:
+    async with _unseen(install) as db:
+        job = await _add_job(db, FIX_QUEUE)
+        await db.execute(_ACT_AS_AI)
+
+        assert job in await _claimed(db, [FIX_QUEUE])
         await db.execute(
             text("SELECT insight_retry_job(:id, :worker, 0, 'one more attempt')"),
             {"id": job, "worker": WORKER},
         )
-    async with as_insight.begin() as db:
-        again = set((await db.execute(_CLAIM, {"worker": WORKER, "queues": [FIX_QUEUE]})).scalars())
-        assert job in again
+        assert job in await _claimed(db, [FIX_QUEUE])
         await db.execute(
             text("SELECT insight_finish_job(:id, :worker)"), {"id": job, "worker": WORKER}
         )
-    async with install.connect() as db:
+
+        await db.execute(_STOP_ACTING)
         left = await db.scalar(text("SELECT count(*) FROM jobs WHERE id = :id"), {"id": job})
     assert left == 0
 
 
 async def test_the_claim_still_matches_no_queue_outside_the_ai_role(
-    install: AsyncEngine, as_insight: AsyncEngine, org: uuid.UUID
+    install: AsyncEngine,
 ) -> None:
-    light = await _job(install, org, "light")
+    async with _unseen(install) as db:
+        light = await _add_job(db, "light")
+        await db.execute(_ACT_AS_AI)
 
-    async with as_insight.begin() as db:
-        claimed = set(
-            (await db.execute(_CLAIM, {"worker": WORKER, "queues": ["light", FIX_QUEUE]})).scalars()
-        )
+        claimed = await _claimed(db, ["light", FIX_QUEUE])
 
     assert light not in claimed
 
