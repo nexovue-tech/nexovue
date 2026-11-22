@@ -14,6 +14,16 @@ a hostile version flattened, and no finding opened.
 The rows are recent, since the rollup's TTL keeps 35 days, and every decision takes a
 `now` built from them, never the wall clock's minute. Each test's tenants and rows are
 its own, removed afterwards. Fails rather than skips when a store is down.
+
+The suite runs on a database of its own on the stack's server (`private_database`). A
+summary is written due at that `now`, which is hours in the past, so on the stack's database
+the stack's own deliveries sweep claims it at once, whichever organization it is for, and
+sends or fails it before the test reads it (CI run 127). The alert suites keep their rows from
+that sweep by deciding a month from now (`alert_fixtures.future`), which this suite cannot:
+`now` also picks the minutes the comparison reads. `jobs_held` holds jobs, not notifications,
+and the suite's own `deliver_due` must find its rows due. In a database of its own no stack
+sweep looks, and the install's settled minute, which the stack's detection sweep also writes,
+is the suite's alone.
 """
 
 from __future__ import annotations
@@ -36,10 +46,11 @@ from live import require_stack
 from nexovue_platform import releases
 from nexovue_platform.email import Delivery, Message
 from nexovue_platform.slo import BUCKET_COUNT
+from private_database import private_database
 from settled_minute import settled_minute
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from nexovue_scheduler.alerts import delivery
 from nexovue_scheduler.alerts.delivery import deliver_due
@@ -84,6 +95,22 @@ require_stack(
     suite="F28's release summary suite",
     remedy="start the dev stack with `just dev`",
 )
+
+
+@pytest.fixture(scope="module")
+def database() -> Iterator[str]:
+    """This suite's own Postgres, which the stack's deliveries sweep never reads."""
+    with private_database(POSTGRES_DSN, prefix="nexovue_release_summary") as dsn:
+        yield dsn
+
+
+@pytest.fixture
+async def engine(database: str) -> AsyncIterator[AsyncEngine]:
+    created = create_async_engine(database, pool_size=4)
+    try:
+        yield created
+    finally:
+        await created.dispose()
 
 
 @pytest.fixture
