@@ -1,10 +1,16 @@
-"""`POST .../draft-pull-request` and `POST .../delete-branch` (spec FR22, FR23, FR24a, FR28,
-BR8, AC23, AC25, AC32a, AC47, AC62, AC66; design, *The draft click*; plan T7.4, T7.10).
+"""`POST .../draft-pull-request`, `POST .../delete-branch` and `POST .../run-ci` (spec FR22,
+FR23, FR24a, FR25, FR28, BR8, AC23, AC25, AC28, AC32a, AC47, AC62, AC66, AC73; design, *The
+draft click*, *Run CI*; plan T7.4, T7.10, T8.1).
 
 **Off in code first.** Each route asks `write_access_on(go)` before anything else, where the
 route passes `write_gate.WRITE_ACCESS_GO` (None until the founder's recorded go, ADR-097;
 foundation item 33): while it is False the click answers 409 `writes_off` with its sentence,
 reads nothing, claims nothing and adds no job.
+
+**Run CI**, with the go: an `opened` draft whose pull request is still open; the request
+(`ci_requested_by`, `ci_requested_at`) stored, any earlier Run CI failure cleared,
+`fix.ci_requested` committed with it, and the job added with ids only. The job checks the
+person's write access on GitHub and that the branch is still Nexovue's (FR25).
 
 With the go, the click, in one transaction:
 
@@ -35,16 +41,22 @@ from nexovue_platform.fixes.records import (
     CHECK_FOR_DRAFT,
     CHECK_PASSED,
     DRAFT_CHECK_WITHIN,
+    FIX_CI_REQUESTED,
     FIX_PULL_REQUEST_ATTEMPTED,
     KIND_SOURCE,
+    OPENED,
     PROPOSED,
+    PULL_REQUEST_NOT_OPEN,
     PULL_REQUEST_NOT_OPENED,
+    PULL_REQUEST_OPEN,
     WRITES_OFF,
     delete_fix_branch_request,
     open_fix_pull_request_request,
+    run_fix_ci_request,
 )
 from nexovue_platform.fixes.sentences import (
     CHECK_EXPIRED,
+    CI_FAILURE_SENTENCES,
     DRAFT_REFUSAL_SENTENCES,
     ELIGIBILITY_SENTENCES,
     GENERAL_HAS_NO_CODE,
@@ -65,6 +77,7 @@ from nexovue_api.data.postgres.models import ConnectionRepository, FindingFix, F
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.findings import cases, fix_queries
 from nexovue_api.findings.fix_source_schemas import (
+    CiRequested,
     DeleteBranchStarted,
     DraftRequest,
     DraftStarted,
@@ -240,3 +253,45 @@ async def delete_branch(
     )
     await db.commit()
     return DeleteBranchStarted(fix_id=fix_id)
+
+
+async def request_ci(
+    db: AsyncSession,
+    *,
+    identity: Identity,
+    finding_id: uuid.UUID,
+    fix_id: uuid.UUID,
+    go: WriteGo | None,
+    now: datetime,
+) -> CiRequested:
+    """FR25, AC28: one request, stored before its job is added. A second click while one
+    runs replaces the request; the job serves whichever the row holds, once."""
+    _refuse_while_off(go)
+    org_id, user_id = identity.org_id, identity.user.id
+    row = await _source_row(db, org_id=org_id, finding_id=finding_id, fix_id=fix_id)
+    requested = await db.execute(
+        update(FindingFix)
+        .where(
+            FindingFix.org_id == org_id,
+            FindingFix.id == fix_id,
+            FindingFix.state == OPENED,
+            FindingFix.pull_request_state == PULL_REQUEST_OPEN,
+        )
+        .values(ci_requested_by=user_id, ci_requested_at=now, last_write_failure=None)
+        .returning(FindingFix.id)
+        .execution_options(synchronize_session=False)
+    )
+    if requested.first() is None:
+        raise ConflictError(CI_FAILURE_SENTENCES[PULL_REQUEST_NOT_OPEN], code=PULL_REQUEST_NOT_OPEN)
+    audit.record_fix_event(
+        db,
+        org_id=org_id,
+        actor_user_id=user_id,
+        action=FIX_CI_REQUESTED,
+        target_kind=audit.FINDING_TARGET,
+        target_id=finding_id,
+        detail={"fix_id": str(fix_id), "repository_id": str(row.connection_repository_id)},
+    )
+    await fix_queries.queue_suggestion(db, run_fix_ci_request(fix_id=fix_id, org_id=org_id))
+    await db.commit()
+    return CiRequested(fix_id=fix_id)

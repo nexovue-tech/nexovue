@@ -33,6 +33,11 @@ SKIP_CHECKS_TRAILER: Final = "skip-checks: true"
 WHOLE_REPOSITORY_WORDS: Final = "the whole repository"
 
 TITLE: Final = "Suggested change for {folder} (nexovue suggestion {fix_id})"
+# Run CI's commit (FR25): the same tree, no skip marker, asked for by a person in Nexovue.
+RUN_CI_COMMIT_MESSAGE: Final = (
+    "Run CI for nexovue suggestion {fix_id}\n\nNo change to any file: a person asked "
+    "Nexovue to run CI on this pull request."
+)
 WHAT_THIS_IS: Final = (
     "Written by an AI model, on a person's request. Not compiled. Not run. Review it as you "
     "would any outside contribution."
@@ -152,6 +157,11 @@ def pull_request_text(facts: PullRequestFacts) -> PullRequestText:
         body=_body(facts),
         branch=fix_branch(facts.fix_id),
     )
+
+
+def run_ci_commit_message(fix_id: str) -> str:
+    """Run CI's commit message: a template, with no skip instruction (FR25)."""
+    return RUN_CI_COMMIT_MESSAGE.format(fix_id=fix_id)
 
 
 def _body(facts: PullRequestFacts) -> str:

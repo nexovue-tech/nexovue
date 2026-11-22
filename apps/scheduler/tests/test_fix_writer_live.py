@@ -26,19 +26,34 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, date, datetime, timedelta
-from typing import Any, Final
+from datetime import datetime, timedelta
+from typing import Any
 
+import fix_writer_fixtures as fixtures
 import pytest
 from alert_fixtures import postgres_reachable
-from github_git_data import GitData
+from fix_writer_fixtures import (
+    LOGIN,
+    NEW,
+    OLD,
+    OTHER,
+    PATH,
+    READ,
+    TEST_GO,
+    WHY,
+    approved_fix,
+    ask_ci,
+    audit_rows,
+    draft_check,
+    git_of,
+    open_draft,
+    opened_fix,
+    proposed_fix,
+    run_ci,
+    writes_seen,
+)
 from live import require_stack
-from nexovue_platform.fixes.checks import Edit, PackFile
 from nexovue_platform.fixes.diff import git_blob_id
-from nexovue_platform.fixes.pack import owner_lists_hash
-from nexovue_platform.fixes.policy import CHECKS_VERSION, OwnerLists
-from nexovue_platform.fixes.proposal import stored_edits
 from nexovue_platform.fixes.pull_request_text import (
     SKIP_CHECKS_TRAILER,
     SKIP_CI_MARKER,
@@ -50,22 +65,19 @@ from nexovue_platform.fixes.records import (
     REPOSITORY_READ,
     fix_branch,
 )
-from nexovue_platform.fixes.write_gate import WRITE_ACCESS_GO, WriteGo
+from nexovue_platform.fixes.write_gate import WRITE_ACCESS_GO
 from recording_site import json_reply
 from source_fix_fixtures import (
     KEYS,
     REPOSITORY,
     SourceWorld,
-    build_world,
-    drop_world,
     fix_row,
-    source_fix,
 )
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tracker_fake import FakeGitHub, serve_fake_github
+from tracker_fake import FakeGitHub
 
-from nexovue_scheduler.connections import fix_check, fix_sweep, fix_writer
+from nexovue_scheduler.connections import fix_sweep, fix_writer
 from nexovue_scheduler.connections.fix_github import FixGitHub
 from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.jobs.registry import Retry
@@ -76,254 +88,10 @@ require_stack(
     remedy="Postgres is not reachable — run `just up`",
 )
 
-# A go built only here, so the gate is on inside these tests alone. The product passes
-# `write_gate.WRITE_ACCESS_GO`, which is None.
-TEST_GO: Final = WriteGo(
-    given_on=date(2027, 1, 4),
-    safety_gates_passed_on=("a test's own option",),
-    buyers_answer="a test's own record",
-    terms="a test's own terms",
-    drafts_from_stack_alone=False,
-    enterprise_server_before_step_7=False,
-)
-FOLDER: Final = "services/shop"
-PATH: Final = f"{FOLDER}/app/pay.py"
-OTHER: Final = f"{FOLDER}/app/other.py"
-READ: Final = (
-    "import json\n"
-    "\n"
-    "def charge(order, gateway):\n"
-    "    amount = order.total\n"
-    "    if amount < 0:\n"
-    "        raise ValueError('negative')\n"
-    "    return gateway.charge(amount)\n"
-)
-OLD: Final = "    return gateway.charge(amount)\n"
-NEW: Final = "    return gateway.charge(amount, retries=2)\n"
-# The model's words: they must never reach GitHub (BR10, AC27).
-WHY: Final = "MODEL-PROSE-MARKER the call needs a retry count."
-GITHUB_USER: Final = 9301
-LOGIN: Final = "ada-lovelace"
-BASE_URL: Final = "https://nexovue.example"
-WRITE_GRANT: Final = {"contents": "write", "metadata": "read", "pull_requests": "write"}
-_WRITE_METHODS: Final = frozenset({"POST", "PATCH", "DELETE", "PUT"})
-
-
-@pytest.fixture
-def now() -> datetime:
-    """This test's clock, read when it starts: the stack's own sweep reads the real clock,
-    so a row dated in the past is one it may expire or end under the test."""
-    return datetime.now(UTC).replace(microsecond=0)
-
-
-@pytest.fixture
-def fake() -> Iterator[FakeGitHub]:
-    with serve_fake_github() as served:
-        yield served
-
-
-@pytest.fixture
-async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
-    made = await build_world(engine, fake, folder=FOLDER, now=now)
-    fake.seed_files(REPOSITORY, {PATH: READ, OTHER: "x = 1\n"})
-    fake.add_user(GITHUB_USER, LOGIN)
-    fake.grant(REPOSITORY, LOGIN, "write")
-    async with engine.begin() as connection:
-        await connection.execute(
-            text(
-                "UPDATE connections SET granted_permissions = CAST(:granted AS jsonb) "
-                "WHERE id = :id"
-            ),
-            {"granted": json.dumps(WRITE_GRANT), "id": made.connection_id},
-        )
-        await connection.execute(
-            text(
-                "INSERT INTO fix_repository_settings (org_id, connection_repository_id, "
-                "drafts_allowed, set_at) VALUES (:org, :repository, true, :now)"
-            ),
-            {"org": made.org_id, "repository": made.repository_id, "now": now},
-        )
-        await connection.execute(
-            text(
-                "INSERT INTO github_user_links (user_id, org_id, github_user_id, github_login) "
-                "VALUES (:user, :org, :github, :login)"
-            ),
-            {"user": made.user_id, "org": made.org_id, "github": GITHUB_USER, "login": LOGIN},
-        )
-        await connection.execute(
-            text(
-                """
-                INSERT INTO finding_explanations (org_id, project_id, finding_id, version,
-                    read_at, fingerprint, evidence, aliases, summary, model_input, likely_cause)
-                VALUES (:org, :project, :finding, 1, :at, :fingerprint,
-                    CAST('{"items": []}' AS jsonb), CAST('{}' AS jsonb), CAST('{}' AS jsonb),
-                    NULL, CAST(:cause AS jsonb))
-                """
-            ),
-            {
-                "org": made.org_id,
-                "project": made.tenant.project_id,
-                "finding": made.finding_id,
-                "at": now - timedelta(minutes=10),
-                "fingerprint": "7" * 64,
-                "cause": json.dumps({"rule": "signed_deploy", "evidence_id": "deploy:d-1"}),
-            },
-        )
-    try:
-        yield made
-    finally:
-        await drop_world(engine, made)
-
-
-def _edits() -> list[dict[str, Any]]:
-    edit = Edit("file_1", OLD, NEW, WHY, ("file_1",))
-    return list(stored_edits([edit], {"file_1": PackFile("file_1", PATH, READ)}))
-
-
-async def _proposed(engine: AsyncEngine, world: SourceWorld, now: datetime) -> uuid.UUID:
-    files_read = {
-        "commit": "c" * 40,
-        "commit_known": False,
-        "round": 1,
-        "files": [
-            {
-                "ref": "file_1",
-                "path": PATH,
-                "blob_sha": git_blob_id(READ),
-                "mode": "100644",
-                "role": "stack",
-                "why": {"kind": "stack", "line": 7},
-                "moved_on_default": False,
-                "lines_sent": None,
-                "bytes": len(READ),
-            }
-        ],
-        "left_out": [],
-    }
-    return await source_fix(
-        engine,
-        world,
-        candidates=[],
-        now=now,
-        state="proposed",
-        edits=json.dumps(_edits()),
-        files_read=json.dumps(files_read),
-        checks_version=CHECKS_VERSION,
-        extra_list_hash=owner_lists_hash(OwnerLists()),
-        explanation_version=1,
-        finished_at=now,
-        result_recorded_at=now,
-    )
-
-
-async def _draft_check(
-    engine: AsyncEngine, world: SourceWorld, fix_id: uuid.UUID, now: datetime, *, go: Any
-) -> Any:
-    async with engine.begin() as connection:
-        check_id = await connection.scalar(
-            text(
-                """
-                INSERT INTO finding_fix_checks (org_id, fix_id, requested_by, purpose, status,
-                    requested_at, expires_at)
-                VALUES (:org, :fix, :user, 'draft', 'running', :now, :expires)
-                RETURNING id
-                """
-            ),
-            {
-                "org": world.org_id,
-                "fix": fix_id,
-                "user": world.user_id,
-                "now": now,
-                "expires": now + timedelta(minutes=15),
-            },
-        )
-    status = await fix_check.check_fix(
-        engine,
-        org_id=str(world.org_id),
-        check_id=str(check_id),
-        keys=KEYS,
-        endpoints=world.endpoints(),
-        go=go,
-        show_held_causes=True,
-        now=now,
-    )
-    async with engine.connect() as connection:
-        row = (
-            await connection.execute(
-                text("SELECT * FROM finding_fix_checks WHERE id = :id"), {"id": check_id}
-            )
-        ).one()
-    return status, row
-
-
-async def _approve(
-    engine: AsyncEngine, world: SourceWorld, fix_id: uuid.UUID, digest: str, now: datetime
-) -> None:
-    async with engine.begin() as connection:
-        await connection.execute(
-            text(
-                "UPDATE finding_fixes SET state = 'approved', state_changed_at = :now, "
-                "approved_by = :user, approved_at = :now, approved_digest = :digest "
-                "WHERE id = :id"
-            ),
-            {"now": now, "user": world.user_id, "digest": digest, "id": fix_id},
-        )
-
-
-async def _approved(engine: AsyncEngine, world: SourceWorld, now: datetime) -> uuid.UUID:
-    """A suggestion approved from the person's own passed check, as the click leaves it."""
-    fix_id = await _proposed(engine, world, now)
-    status, check = await _draft_check(engine, world, fix_id, now, go=TEST_GO)
-    assert status == "unchanged", (status, check.reason)
-    await _approve(engine, world, fix_id, check.digest, now)
-    return fix_id
-
-
-async def _open(
-    engine: AsyncEngine, world: SourceWorld, fix_id: uuid.UUID, now: datetime, *, go: Any = TEST_GO
-) -> str | None:
-    return await fix_writer.open_pull_request(
-        engine,
-        org_id=str(world.org_id),
-        fix_id=str(fix_id),
-        keys=KEYS,
-        endpoints=world.endpoints(),
-        go=go,
-        show_held_causes=True,
-        base_url=BASE_URL,
-        now=now,
-    )
-
-
-def _git(fake: FakeGitHub) -> GitData:
-    return fake.git_of(REPOSITORY)
-
-
-def _writes(fake: FakeGitHub) -> list[str]:
-    """Every request that could change a repository, from the fake's own log: a write
-    method on a repository route, or a token minted to write."""
-    found = []
-    for request in fake.site.requests:
-        if request.method in _WRITE_METHODS and request.path.startswith("/repos/"):
-            found.append(f"{request.method} {request.path}")
-        if request.path.endswith("/access_tokens") and b'"write"' in request.body:
-            found.append(f"write token {request.path}")
-    return found
-
-
-async def _audit(engine: AsyncEngine, world: SourceWorld, action: str) -> list[Any]:
-    async with engine.connect() as connection:
-        return list(
-            (
-                await connection.execute(
-                    text(
-                        "SELECT actor_user_id, detail FROM audit_log "
-                        "WHERE org_id = :org AND action = :action ORDER BY at"
-                    ),
-                    {"org": world.org_id, "action": action},
-                )
-            ).all()
-        )
+# The suite's fixtures: the test's clock, the simulated GitHub and the tenant built on it.
+now = fixtures.now
+fake = fixtures.fake
+world = fixtures.world
 
 
 # ------------------------------------------------------- as shipped: off in code
@@ -336,10 +104,10 @@ def test_the_gate_ships_off() -> None:
 async def test_as_shipped_a_draft_check_is_refused_with_no_request_to_github(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _proposed(engine, world, now)
+    fix_id = await proposed_fix(engine, world, now)
     before = len(fake.site.requests)
 
-    status, check = await _draft_check(engine, world, fix_id, now, go=WRITE_ACCESS_GO)
+    status, check = await draft_check(engine, world, fix_id, now, go=WRITE_ACCESS_GO)
 
     assert (status, check.status, check.reason) == ("refused", "refused", "writes_off")
     assert check.patch is None and check.digest is None
@@ -350,26 +118,26 @@ async def test_as_shipped_a_draft_check_is_refused_with_no_request_to_github(
 async def test_as_shipped_the_draft_job_writes_nothing_and_reads_nothing(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     before = len(fake.site.requests)
-    refs_before = dict(_git(fake).refs)
+    refs_before = dict(git_of(fake).refs)
 
-    assert await _open(engine, world, fix_id, now, go=WRITE_ACCESS_GO) == "proposed"
+    assert await open_draft(engine, world, fix_id, now, go=WRITE_ACCESS_GO) == "proposed"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "writes_off")
     assert row.pull_request_branch is None and row.pull_request_commit_sha is None
     assert len(fake.site.requests) == before
-    assert _writes(fake) == [] and fake.pulls_in(REPOSITORY) == []
-    assert _git(fake).refs == refs_before
+    assert writes_seen(fake) == [] and fake.pulls_in(REPOSITORY) == []
+    assert git_of(fake).refs == refs_before
 
 
 async def test_as_shipped_delete_this_branch_does_nothing(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _proposed(engine, world, now)
+    fix_id = await proposed_fix(engine, world, now)
     branch = fix_branch(fix_id)
-    _git(fake).refs[branch] = _git(fake).refs["main"]
+    git_of(fake).refs[branch] = git_of(fake).refs["main"]
     async with engine.begin() as connection:
         await connection.execute(
             text(
@@ -377,7 +145,7 @@ async def test_as_shipped_delete_this_branch_does_nothing(
                 "pull_request_commit_sha = :sha, pull_request_state = 'not_opened' "
                 "WHERE id = :id"
             ),
-            {"branch": branch, "sha": _git(fake).refs["main"], "id": fix_id},
+            {"branch": branch, "sha": git_of(fake).refs["main"], "id": fix_id},
         )
     before = len(fake.site.requests)
 
@@ -393,7 +161,7 @@ async def test_as_shipped_delete_this_branch_does_nothing(
     )
 
     assert deleted is None
-    assert len(fake.site.requests) == before and branch in _git(fake).refs
+    assert len(fake.site.requests) == before and branch in git_of(fake).refs
 
 
 # --------------------------------------------- with the gate forced on, in a test
@@ -402,13 +170,13 @@ async def test_as_shipped_delete_this_branch_does_nothing(
 async def test_ac22_a_click_makes_one_draft_with_exactly_the_checked_change(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    main_before = _git(fake).refs["main"]
-    main_files = dict(_git(fake).flat(_git(fake).commits[main_before].tree))
-    fix_id = await _approved(engine, world, now)
+    main_before = git_of(fake).refs["main"]
+    main_files = dict(git_of(fake).flat(git_of(fake).commits[main_before].tree))
+    fix_id = await approved_fix(engine, world, now)
 
-    assert await _open(engine, world, fix_id, now) == "opened"
+    assert await open_draft(engine, world, fix_id, now) == "opened"
 
-    git = _git(fake)
+    git = git_of(fake)
     branch = fix_branch(fix_id)
     assert set(git.refs) == {"main", branch}
     assert git.refs["main"] == main_before
@@ -432,10 +200,10 @@ async def test_ac22_a_click_makes_one_draft_with_exactly_the_checked_change(
     assert row.pull_request_branch == branch
     assert row.pull_request_commit_sha == git.refs[branch]
     assert row.pull_request_url == pull_url(pull.number)
-    [opened] = await _audit(engine, world, FIX_PULL_REQUEST_OPENED)
+    [opened] = await audit_rows(engine, world, FIX_PULL_REQUEST_OPENED)
     assert opened.actor_user_id == world.user_id
     assert opened.detail == {"fix_id": str(fix_id), "pull_request_number": 1, "branch": branch}
-    reads = [each.detail for each in await _audit(engine, world, REPOSITORY_READ)]
+    reads = [each.detail for each in await audit_rows(engine, world, REPOSITORY_READ)]
     assert [each["purpose"] for each in reads] == ["draft", "draft"]
     async with engine.connect() as connection:
         events = (
@@ -461,11 +229,11 @@ async def test_ac61_ci_on_open_commits_with_no_skip_marker(
             text("UPDATE fix_repository_settings SET ci_on_open = true WHERE org_id = :org"),
             {"org": world.org_id},
         )
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
 
-    assert await _open(engine, world, fix_id, now) == "opened"
+    assert await open_draft(engine, world, fix_id, now) == "opened"
 
-    message = _git(fake).commits[_git(fake).refs[fix_branch(fix_id)]].message
+    message = git_of(fake).commits[git_of(fake).refs[fix_branch(fix_id)]].message
     assert SKIP_CI_MARKER not in message and SKIP_CHECKS_TRAILER not in message
 
 
@@ -479,19 +247,19 @@ async def test_ac26_a_crash_after_each_write_retries_to_one_branch_and_one_draft
     route: str,
     main: str,
 ) -> None:
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     fake.drop_after_commit = {route}
 
     with pytest.raises(Retry):
-        await _open(engine, world, fix_id, now)
+        await open_draft(engine, world, fix_id, now)
     stored = (await fix_row(engine, world, fix_id)).pull_request_commit_sha
     fake.drop_after_commit = set()
     if main == "moved":
         fake.seed_files(REPOSITORY, {OTHER: "x = 2\n"}, message="unrelated")
 
-    assert await _open(engine, world, fix_id, now) == "opened"
+    assert await open_draft(engine, world, fix_id, now) == "opened"
 
-    git = _git(fake)
+    git = git_of(fake)
     branch = fix_branch(fix_id)
     assert set(git.refs) == {"main", branch}
     assert len(fake.pulls_in(REPOSITORY)) == 1
@@ -514,10 +282,10 @@ async def test_ac51_a_pull_request_github_made_but_did_not_list_is_adopted_after
     """The first attempt's `POST /pulls` lands and its answer is lost; the retry's list
     does not show it yet, so it asks again, GitHub answers 422 for a second pull request
     on the branch, and the job adopts the one by `?head=`."""
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     fake.drop_after_commit = {"create_pull"}
     with pytest.raises(Retry):
-        await _open(engine, world, fix_id, now)
+        await open_draft(engine, world, fix_id, now)
     fake.drop_after_commit = set()
     real = FixGitHub.pulls_for
     calls = {"count": 0}
@@ -528,7 +296,7 @@ async def test_ac51_a_pull_request_github_made_but_did_not_list_is_adopted_after
 
     monkeypatch.setattr(FixGitHub, "pulls_for", late_list)
 
-    assert await _open(engine, world, fix_id, now) == "opened"
+    assert await open_draft(engine, world, fix_id, now) == "opened"
 
     assert len(fake.pulls_in(REPOSITORY)) == 1
     creates = [r for r in fake.site.requests if r.method == "POST" and r.path.endswith("/pulls")]
@@ -539,40 +307,40 @@ async def test_ac51_a_pull_request_github_made_but_did_not_list_is_adopted_after
 async def test_ac26_a_branch_whose_head_is_not_nexovue_s_is_refused_with_nothing_written(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _approved(engine, world, now)
-    _git(fake).refs[fix_branch(fix_id)] = _git(fake).refs["main"]
+    fix_id = await approved_fix(engine, world, now)
+    git_of(fake).refs[fix_branch(fix_id)] = git_of(fake).refs["main"]
 
-    assert await _open(engine, world, fix_id, now) == "proposed"
+    assert await open_draft(engine, world, fix_id, now) == "proposed"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "branch_not_ours")
-    assert [w for w in _writes(fake) if not w.startswith("write token")] == []
+    assert [w for w in writes_seen(fake) if not w.startswith("write token")] == []
     assert fake.pulls_in(REPOSITORY) == []
 
 
 async def test_ac24_a_file_changed_after_the_check_stops_the_job_with_nothing_written(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     fake.seed_files(REPOSITORY, {PATH: "# moved on\n" + READ}, message="a change to the file")
 
-    assert await _open(engine, world, fix_id, now) == "proposed"
+    assert await open_draft(engine, world, fix_id, now) == "proposed"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "changed_since_check")
-    assert [w for w in _writes(fake) if not w.startswith("write token")] == []
-    assert set(_git(fake).refs) == {"main"}
+    assert [w for w in writes_seen(fake) if not w.startswith("write token")] == []
+    assert set(git_of(fake).refs) == {"main"}
 
 
 async def test_ac27a_a_refused_draft_is_not_opened_never_retried_as_a_pull_request(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     fake.faults["create_pull"] = json_reply(
         {"message": "Draft pull requests are not supported in this repository."}, 422
     )
 
-    assert await _open(engine, world, fix_id, now) == "proposed"
+    assert await open_draft(engine, world, fix_id, now) == "proposed"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.pull_request_state, row.last_write_failure) == (
@@ -599,7 +367,7 @@ async def test_ac48_a_withdrawal_mid_job_stops_every_later_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The owner withdraws just after the commit is stored: the branch is never made."""
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     real = fix_writer._DraftJob._store
 
     async def store_then_withdraw(self: Any, statement: Any, **values: Any) -> None:
@@ -615,26 +383,26 @@ async def test_ac48_a_withdrawal_mid_job_stops_every_later_write(
 
     monkeypatch.setattr(fix_writer._DraftJob, "_store", store_then_withdraw)
 
-    assert await _open(engine, world, fix_id, now) == "proposed"
+    assert await open_draft(engine, world, fix_id, now) == "proposed"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "consent_withdrawn")
-    assert not any("/git/refs" in w or w.endswith("/pulls") for w in _writes(fake))
-    assert set(_git(fake).refs) == {"main"} and fake.pulls_in(REPOSITORY) == []
+    assert not any("/git/refs" in w or w.endswith("/pulls") for w in writes_seen(fake))
+    assert set(git_of(fake).refs) == {"main"} and fake.pulls_in(REPOSITORY) == []
 
 
 async def test_ac23_a_person_without_write_access_is_refused_at_the_check(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
     fake.grant(REPOSITORY, LOGIN, "read")
-    fix_id = await _proposed(engine, world, now)
+    fix_id = await proposed_fix(engine, world, now)
 
-    status, check = await _draft_check(engine, world, fix_id, now, go=TEST_GO)
+    status, check = await draft_check(engine, world, fix_id, now, go=TEST_GO)
 
     assert (status, check.reason) == ("refused", "no_github_access")
     assert check.digest is None and check.patch is None
     assert (await fix_row(engine, world, fix_id)).approved_by is None
-    assert _writes(fake) == []
+    assert writes_seen(fake) == []
 
 
 @pytest.mark.parametrize(
@@ -674,12 +442,12 @@ async def test_ac60_each_draft_condition_refuses_the_check_before_any_github_cal
     statement: str,
     reason: str,
 ) -> None:
-    fix_id = await _proposed(engine, world, now)
+    fix_id = await proposed_fix(engine, world, now)
     async with engine.begin() as connection:
         await connection.execute(text(statement), {"org": world.org_id})
     before = len(fake.site.requests)
 
-    status, check = await _draft_check(engine, world, fix_id, now, go=TEST_GO)
+    status, check = await draft_check(engine, world, fix_id, now, go=TEST_GO)
 
     assert (status, check.reason) == ("refused", reason), label
     assert len(fake.site.requests) == before
@@ -689,18 +457,18 @@ async def test_br13_a_public_repository_without_an_allowance_is_refused_before_a
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
     fake.make_public(REPOSITORY)
-    fix_id = await _proposed(engine, world, now)
+    fix_id = await proposed_fix(engine, world, now)
 
-    status, check = await _draft_check(engine, world, fix_id, now, go=TEST_GO)
+    status, check = await draft_check(engine, world, fix_id, now, go=TEST_GO)
 
     assert (status, check.reason) == ("refused", "public_not_allowed")
-    assert _writes(fake) == []
+    assert writes_seen(fake) == []
 
 
 async def test_ac26a_the_sweep_returns_a_job_that_never_finished_and_a_late_run_stops(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     async with engine.begin() as connection:
         await connection.execute(
             text("UPDATE finding_fixes SET state_changed_at = :at WHERE id = :id"),
@@ -712,18 +480,18 @@ async def test_ac26a_the_sweep_returns_a_job_that_never_finished_and_a_late_run_
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "did_not_finish")
     before = len(fake.site.requests)
-    assert await _open(engine, world, fix_id, now) is None
+    assert await open_draft(engine, world, fix_id, now) is None
     assert len(fake.site.requests) == before
 
 
 async def test_ac26_attempts_used_up_go_back_to_proposed_naming_the_failure(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     fake.fail("create_pull", 503)
     token = registry._ATTEMPT.set(3)
     try:
-        assert await _open(engine, world, fix_id, now) == "proposed"
+        assert await open_draft(engine, world, fix_id, now) == "proposed"
     finally:
         registry._ATTEMPT.reset(token)
 
@@ -736,8 +504,8 @@ async def test_ac26_attempts_used_up_go_back_to_proposed_naming_the_failure(
 async def _closed_with_branch(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime, *, state: str
 ) -> uuid.UUID:
-    fix_id = await _approved(engine, world, now)
-    assert await _open(engine, world, fix_id, now) == "opened"
+    fix_id = await approved_fix(engine, world, now)
+    assert await open_draft(engine, world, fix_id, now) == "opened"
     async with engine.begin() as connection:
         await connection.execute(
             text("UPDATE finding_fixes SET pull_request_state = :state WHERE id = :id"),
@@ -766,8 +534,8 @@ async def test_ac66_delete_this_branch_deletes_only_its_own_branch_at_its_own_he
 
     assert await _delete(engine, world, fix_id, now) == "deleted"
 
-    assert set(_git(fake).refs) == {"main"}
-    [deleted] = await _audit(engine, world, FIX_BRANCH_DELETED)
+    assert set(git_of(fake).refs) == {"main"}
+    [deleted] = await audit_rows(engine, world, FIX_BRANCH_DELETED)
     assert deleted.actor_user_id == world.user_id
     deletes = [r.path for r in fake.site.requests if r.method == "DELETE" and "/git/" in r.path]
     assert deletes == [f"/repos/{REPOSITORY}/git/refs/heads/{fix_branch(fix_id)}"]
@@ -782,13 +550,13 @@ async def test_ac66_delete_this_branch_refuses_an_open_draft_a_moved_head_and_a_
     )
     branch = fix_branch(fix_id)
     if why == "moved by someone":
-        _git(fake).refs[branch] = _git(fake).refs["main"]
+        git_of(fake).refs[branch] = git_of(fake).refs["main"]
     if why == "no write access":
         fake.grant(REPOSITORY, LOGIN, "read")
 
     assert await _delete(engine, world, fix_id, now) is None
 
-    assert branch in _git(fake).refs
+    assert branch in git_of(fake).refs
     assert not [r for r in fake.site.requests if r.method == "DELETE" and "/git/" in r.path]
 
 
@@ -797,7 +565,7 @@ async def test_ac62_a_repository_public_by_the_job_gets_no_unconfirmed_note(
 ) -> None:
     """Private at the click, public (and allowed) by the job: GitHub's live answer decides,
     and a note the requester never confirmed for a public body stays out (FR24a)."""
-    fix_id = await _approved(engine, world, now)
+    fix_id = await approved_fix(engine, world, now)
     async with engine.begin() as connection:
         await connection.execute(
             text("UPDATE finding_fixes SET requester_note = 'NOTE-MARKER-9' WHERE id = :id"),
@@ -809,7 +577,210 @@ async def test_ac62_a_repository_public_by_the_job_gets_no_unconfirmed_note(
         )
     fake.make_public(REPOSITORY)
 
-    assert await _open(engine, world, fix_id, now) == "opened"
+    assert await open_draft(engine, world, fix_id, now) == "opened"
 
     [pull] = fake.pulls_in(REPOSITORY)
     assert "NOTE-MARKER-9" not in pull.body and LOGIN not in pull.body
+
+
+# ------------------------------------------------------------- Run CI (Step 8)
+
+
+def _branch_head(fake: FakeGitHub, fix_id: uuid.UUID) -> str:
+    return git_of(fake).refs[fix_branch(fix_id)]
+
+
+def _commit_writes(fake: FakeGitHub, before: int) -> list[str]:
+    """Repository writes made after the first `before` requests."""
+    return [
+        f"{request.method} {request.path}"
+        for request in fake.site.requests[before:]
+        if request.method in {"POST", "PATCH", "DELETE"} and request.path.startswith("/repos/")
+    ]
+
+
+async def test_as_shipped_run_ci_answers_writes_off_with_no_request_to_github(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    fix_id = await opened_fix(engine, world, now)
+    await ask_ci(engine, world, fix_id, now)
+    head = _branch_head(fake, fix_id)
+    before = len(fake.site.requests)
+
+    assert await run_ci(engine, world, fix_id, now, go=WRITE_ACCESS_GO) == "writes_off"
+
+    row = await fix_row(engine, world, fix_id)
+    assert (row.last_write_failure, row.ci_commit_sha, row.ci_pushed_at) == (
+        "writes_off",
+        None,
+        None,
+    )
+    assert len(fake.site.requests) == before
+    assert _branch_head(fake, fix_id) == head
+
+
+async def test_ac28_run_ci_pushes_one_same_tree_commit_with_no_skip_marker(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    fix_id = await opened_fix(engine, world, now)
+    git = git_of(fake)
+    opening, main = _branch_head(fake, fix_id), git.refs["main"]
+    await ask_ci(engine, world, fix_id, now)
+    before = len(fake.site.requests)
+
+    assert await run_ci(engine, world, fix_id, now) == "requested"
+
+    commit = git.commits[_branch_head(fake, fix_id)]
+    assert commit.parents == (opening,)
+    assert commit.tree == git.commits[opening].tree
+    assert SKIP_CI_MARKER not in commit.message and SKIP_CHECKS_TRAILER not in commit.message
+    assert git.refs["main"] == main and set(git.refs) == {"main", fix_branch(fix_id)}
+    branch_path = f"/repos/{REPOSITORY}/git/refs/heads/{fix_branch(fix_id)}"
+    assert _commit_writes(fake, before) == [
+        f"POST /repos/{REPOSITORY}/git/commits",
+        f"PATCH {branch_path}",
+    ]
+    patched = [r for r in fake.site.requests[before:] if r.method == "PATCH"]
+    assert json.loads(patched[0].body) == {"sha": commit.sha, "force": False}
+    row = await fix_row(engine, world, fix_id)
+    assert (row.ci_commit_sha, row.ci_parent_sha) == (commit.sha, opening)
+    assert row.ci_commit_requested_at == now and row.ci_pushed_at == now
+    assert row.last_write_failure is None
+
+
+async def test_ac28_a_crash_after_the_branch_moved_finishes_on_retry_with_no_new_commit(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    fix_id = await opened_fix(engine, world, now)
+    await ask_ci(engine, world, fix_id, now)
+    fake.drop_after_commit = {"update_ref"}
+
+    with pytest.raises(Retry):
+        await run_ci(engine, world, fix_id, now)
+    moved = _branch_head(fake, fix_id)
+    commits = len(git_of(fake).commits)
+    fake.drop_after_commit = set()
+    before = len(fake.site.requests)
+
+    assert await run_ci(engine, world, fix_id, now) == "requested"
+
+    assert (
+        _branch_head(fake, fix_id) == moved == (await fix_row(engine, world, fix_id)).ci_commit_sha
+    )
+    assert len(git_of(fake).commits) == commits
+    assert _commit_writes(fake, before) == []
+    assert (await fix_row(engine, world, fix_id)).ci_pushed_at == now
+
+
+async def test_ac28_a_crash_before_the_branch_moved_moves_it_to_the_stored_commit(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    """The commit is stored before the `PATCH`, so a retry never refuses its own commit."""
+    fix_id = await opened_fix(engine, world, now)
+    opening = _branch_head(fake, fix_id)
+    await ask_ci(engine, world, fix_id, now)
+    fake.fail("update_ref", 502)
+
+    with pytest.raises(Retry):
+        await run_ci(engine, world, fix_id, now)
+    stored = (await fix_row(engine, world, fix_id)).ci_commit_sha
+    assert stored is not None and _branch_head(fake, fix_id) == opening
+    commits = len(git_of(fake).commits)
+    fake.heal("update_ref")
+
+    assert await run_ci(engine, world, fix_id, now) == "requested"
+
+    assert _branch_head(fake, fix_id) == stored
+    assert len(git_of(fake).commits) == commits
+
+
+async def test_ac28_a_second_run_ci_after_a_first_makes_a_second_commit(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    fix_id = await opened_fix(engine, world, now)
+    opening = _branch_head(fake, fix_id)
+    await ask_ci(engine, world, fix_id, now)
+    assert await run_ci(engine, world, fix_id, now) == "requested"
+    first = _branch_head(fake, fix_id)
+    later = now + timedelta(minutes=3)
+    await ask_ci(engine, world, fix_id, later)
+
+    assert await run_ci(engine, world, fix_id, later) == "requested"
+
+    second = git_of(fake).commits[_branch_head(fake, fix_id)]
+    assert second.parents == (first,) and first != opening
+    assert second.tree == git_of(fake).commits[opening].tree
+    row = await fix_row(engine, world, fix_id)
+    assert (row.ci_commit_sha, row.ci_parent_sha) == (second.sha, first)
+    # The same request again does nothing more.
+    assert await run_ci(engine, world, fix_id, later) is None
+
+
+async def test_ac28_a_head_that_is_not_nexovue_s_is_refused_with_nothing_written(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    fix_id = await opened_fix(engine, world, now)
+    pushed = fake.seed_files(REPOSITORY, {OTHER: "x = 3\n"}, branch=fix_branch(fix_id))
+    await ask_ci(engine, world, fix_id, now)
+    before = len(fake.site.requests)
+
+    assert await run_ci(engine, world, fix_id, now) == "branch_changed"
+
+    assert _branch_head(fake, fix_id) == pushed
+    assert _commit_writes(fake, before) == []
+    row = await fix_row(engine, world, fix_id)
+    assert (row.last_write_failure, row.ci_commit_sha) == ("branch_changed", None)
+
+
+@pytest.mark.parametrize(
+    ("arrange", "failure"),
+    [
+        ("read_only_person", "no_github_access"),
+        ("drafts_withdrawn", "drafts_not_allowed"),
+        ("closed", "pull_request_not_open"),
+    ],
+)
+async def test_ac28_run_ci_is_refused_without_access_or_an_open_draft(
+    engine: AsyncEngine,
+    world: SourceWorld,
+    fake: FakeGitHub,
+    now: datetime,
+    arrange: str,
+    failure: str,
+) -> None:
+    fix_id = await opened_fix(engine, world, now)
+    head = _branch_head(fake, fix_id)
+    await ask_ci(engine, world, fix_id, now)
+    if arrange == "read_only_person":
+        fake.grant(REPOSITORY, LOGIN, "read")
+    statement = {
+        "drafts_withdrawn": "UPDATE fix_repository_settings SET drafts_allowed = false "
+        "WHERE org_id = :org",
+        "closed": "UPDATE finding_fixes SET pull_request_state = 'closed' WHERE org_id = :org",
+    }.get(arrange)
+    if statement is not None:
+        async with engine.begin() as connection:
+            await connection.execute(text(statement), {"org": world.org_id})
+    before = len(fake.site.requests)
+
+    assert await run_ci(engine, world, fix_id, now) == failure
+
+    if arrange == "closed":
+        # A draft the poller found ended is refused from the row, asking GitHub nothing.
+        assert len(fake.site.requests) == before
+    assert _commit_writes(fake, before) == []
+    assert _branch_head(fake, fix_id) == head
+    assert (await fix_row(engine, world, fix_id)).last_write_failure == failure
+
+
+async def test_run_ci_never_writes_a_ref_but_the_suggestion_s_own(
+    engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
+) -> None:
+    """FR23, AC7: `move_branch` takes the suggestion's id and builds the ref itself."""
+    fix_id = await opened_fix(engine, world, now)
+    await ask_ci(engine, world, fix_id, now)
+
+    assert await run_ci(engine, world, fix_id, now) == "requested"
+
+    patched = {r.path for r in fake.site.requests if r.method == "PATCH"}
+    assert patched == {f"/repos/{REPOSITORY}/git/refs/heads/{fix_branch(fix_id)}"}

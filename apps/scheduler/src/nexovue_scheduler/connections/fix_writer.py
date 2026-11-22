@@ -1,13 +1,13 @@
-"""The draft job and **Delete this branch** (F5 design, *The draft click*, the job's steps 1
-to 10; spec FR22, FR23, FR27, BR8, BR13, BR14, AC19, AC22, AC24, AC26, AC26a, AC27a, AC48,
-AC51, AC66; plan T7.5, T7.10).
+"""The draft job, **Delete this branch** and **Run CI** (F5 design, *The draft click*, the
+job's steps 1 to 10, *Run CI*; spec FR22, FR23, FR25, FR27, BR8, BR13, BR14, AC19, AC22,
+AC24, AC26, AC26a, AC27a, AC28, AC48, AC51, AC66; plan T7.5, T7.10, T8.1).
 
-**Off in code.** Both jobs ask `write_access_on(go)` first, where the product passes
+**Off in code.** All three jobs ask `write_access_on(go)` first, where the product passes
 `write_gate.WRITE_ACCESS_GO` (None until the founder's recorded go, ADR-097; foundation item
-33). While it is False the draft job makes **no GitHub call of any kind**: an `approved` row
-goes back to `proposed` with `writes_off`, and **Delete this branch** does nothing. The write
-routes live on `FixWrites`, whose constructor refuses without the go, so no write token can
-be minted either.
+33). While it is False they make **no GitHub call of any kind**: an `approved` row goes back
+to `proposed` with `writes_off`, **Delete this branch** does nothing, and a Run CI request is
+answered `writes_off` on the row. The write routes live on `FixWrites`, whose constructor
+refuses without the go, so no write token can be minted either.
 
 With the go, on `scheduler-connections`, through F22's guarded client:
 
@@ -33,6 +33,16 @@ With the go, on `scheduler-connections`, through F22's guarded client:
 
 A passing GitHub failure is retried while attempts last; then the row goes back to
 `proposed` with a fixed code, naming any branch left. Logs carry ids and codes only.
+
+**Run CI** (Step 8), on an `opened` draft whose pull request is open, for the person who
+clicked (`ci_requested_by`): the person's write access (D6), the owner's allowance and the
+App's grant, and BR13 on GitHub's live answer, as for the draft. The branch's head must be
+Nexovue's own: its opening commit, its latest Run CI commit, or the head that commit was
+built on, else `branch_changed`. One commit with the head's tree and no skip marker is
+**stored, with the request it answers, before the `PATCH`**, which only fast-forwards
+`nexovue/suggestion-<id>`. So a retry after the branch moved finishes with no new commit, a
+retry before it moves the branch to the stored commit, and a second click makes a second
+commit (AC28).
 """
 
 from __future__ import annotations
@@ -52,6 +62,7 @@ from nexovue_platform.detection import FINDING_AUDIT_TARGET
 from nexovue_platform.evidence.aliases import AliasBook
 from nexovue_platform.fixes import write_gate
 from nexovue_platform.fixes.consent import folder_covered
+from nexovue_platform.fixes.draft import ci_done, ci_refusal
 from nexovue_platform.fixes.pull_request_text import (
     ChangedFile,
     MarkedLine,
@@ -59,10 +70,12 @@ from nexovue_platform.fixes.pull_request_text import (
     PullRequestText,
     SignalFacts,
     pull_request_text,
+    run_ci_commit_message,
 )
 from nexovue_platform.fixes.recheck import Rechecked
 from nexovue_platform.fixes.records import (
     APPROVED,
+    BRANCH_CHANGED,
     BRANCH_NOT_OURS,
     CHANGED_SINCE_CHECK,
     DELETE_FIX_BRANCH_TASK,
@@ -71,9 +84,14 @@ from nexovue_platform.fixes.records import (
     FIX_PULL_REQUEST_OPENED_EVENT,
     NO_DRAFT_SUPPORT,
     OPEN_FIX_PULL_REQUEST_TASK,
+    OPENED,
+    PULL_REQUEST_NOT_OPEN,
     PULL_REQUEST_NOT_OPENED,
+    PULL_REQUEST_OPEN,
     READ_FOR_DRAFT,
     ROLES_WHO_ASK,
+    RUN_CI_MAX_ATTEMPTS,
+    RUN_FIX_CI_TASK,
     WRITER_MAX_ATTEMPTS,
     WRITES_OFF,
     fix_branch,
@@ -144,7 +162,7 @@ _OPENED: Final = text(
     """
     UPDATE finding_fixes
     SET state = 'opened', state_changed_at = :at, pull_request_state = 'open',
-        pull_request_number = :number, pull_request_url = :url,
+        pull_request_state_at = :at, pull_request_number = :number, pull_request_url = :url,
         pull_request_branch = :branch, last_write_failure = NULL
     WHERE org_id = :org_id AND id = :fix_id AND state = 'approved'
     RETURNING finding_id, approved_by
@@ -154,7 +172,7 @@ _NOT_OPENED: Final = text(
     """
     UPDATE finding_fixes
     SET state = 'proposed', state_changed_at = :at, pull_request_state = 'not_opened',
-        last_write_failure = 'no_draft_support'
+        pull_request_state_at = :at, last_write_failure = 'no_draft_support'
     WHERE org_id = :org_id AND id = :fix_id AND state = 'approved'
     RETURNING id
     """
@@ -766,6 +784,256 @@ async def _delete(
     return "deleted"
 
 
+# ------------------------------------------------------------------- Run CI
+
+# Every statement binds the job's own `org_id`; each write is conditional on the draft still
+# being `opened` and on the request it answers (`ci_requested_at`), so a newer click wins.
+_CI_ROW: Final = text(
+    """
+    SELECT fix.id, fix.org_id, fix.state, fix.connection_repository_id,
+           fix.pull_request_state, fix.pull_request_commit_sha, fix.ci_commit_sha,
+           fix.ci_parent_sha, fix.ci_requested_by, fix.ci_requested_at,
+           fix.ci_commit_requested_at, fix.ci_pushed_at, fix.last_write_failure
+    FROM finding_fixes AS fix
+    WHERE fix.org_id = :org_id AND fix.id = :fix_id
+    """
+)
+_CI_STORE_COMMIT: Final = text(
+    """
+    UPDATE finding_fixes
+    SET ci_commit_sha = :sha, ci_parent_sha = :parent, ci_commit_requested_at = :requested_at,
+        ci_pushed_at = NULL
+    WHERE org_id = :org_id AND id = :fix_id AND state = 'opened'
+      AND ci_requested_at = :requested_at
+    RETURNING id
+    """
+)
+_CI_PUSHED: Final = text(
+    """
+    UPDATE finding_fixes SET ci_pushed_at = :at
+    WHERE org_id = :org_id AND id = :fix_id AND state = 'opened'
+      AND ci_requested_at = :requested_at AND ci_commit_requested_at = :requested_at
+    RETURNING id
+    """
+)
+_CI_FAILED: Final = text(
+    """
+    UPDATE finding_fixes SET last_write_failure = :failure
+    WHERE org_id = :org_id AND id = :fix_id AND state = 'opened'
+      AND ci_requested_at = :requested_at
+    RETURNING id
+    """
+)
+_CI_STILL_GOING: Final = text(
+    """
+    SELECT fix.state, fix.pull_request_state, fix.ci_requested_at,
+           connection.state AS connection_state
+    FROM finding_fixes AS fix
+    JOIN connection_repositories AS place
+      ON place.org_id = fix.org_id AND place.id = fix.connection_repository_id
+    JOIN connections AS connection
+      ON connection.org_id = place.org_id AND connection.id = place.connection_id
+    WHERE fix.org_id = :org_id AND fix.id = :fix_id
+    """
+)
+
+
+def _ci_done(row: Any) -> bool:
+    return ci_done(
+        requested_at=row.ci_requested_at,
+        commit_requested_at=row.ci_commit_requested_at,
+        pushed_at=row.ci_pushed_at,
+    )
+
+
+async def run_ci(
+    engine: AsyncEngine,
+    *,
+    org_id: str,
+    fix_id: str,
+    keys: ConfiguredKeys,
+    endpoints: FixEndpoints,
+    go: WriteGo | None,
+    now: datetime,
+) -> str | None:
+    """One run of Run CI's job. `go` is `write_gate.WRITE_ACCESS_GO` in the product; only a
+    test passes another. Returns `requested` once the branch moved for this request, the
+    failure it stored, or None when there was nothing to do."""
+    async with engine.connect() as connection:
+        row = (
+            await connection.execute(_CI_ROW, {"org_id": org_id, "fix_id": fix_id})
+        ).one_or_none()
+    if (
+        row is None
+        or row.state != OPENED
+        or row.ci_requested_at is None
+        or row.last_write_failure is not None
+        or _ci_done(row)
+    ):
+        return None
+    job = _CiJob(engine, row, go=go, now=now)
+    if not write_access_on(go):
+        return await job.fail(WRITES_OFF)
+    if row.pull_request_state != PULL_REQUEST_OPEN:
+        return await job.fail(PULL_REQUEST_NOT_OPEN)
+    place = await load_fix_row(engine, org_id, fix_id)
+    if place is None:
+        return None
+    try:
+        return await job.run(place, keys=keys, endpoints=endpoints)
+    except _Halted:
+        logger.info("a Run CI job stopped: the request moved on", fix_id=fix_id)
+        return None
+    except _Back as back:
+        return await job.fail(back.failure)
+    except Ending as ending:
+        return await job.fail(ending.reason)
+    except GitHubFailure as failure:
+        logger.warning(
+            "a Run CI job's GitHub call failed",
+            fix_id=fix_id,
+            failure=failure.code,
+            status=failure.status,
+        )
+        if failure.passing and attempt() < RUN_CI_MAX_ATTEMPTS:
+            raise Retry(RETRY_SECONDS, failure.code) from failure
+        return await job.fail(_FAILURE_OF.get(failure.code, _GITHUB_UNAVAILABLE))
+
+
+class _CiJob:
+    """Run CI for the one request the row held when the job started."""
+
+    def __init__(self, engine: AsyncEngine, row: Any, *, go: WriteGo | None, now: datetime) -> None:
+        self._engine = engine
+        self._row = row
+        self._go = go
+        self._now = now
+        self._fix_id = str(row.id)
+        self._ids = {
+            "org_id": row.org_id,
+            "fix_id": row.id,
+            "requested_at": row.ci_requested_at,
+        }
+
+    async def run(self, place: Any, *, keys: ConfiguredKeys, endpoints: FixEndpoints) -> str:
+        github = fix_client(place, keys, endpoints)
+        writes = github.writes(self._go)
+        installation, repository = place.github_installation_id, int(place.external_id)
+        read = github.pull_request_read_token(installation, repository)
+        try:
+            write = writes.token(installation, repository)
+        except BaseException:
+            github.revoke(read)
+            raise
+        try:
+            return await self._steps(github, writes, _Tokens(read=read, write=write), place.key)
+        finally:
+            github.revoke(read)
+            github.revoke(write)
+
+    async def _steps(self, github: FixGitHub, writes: FixWrites, tokens: _Tokens, key: str) -> str:
+        row = self._row
+        await self._person(github, tokens.read, key)
+        facts = await draft_rules.repository_facts(self._engine, row)
+        refused = ci_refusal(
+            drafts_allowed=facts is not None and bool(facts.drafts_allowed),
+            granted=None if facts is None else facts.granted_permissions,
+        )
+        if refused is not None:
+            raise _Back(refused)
+        public = await draft_rules.public_refusal(
+            self._engine, row, github.repository(tokens.read, key)
+        )
+        if public is not None:
+            raise _Back(public)
+        head = github.fix_branch_head(tokens.read, key, self._fix_id)
+        if row.ci_commit_requested_at == row.ci_requested_at and row.ci_commit_sha is not None:
+            # A retry: the commit for this request is stored. Moved already, or not yet.
+            if head == row.ci_commit_sha:
+                return await self._pushed()
+            if head is None or head != row.ci_parent_sha:
+                raise _Back(BRANCH_CHANGED)
+            return await self._move(writes, tokens, key, row.ci_commit_sha)
+        ours = {row.pull_request_commit_sha, row.ci_commit_sha, row.ci_parent_sha} - {None}
+        if head is None or head not in ours:
+            raise _Back(BRANCH_CHANGED)
+        tree = github.tree_of_commit(tokens.read, key, head)
+        await self._still_going()
+        commit = writes.create_commit(
+            tokens.write,
+            key,
+            message=run_ci_commit_message(self._fix_id),
+            tree=tree,
+            parent=head,
+        )
+        async with self._engine.begin() as connection:
+            stored = (
+                await connection.execute(
+                    _CI_STORE_COMMIT, {**self._ids, "sha": commit, "parent": head}
+                )
+            ).one_or_none()
+        if stored is None:
+            raise _Halted
+        return await self._move(writes, tokens, key, commit)
+
+    async def _person(self, github: FixGitHub, read: str, key: str) -> None:
+        """D6 again: the person who clicked is still here, linked, with write access."""
+        ids = {"org_id": self._row.org_id, "user_id": self._row.ci_requested_by}
+        async with self._engine.connect() as connection:
+            role = await connection.scalar(_PERSON, {**ids, "roles": list(ROLES_WHO_ASK)})
+            linked = await connection.scalar(_LINK, ids)
+        if role is None:
+            raise _Back(_ACCESS_UNKNOWN)
+        check_access(
+            github, read, key, None if linked is None else int(linked), levels=WRITE_LEVELS
+        )
+
+    async def _still_going(self) -> None:
+        """Before each write: still `opened`, open, this request, not disconnected."""
+        async with self._engine.connect() as connection:
+            found = (
+                await connection.execute(
+                    _CI_STILL_GOING, {"org_id": self._row.org_id, "fix_id": self._row.id}
+                )
+            ).one_or_none()
+        if (
+            found is None
+            or found.state != OPENED
+            or found.ci_requested_at != self._row.ci_requested_at
+            or found.connection_state == "disconnected"
+        ):
+            raise _Halted
+        if found.pull_request_state != PULL_REQUEST_OPEN:
+            raise _Back(PULL_REQUEST_NOT_OPEN)
+
+    async def _move(self, writes: FixWrites, tokens: _Tokens, key: str, commit: str) -> str:
+        await self._still_going()
+        try:
+            writes.move_branch(tokens.write, key, self._fix_id, commit)
+        except GitHubFailure as failure:
+            if failure.code == "not_fast_forward":
+                raise _Back(BRANCH_CHANGED) from failure
+            raise
+        return await self._pushed()
+
+    async def _pushed(self) -> str:
+        async with self._engine.begin() as connection:
+            await connection.execute(_CI_PUSHED, {**self._ids, "at": self._now})
+        logger.info("Run CI moved a suggestion's branch", fix_id=self._fix_id)
+        return "requested"
+
+    async def fail(self, failure: str) -> str | None:
+        """The request's failure, a fixed code, while the request is still the row's."""
+        async with self._engine.begin() as connection:
+            stored = (
+                await connection.execute(_CI_FAILED, {**self._ids, "failure": failure})
+            ).one_or_none()
+        if stored is None:
+            return None
+        logger.info("Run CI did not move the branch", fix_id=self._fix_id, failure=failure)
+        return failure
+
+
 # --------------------------------------------------------------------- tasks
 
 
@@ -804,3 +1072,20 @@ def delete_fix_branch_task(*, fix_id: str, org_id: str, requested_by: str) -> No
         )
     )
     logger.info("a branch deletion job ended", fix_id=fix_id, org_id=org_id, did=did)
+
+
+@task(RUN_FIX_CI_TASK)
+def run_fix_ci_task(*, fix_id: str, org_id: str) -> None:
+    settings = get_settings()
+    did = with_engine(
+        lambda engine: run_ci(
+            engine,
+            org_id=org_id,
+            fix_id=fix_id,
+            keys=settings.connection_secret_keys,
+            endpoints=endpoints(),
+            go=write_gate.WRITE_ACCESS_GO,
+            now=datetime.now(UTC),
+        )
+    )
+    logger.info("a Run CI job ended", fix_id=fix_id, org_id=org_id, did=did)

@@ -15,6 +15,9 @@ are the checked-in lists, and a test fails when a method is added without them.
 - Path segments are percent-encoded; a repository is only ever a strict `owner/name` key.
 - Tokens are minted per job, narrowed to one repository and `contents: read`, held in
   memory, and revoked at the end (F22's `GitHubApp`). Never stored, logged or put in a job.
+Step 8 adds Run CI's `PATCH` of the same ref (`move_branch`, fast forward only) and the
+poller's read of one pull request (`pull`).
+
 - **What GitHub answers is read from its documents, never from the service** (foundation
   item 28): the simulated GitHub (`tests/tracker_fake.py`) replays those shapes, and the
   founder's real run after Phase 2 checks them.
@@ -25,6 +28,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -79,9 +83,10 @@ ROUTES: Final = (
     ("POST", "/app/installations/{id}/access_tokens", "pull_request_read_token"),
     ("GET", "/repos/{r}/git/ref/heads/nexovue/suggestion-{id}", "fix_branch_head"),
     ("GET", "/repos/{r}/pulls?head={owner}:nexovue/suggestion-{id}&state=all", "pulls_for"),
+    ("GET", "/repos/{r}/pulls/{number}", "pull"),
 )
-# The write routes (Step 7), each on `FixWrites` only, behind the founder's go (ADR-097).
-# Step 8 adds the `PATCH` of the same ref for Run CI.
+# The write routes (Steps 7 and 8), each on `FixWrites` only, behind the founder's go
+# (ADR-097): Step 8 adds Run CI's `PATCH` of the same ref.
 WRITE_ROUTES: Final = (
     ("POST", "/app/installations/{id}/access_tokens", "token"),
     ("POST", "/repos/{r}/git/blobs", "create_blob"),
@@ -90,11 +95,13 @@ WRITE_ROUTES: Final = (
     ("POST", "/repos/{r}/git/refs", "create_branch"),
     ("DELETE", "/repos/{r}/git/refs/heads/nexovue/suggestion-{id}", "delete_branch"),
     ("POST", "/repos/{r}/pulls", "open_draft"),
+    ("PATCH", "/repos/{r}/git/refs/heads/nexovue/suggestion-{id}", "move_branch"),
 )
 # Why GitHub refused a write, by the words its 422 carries (from GitHub's documents and
 # the trial's questions, not yet checked against the service: foundation item 28).
 _ALREADY_EXISTS: Final = "already exists"
 _DRAFT_WORD: Final = "draft"
+_FAST_FORWARD_WORDS: Final = "fast forward"
 
 
 class GitHubFailure(Exception):  # noqa: N818 — named for what it reports
@@ -166,7 +173,9 @@ class TreeEntry:
 
 @dataclass(frozen=True, slots=True)
 class PullFacts:
-    """A pull request as the draft job needs it; never its title or body."""
+    """A pull request as the draft job and the poller need it; never its title or body.
+    `ended_at` is GitHub's merge time for a merged one, else its close time; the merge's
+    commit is the one a deploy would name (FR30)."""
 
     number: int
     url: str
@@ -174,6 +183,8 @@ class PullFacts:
     state: str
     merged: bool
     draft: bool
+    ended_at: datetime | None = None
+    merge_commit_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +298,21 @@ def _refused_words(answer: _Answer) -> str:
     return " ".join(words).lower()
 
 
+def _time(value: Any) -> datetime | None:
+    """GitHub's ISO 8601 time, or None when it gives none; anything else is unexpected."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise GitHubFailure("unexpected")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as unreadable:
+        raise GitHubFailure("unexpected") from unreadable
+    if parsed.tzinfo is None:
+        raise GitHubFailure("unexpected")
+    return parsed
+
+
 def _pull_facts(item: Any) -> PullFacts:
     if not isinstance(item, dict):
         raise GitHubFailure("unexpected")
@@ -295,13 +321,17 @@ def _pull_facts(item: Any) -> PullFacts:
     head_sha = head.get("sha") if isinstance(head, dict) else None
     if not isinstance(number, int) or not isinstance(url, str) or not isinstance(state, str):
         raise GitHubFailure("unexpected")
+    was_merged = merged is True or item.get("merged_at") is not None
+    merge_commit = item.get("merge_commit_sha")
     return PullFacts(
         number=number,
         url=url,
         head_sha=_sha(head_sha),
         state=state,
-        merged=merged is True,
+        merged=was_merged,
         draft=draft is True,
+        ended_at=_time(item.get("merged_at") if was_merged else item.get("closed_at")),
+        merge_commit_sha=_sha(merge_commit) if was_merged and merge_commit is not None else None,
     )
 
 
@@ -495,6 +525,12 @@ class FixGitHub:
             raise GitHubFailure("unexpected")
         return [_pull_facts(item) for item in answer]
 
+    def pull(self, token: str, key: str, number: int) -> PullFacts:
+        """One pull request, for the poller (FR27); `not_found` when GitHub says 404, which
+        the poller reads as `untracked`. Needs `pull_requests: read`."""
+        url = f"{self._endpoints.api}/repos/{_repository(key)}/pulls/{int(number)}"
+        return _pull_facts(_ok(_send(self._endpoints, "GET", url, bearer=token)))
+
     # --------------------------------------------------------- people
 
     def login_of(self, token: str, github_user_id: int) -> str:
@@ -628,6 +664,26 @@ class FixWrites:
         answer = _send(self._endpoints, "DELETE", url, bearer=token)
         if answer.status != 204:
             _ok(answer)
+
+    def move_branch(self, token: str, key: str, fix_id: str, commit: str) -> None:
+        """Run CI (FR25): `refs/heads/nexovue/suggestion-<id>` to `commit`, a fast forward
+        only (`force` is a constant false). GitHub's 422 says the branch moved since it was
+        read (`not_fast_forward`), or the commit is gone (`commit_missing`)."""
+        url = (
+            f"{self._endpoints.api}/repos/{_repository(key)}/git/refs/heads/"
+            f"{quote(fix_branch(fix_id), safe='/')}"
+        )
+        answer = _send(
+            self._endpoints,
+            "PATCH",
+            url,
+            bearer=token,
+            body={"sha": _sha(commit), "force": False},
+        )
+        if answer.status == 422:
+            moved = _FAST_FORWARD_WORDS in _refused_words(answer)
+            raise GitHubFailure("not_fast_forward" if moved else "commit_missing", 422)
+        _ok(answer)
 
     def open_draft(
         self, token: str, key: str, fix_id: str, *, base: str, title: str, body: str

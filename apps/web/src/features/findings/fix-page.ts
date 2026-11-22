@@ -1,5 +1,5 @@
 import { plural } from "@/shared/format/plural";
-import { formatRelativeTime } from "@/shared/format/time";
+import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 
 import type {
   DeployLineAddition,
@@ -7,6 +7,7 @@ import type {
   FindingSourceFix,
   GeneralLanguage,
   GeneralState,
+  MergedFacts,
   ReleaseContext,
 } from "./api";
 import type { ReleaseLine } from "./finding-page";
@@ -202,6 +203,35 @@ export const DRAFT_WORDS = {
   cancel: "Not now",
   deleteAsked: "Asked GitHub to delete this branch.",
 } as const;
+
+/**
+ * FR30's facts line after a merge, "before, not because": each fact a time, stated in the
+ * order the times fell, with no word tying one to another (Step 8, T8.3).
+ */
+export const MERGED_WORDS = {
+  merged: (at: string) => `Merged ${at}.`,
+  deployed: (at: string) => `A deploy recorded with the merge's commit: ${at}.`,
+  closed: (at: string) => `This finding closed ${at}.`,
+} as const;
+
+export function mergedFactsLine(facts: MergedFacts | null | undefined): string[] {
+  if (!facts) return [];
+  const stated: [string, string][] = [
+    [facts.merged_at, MERGED_WORDS.merged(formatTimestamp(facts.merged_at))],
+  ];
+  if (facts.deployed_at) {
+    stated.push([facts.deployed_at, MERGED_WORDS.deployed(formatTimestamp(facts.deployed_at))]);
+  }
+  if (facts.finding_closed_at) {
+    stated.push([
+      facts.finding_closed_at,
+      MERGED_WORDS.closed(formatTimestamp(facts.finding_closed_at)),
+    ]);
+  }
+  return stated
+    .sort(([earlier], [later]) => Date.parse(earlier) - Date.parse(later))
+    .map(([, sentence]) => sentence);
+}
 
 /* ------------------------------------------- rung 3: the written suggestion (Step 4) */
 

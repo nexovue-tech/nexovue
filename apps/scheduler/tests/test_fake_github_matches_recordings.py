@@ -207,6 +207,12 @@ STEPS: Final[dict[str, Step]] = {
         s.call("GET", f"{REPO}/pulls?head=acme:{BRANCH}&state=all", token=WRITER),
     )[2],
     "read_pull": lambda s: (s.branch(), s.draft(), s.call("GET", f"{REPO}/pulls/1"))[2],
+    "read_pull_merged": lambda s: (
+        s.branch(),
+        s.draft(),
+        s.fake.merge_pull(REPOSITORY, 1, at="2026-11-22T10:00:00Z"),
+        s.call("GET", f"{REPO}/pulls/1"),
+    )[3],
     "write_with_read_token": lambda s: s.call(
         "POST", f"{REPO}/git/blobs", token=READER, body={"content": "x", "encoding": "utf-8"}
     ),

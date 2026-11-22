@@ -26,6 +26,7 @@ from nexovue_platform.fixes.pull_request_text import (
     SignalFacts,
     checked_note,
     pull_request_text,
+    run_ci_commit_message,
 )
 from nexovue_platform.fixes.sentences import NOT_CHECKED
 
@@ -151,3 +152,11 @@ def test_an_unknown_role_reads_neutrally() -> None:
     body = pull_request_text(_facts(files=[ChangedFile("a/b.py", "other", 0, 2)])).body
 
     assert "`a/b.py`: read for this suggestion, +0 -2" in body
+
+
+def test_fr25_run_ci_s_commit_carries_no_skip_instruction_and_names_its_suggestion() -> None:
+    message = run_ci_commit_message("f-1")
+
+    assert SKIP_CI_MARKER not in message and SKIP_CHECKS_TRAILER not in message
+    assert "skip" not in message.lower()
+    assert message.splitlines()[0] == "Run CI for nexovue suggestion f-1"

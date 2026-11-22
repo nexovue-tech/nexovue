@@ -1,12 +1,14 @@
-"""Write access stays off in code until the founder's recorded go (F5 plan T6.5, Step 7;
-foundation item 33; ADR-097).
+"""Write access stays off in code until the founder's recorded go (F5 plan T6.5, Steps 7 and
+8; foundation item 33; ADR-097).
 
 The go and `status.md` move together: a go set in code with the status still reading
 "not given", or the reverse, fails here, so neither can change alone. And **no code path can
 turn it on but the recorded go** (Step 7): read from the product's own sources, nothing builds
 a `WriteGo`, nothing but `write_gate.py` assigns the constant, every `go` the product passes
 is that constant read at call time, no function defaults one, the gate reads no setting,
-environment or store, and every write path asks it.
+environment or store, and every write path asks it. Step 8 adds that each write entry point
+(Run CI's click and job among them) asks it before anything that could reach GitHub or add a
+job, that only the writer builds the write routes, and that the pull request poller only reads.
 """
 
 from __future__ import annotations
@@ -186,7 +188,7 @@ def test_the_gate_reads_no_setting_environment_or_store() -> None:
 
 
 def test_every_write_path_asks_the_gate() -> None:
-    """Steps 7's write paths each ask `write_access_on` themselves (ADR-097)."""
+    """Steps 7's and 8's write paths each ask `write_access_on` themselves (ADR-097)."""
     writers = {
         "apps/api/src/nexovue_api/findings/fix_draft.py",
         "apps/api/src/nexovue_api/findings/fix_checks.py",
@@ -196,3 +198,121 @@ def test_every_write_path_asks_the_gate() -> None:
     }
     for relative in writers:
         assert "write_access_on(" in (ROOT / relative).read_text(encoding="utf-8"), relative
+
+
+# Every entry point of a write path, by module and function: the draft click, Delete this
+# branch and Run CI in the API; the draft job, the branch deletion and Run CI's job in the
+# scheduler (Steps 7 and 8).
+WRITE_ENTRY_POINTS = {
+    "apps/api/src/nexovue_api/findings/fix_draft.py": {"open_draft", "delete_branch", "request_ci"},
+    "apps/scheduler/src/nexovue_scheduler/connections/fix_writer.py": {
+        "open_pull_request",
+        "delete_fix_branch",
+        "run_ci",
+    },
+}
+# What reaches GitHub, or hands work to something that will: the Fix App's client, its write
+# routes, the row a job writes from, a queued job.
+_REACHES_OUT = ("fix_client", "writes", "load_fix_row", "queue_suggestion", "FixWrites")
+_ASKS = ("write_access_on", "_refuse_while_off")
+
+
+def _function(path: Path, name: str) -> ast.AsyncFunctionDef | ast.FunctionDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    [found] = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name
+    ]
+    return found
+
+
+def _first_call(function: ast.AST, names: tuple[str, ...]) -> int | None:
+    lines = [
+        node.lineno
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and _name(node.func).split(".")[-1] in names
+    ]
+    return min(lines, default=None)
+
+
+def test_every_write_entry_point_asks_the_gate_before_it_reaches_out() -> None:
+    """Step 8: in each entry point the gate is asked, on a line before anything that could
+    reach GitHub or add a job, so "off" holds before the first request (ADR-097, ADR-101)."""
+    for relative, names in WRITE_ENTRY_POINTS.items():
+        for name in names:
+            function = _function(ROOT / relative, name)
+            asked = _first_call(function, _ASKS)
+            reached = _first_call(function, _REACHES_OUT)
+            assert asked is not None, f"{relative}:{name} never asks the gate"
+            assert reached is None or asked < reached, f"{relative}:{name}"
+
+
+def test_every_go_taking_entry_point_is_listed() -> None:
+    """A new write path in these modules joins the list above, so the check covers it."""
+    for relative, names in WRITE_ENTRY_POINTS.items():
+        tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
+        taking = {
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and not node.name.startswith("_")
+            and "go" in {a.arg for a in node.args.kwonlyargs + node.args.args}
+        }
+        assert taking == names, relative
+
+
+def test_only_the_writer_builds_the_write_routes() -> None:
+    """`FixGitHub.writes(go)` is called only by the scheduler's writer: no other module,
+    the pull request poller included, can reach a write route (Step 8)."""
+    builders = sorted(
+        str(path.relative_to(ROOT))
+        for path, tree in _trees()
+        if any(
+            isinstance(node, ast.Call)
+            and (_name(node.func).endswith(".writes") or _name(node.func) == "FixWrites")
+            for node in ast.walk(tree)
+        )
+    )
+    assert builders == [
+        "apps/scheduler/src/nexovue_scheduler/connections/fix_github.py",
+        "apps/scheduler/src/nexovue_scheduler/connections/fix_writer.py",
+    ]
+
+
+def _routes(name: str) -> tuple[tuple[str, str, str], ...]:
+    """`fix_github.py`'s checked-in route list, read from its source: this package's tests
+    import no app."""
+    client = ROOT / "apps/scheduler/src/nexovue_scheduler/connections/fix_github.py"
+    tree = ast.parse(client.read_text(encoding="utf-8"))
+    [value] = [
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign) and _name(node.target) == name and node.value
+    ]
+    routes: tuple[tuple[str, str, str], ...] = ast.literal_eval(value)
+    return routes
+
+
+def test_the_pull_request_poller_only_reads() -> None:
+    """Step 8: the poller follows a draft with read routes only, so it needs no go; it
+    imports no write route and calls only methods on `fix_github.ROUTES`' read list."""
+    poller = ROOT / "apps/scheduler/src/nexovue_scheduler/connections/fix_poller.py"
+    tree = ast.parse(poller.read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert not imported & {"FixWrites", "WriteGo", "write_access_on", "WRITE_ACCESS_GO"}
+    reads = {name for method, _, name in _routes("ROUTES") if method == "GET"}
+    writes = {name for _, _, name in _routes("WRITE_ROUTES")}
+    called = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert called & {"pull", "pulls_for"} == {"pull", "pulls_for"}
+    assert not called & writes and not called & {"writes", "token"}
+    assert called & (reads | writes) <= reads

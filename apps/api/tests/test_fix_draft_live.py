@@ -1,12 +1,12 @@
 """The draft pull request's routes and read, against real Postgres (F5 plan T7.4, T7.7's routes,
-T7.8's read; spec FR10c, FR22, FR24, FR24a, FR28, BR8, BR14, AC23, AC25, AC32a, AC47, AC48,
-AC60, AC61, AC62).
+T7.8's read, T8.1's route, T8.3's read; spec FR10c, FR22, FR24, FR24a, FR25, FR26, FR28, FR30,
+BR8, BR14, AC23, AC25, AC28, AC32a, AC47, AC48, AC60, AC61, AC62, AC73).
 
 **Two gates, both proved here.** As shipped, `write_gate.WRITE_ACCESS_GO` is None: the draft
-check, the click and **Delete this branch** answer 409 `writes_off` with its sentence, add no
-job and change no row, and the read hides the action with that sentence in its place. Only
-inside a test is the gate forced on (`monkeypatch` on the module's constant, which the routes
-read at call time), to prove the path behind it.
+check, the click, **Delete this branch** and **Run CI** answer 409 `writes_off` with its
+sentence, add no job and change no row, and the read hides the action with that sentence in
+its place. Only inside a test is the gate forced on (`monkeypatch` on the module's constant,
+which the routes read at call time), to prove the path behind it.
 
 Each test builds its own tenant inside a transaction rolled back afterwards, so no job it
 adds is ever committed for the stack's workers; the clock is the suite's own `now`. **No
@@ -32,14 +32,20 @@ from nexovue_platform.fixes.proposal import stored_edits
 from nexovue_platform.fixes.recheck import CurrentFile, Rechecked, recheck
 from nexovue_platform.fixes.records import (
     CHECK_FIX_TASK,
+    FIX_CI_REQUESTED,
     FIX_PULL_REQUEST_ATTEMPTED,
     FIX_REPOSITORY_SETTINGS_CHANGED,
     OPEN_FIX_PULL_REQUEST_TASK,
+    RUN_FIX_CI_TASK,
     fix_branch,
 )
 from nexovue_platform.fixes.sentences import (
     CHECK_EXPIRED,
+    CI_DID_NOT_FINISH,
+    CI_FAILURE_SENTENCES,
     CI_HELD_ON_PAGE,
+    CI_PUSHED,
+    CI_REQUESTED,
     CONFIRM_AUTHOR,
     CONFIRM_CASE,
     CONFIRM_CI_ON_OPEN,
@@ -52,6 +58,9 @@ from nexovue_platform.fixes.sentences import (
     OPEN_DRAFT,
     OPENING_HEADING,
     OPENING_REQUESTER,
+    RUN_CI,
+    RUN_CI_CONFIRM,
+    RUN_CI_CONFIRM_ACTION,
     WRITE_FAILURE_SENTENCES,
 )
 from nexovue_platform.fixes.write_gate import WriteGo
@@ -63,6 +72,7 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     Connection,
     ConnectionRepository,
+    DeployEvent,
     FindingFix,
     FindingFixCheck,
     FixRepositorySettings,
@@ -324,6 +334,11 @@ async def test_as_shipped_the_read_hides_the_draft_with_the_writes_off_sentence(
         "pull_request_sentence": None,
         "ci_note": None,
         "delete_branch_action": None,
+        "ci_action": None,
+        "ci_confirm": None,
+        "ci_confirm_action": None,
+        "ci_status": None,
+        "merged_facts": None,
     }
     assert latest["patch_action"] == "Prepare patch"
 
@@ -822,3 +837,248 @@ async def test_ac60_only_an_owner_sets_a_repository_s_draft_choices_and_each_is_
         "before": {"drafts_allowed": False, "ci_on_open": False},
         "after": {"drafts_allowed": True, "ci_on_open": False},
     }
+
+
+# --------------------------------------------------------------- Run CI (Step 8)
+
+PULL_URL: Final = "https://github.com/acme/shop/pull/7"
+MERGE_COMMIT: Final = "e" * 40
+
+
+async def _opened(
+    db: AsyncSession,
+    finding: FindingRow,
+    repository: ConnectionRepository,
+    now: datetime,
+    **set_: Any,
+) -> FindingFix:
+    values: dict[str, Any] = {
+        "state": "opened",
+        "pull_request_state": "open",
+        "pull_request_url": PULL_URL,
+        "pull_request_number": 7,
+        "pull_request_commit_sha": "a" * 40,
+        "approved_at": now,
+        "approved_digest": "0" * 64,
+    }
+    row = await _proposed(db, finding, repository, now, **(values | set_))
+    row.pull_request_branch = fix_branch(row.id)
+    await db.flush()
+    return row
+
+
+async def test_as_shipped_run_ci_refuses_writes_off_and_the_read_offers_no_run_ci(
+    db: AsyncSession, now: datetime
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now)
+    person = rows.person(tenant)
+
+    asked = await _post(db, person, finding, f"/fixes/{row.id}/run-ci", None)
+    draft = (await _latest(db, person, finding))["draft"]
+
+    assert asked.status_code == 409, asked.text
+    assert (asked.json()["code"], asked.json()["detail"]) == ("writes_off", WRITES_OFF)
+    assert await _jobs(db, tenant.organization.id) == []
+    await db.refresh(row)
+    assert (row.ci_requested_by, row.ci_requested_at) == (None, None)
+    assert draft["ci_action"] is None and draft["ci_confirm"] is None
+
+
+async def test_ac28_run_ci_stores_the_request_audits_it_and_adds_one_job_with_ids_only(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now, last_write_failure="branch_changed")
+
+    asked = await _post(db, rows.person(tenant), finding, f"/fixes/{row.id}/run-ci", None)
+
+    assert asked.status_code == 202, asked.text
+    assert asked.json() == {"fix_id": str(row.id)}
+    await db.refresh(row)
+    assert row.ci_requested_by == tenant.user.id and row.ci_requested_at is not None
+    assert row.last_write_failure is None
+    [job] = await _jobs(db, tenant.organization.id)
+    assert job.task == RUN_FIX_CI_TASK
+    assert job.kwargs == {"fix_id": str(row.id), "org_id": str(tenant.organization.id)}
+    [entry] = (
+        await db.scalars(
+            select(AuditLogEntry).where(
+                AuditLogEntry.org_id == tenant.organization.id,
+                AuditLogEntry.action == FIX_CI_REQUESTED,
+            )
+        )
+    ).all()
+    assert entry.actor_user_id == tenant.user.id
+    assert entry.detail == {"fix_id": str(row.id), "repository_id": str(repository.id)}
+
+
+@pytest.mark.parametrize("pull_request_state", ["closed", "merged", "untracked"])
+async def test_ac28_run_ci_needs_an_open_draft(
+    db: AsyncSession, now: datetime, gate_on: None, pull_request_state: str
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now)
+    row.pull_request_state = pull_request_state
+    await db.flush()
+
+    asked = await _post(db, rows.person(tenant), finding, f"/fixes/{row.id}/run-ci", None)
+
+    assert asked.status_code == 409
+    assert asked.json()["code"] == "pull_request_not_open"
+    assert asked.json()["detail"] == CI_FAILURE_SENTENCES["pull_request_not_open"]
+    assert await _jobs(db, tenant.organization.id) == []
+
+
+async def test_ac73_a_general_row_refuses_run_ci_with_a_named_code(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    tenant, finding = await rows.ready(db, now)
+    row = await rows.fix(db, finding, now)
+
+    asked = await _post(db, rows.person(tenant), finding, f"/fixes/{row.id}/run-ci", None)
+
+    assert asked.status_code == 409
+    assert (asked.json()["code"], asked.json()["detail"]) == (
+        "general_has_no_code",
+        GENERAL_HAS_NO_CODE,
+    )
+
+
+async def test_a_viewer_cannot_run_ci(db: AsyncSession, now: datetime, gate_on: None) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now)
+
+    asked = await _post(db, rows.person(tenant, "viewer"), finding, f"/fixes/{row.id}/run-ci", None)
+
+    assert asked.status_code == 403
+    await db.refresh(row)
+    assert row.ci_requested_at is None
+
+
+async def test_fr25_an_open_draft_offers_run_ci_with_its_confirmation(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    await _opened(db, finding, repository, now)
+
+    requester = (await _latest(db, rows.person(tenant), finding))["draft"]
+    viewer = (await _latest(db, rows.person(tenant, "viewer"), finding))["draft"]
+
+    assert (requester["ci_action"], requester["ci_confirm"], requester["ci_confirm_action"]) == (
+        RUN_CI,
+        RUN_CI_CONFIRM,
+        RUN_CI_CONFIRM_ACTION,
+    )
+    assert requester["ci_note"] == CI_HELD_ON_PAGE and requester["ci_status"] is None
+    assert viewer["ci_action"] is None and viewer["merged_facts"] is None
+
+
+async def test_fr25_a_request_reads_as_asked_then_done_and_a_failure_says_why(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now)
+    person = rows.person(tenant)
+    row.ci_requested_by, row.ci_requested_at = tenant.user.id, now
+    await db.flush()
+    waiting = (await _latest(db, person, finding))["draft"]
+    row.ci_commit_sha, row.ci_parent_sha = "b" * 40, "a" * 40
+    row.ci_commit_requested_at, row.ci_pushed_at = now, now
+    await db.flush()
+    done = (await _latest(db, person, finding))["draft"]
+    row.ci_requested_at = now + timedelta(minutes=1)
+    row.last_write_failure = "branch_changed"
+    await db.flush()
+    failed = (await _latest(db, person, finding))["draft"]
+
+    assert (waiting["ci_status"], waiting["ci_action"]) == (CI_REQUESTED, None)
+    assert waiting["ci_note"] == CI_HELD_ON_PAGE
+    assert (done["ci_status"], done["ci_action"], done["ci_note"]) == (CI_PUSHED, RUN_CI, None)
+    assert failed["failure"] == CI_FAILURE_SENTENCES["branch_changed"]
+    assert (failed["ci_status"], failed["ci_action"]) == (None, RUN_CI)
+
+
+async def test_fr25_a_request_its_job_never_answered_is_offered_again_after_20_minutes(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now)
+    row.ci_requested_by, row.ci_requested_at = tenant.user.id, now - timedelta(minutes=19)
+    await db.flush()
+    young = (await _latest(db, rows.person(tenant), finding))["draft"]
+    row.ci_requested_at = now - timedelta(minutes=21)
+    await db.flush()
+    lapsed = (await _latest(db, rows.person(tenant), finding))["draft"]
+
+    assert (young["ci_status"], young["ci_action"]) == (CI_REQUESTED, None)
+    assert (lapsed["ci_status"], lapsed["ci_action"]) == (CI_DID_NOT_FINISH, RUN_CI)
+
+
+async def test_fr30_after_a_merge_the_requester_reads_the_facts_line_s_times(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    """Before, not because: GitHub's merge time; the first deploy F28 recorded with the
+    merge's commit at or after it, in this project; the finding's close."""
+    tenant, finding, repository = await _ready(db, now)
+    merged_at = now - timedelta(minutes=50)
+    await _opened(
+        db,
+        finding,
+        repository,
+        now,
+        pull_request_state="merged",
+        pull_request_state_at=merged_at,
+        pull_request_merge_commit_sha=MERGE_COMMIT,
+    )
+    for at, commit in (
+        (merged_at - timedelta(minutes=5), MERGE_COMMIT),
+        (merged_at + timedelta(minutes=10), "f" * 40),
+        (merged_at + timedelta(minutes=20), MERGE_COMMIT),
+        (merged_at + timedelta(minutes=90), MERGE_COMMIT),
+    ):
+        db.add(
+            DeployEvent(
+                org_id=finding.org_id,
+                project_id=finding.project_id,
+                version=f"v-{at.isoformat()}",
+                service_name="checkout",
+                deployed_at=at,
+                source="ci",
+                delivery_id=f"d-{at.isoformat()}-{commit[:4]}",
+                event_metadata={},
+                commit_sha=commit,
+            )
+        )
+    finding.state, finding.closed_reason = "closed", "recovered"
+    finding.closed_at = merged_at + timedelta(minutes=30)
+    await db.flush()
+
+    draft = (await _latest(db, rows.person(tenant), finding))["draft"]
+
+    assert draft["merged_facts"] == {
+        "merged_at": merged_at.isoformat().replace("+00:00", "Z"),
+        "deployed_at": (merged_at + timedelta(minutes=20)).isoformat().replace("+00:00", "Z"),
+        "finding_closed_at": (merged_at + timedelta(minutes=30)).isoformat().replace("+00:00", "Z"),
+    }
+    assert draft["ci_action"] is None and draft["ci_note"] is None
+
+
+async def test_fr30_a_merge_no_deploy_recorded_reads_without_one(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    tenant, finding, repository = await _ready(db, now)
+    merged_at = now - timedelta(hours=3)
+    await _opened(
+        db,
+        finding,
+        repository,
+        now,
+        pull_request_state="merged",
+        pull_request_state_at=merged_at,
+        pull_request_merge_commit_sha=MERGE_COMMIT,
+    )
+
+    facts = (await _latest(db, rows.person(tenant), finding))["draft"]["merged_facts"]
+
+    assert facts["deployed_at"] is None and facts["finding_closed_at"] is None

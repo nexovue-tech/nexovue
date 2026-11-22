@@ -1425,6 +1425,20 @@ export interface DraftView {
   pull_request_sentence: string | null;
   ci_note: string | null;
   delete_branch_action: string | null;
+  /** Step 8 (FR25): **Run CI**, FR25's confirmation, and what a request has done so far. */
+  ci_action: string | null;
+  ci_confirm: string | null;
+  ci_confirm_action: string | null;
+  ci_status: string | null;
+  /** FR30: the facts line's times after a merge, for a requester. */
+  merged_facts: MergedFacts | null;
+}
+
+/** FR30, "before, not because": times only, which the page states in order. */
+export interface MergedFacts {
+  merged_at: string;
+  deployed_at: string | null;
+  finding_closed_at: string | null;
 }
 
 export interface SourceFix {
@@ -1612,6 +1626,22 @@ export function useDeleteBranch(findingId: string, fixId: string) {
     mutationFn: () =>
       apiClient.post<{ fix_id: string }>(
         `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/delete-branch`,
+        {},
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sourceFixQueryKey(findingId) });
+    },
+  });
+}
+
+/** **Run CI** (FR25): a job pushes one same-tree commit with no skip marker to the branch. */
+export function useRunCi(findingId: string, fixId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "fixes", "source", "run-ci", findingId, fixId],
+    mutationFn: () =>
+      apiClient.post<{ fix_id: string }>(
+        `findings/${encodeURIComponent(findingId)}/fixes/${encodeURIComponent(fixId)}/run-ci`,
         {},
       ),
     onSettled: () => {

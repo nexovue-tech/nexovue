@@ -205,10 +205,9 @@ POLICY_OF: Final = {
     # (FR20); stopping a rule changes what detection's explanations say (FR54, A64).
     "nexovue_api/findings/router.py:rate_explanation": "MayOperateAlerts",
     # F5 (FR32, T2b.2): asking for a general fix suggestion spends the customer's tokens, so
-    # every working role's and no viewer's. The four actions on code refuse a general row
-    # (AC73) and carry the same gate, which their source rows will need (Steps 4 to 7).
+    # every working role's and no viewer's. The actions on code are rung 3's routes, which
+    # refuse a general row (AC73).
     "nexovue_api/findings/fixes/general_router.py:ask_general_fix": "MayRequestFix",
-    "nexovue_api/findings/fixes/general_router.py:run_ci": "MayRequestFix",
     # F5 Step 3: rung 3's Ask, list, Send and Cancel, and the brief's paths (FR5c, FR11).
     "nexovue_api/findings/fixes/source/router.py:ask_source_fix": "MayRequestFix",
     "nexovue_api/findings/fixes/source/router.py:change_source_files": "MayRequestFix",
@@ -226,6 +225,9 @@ POLICY_OF: Final = {
     "nexovue_api/findings/fixes/source/router.py:delete_suggestion_branch": (
         "MayOpenFixPullRequest"
     ),
+    # F5 Step 8: Run CI is `OPEN_FIX_PULL_REQUEST` (design, *Routes*), refusing `writes_off`
+    # while write access is off in code (ADR-097); rung 2b's placeholder is gone.
+    "nexovue_api/findings/fixes/source/router.py:run_suggestion_ci": "MayOpenFixPullRequest",
     # F5's Fix App and code locations are an admin's; consent an owner's (FR6, AC10a).
     "nexovue_api/connections/fix/router.py:start_fix_app": "MayManageConnections",
     "nexovue_api/connections/fix/router.py:complete_fix_app": "MayManageConnections",

@@ -17,13 +17,15 @@ environment, never from the command line, and are never printed.
     NEXOVUE_RECORD_READ_TOKEN=…  NEXOVUE_RECORD_WRITE_TOKEN=…  \\
       uv run python tools/ai-eval/fix/record_github.py \\
         --repository owner/scratch --first <older commit sha> \\
-        --person-login someone --person-id 123 [--large-tree <sha>] [--dry-run]
+        --person-login someone --person-id 123 [--large-tree <sha>] [--merged-pull <n>] \\
+        [--dry-run]
 
 The read token is an installation token minted with `contents: read, metadata: read`;
 the write token with `contents: write, pull_requests: write, metadata: read`. It
 creates and then deletes one branch, `nexovue/suggestion-record`, and opens one draft
 pull request, which deleting the branch closes. `read_tree_truncated` needs a tree past
-GitHub's limit (`--large-tree`), and is left as it is without one.
+GitHub's limit (`--large-tree`), and is left as it is without one; `read_pull_merged` (Step 8)
+needs a pull request merged by hand in the scratch repository (`--merged-pull`), likewise.
 Run `pnpm exec biome format --write` on the folder afterwards, as the gate formats JSON.
 """
 
@@ -62,6 +64,8 @@ class Session:
     person_login: str
     person_id: int
     large_tree: str | None
+    # Step 8: a pull request merged by hand in the scratch repository, for the poller's shape.
+    merged_pull: int | None
     read_token: str
     write_token: str
     # What earlier steps learned: the head, its tree, a blob, the branch's commit.
@@ -184,6 +188,9 @@ STEPS: Final[dict[str, Step]] = {
         if s.large_tree is None
         else s.call("GET", f"{_repo(s)}/git/trees/{s.large_tree}?recursive=1")
     ),
+    "read_pull_merged": lambda s: (
+        None if s.merged_pull is None else s.call("GET", f"{_repo(s)}/pulls/{s.merged_pull}")
+    ),
     "read_blob": lambda s: s.call("GET", f"{_repo(s)}/git/blobs/{s.known['blob']}"),
     "compare_ahead": lambda s: s.call("GET", f"{_repo(s)}/compare/{s.first}...main"),
     "compare_unknown": lambda s: s.call("GET", f"{_repo(s)}/compare/{'f' * 40}...main"),
@@ -289,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--person-login", required=True)
     parser.add_argument("--person-id", required=True, type=int)
     parser.add_argument("--large-tree", help="a tree sha past GitHub's recursive limit")
+    parser.add_argument("--merged-pull", type=int, help="a pull request merged by hand")
     parser.add_argument("--dry-run", action="store_true", help="list the steps, call nothing")
     arguments = parser.parse_args(argv)
     tokens = {
@@ -303,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         person_login=arguments.person_login,
         person_id=arguments.person_id,
         large_tree=arguments.large_tree,
+        merged_pull=arguments.merged_pull,
         read_token=tokens[READ_TOKEN_VARIABLE],
         write_token=tokens[WRITE_TOKEN_VARIABLE],
     )

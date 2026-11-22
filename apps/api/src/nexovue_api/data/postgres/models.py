@@ -2404,6 +2404,16 @@ class FindingFix(Base):
     pull_request_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     ci_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_write_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Run CI and following the pull request (migration 0084, Step 8): the head the latest
+    # Run CI commit was built on, the request it answers and when the branch moved to it;
+    # when the stored pull request state last changed, a merge's commit, and the poller's
+    # last visit. The record, never stored code.
+    ci_parent_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ci_commit_requested_at: Mapped[OptionalTimestamp]
+    ci_pushed_at: Mapped[OptionalTimestamp]
+    pull_request_state_at: Mapped[OptionalTimestamp]
+    pull_request_merge_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pull_request_polled_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -2539,6 +2549,12 @@ class FindingFix(Base):
             "(pull_request_commit_sha IS NULL OR pull_request_commit_sha ~ '^[0-9a-f]{40}$') "
             "AND (ci_commit_sha IS NULL OR ci_commit_sha ~ '^[0-9a-f]{40}$')",
             name="commits_are_shas",
+        ),
+        CheckConstraint(
+            "(ci_parent_sha IS NULL OR ci_parent_sha ~ '^[0-9a-f]{40}$') "
+            "AND (pull_request_merge_commit_sha IS NULL "
+            "OR pull_request_merge_commit_sha ~ '^[0-9a-f]{40}$')",
+            name="followed_commits_are_shas",
         ),
         CheckConstraint(
             "state <> 'approved' OR (approved_at IS NOT NULL AND approved_digest IS NOT NULL)",

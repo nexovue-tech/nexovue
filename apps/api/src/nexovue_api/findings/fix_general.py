@@ -44,7 +44,6 @@ from nexovue_platform.fixes.sentences import (
     ELIGIBILITY_SENTENCES,
     GENERAL_ACTION,
     GENERAL_EARLIER_READING,
-    GENERAL_HAS_NO_CODE,
     GENERAL_HEADING,
     GENERAL_LABEL,
     GENERAL_LEAD,
@@ -84,12 +83,10 @@ from nexovue_api.findings.schemas import ExplanationSegment
 from nexovue_api.settings import Settings
 
 NOT_FOUND: Final = "No such finding."
-NO_SUCH_FIX: Final = "No such suggestion for this finding."
 NOT_OFFERED: Final = "A general suggestion is not offered for this finding now."
 # A click that lost the one-in-flight index to another (BR8).
 ALREADY_RUNNING_CODE: Final = "already_running"
 NOT_OFFERED_CODE: Final = "not_offered"
-GENERAL_HAS_NO_CODE_CODE: Final = "general_has_no_code"
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,14 +387,3 @@ async def ask_general(
     return await read_general(
         session, identity=identity, finding_id=finding_id, settings=settings, now=now
     )
-
-
-async def refuse_code_action(
-    session: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, fix_id: uuid.UUID
-) -> None:
-    """AC73: a general row has no code, so a check, a patch, a draft and CI are refused with
-    a named code. Step 3 builds these actions for source rows; until then there are none."""
-    row = await fix_queries.fix_of(session, org_id=org_id, finding_id=finding_id, fix_id=fix_id)
-    if row is None or row.kind != KIND_GENERAL:
-        raise NotFoundError(NO_SUCH_FIX)
-    raise ConflictError(GENERAL_HAS_NO_CODE, code=GENERAL_HAS_NO_CODE_CODE)

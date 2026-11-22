@@ -140,7 +140,11 @@ async def test_ac9_a_provider_change_stops_the_next_request_and_touches_no_conse
     db: AsyncSession, now: datetime, label: str, change: dict[str, Any]
 ) -> None:
     tenant, finding, _ = await source.ready(db, now)
-    consent_before = (await db.execute(select(FixSourceConsent.__table__))).all()
+    # This organization's rows only: other suites commit their own while this one runs.
+    own_consents = select(FixSourceConsent.__table__).where(
+        FixSourceConsent.org_id == tenant.organization.id
+    )
+    consent_before = (await db.execute(own_consents)).all()
     ai = await db.scalar(select(AIConnection).where(AIConnection.org_id == tenant.organization.id))
     assert ai is not None
     for name, value in change.items():
@@ -157,7 +161,7 @@ async def test_ac9_a_provider_change_stops_the_next_request_and_touches_no_conse
     # was touched to stop it (status.md, *Open decisions*).
     expected = "no_consent" if label == "the model" else "ai_off"
     assert response.status_code == 409 and response.json()["code"] == expected, label
-    assert (await db.execute(select(FixSourceConsent.__table__))).all() == consent_before
+    assert (await db.execute(own_consents)).all() == consent_before
 
 
 async def test_withdrawing_ends_work_in_flight_and_deletes_its_stored_code(

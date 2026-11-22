@@ -33,6 +33,12 @@ through `files_read`; and every row the requester must hear about owes one email
 Step 7 (T7.5, AC26a): an `approved` row whose draft job did not finish within its expiry,
 hard limit and a margin goes back to `proposed`, `did_not_finish`, so **Try again** works; a
 branch it stored keeps the one-draft hold until the poller (Step 8) settles it.
+
+Step 8 (T8.2): stored code is deleted 7 days after the poller stored a pull request as
+merged or closed (BR9's second row, `pull_request_done`); and once a repository's GitHub
+access has been gone 72 hours, every pull request or held branch there that Nexovue still
+followed reads `untracked` and frees its finding (design, *The sweep*, step 6; BR8, AC49),
+whether or not a consent was still live.
 """
 
 from __future__ import annotations
@@ -61,6 +67,7 @@ from nexovue_platform.fixes.records import (
     CANCELLED,
     CHECKS_REFUSED_AT_CLICK,
     CODE_ACCESS_GONE,
+    CODE_PULL_REQUEST_DONE,
     CONSENT_WITHDRAWN_ACCESS_GONE,
     FAILED,
     FIX_CHECKS_REFUSED,
@@ -70,6 +77,7 @@ from nexovue_platform.fixes.records import (
     INTERACTIVE_QUEUE,
     LAPSED,
     PROPOSED,
+    PULL_REQUEST_CODE_KEPT_FOR,
     REFRESH_FIX_APP_TASK,
     REPOSITORY_AUDIT_TARGET,
     SWEEP_FIXES_TASK,
@@ -197,6 +205,19 @@ _CODE_DUE: Final = text(
     LIMIT :batch
     """
 )
+# Across every organization: code kept past 7 days after its pull request was merged or
+# closed, by the poller's stored state and time (BR9).
+_PULL_REQUEST_DONE: Final = text(
+    """
+    SELECT id, org_id FROM finding_fixes
+    WHERE kind = 'source' AND code_deleted_at IS NULL
+      AND pull_request_state IN ('merged', 'closed') AND pull_request_state_at < :before
+      AND (files_read IS NOT NULL OR edits IS NOT NULL)
+      AND (CAST(:only_org AS uuid) IS NULL OR org_id = CAST(:only_org AS uuid))
+    ORDER BY pull_request_state_at
+    LIMIT :batch
+    """
+)
 _EXPIRED_PACKS: Final = text(
     "DELETE FROM finding_fix_source_packs WHERE expires_at < :at AND "
     "(CAST(:only_org AS uuid) IS NULL OR org_id = CAST(:only_org AS uuid)) RETURNING org_id"
@@ -261,6 +282,35 @@ _END_IN_FLIGHT: Final = text(
       AND state IN ('gathering', 'gathered', 'proposing')
     """
 )
+# Across every organization: pull requests and held branches Nexovue still follows, in a
+# repository whose GitHub access has been gone past the limit, read `untracked` (step 6).
+_OUT_OF_REACH: Final = text(
+    """
+    UPDATE finding_fixes AS fix
+    SET pull_request_state = 'untracked', pull_request_state_at = :at
+    WHERE fix.id IN (
+        SELECT followed.id
+        FROM finding_fixes AS followed
+        JOIN connection_repositories AS repository
+          ON repository.org_id = followed.org_id
+         AND repository.id = followed.connection_repository_id
+        JOIN connections AS app
+          ON app.org_id = repository.org_id AND app.id = repository.connection_id
+        WHERE app.kind = 'github_fix' AND app.state <> 'disconnected'
+          AND followed.kind = 'source' AND followed.state <> 'approved'
+          AND followed.pull_request_branch IS NOT NULL
+          AND (followed.pull_request_state IS NULL OR followed.pull_request_state = 'open')
+          AND ((NOT repository.is_reachable AND repository.unreachable_since < :before)
+               OR (app.state = 'needs_attention' AND app.last_failure = 'app_not_installed'
+                   AND app.failing_since < :before))
+          AND (CAST(:only_org AS uuid) IS NULL OR followed.org_id = CAST(:only_org AS uuid))
+        ORDER BY followed.id
+        LIMIT :batch
+        FOR UPDATE OF followed SKIP LOCKED
+    )
+    RETURNING fix.org_id, fix.id
+    """
+)
 _APPS_DUE: Final = text(
     """
     SELECT id, org_id FROM connections
@@ -281,6 +331,7 @@ class SweptFixes:
     expired: int
     refreshes: int
     access_gone: int = 0
+    untracked: int = 0
 
 
 async def sweep(
@@ -335,12 +386,27 @@ async def sweep(
             )
     refreshes = await _queue_refreshes(engine, now=now, only_org=only_org)
     access_gone = await _take_back_lost_access(engine, now=now, only_org=only_org)
+    async with engine.begin() as connection:
+        untracked = len(
+            (
+                await connection.execute(
+                    _OUT_OF_REACH,
+                    {
+                        "before": now - ACCESS_GONE_AFTER,
+                        "at": now,
+                        "batch": BATCH,
+                        "only_org": only_org,
+                    },
+                )
+            ).all()
+        )
     return SweptFixes(
         ended=ended,
         cleared=cleared,
         expired=expired,
         refreshes=refreshes,
         access_gone=access_gone,
+        untracked=untracked,
     )
 
 
@@ -491,7 +557,22 @@ async def _clear_due(engine: AsyncEngine, *, now: datetime, only_org: str | None
                 text(CLEAR_STORED_CODE),
                 {"org_id": row.org_id, "fix_id": row.id, "reason": row.reason},
             )
-    return len(rows)
+        done = (
+            await connection.execute(
+                _PULL_REQUEST_DONE,
+                {
+                    "before": now - PULL_REQUEST_CODE_KEPT_FOR,
+                    "batch": BATCH,
+                    "only_org": only_org,
+                },
+            )
+        ).all()
+        for row in done:
+            await connection.execute(
+                text(CLEAR_STORED_CODE),
+                {"org_id": row.org_id, "fix_id": row.id, "reason": CODE_PULL_REQUEST_DONE},
+            )
+    return len(rows) + len(done)
 
 
 async def _queue_refreshes(engine: AsyncEngine, *, now: datetime, only_org: str | None) -> int:
@@ -564,7 +645,14 @@ async def _take_back_lost_access(
 @task(SWEEP_FIXES_TASK)
 def sweep_fixes_task() -> None:
     swept = with_engine(lambda engine: sweep(engine, clock=lambda: datetime.now(UTC)))
-    if swept.ended or swept.cleared or swept.expired or swept.refreshes or swept.access_gone:
+    if (
+        swept.ended
+        or swept.cleared
+        or swept.expired
+        or swept.refreshes
+        or swept.access_gone
+        or swept.untracked
+    ):
         logger.info(
             "the suggested fix sweep moved rows",
             ended=swept.ended,
@@ -572,4 +660,5 @@ def sweep_fixes_task() -> None:
             expired=swept.expired,
             refreshes=swept.refreshes,
             access_gone=swept.access_gone,
+            untracked=swept.untracked,
         )

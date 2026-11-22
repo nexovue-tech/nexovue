@@ -15,6 +15,7 @@ from typing import Final
 
 from nexovue_platform.fixes.pack import LEFT_OUT_REASONS
 from nexovue_platform.fixes.records import (
+    BRANCH_CHANGED,
     BRANCH_NOT_OURS,
     CHANGED_SINCE_CHECK,
     CHECKS_REFUSED_AT_CLICK,
@@ -29,6 +30,7 @@ from nexovue_platform.fixes.records import (
     NO_DRAFT_SUPPORT,
     NO_WRITE_PERMISSION,
     PUBLIC_NOT_ALLOWED,
+    PULL_REQUEST_NOT_OPEN,
     PULL_REQUEST_STATES,
     STALE_REASONS,
     VERDICT_MERGE_AS_IS,
@@ -477,6 +479,38 @@ WRITE_FAILURE_SENTENCES: Final[dict[str, str]] = {
     "github_unavailable": REASON_SENTENCES["github_unavailable"].requester,
     "consent_withdrawn": "An owner withdrew agreement while this was opening, so it stopped.",
 }
+# Step 8: why Run CI did not move the branch, on an opened draft's `last_write_failure`
+# (spec FR25; design, *Run CI*). New wording, the founder's call (status, open decision).
+CI_FAILURE_SENTENCES: Final[dict[str, str]] = {
+    WRITES_OFF: (
+        "Running CI from Nexovue is switched off in this version of Nexovue, until its safety "
+        "evaluation is done."
+    ),
+    DRAFTS_NOT_ALLOWED: (
+        "An owner no longer allows draft pull requests for this repository, so CI was not "
+        "asked for."
+    ),
+    NO_WRITE_PERMISSION: (
+        "The Nexovue suggestions App has no write access to this repository, so CI was not "
+        "asked for."
+    ),
+    PUBLIC_NOT_ALLOWED: (
+        "This repository is public and an admin has not allowed it, so CI was not asked for."
+    ),
+    BRANCH_CHANGED: (
+        "This branch has changed since Nexovue's last commit, so CI was not asked for. Check "
+        "GitHub."
+    ),
+    PULL_REQUEST_NOT_OPEN: "This pull request is no longer open, so CI was not asked for.",
+    "no_github_access": REASON_SENTENCES["no_github_access"].requester,
+    "not_linked": REASON_SENTENCES["not_linked"].requester,
+    "access_unknown": REASON_SENTENCES["access_unknown"].requester,
+    "permission_missing": REASON_SENTENCES["permission_missing"].requester,
+    "github_unavailable": REASON_SENTENCES["github_unavailable"].requester,
+}
+WRITE_FAILURE_SENTENCES.update(
+    {code: CI_FAILURE_SENTENCES[code] for code in (BRANCH_CHANGED, PULL_REQUEST_NOT_OPEN)}
+)
 # What GitHub says of the draft, followed by F5's poller (design, *Every sentence*).
 PULL_REQUEST_SENTENCES: Final[dict[str, FixSentence]] = {
     "open": FixSentence(
@@ -513,6 +547,20 @@ OPENED_HEADING: Final = "Draft pull request"
 CI_HELD_ON_PAGE: Final = (
     "Nexovue's commit asked GitHub Actions to wait. Anything pushed since is not tracked "
     "here; check GitHub."
+)
+# Step 8, Run CI (spec FR25, FR26; design, *Run CI*). FR25's confirmation says it runs the
+# model's code in the customer's CI, possibly with secrets, after the diff is read.
+RUN_CI: Final = "Run CI"
+RUN_CI_CONFIRM: Final = (
+    "This runs the model's code in this repository's CI, possibly with its secrets. Read the "
+    "diff on GitHub first."
+)
+RUN_CI_CONFIRM_ACTION: Final = "Run CI now"
+CI_REQUESTED: Final = "Asking GitHub to run CI: Nexovue is adding a commit with no skip marker."
+CI_DID_NOT_FINISH: Final = "Asking GitHub to run CI did not finish. You can ask again."
+CI_PUSHED: Final = (
+    "CI was asked for: Nexovue's newest commit on this branch has no skip marker. Anything "
+    "pushed since is not tracked here; check GitHub."
 )
 # FR24's confirmation, each asserted by exact string (AC37e, AC62).
 CONFIRM_FACTS: Final = "{repository}, branch {branch}: {files} {files_word}, {lines} {lines_word}."
@@ -611,4 +659,5 @@ assert set(CODE_DELETED_WHY) == set(CODE_DELETED_REASONS), (
 )
 assert set(DRAFT_REFUSAL_SENTENCES) == set(DRAFT_REFUSALS), "every draft refusal needs words"
 assert set(WRITE_FAILURE_SENTENCES) == set(WRITE_FAILURES), "every write failure needs words"
+assert set(CI_FAILURE_SENTENCES) <= set(WRITE_FAILURES), "Run CI stores only write failures"
 assert set(PULL_REQUEST_SENTENCES) == set(PULL_REQUEST_STATES), "every state needs words"

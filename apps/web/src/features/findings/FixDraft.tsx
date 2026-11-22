@@ -5,6 +5,7 @@ import { ApiError } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
 import type { DraftView } from "./api";
 import { useCheckForDraft, useDeleteBranch } from "./api";
+import { FixCi } from "./FixCi";
 import { FixDraftConfirm } from "./FixDraftConfirm";
 import { DRAFT_WORDS } from "./fix-page";
 
@@ -17,7 +18,8 @@ const LINK = "font-medium text-brand-text text-sm underline-offset-2 hover:under
  * pull request** asks this person's own `draft` check; the section polls it; once it passes,
  * FR24's confirm opens. A refused draft is hidden with its sentence beside the patch action,
  * never a disabled button (FR10c). An opened draft shows its state, its link and FR26's
- * line. Every sentence is the API's.
+ * line, then **Run CI** and what it did, and after a merge the facts line (Step 8, `FixCi`).
+ * Every sentence is the API's.
  */
 export function FixDraft({
   findingId,
@@ -55,6 +57,7 @@ export function FixDraft({
         </p>
       ) : null}
       {draft.ci_note ? <p className="max-w-prose text-ink-dim text-sm">{draft.ci_note}</p> : null}
+      <FixCi findingId={findingId} fixId={fixId} draft={draft} />
       {draft.check ? (
         <>
           <h4 className="font-medium text-ink text-sm">{draft.check.heading}</h4>

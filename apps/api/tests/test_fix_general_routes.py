@@ -38,12 +38,10 @@ from nexovue_api.settings import API_PREFIX, Settings
 
 NOW: Final = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
 GENERAL: Final = "/findings/{finding_id}/fixes/general"
-# `/check` is rung 3's own route since Step 4, `/patch` since Step 5 and
-# `/draft-pull-request` since Step 7; each refuses a general row there (T4.12, T5.2, T7.4).
-ON_CODE: Final = tuple(
-    f"/findings/{{finding_id}}/fixes/{{fix_id}}/{action}" for action in ("run-ci",)
-)
-ALL_PATHS: Final = {GENERAL, *ON_CODE}
+# Every action on code is rung 3's own route: `/check` since Step 4, `/patch` since Step 5,
+# `/draft-pull-request` since Step 7 and `/run-ci` since Step 8; each refuses a general row
+# there (T4.12, T5.2, T7.4, T8.1). Rung 2b's router holds only its own two.
+ALL_PATHS: Final = {GENERAL}
 
 # FR31 holds: AI on, a service finding past its first read, a released cause sendable.
 OFFERED: Final = EligibilityFacts(
@@ -160,9 +158,8 @@ async def test_ac74_an_api_token_gets_403_on_every_rung_2b_route(app: FastAPI) -
         read = await client.get(API_PREFIX + GENERAL.format(**ids), headers=token)
         writes = [
             await client.post(
-                API_PREFIX + path.format(**ids), headers=token, json={"language": "go"}
+                API_PREFIX + GENERAL.format(**ids), headers=token, json={"language": "go"}
             )
-            for path in (GENERAL, *ON_CODE)
         ]
 
     for response in (read, *writes):

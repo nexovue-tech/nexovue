@@ -69,6 +69,30 @@ def draft_refusal(
     return None
 
 
+def ci_refusal(*, drafts_allowed: bool, granted: Mapping[str, str] | None) -> str | None:
+    """Run CI's gates that need no GitHub call (FR25: "the same access checks"): the owner's
+    allowance for this repository and the App's write grant. A draft refused by GitHub, or a
+    cause other than a signed deploy, says nothing about a draft already open."""
+    if not drafts_allowed:
+        return DRAFTS_NOT_ALLOWED
+    if not has_write_grant(granted):
+        return NO_WRITE_PERMISSION
+    return None
+
+
+def ci_done(
+    *,
+    requested_at: datetime | None,
+    commit_requested_at: datetime | None,
+    pushed_at: datetime | None,
+) -> bool:
+    """Whether Run CI moved the branch for the request a row holds now (FR25): its commit
+    answers that request, and the branch was moved to it. The job and the read both ask."""
+    return (
+        requested_at is not None and commit_requested_at == requested_at and pushed_at is not None
+    )
+
+
 def public_refused(*, private: bool, public_allowed: bool) -> bool:
     """BR13: a public repository, by GitHub's live answer, needs an admin's allowance."""
     return not private and not public_allowed

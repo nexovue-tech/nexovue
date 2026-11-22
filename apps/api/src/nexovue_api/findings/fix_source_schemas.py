@@ -249,6 +249,16 @@ class DraftConfirm(BaseModel):
     expires_at: datetime
 
 
+class MergedFacts(BaseModel):
+    """FR30, "before, not because": when GitHub merged the draft; when a deploy F28 recorded
+    with the merge's commit came after it, if one did; and when the finding closed, if it
+    has. Times only: the page states them in order and draws no link between them."""
+
+    merged_at: datetime
+    deployed_at: datetime | None
+    finding_closed_at: datetime | None
+
+
 class DraftView(BaseModel):
     """Step 7, in this person's shape (design, *State by role*; FR10c, FR24, FR26).
 
@@ -271,6 +281,13 @@ class DraftView(BaseModel):
     pull_request_sentence: str | None = None
     ci_note: str | None = None
     delete_branch_action: str | None = None
+    # Step 8 (FR25, FR26, FR30): **Run CI** with its confirmation, what a request has done so
+    # far, and after a merge the facts line's times, for a requester.
+    ci_action: str | None = None
+    ci_confirm: str | None = None
+    ci_confirm_action: str | None = None
+    ci_status: str | None = None
+    merged_facts: MergedFacts | None = None
 
 
 class SourceFix(BaseModel):
@@ -318,6 +335,12 @@ class DraftStarted(BaseModel):
 
 
 class DeleteBranchStarted(BaseModel):
+    fix_id: uuid.UUID
+
+
+class CiRequested(BaseModel):
+    """Run CI's answer: the request is stored and its job is queued (FR25)."""
+
     fix_id: uuid.UUID
 
 

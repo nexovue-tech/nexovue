@@ -171,7 +171,7 @@ async def on_disconnect(db: AsyncSession, org_id: uuid.UUID, connection_id: uuid
             FindingFix.pull_request_state.is_(None)
             | (FindingFix.pull_request_state == PULL_REQUEST_OPEN),
         )
-        .values(pull_request_state=PULL_REQUEST_UNTRACKED)
+        .values(pull_request_state=PULL_REQUEST_UNTRACKED, pull_request_state_at=now)
         .execution_options(synchronize_session=False)
     )
     for consent in consents:

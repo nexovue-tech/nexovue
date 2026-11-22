@@ -26,6 +26,7 @@ from nexovue_platform.connections import (
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from nexovue_platform.fixes.records import (
     NOTIFY_REQUESTERS_TASK,
+    POLL_FIX_PULL_REQUESTS_TASK,
     SWEEP_FIXES_TASK,
     SWEEP_GENERAL_FIXES_TASK,
 )
@@ -47,6 +48,7 @@ from nexovue_scheduler.beat import (
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
     FIX_NOTIFY_ENTRY,
+    FIX_PULL_REQUESTS_ENTRY,
     FIX_SWEEP_ENTRY,
     FIX_SWEEP_SECONDS,
     GENERAL_FIX_SWEEP_ENTRY,
@@ -432,3 +434,18 @@ def test_f5s_rung_3_sweep_runs_every_minute_on_connections_only_while_connection
     assert entry.request.task == SWEEP_FIXES_TASK
     assert entry.request.queue == CONNECTIONS_QUEUE
     assert entry.interval_seconds == FIX_SWEEP_SECONDS
+
+
+def test_f5s_pull_request_poller_runs_every_5_minutes_on_connections_while_they_are_on() -> None:
+    """F5 T8.2: `poll_fix_pull_requests` on `connections`, every 5 minutes, with the design's
+    60 and 90 second limits, only while connections are on."""
+    beat = _scheduler()
+    assert FIX_PULL_REQUESTS_ENTRY not in beat._sweep_entries()
+
+    beat.connections_on = True
+    entry = beat._sweep_entries()[FIX_PULL_REQUESTS_ENTRY]
+
+    assert entry.request.task == POLL_FIX_PULL_REQUESTS_TASK
+    assert entry.request.queue == CONNECTIONS_QUEUE
+    assert entry.interval_seconds == 300
+    assert (entry.request.soft_limit_seconds, entry.request.hard_limit_seconds) == (60, 90)

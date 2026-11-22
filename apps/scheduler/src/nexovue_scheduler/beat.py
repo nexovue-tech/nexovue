@@ -52,6 +52,10 @@ from nexovue_platform.deployment import HOSTED, ai_available
 from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
 from nexovue_platform.fixes.records import (
     NOTIFY_REQUESTERS_TASK,
+    POLL_FIX_PULL_REQUESTS_TASK,
+    POLL_PULL_REQUESTS_EVERY_SECONDS,
+    POLL_PULL_REQUESTS_HARD_LIMIT_SECONDS,
+    POLL_PULL_REQUESTS_SOFT_LIMIT_SECONDS,
     SWEEP_FIXES_TASK,
     SWEEP_GENERAL_FIXES_TASK,
 )
@@ -124,6 +128,9 @@ GENERAL_FIX_SWEEP_ENTRY: Final = "sweep:general-fixes"
 # while connections are on, so no job waits for a `scheduler-connections` not running.
 FIX_SWEEP_SECONDS: Final = 60
 FIX_SWEEP_ENTRY: Final = "sweep:fixes"
+# F5 Step 8: F5's own pull request poller, on `connections`, every 5 minutes (design, *Jobs*;
+# a guess), while connections are on. It reads only.
+FIX_PULL_REQUESTS_ENTRY: Final = "sweep:fix-pull-requests"
 # F5 Step 4: a requester's one email per event, on `light`, which holds the mail settings,
 # always, so an email owed before connections were turned off still goes (every minute, a
 # guess).
@@ -521,6 +528,11 @@ class Beat:
             wanted[EMBED_SWEEP_ENTRY] = (EMBED_SWEEP_TASK, EMBED_SWEEP_SECONDS, INSIGHT_QUEUE)
         if self.connections_on:
             wanted[FIX_SWEEP_ENTRY] = (SWEEP_FIXES_TASK, FIX_SWEEP_SECONDS, CONNECTIONS_QUEUE)
+            wanted[FIX_PULL_REQUESTS_ENTRY] = (
+                POLL_FIX_PULL_REQUESTS_TASK,
+                POLL_PULL_REQUESTS_EVERY_SECONDS,
+                CONNECTIONS_QUEUE,
+            )
         if self.connections_live:
             wanted[CONNECTIONS_SWEEP_ENTRY] = (
                 SWEEP_CONNECTIONS_TASK,
@@ -536,6 +548,10 @@ class Beat:
             EMBED_SWEEP_ENTRY: (
                 EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS,
                 EMBED_SWEEP_TIME_LIMIT_SECONDS,
+            ),
+            FIX_PULL_REQUESTS_ENTRY: (
+                POLL_PULL_REQUESTS_SOFT_LIMIT_SECONDS,
+                POLL_PULL_REQUESTS_HARD_LIMIT_SECONDS,
             ),
         }
         entries: dict[str, Entry] = {}

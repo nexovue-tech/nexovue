@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { formatTimestamp } from "@/shared/format/time";
 import type { FindingSourceFix, SourceFix } from "./api";
 import { SUGGESTED_FIX } from "./fix-page";
 import {
@@ -532,6 +532,11 @@ describe("Step 7: the draft pull request (T7.8; FR10c, FR22, FR24, FR24a, FR26)"
     pull_request_sentence: null,
     ci_note: null,
     delete_branch_action: null,
+    ci_action: null,
+    ci_confirm: null,
+    ci_confirm_action: null,
+    ci_status: null,
+    merged_facts: null,
     ...overrides,
   });
   const CONFIRM = {
@@ -747,5 +752,108 @@ describe("Step 7: the draft pull request (T7.8; FR10c, FR22, FR24, FR24a, FR26)"
     expect(api.calls.some((call) => call.path === "/findings/f-1/fixes/s-1/delete-branch")).toBe(
       true,
     );
+  });
+
+  describe("Step 8: Run CI and following the pull request (T8.3; FR25, FR26, FR27, FR30)", () => {
+    const HELD =
+      "Nexovue's commit asked GitHub Actions to wait. Anything pushed since is not tracked here; check GitHub.";
+    const CONFIRM_RUN =
+      "This runs the model's code in this repository's CI, possibly with its secrets. Read the diff on GitHub first.";
+    const opened = (overrides: Partial<NonNullable<SourceFix["draft"]>>): SourceFix => ({
+      ...PROPOSED,
+      state: "opened",
+      heading: "Draft pull request",
+      proposal: null,
+      draft: draft({
+        pull_request_state: "open",
+        pull_request_url: "https://github.com/acme/shop/pull/7",
+        pull_request_sentence: "A draft pull request is open: https://github.com/acme/shop/pull/7.",
+        ...overrides,
+      }),
+    });
+
+    it("CI held: Run CI opens FR25's confirmation first, and only its own click posts", async () => {
+      const { api, section } = await page(
+        source({
+          latest: opened({
+            ci_note: HELD,
+            ci_action: "Run CI",
+            ci_confirm: CONFIRM_RUN,
+            ci_confirm_action: "Run CI now",
+          }),
+        }),
+        { "POST /findings/f-1/fixes/s-1/run-ci": json({ fix_id: "s-1" }) },
+      );
+
+      expect(readable(section as Element)).toContain(HELD);
+      click(buttons(section).find((each) => each.textContent === "Run CI"));
+      await settle();
+      expect(readable(section as Element)).toContain(CONFIRM_RUN);
+      expect(api.calls.some((call) => call.path.endsWith("/run-ci"))).toBe(false);
+      click(buttons(section).find((each) => each.textContent === "Run CI now"));
+      for (let round = 0; round < 4; round += 1) await settle();
+
+      expect(
+        api.calls.filter((call) => call.path === "/findings/f-1/fixes/s-1/run-ci"),
+      ).toHaveLength(1);
+    });
+
+    it("while write access is off the API sends no Run CI, and none is drawn", async () => {
+      const { section } = await page(source({ latest: opened({ ci_note: HELD }) }));
+
+      expect(buttons(section).some((each) => each.textContent === "Run CI")).toBe(false);
+    });
+
+    it("CI requested: the API's sentence replaces the action", async () => {
+      const asked = "Asking GitHub to run CI: Nexovue is adding a commit with no skip marker.";
+      const { section } = await page(
+        source({ latest: opened({ ci_note: HELD, ci_status: asked }) }),
+      );
+
+      expect(readable(section as Element)).toContain(asked);
+      expect(buttons(section).some((each) => each.textContent === "Run CI")).toBe(false);
+    });
+
+    it.each([
+      ["merged", "This pull request was merged: https://github.com/acme/shop/pull/7."],
+      [
+        "closed",
+        "This pull request was closed without merging: https://github.com/acme/shop/pull/7.",
+      ],
+      ["untracked", "Nexovue can no longer see this pull request; check GitHub."],
+    ])("FR27: a %s pull request reads the API's sentence", async (state, sentence) => {
+      const { section } = await page(
+        source({ latest: opened({ pull_request_state: state, pull_request_sentence: sentence }) }),
+      );
+
+      expect(readable(section as Element)).toContain(sentence);
+    });
+
+    it("FR30: after a merge, the facts line states each time in the order it fell, with F28's deploy", async () => {
+      const facts = {
+        merged_at: "2026-11-21T10:00:00Z",
+        deployed_at: "2026-11-21T10:20:00Z",
+        finding_closed_at: "2026-11-21T09:30:00Z",
+      };
+      const { section } = await page(
+        source({
+          latest: opened({
+            pull_request_state: "merged",
+            pull_request_sentence:
+              "This pull request was merged: https://github.com/acme/shop/pull/7.",
+            merged_facts: facts,
+          }),
+        }),
+      );
+
+      const items = [...(section?.querySelectorAll("[data-testid='merged-facts'] li") ?? [])].map(
+        (each) => each.textContent,
+      );
+      expect(items).toEqual([
+        `This finding closed ${formatTimestamp(facts.finding_closed_at)}.`,
+        `Merged ${formatTimestamp(facts.merged_at)}.`,
+        `A deploy recorded with the merge's commit: ${formatTimestamp(facts.deployed_at)}.`,
+      ]);
+    });
   });
 });

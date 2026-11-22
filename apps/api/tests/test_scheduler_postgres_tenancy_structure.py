@@ -287,6 +287,24 @@ CROSS_TENANT_STATEMENTS: Final = (
     ),
     _across(
         "connections.fix_sweep",
+        "_PULL_REQUEST_DONE",
+        f"{_SWEEP}: stored code 7 days after its pull request was merged or closed (F5 Step 8, "
+        "BR9); each row's code is deleted by its own `org_id` and id",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_OUT_OF_REACH",
+        f"{_SWEEP}: pull requests in a repository whose GitHub access has been gone 72 hours "
+        "(F5 Step 8, AC49); each row reads `untracked` by its own id",
+    ),
+    _across(
+        "connections.fix_poller",
+        "_FOLLOWED",
+        f"{_SWEEP}: drafts Nexovue still follows on GitHub (F5 Step 8, FR27, AC51); each row "
+        "is read and written by its own `org_id` and id",
+    ),
+    _across(
+        "connections.fix_sweep",
         "_UNRECORDED",
         f"{_SWEEP}: ended source suggestions whose result is not yet recorded (Step 4); the "
         "rules' re-run reads, the event, the audit entry, the cleared code and the mark each "

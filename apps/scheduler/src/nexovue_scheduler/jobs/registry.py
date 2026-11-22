@@ -58,6 +58,9 @@ TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
         # F5 Step 7: the draft job and **Delete this branch** (plan T7.5, T7.10), each
         # refusing before any GitHub call while write access is off (ADR-097).
         "nexovue_scheduler.connections.fix_writer",
+        # F5 Step 8: F5's own pull request poller, reads only (plan T8.2); Run CI is in
+        # `fix_writer`, refusing before any GitHub call while write access is off.
+        "nexovue_scheduler.connections.fix_poller",
     ),
     # F3: the AI role, on its own account and network: the connection test (Step 4), the
     # wording job and its sweep (Step 5). `all` never loads these.

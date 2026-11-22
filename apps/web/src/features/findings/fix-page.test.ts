@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { formatTimestamp } from "@/shared/format/time";
 import type { DeployLineAddition, FindingGeneralFix, ReleaseContext } from "./api";
 import {
   deployAddition,
   earlierLink,
+  MERGED_WORDS,
+  mergedFactsLine,
   restsOn,
   showsSection,
   tokensAndAge,
@@ -113,5 +116,31 @@ describe("rung 2b's own words (FR10a, FR37)", () => {
 
     expect(triesLeft(2)).toBe("Tries left today: 2");
     expect(tokensAndAge(1460, "2026-11-21T11:56:00Z", now)).toBe("1,460 tokens · asked 4 min. ago");
+  });
+});
+
+describe("FR30's facts line after a merge (Step 8, T8.3)", () => {
+  const facts = {
+    merged_at: "2026-11-21T10:00:00Z",
+    deployed_at: "2026-11-21T10:20:00Z",
+    finding_closed_at: "2026-11-21T11:00:00Z",
+  };
+
+  it("states only the facts there are, in time order", () => {
+    expect(mergedFactsLine(null)).toEqual([]);
+    expect(mergedFactsLine({ ...facts, deployed_at: null, finding_closed_at: null })).toEqual([
+      MERGED_WORDS.merged(formatTimestamp(facts.merged_at)),
+    ]);
+    expect(mergedFactsLine(facts)).toEqual([
+      MERGED_WORDS.merged(formatTimestamp(facts.merged_at)),
+      MERGED_WORDS.deployed(formatTimestamp(facts.deployed_at)),
+      MERGED_WORDS.closed(formatTimestamp(facts.finding_closed_at)),
+    ]);
+  });
+
+  it("before, not because: no sentence holds a causal word", () => {
+    for (const sentence of mergedFactsLine(facts)) {
+      expect(sentence).not.toMatch(/\b(because|caused|fixed|so|therefore|due|resolved)\b/i);
+    }
   });
 });

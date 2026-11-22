@@ -265,13 +265,13 @@ Tasks are marked with the feature whose names they lean on, as **(F3)**, **(F22)
 
 *Judgeable:* the founder clicks **Run CI**, sees the warning, then sees the workflow run. He closes the draft on GitHub and sees that within a poll.
 
-**Changes shape, or is deleted, by the GitHub trial's results (design).**
+**Changes shape, or is deleted, by the GitHub trial's results (design).** Built 2026-11-22 as designed, against the simulated GitHub, with write access off in code (foundation item 33); the trial is the founder's, after Phase 2, and may still change or delete this step (status, Step 8).
 
-- [ ] **T8.1** — `connections/fix_writer.py`; route `run-ci` · a same-tree commit, stored before the `PATCH`, on that branch only; retry and repeat safe · proved by `test_fix_writer_live.py` (AC28)
-- [ ] **T8.2** — `connections/fix_poller.py`, `beat.py`; `fixes/sweep.py` **(F5 owns it; F22's sync loop does not follow pull requests)** · `connections.poll_fix_pull_requests` every 5 minutes, `?head=` for a held branch, `untracked`, `not_opened`, permissions and plan refresh · proved by `apps/scheduler/tests/test_fix_pull_request_state.py` (AC27a's clearing half, AC28b, AC49, AC51)
-- [ ] **T8.3** — `FixSection.tsx`, F28's fixture **(F28)** · CI held and requested, merged, closed, `untracked`, the facts line · proved by `FixSection.test.ts`, and a named test using F28's fixture
-- [ ] **T8.4** — `docs/features/ai-solution/status.md` · the real run with **Run CI**, by hand **(needs the founder's approval)** · proved by the recorded result
-- [ ] **T8.5** — `tools/ai-eval/fix/` · a short re-run of T6.1's safety arms with the write path in place, and AC20's stored proposals driven through the job · proved by the report
+- [x] **T8.1** — `connections/fix_writer.py`; route `run-ci` · a same-tree commit, stored before the `PATCH`, on that branch only; retry and repeat safe · proved by `test_fix_writer_live.py` (AC28)
+- [x] **T8.2** — *(the sweep's half is in `connections/fix_sweep.py`, rung 3's sweep: `fixes/sweep.py` is rung 2b's, on `light`, and may import nothing from `connections`; the permissions and repositories refresh already runs hourly from that sweep since Step 5; no plan can be read, so there is no plan refresh: status, decisions 106, 107)* `connections/fix_poller.py`, `beat.py`; `fixes/sweep.py` **(F5 owns it; F22's sync loop does not follow pull requests)** · `connections.poll_fix_pull_requests` every 5 minutes, `?head=` for a held branch, `untracked`, `not_opened`, permissions and plan refresh · proved by `apps/scheduler/tests/test_fix_pull_request_state.py` (AC27a's clearing half, AC28b, AC49, AC51)
+- [x] **T8.3** — *(built in `FixCi.tsx` beside Step 7's `FixDraft.tsx`, tested in `FixFiles.test.ts` and `fix-page.test.ts` where Step 7's draft states are; F28's half is `test_fix_draft_live.py`'s FR30 test on F28's `deploy_events` with `commit_sha`)* `FixSection.tsx`, F28's fixture **(F28)** · CI held and requested, merged, closed, `untracked`, the facts line · proved by `FixSection.test.ts`, and a named test using F28's fixture
+- [ ] **T8.4** — *(not run: real GitHub is the founder's, after Phase 2, foundation item 28; and write access is off until T6.5)* `docs/features/ai-solution/status.md` · the real run with **Run CI**, by hand **(needs the founder's approval)** · proved by the recorded result
+- [ ] **T8.5** — *(gate half built 2026-11-22: AC20's hostile proposals, stored as a compromised AI room would, driven through the draft job with a test go, reach no repository, `apps/scheduler/tests/test_fix_write_hostile_live.py`; the re-run of T6.1's safety arms is a real-model run, the founder's after Phase 2, foundation item 31)* `tools/ai-eval/fix/` · a short re-run of T6.1's safety arms with the write path in place, and AC20's stored proposals driven through the job · proved by the report
 
 ### Step 9: Words, operations, launch
 

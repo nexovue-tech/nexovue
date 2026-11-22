@@ -16,6 +16,7 @@ def session() -> Session:
         person_login="real-person",
         person_id=1,
         large_tree=None,
+        merged_pull=None,
         read_token="",
         write_token="",
     )

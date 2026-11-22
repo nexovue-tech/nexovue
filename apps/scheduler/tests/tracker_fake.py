@@ -166,6 +166,10 @@ class FakePull:
     creator: str
     state: str = "open"
     merged: bool = False
+    # F5 Step 8: what the poller reads once a pull request ends (GitHub's ISO times).
+    merged_at: str | None = None
+    closed_at: str | None = None
+    merge_commit_sha: str | None = None
 
 
 @dataclass
@@ -723,6 +727,32 @@ class FakeGitHub:
     def grant(self, full_name: str, login: str, permission: str) -> None:
         self.permissions[(self.repository(full_name)["id"], login)] = permission
 
+    def close_pull(self, full_name: str, number: int, *, at: str) -> None:
+        """A person closes a pull request on GitHub without merging it."""
+        pull = self._pull(full_name, number)
+        pull.state, pull.closed_at = "closed", at
+
+    def merge_pull(self, full_name: str, number: int, *, at: str) -> str:
+        """A person squash-merges a pull request: one new commit on its base, with the
+        head's tree. Returns the merge's commit."""
+        pull = self._pull(full_name, number)
+        data = self.git_of(full_name)
+        head = data.refs.get(pull.head_ref, pull.head_sha)
+        merged = data.add_commit(data.commits[head].tree, (data.refs[pull.base_ref],), pull.title)
+        data.refs[pull.base_ref] = merged
+        pull.state, pull.merged = "closed", True
+        pull.merged_at = pull.closed_at = at
+        pull.merge_commit_sha = merged
+        return merged
+
+    def delete_pull(self, full_name: str, number: int) -> None:
+        """A pull request GitHub no longer serves: the poller's 404."""
+        self.pulls.remove(self._pull(full_name, number))
+
+    def _pull(self, full_name: str, number: int) -> FakePull:
+        [found] = [pull for pull in self.pulls_in(full_name) if pull.number == number]
+        return found
+
     def pulls_in(self, full_name: str) -> list[FakePull]:
         repository_id = self.repository(full_name)["id"]
         return [pull for pull in self.pulls if pull.repository_id == repository_id]
@@ -962,6 +992,10 @@ class FakeGitHub:
 
     def _pull_json(self, repository: dict[str, Any], pull: FakePull) -> dict[str, Any]:
         owner = repository["full_name"].split("/")[0]
+        # GitHub's head is the branch's head while the branch exists: Run CI moves it.
+        head_sha = self.git.setdefault(repository["id"], GitData()).refs.get(
+            pull.head_ref, pull.head_sha
+        )
         return {
             **fixture("pull"),
             "id": pull.id,
@@ -969,12 +1003,15 @@ class FakeGitHub:
             "state": pull.state,
             "draft": pull.draft,
             "merged": pull.merged,
+            "merged_at": pull.merged_at,
+            "closed_at": pull.closed_at,
+            "merge_commit_sha": pull.merge_commit_sha,
             "title": pull.title,
             "body": pull.body,
             "user": {"login": pull.creator, "type": "Bot"},
             "head": {
                 "ref": pull.head_ref,
-                "sha": pull.head_sha,
+                "sha": head_sha,
                 "label": f"{owner}:{pull.head_ref}",
             },
             "base": {"ref": pull.base_ref, "label": f"{owner}:{pull.base_ref}"},

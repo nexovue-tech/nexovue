@@ -152,6 +152,7 @@ CANDIDATE_SOURCES: Final = (FROM_STACK, FROM_PERSON, FROM_MODEL)
 FILE_ROLES: Final = ("stack", "named", "imported", "asked", "test")
 # Why stored code was deleted (BR9's table; the restore too).
 CODE_ENDED_SHORT: Final = "ended_short"
+CODE_PULL_REQUEST_DONE: Final = "pull_request_done"
 CODE_AGED_OUT: Final = "aged_out"
 CODE_CONSENT_WITHDRAWN: Final = "consent_withdrawn"
 CODE_DISCONNECTED: Final = "disconnected"
@@ -161,7 +162,7 @@ CODE_RESTORED: Final = "restored"
 # Migration 0079's list: its frozen copy is held to this.
 STEP_3_CODE_DELETED_REASONS: Final = (
     CODE_ENDED_SHORT,
-    "pull_request_done",
+    CODE_PULL_REQUEST_DONE,
     CODE_AGED_OUT,
     CODE_CONSENT_WITHDRAWN,
     CODE_DISCONNECTED,
@@ -567,12 +568,14 @@ def check_fix_request(*, check_id: Any, org_id: Any) -> JobRequest:
 # What GitHub says of a draft Nexovue made, followed by F5's own poller (FR27, Step 8);
 # `not_opened` when `POST /pulls` was refused or never answered and nothing was found.
 PULL_REQUEST_OPEN: Final = "open"
+PULL_REQUEST_MERGED: Final = "merged"
+PULL_REQUEST_CLOSED: Final = "closed"
 PULL_REQUEST_NOT_OPENED: Final = "not_opened"
 PULL_REQUEST_UNTRACKED: Final = "untracked"
 PULL_REQUEST_STATES: Final = (
     PULL_REQUEST_OPEN,
-    "merged",
-    "closed",
+    PULL_REQUEST_MERGED,
+    PULL_REQUEST_CLOSED,
     PULL_REQUEST_NOT_OPENED,
     PULL_REQUEST_UNTRACKED,
 )
@@ -581,7 +584,8 @@ PULL_REQUEST_STATES: Final = (
 CHANGED_SINCE_CHECK: Final = "changed_since_check"
 BRANCH_NOT_OURS: Final = "branch_not_ours"
 DID_NOT_FINISH: Final = "did_not_finish"
-WRITE_FAILURES: Final = (
+# Migration 0083's list: its frozen copy is held to this.
+STEP_7_WRITE_FAILURES: Final = (
     WRITES_OFF,
     CHANGED_SINCE_CHECK,
     BRANCH_NOT_OURS,
@@ -598,6 +602,12 @@ WRITE_FAILURES: Final = (
     "github_unavailable",
     "consent_withdrawn",
 )
+# Step 8 (migration 0084): why Run CI did not move the branch. `branch_changed`: its head is
+# neither a commit Nexovue made nor one it built on (FR25); `pull_request_not_open`: the
+# poller found the pull request closed or merged before the job ran.
+BRANCH_CHANGED: Final = "branch_changed"
+PULL_REQUEST_NOT_OPEN: Final = "pull_request_not_open"
+WRITE_FAILURES: Final = (*STEP_7_WRITE_FAILURES, BRANCH_CHANGED, PULL_REQUEST_NOT_OPEN)
 # The one branch a suggestion may write (FR23): nothing else can be expressed.
 FIX_BRANCH_PREFIX: Final = "nexovue/suggestion-"
 # A draft click needs this person's own `draft` check, passed within this long (FR22, a guess).
@@ -661,4 +671,42 @@ def delete_fix_branch_request(*, fix_id: Any, org_id: Any, requested_by: Any) ->
         max_attempts=1,
         soft_limit_seconds=DELETE_BRANCH_SOFT_LIMIT_SECONDS,
         hard_limit_seconds=DELETE_BRANCH_HARD_LIMIT_SECONDS,
+    )
+
+
+# ------------------------------------------- Run CI and following the pull request (Step 8)
+
+RUN_FIX_CI_TASK: Final = "nexovue_scheduler.connections.run_fix_ci"
+POLL_FIX_PULL_REQUESTS_TASK: Final = "nexovue_scheduler.connections.poll_fix_pull_requests"
+# Run CI's job (design, *Jobs*: 30 s, 60 s, 3 attempts, 15 minutes; guesses).
+RUN_CI_SOFT_LIMIT_SECONDS: Final = 30
+RUN_CI_HARD_LIMIT_SECONDS: Final = 60
+RUN_CI_MAX_ATTEMPTS: Final = 3
+# The poller (design, *Jobs*: every 5 minutes, 60 s, 90 s, 1 attempt, 5 minutes; guesses).
+POLL_PULL_REQUESTS_EVERY_SECONDS: Final = 5 * 60
+POLL_PULL_REQUESTS_EXPIRES_SECONDS: Final = 5 * 60
+POLL_PULL_REQUESTS_SOFT_LIMIT_SECONDS: Final = 60
+POLL_PULL_REQUESTS_HARD_LIMIT_SECONDS: Final = 90
+# A Run CI request whose job never answered (expired, or its worker died past its attempts)
+# reads as not finished after the job's expiry, hard limit and a margin, so Run CI is offered
+# again (as `APPROVED_STUCK_AFTER` does for a draft; a guess).
+CI_REQUEST_STUCK_AFTER: Final = timedelta(minutes=20)
+# BR9: code is deleted this long after its pull request was merged or closed (a guess).
+PULL_REQUEST_CODE_KEPT_FOR: Final = timedelta(days=7)
+# Audit: the Run CI click, committed with the request (design, *Observability*).
+FIX_CI_REQUESTED: Final = "fix.ci_requested"
+
+
+def run_fix_ci_request(*, fix_id: Any, org_id: Any) -> JobRequest:
+    """Run CI's job (design, *Run CI*). Ids only: the job reads who asked, and when, from
+    the row, so a retry and a second click are told apart by the store."""
+    return JobRequest(
+        task=RUN_FIX_CI_TASK,
+        queue=INTERACTIVE_QUEUE,
+        kwargs={"fix_id": str(fix_id), "org_id": str(org_id)},
+        org_id=str(org_id),
+        expires_seconds=WRITER_EXPIRES_SECONDS,
+        max_attempts=RUN_CI_MAX_ATTEMPTS,
+        soft_limit_seconds=RUN_CI_SOFT_LIMIT_SECONDS,
+        hard_limit_seconds=RUN_CI_HARD_LIMIT_SECONDS,
     )

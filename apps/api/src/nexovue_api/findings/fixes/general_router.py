@@ -4,8 +4,8 @@
 Apart from `router.py`, whose rungs 1 and 2 must import no AI code (AC33): these read the
 AI connection and F3's limits. A person's routes only, so a token is refused below each and
 none is on the read surface (AC74). The click is `MayRequestFix`; a support view is refused
-by method. The actions on code refuse a general row with a named code (AC73): CI here; the
-check, the patch and the draft on rung 3's router, which serve both kinds.
+by method. The actions on code refuse a general row with a named code (AC73) on rung 3's
+router, which serves both kinds: the check, the patch, the draft and, since Step 8, Run CI.
 """
 
 from __future__ import annotations
@@ -60,19 +60,3 @@ async def ask_general_fix(
         settings=settings,
         now=datetime.now(UTC),
     )
-
-
-async def _refuse(
-    identity: MayRequestFix, db: DbSession, finding_id: uuid.UUID, fix_id: uuid.UUID
-) -> None:
-    await fix_general.refuse_code_action(
-        db, org_id=identity.org_id, finding_id=finding_id, fix_id=fix_id
-    )
-
-
-@router.post("/{finding_id}/fixes/{fix_id}/run-ci", summary="Ask CI to run on a draft")
-async def run_ci(
-    identity: MayRequestFix, db: DbSession, finding_id: uuid.UUID, fix_id: uuid.UUID
-) -> None:
-    """Rung 5 (Step 8). A general row refuses: `general_has_no_code` (AC73)."""
-    await _refuse(identity, db, finding_id, fix_id)

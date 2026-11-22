@@ -291,7 +291,7 @@ async def _view(
         )
     elif row.state == OPENED:
         heading, sentence, draft = await fix_draft_read.opened(
-            db, row, may_request=viewer.may_request
+            db, row, may_request=viewer.may_request, go=go, now=state.now
         )
     elif row.state == GATHERING:
         heading = GATHERING_HEADING

@@ -1,7 +1,7 @@
 """F5 rung 3's routes on a finding: Ask, the file list, Send and Cancel, the brief's paths,
-the check run, the patch, the verdict, the draft pull request and **Delete this branch**
-(spec FR5c, FR11 to FR13a, FR20a, FR22 to FR24a, FR29; design, *Routes*; plan T3.9, T3.11,
-T3.16, T4.12, T5.1, T5.2, T7.4, T7.10). HTTP only.
+the check run, the patch, the verdict, the draft pull request, **Delete this branch** and
+**Run CI** (spec FR5c, FR11 to FR13a, FR20a, FR22 to FR25, FR29; design, *Routes*; plan T3.9,
+T3.11, T3.16, T4.12, T5.1, T5.2, T7.4, T7.10, T8.1). HTTP only.
 
 Apart from `fixes/router.py`, whose rungs 1 and 2 import no AI code (AC33): these read the
 AI connection and F3's limits to decide FR9. A person's routes only, so a token is refused
@@ -37,6 +37,7 @@ from nexovue_api.findings.fix_source_schemas import (
     BriefFilesStarted,
     CheckRequest,
     CheckView,
+    CiRequested,
     DeleteBranchStarted,
     DraftRequest,
     DraftStarted,
@@ -274,6 +275,29 @@ async def delete_suggestion_branch(
         finding_id=finding_id,
         fix_id=fix_id,
         go=write_gate.WRITE_ACCESS_GO,
+    )
+
+
+@router.post(
+    "/{finding_id}/fixes/{fix_id}/run-ci",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Run CI on this suggestion's draft: one commit with no skip marker, by a job",
+)
+async def run_suggestion_ci(
+    identity: MayOpenFixPullRequest,
+    db: DbSession,
+    finding_id: uuid.UUID,
+    fix_id: uuid.UUID,
+) -> CiRequested:
+    """FR25: refused `writes_off` while write access is off in code. With the go, an open
+    draft's request is stored and a job moves only its own branch, at its own head."""
+    return await fix_draft.request_ci(
+        db,
+        identity=identity,
+        finding_id=finding_id,
+        fix_id=fix_id,
+        go=write_gate.WRITE_ACCESS_GO,
+        now=datetime.now(UTC),
     )
 
 

@@ -1,5 +1,5 @@
 """The Fix App's GitHub client offers only its named routes, on a fixed host (F5 plan T3.10,
-T7.2; spec AC7, FR23).
+T7.2, T8.1, T8.2; spec AC7, FR23, FR25).
 
 A method added without the checked-in `ROUTES` or `WRITE_ROUTES` list fails here. Every
 write is on `FixWrites`, which cannot be built while write access is off in code (foundation
@@ -47,7 +47,8 @@ def test_ac7_every_write_is_on_fix_writes_and_the_reads_post_only_for_tokens() -
     posts = {name for method, _, name in fix_github.ROUTES if method != "GET"}
 
     assert posts == {"convert_manifest", "read_token", "exchange_code", "pull_request_read_token"}
-    assert {method for method, _, _ in fix_github.WRITE_ROUTES} == {"POST", "DELETE"}
+    # Step 8 adds Run CI's `PATCH` of the suggestion's own ref.
+    assert {method for method, _, _ in fix_github.WRITE_ROUTES} == {"POST", "DELETE", "PATCH"}
     reads = ast.unparse(_class("FixGitHub"))
     assert '"POST"' not in reads and '"DELETE"' not in reads and '"PATCH"' not in reads
 
@@ -72,6 +73,14 @@ def test_ac7_the_draft_is_always_asked_for_as_a_draft() -> None:
     source = ast.unparse(_class("FixWrites"))
     assert "'draft': True" in source
     assert source.count("'draft'") == 1
+
+
+def test_fr25_run_ci_only_fast_forwards_the_suggestion_s_own_ref() -> None:
+    """Run CI's `PATCH` never forces: `force` is a constant false, so a branch someone moved
+    is refused by GitHub rather than overwritten."""
+    source = ast.unparse(_class("FixWrites"))
+    assert "'force': False" in source
+    assert source.count("'force'") == 1
 
 
 def test_ac7_writes_cannot_be_built_while_write_access_is_off() -> None:

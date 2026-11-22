@@ -62,7 +62,7 @@ def _check(name: str) -> str:
         ("_FIX_STATES", records.FIX_STATES),
         ("_CHECK_REASONS", records.FIX_CHECK_REASONS),
         ("_PULL_REQUEST_STATES", records.PULL_REQUEST_STATES),
-        ("_WRITE_FAILURES", records.WRITE_FAILURES),
+        ("_WRITE_FAILURES", records.STEP_7_WRITE_FAILURES),
     ],
 )
 def test_0083_froze_exactly_the_shared_words(frozen: str, shared: tuple[str, ...]) -> None:
@@ -77,7 +77,6 @@ def test_0083_follows_0082() -> None:
 def test_the_model_checks_the_same_words() -> None:
     assert _words(_check("state_is_known")) == records.FIX_STATES
     assert _words(_check("pull_request_state_is_known")) == records.PULL_REQUEST_STATES
-    assert _words(_check("last_write_failure_is_known")) == records.WRITE_FAILURES
 
 
 def test_the_branch_check_names_only_the_suggestion_s_own_branch() -> None:
