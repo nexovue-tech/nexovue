@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from alert_fixtures import postgres_reachable
+from held_jobs import jobs_held
 from live import require_stack
 from nexovue_platform.fixes.records import REFRESH_FIX_APP_TASK
 from source_fix_fixtures import (
@@ -52,9 +53,12 @@ def fake() -> Iterator[FakeGitHub]:
 
 @pytest.fixture
 async def world(engine: AsyncEngine, fake: FakeGitHub, now: datetime) -> AsyncIterator[SourceWorld]:
+    """A world whose every job is held from the stack's own connections worker: the sweep's
+    jobs are read here, never run, and the stack would run and finish them first."""
     made = await build_world(engine, fake, now=now)
     try:
-        yield made
+        with jobs_held(engine, made.org_id):
+            yield made
     finally:
         await drop_world(engine, made)
 
