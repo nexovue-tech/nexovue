@@ -106,6 +106,11 @@ simulated GitHub only. Worktree `wt/f22s8` on `feature/phase-2` at 4ad5d47; own 
     and F5's eleven connections suites (152) pass, and the end-to-end test runs the real worker
     as it. `test_connections_account_live.py` holds the functions to the shared statements and
     proves they never reach another queue.
+  - **Found after merge (2026-11-22):** F5 Step 9's `fix_sweep_status` (migration 0086), which
+    the sweep writes on this role, had no grant, and its suite ran the write as the install
+    account, so every pass was refused its record. The account now holds
+    `SELECT (sweep, finished_at)`, `INSERT (sweep, finished_at)`, `UPDATE (finished_at)` there,
+    and the suite runs as it (`docs/changes/fix-sweep-records-as-its-account/`).
 
 - **T8.8 (AC70, AC77), and T2.9 found by it.**
   - **`apps/api/tests/test_finding_event_kinds_live.py`:** 27 tests, one per kind in FR16, each

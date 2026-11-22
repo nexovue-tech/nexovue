@@ -402,6 +402,11 @@ EXPECTED_COLUMN_RIGHTS: Final = {
         "draft_refused_at",
     },
     ("fix_repository_settings", "UPDATE"): {"draft_refused_at"},
+    # The sweep's finish (F5 T9.1): its upsert reads the conflict key and `EXCLUDED.finished_at`,
+    # so `SELECT` on both (measured: refused with either missing). Never `DELETE`.
+    ("fix_sweep_status", "SELECT"): {"sweep", "finished_at"},
+    ("fix_sweep_status", "INSERT"): {"sweep", "finished_at"},
+    ("fix_sweep_status", "UPDATE"): {"finished_at"},
 }
 EXPECTED_FUNCTIONS: Final = {
     "connections_claim_jobs(text,text[],integer,integer)",

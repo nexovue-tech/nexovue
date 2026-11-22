@@ -4,6 +4,10 @@
 The pass itself is replaced by a stand-in here: the real one moves every organization's due
 rows, and these tests must reach no other suite's rows. What is under test is that the end of
 a pass is written, and that a pass which raises writes nothing, so beat's age keeps growing.
+The recording runs as `nexovue_connections` (`connections_engine`), the account
+`scheduler-connections` signs in as; the real pass runs as it in `test_fix_sweep_live.py` and
+its neighbours. Run as the owner, this suite once passed while the role was refused every
+minute (`docs/changes/fix-sweep-records-as-its-account/`).
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ _SET = text(
     ON CONFLICT (sweep) DO UPDATE SET finished_at = EXCLUDED.finished_at
     """
 )
+_FORGET = text("DELETE FROM fix_sweep_status WHERE sweep = :sweep")
 LONG_AGO = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -57,7 +62,7 @@ def _clock() -> Callable[[], datetime]:
 
 
 async def test_a_whole_pass_records_when_it_finished(
-    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    engine: AsyncEngine, connections_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def finishes(engine: AsyncEngine, **_: object) -> fix_sweep.SweptFixes:
         return fix_sweep.SweptFixes(ended=0, cleared=0, expired=0, refreshes=0)
@@ -65,15 +70,38 @@ async def test_a_whole_pass_records_when_it_finished(
     monkeypatch.setattr(fix_sweep, "sweep", finishes)
     await _set(engine, LONG_AGO)
 
-    await fix_sweep.sweep_and_record(engine, clock=_clock())
+    await fix_sweep.sweep_and_record(connections_engine, clock=_clock())
 
     finished = await _finished(engine)
     assert finished is not None
     assert finished > LONG_AGO
 
 
+async def test_a_pass_records_again_over_its_last_finish(
+    engine: AsyncEngine, connections_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both arms of the upsert as the account: the first finish ever (no row) and every later
+    one (the row's time moved)."""
+
+    async def finishes(engine: AsyncEngine, **_: object) -> fix_sweep.SweptFixes:
+        return fix_sweep.SweptFixes(ended=0, cleared=0, expired=0, refreshes=0)
+
+    monkeypatch.setattr(fix_sweep, "sweep", finishes)
+    async with engine.begin() as connection:
+        await connection.execute(_FORGET, {"sweep": FIX_SWEEP_NAME})
+
+    await fix_sweep.sweep_and_record(connections_engine, clock=_clock())
+    first = await _finished(engine)
+    await fix_sweep.sweep_and_record(connections_engine, clock=_clock())
+    second = await _finished(engine)
+
+    assert first is not None
+    assert second is not None
+    assert second > first
+
+
 async def test_a_pass_that_raises_records_nothing(
-    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+    engine: AsyncEngine, connections_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def raises(engine: AsyncEngine, **_: object) -> fix_sweep.SweptFixes:
         raise PassFailedError
@@ -82,7 +110,7 @@ async def test_a_pass_that_raises_records_nothing(
     await _set(engine, LONG_AGO)
 
     with pytest.raises(PassFailedError):
-        await fix_sweep.sweep_and_record(engine, clock=_clock())
+        await fix_sweep.sweep_and_record(connections_engine, clock=_clock())
 
     assert await _finished(engine) == LONG_AGO
 

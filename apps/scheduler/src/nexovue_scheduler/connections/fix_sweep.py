@@ -41,7 +41,7 @@ followed reads `untracked` and frees its finding (design, *The sweep*, step 6; B
 whether or not a consent was still live.
 
 Step 9 (T9.1): the task runs `sweep_and_record`, which writes `fix_sweep_status` once a whole
-pass has finished; beat reads its age for the operator's alert (migration 0085).
+pass has finished; beat reads its age for the operator's alert (migration 0086).
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ _ENDED_WAITING: Final = text(
 _DROP_PACK: Final = text(
     "DELETE FROM finding_fix_source_packs WHERE org_id = :org_id AND fix_id = :fix_id"
 )
-# Install-wide bookkeeping (migration 0085): the database's clock, since beat reads the age
+# Install-wide bookkeeping (migration 0086): the database's clock, since beat reads the age
 # with it, and a test's clock may be anywhere.
 _RECORD_FINISHED: Final = text(
     """

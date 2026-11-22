@@ -17,8 +17,10 @@ Row security on `finding_fixes` and its packs admits this account by 0085's two 
 **What a broken-into process of it can still do,** stated plainly: read and change every
 organization's connections, links and case columns, and F5's suggestions, because the jobs
 cross organizations by nature and no grant can bind `org_id`; read the explanation facts F5
-sends (`model_input`, `aliases`). It cannot read a check, channel, AI or mail secret, an
-alert, telemetry or a person's sign-in, lock the alert queue, or add a job outside its queues.
+sends (`model_input`, `aliases`); and set any time as when F5's sweep last finished, keeping
+its stall alert quiet (a function writing `now()` would not stop that: the process could call
+it without sweeping). It cannot read a check, channel, AI or mail secret, an alert,
+telemetry or a person's sign-in, lock the alert queue, or add a job outside its queues.
 
 A missing password stops this role alone, which cannot sign in, and `setup` goes on.
 """
@@ -161,6 +163,12 @@ CONNECTIONS_GRANTS: Final = (
     "GRANT SELECT (org_id, connection_repository_id, drafts_allowed, ci_on_open, "
     f"draft_refused_at) ON fix_repository_settings {_TO}",
     f"GRANT UPDATE (draft_refused_at) ON fix_repository_settings {_TO}",
+    # When the sweep last finished a whole pass (migration 0086), which beat reads for the
+    # stall alert. The upsert reads its key and `EXCLUDED.finished_at`, so `SELECT` on both
+    # (measured: refused with either missing); the key is never changed or a row deleted.
+    f"GRANT SELECT (sweep, finished_at) ON fix_sweep_status {_TO}",
+    f"GRANT INSERT (sweep, finished_at) ON fix_sweep_status {_TO}",
+    f"GRANT UPDATE (finished_at) ON fix_sweep_status {_TO}",
     *function_grants(CONNECTIONS_ACCOUNT, CONNECTIONS_FUNCTIONS),
 )
 

@@ -2,11 +2,11 @@
 spec UR12, AC39; design, *The summary*).
 
 Each refusal is written by the proposal job as `nexovue_insight`, with a fake provider's answer
-that trips one of Nexovue's rules, then swept as the install account, as beat runs it, twice.
-The summary the API serves is then read for this organization: a notice for K7, none for K6
-(held until the founder has read T6.3's report, decision 89), each refusal counted once by its
-reason, and no suggestion's text anywhere. Each sweep is narrowed to this test's organization
-and runs on its clock.
+that trips one of Nexovue's rules, then swept as `nexovue_connections`, as
+`scheduler-connections` runs it, twice. The summary the API serves is then read for this
+organization: a notice for K7, none for K6 (held until the founder has read T6.3's report,
+decision 89), each refusal counted once by its reason, and no suggestion's text anywhere. Each
+sweep is narrowed to this test's organization and runs on its clock.
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ async def _summary(install: AsyncEngine, tenant: AlertTenant, at: datetime) -> A
 async def test_ac39_a_k7_refusal_written_by_the_ai_account_shows_one_notice_without_text(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
+    connections_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
     now: datetime,
@@ -77,7 +78,7 @@ async def test_ac39_a_k7_refusal_written_by_the_ai_account_shows_one_notice_with
     )
 
     for _ in range(2):
-        await fix_sweep.sweep(ai_install, clock=lambda: now, only_org=str(ai_tenant.org_id))
+        await fix_sweep.sweep(connections_engine, clock=lambda: now, only_org=str(ai_tenant.org_id))
     read = await _summary(ai_install, ai_tenant, now + timedelta(minutes=1))
 
     assert read.requested == 1
@@ -92,6 +93,7 @@ async def test_ac39_a_k7_refusal_written_by_the_ai_account_shows_one_notice_with
 async def test_ac39_decision_89_a_k6_refusal_is_counted_and_shows_no_notice_until_read(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
+    connections_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
     now: datetime,
@@ -105,7 +107,7 @@ async def test_ac39_decision_89_a_k6_refusal_is_counted_and_shows_no_notice_unti
         edits_answer(edit(new_text=NEW_ADDRESS_LINE)),
     )
 
-    await fix_sweep.sweep(ai_install, clock=lambda: now, only_org=str(ai_tenant.org_id))
+    await fix_sweep.sweep(connections_engine, clock=lambda: now, only_org=str(ai_tenant.org_id))
     read = await _summary(ai_install, ai_tenant, now + timedelta(minutes=1))
 
     assert [(each.reason, each.count) for each in read.refused] == [("withheld_K6", 1)]
@@ -116,6 +118,7 @@ async def test_ac39_decision_89_a_k6_refusal_is_counted_and_shows_no_notice_unti
 async def test_ac39_counts_older_than_30_days_are_left_out(
     ai_install: AsyncEngine,
     ai_engine: AsyncEngine,
+    connections_engine: AsyncEngine,
     provider_site: RecordingSite,
     ai_tenant: AlertTenant,
     now: datetime,
@@ -128,7 +131,7 @@ async def test_ac39_counts_older_than_30_days_are_left_out(
         now,
         edits_answer(edit(new_text=HIDDEN_LINE)),
     )
-    await fix_sweep.sweep(ai_install, clock=lambda: now, only_org=str(ai_tenant.org_id))
+    await fix_sweep.sweep(connections_engine, clock=lambda: now, only_org=str(ai_tenant.org_id))
 
     read = await _summary(ai_install, ai_tenant, now + timedelta(days=31))
 

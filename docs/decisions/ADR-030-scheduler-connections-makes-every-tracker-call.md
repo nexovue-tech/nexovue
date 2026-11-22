@@ -68,10 +68,12 @@ F5 reached the same answer for its own GitHub work (`ai-solution/design.md`, D40
   connection, link and case columns and F5's tables, and the job queue reached only through
   migration 0085's functions, limited to the two tracker queues. **Stated plainly, what a
   compromise of it still reaches:** every organization's connections, links, case columns
-  and F5 suggestions (its jobs cross organizations, so no grant binds `org_id`), and the
-  explanation facts F5 reads. It cannot read a check, channel, AI or mail secret, an alert,
-  telemetry or a sign-in, lock the alert queue, or add a job outside its queues
-  (`test_connections_grants_live.py`). Before T8.7 it shared the install account.
+  and F5 suggestions (its jobs cross organizations, so no grant binds `org_id`), the
+  explanation facts F5 reads, and the time F5's sweep last finished, which it could set to
+  keep that sweep's stall alert quiet (granted 2026-11-22,
+  `docs/changes/fix-sweep-records-as-its-account/`). It cannot read a check, channel, AI or
+  mail secret, an alert, telemetry or a sign-in, lock the alert queue, or add a job outside
+  its queues (`test_connections_grants_live.py`). Before T8.7 it shared the install account.
 - F5's GitHub work joins this role and this task set, rather than `TASK_MODULES`.
 - **Unverified until the founder's real-GitHub run after Phase 2** (foundation item 28):
   every GitHub answer this role depends on was read from documentation and replayed by a
