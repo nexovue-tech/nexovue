@@ -17,6 +17,7 @@ import os
 import signal
 import socket
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -216,13 +217,14 @@ def _hand_out(lane: str, *org_ids: uuid.UUID) -> list[JobRequest]:
     ]
 
 
-async def _queued_for(engine: AsyncEngine, lane: str) -> list[uuid.UUID | None]:
+async def _queued_for(engine: AsyncEngine, lane: str) -> Counter[uuid.UUID | None]:
+    """Whom `lane`'s jobs are for, in no order: one hand-out adds its jobs in one statement,
+    so their `run_after` and `created_at` tie and Postgres returns them in any order."""
     async with engine.connect() as connection:
         rows = await connection.execute(
-            text("SELECT org_id FROM jobs WHERE queue = :q ORDER BY run_after, created_at"),
-            {"q": lane},
+            text("SELECT org_id FROM jobs WHERE queue = :q"), {"q": lane}
         )
-        return [row.org_id for row in rows]
+        return Counter(row.org_id for row in rows)
 
 
 async def _delete_organization(connection: AsyncConnection, org_id: uuid.UUID) -> None:
@@ -238,7 +240,7 @@ async def test_an_organization_deleted_before_its_job_is_added_is_left_out_alone
 
     await queue.enqueue_all(engine, _hand_out(lane, gone, live))
 
-    assert await _queued_for(engine, lane) == [live, None]
+    assert await _queued_for(engine, lane) == Counter([live, None])
 
 
 async def test_a_hand_out_waits_out_an_organization_deletion_in_flight(
@@ -255,7 +257,7 @@ async def test_a_hand_out_waits_out_an_organization_deletion_in_flight(
         await deleter.commit()
         await asyncio.wait_for(adding, PATIENCE_SECONDS)
 
-    assert await _queued_for(engine, lane) == [live, None]
+    assert await _queued_for(engine, lane) == Counter([live, None])
 
 
 async def _until_blocked_by(engine: AsyncEngine, pid: int) -> None:
