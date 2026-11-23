@@ -39,9 +39,15 @@ BANNED: Final = re.compile(
     r"\b(?:" + "|".join(word.replace(" ", r"\s+") for word in BANNED_WORDS) + r")\b",
     re.IGNORECASE,
 )
-EMAIL: Final = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-# A Markdown link or image, an autolink, or an HTML tag: markup a renderer may follow.
-MARKUP: Final = re.compile(r"\[[^\]]*\]\([^)]*\)|!\[|<[a-z/!][^>]*>", re.IGNORECASE)
+# Tried only where a run of address characters starts, so a long run with no `@` costs one
+# pass, not one per character (CodeQL py/polynomial-redos).
+EMAIL: Final = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# A Markdown link or image, an autolink, or an HTML tag: markup a renderer may follow. Each
+# is found by its opening, then its close anywhere after (`has_markup`).
+_IMAGE_OPENING: Final = "!["
+# A link's text in brackets, then `(`; brackets inside it start a later one.
+_LINK_OPENING: Final = re.compile(r"\[[^\][]*\]\(")
+_TAG_OPENING: Final = re.compile(r"<[a-z/!]", re.IGNORECASE)
 _ALLOWED_CONTROLS: Final = frozenset({"\n", "\t"})
 
 ProseRefusal = Literal[
@@ -74,13 +80,25 @@ def prose_refusal(text: str, book: AliasBook | None) -> ProseRefusal | None:
         return "hidden_character"
     if EMAIL.search(text):
         return "email"
-    if MARKUP.search(text):
+    if has_markup(text):
         return "markup"
     if addresses_in(text, hosts_anywhere=True):
         return "address"
     if any(book is None or book.name_of(alias) is None for alias in ALIAS_TOKEN.findall(text)):
         return "unknown_alias"
     return None
+
+
+def has_markup(text: str) -> bool:
+    """`[text](target)`, `![` or `<tag…>`. Only the first opening of each is looked for: a
+    close after any later opening is after the first too, so a run of openings is one pass."""
+    if _IMAGE_OPENING in text:
+        return True
+    link = _LINK_OPENING.search(text)
+    if link is not None and ")" in text[link.end() :]:
+        return True
+    tag = _TAG_OPENING.search(text)
+    return tag is not None and ">" in text[tag.end() :]
 
 
 def check_why(text: str, book: AliasBook | None) -> ProseVerdict:

@@ -30,10 +30,10 @@ from nexovue_platform.fixes.diff import (
     line_changes,
 )
 from nexovue_platform.fixes.patterns import (
-    URL_TOKEN,
     addresses_in,
     hidden_characters,
     mixed_script_words,
+    without_urls,
 )
 from nexovue_platform.fixes.policy import NO_OWNER_LISTS, OwnerLists, is_never_changed
 from nexovue_platform.fixes.prose import check_why, evidence_ids_known
@@ -441,7 +441,7 @@ def _is_joined_words(run: str) -> bool:
 def opaque_runs(line: str) -> list[str]:
     """K8's long opaque strings in a line, outside any URL (K6 already judges those)."""
     found = []
-    for match in _OPAQUE_RUN.finditer(URL_TOKEN.sub(" ", line)):
+    for match in _OPAQUE_RUN.finditer(without_urls(line)):
         run = match.group(0)
         if _is_joined_words(run):
             continue

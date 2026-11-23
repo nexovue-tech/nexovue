@@ -11,10 +11,13 @@ import re
 import unicodedata
 from typing import Final
 
-# K6: any scheme, `https://`, `ftp://`, `javascript://` and the rest.
-URL_SCHEME: Final = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
-# A URL as a token, for the "not already in that file" comparison.
-URL_TOKEN: Final = re.compile(r"[a-z][a-z0-9+.-]*://[^\s'\"`<>()\[\]{}]*", re.IGNORECASE)
+# K6: a URL with any scheme, as a token for the "not already in that file" comparison. Tried
+# only where a run of scheme characters starts, its digits and signs before the first letter
+# kept as `lead`, so a long run with no `://` is read once (CodeQL py/polynomial-redos).
+_URL_TOKEN: Final = re.compile(
+    r"(?<![a-z0-9+.-])(?P<lead>[0-9+.-]*)(?P<url>[a-z][a-z0-9+.-]*://[^\s'\"`<>()\[\]{}]*)",
+    re.IGNORECASE,
+)
 _OCTET: Final = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
 # Four dot-separated numbers, each up to 255; a version `1.2.3` has three. A dot is part of
 # the address only before another number, so one ending a sentence is still an address.
@@ -51,12 +54,17 @@ _QUOTES: Final = "\"'`"
 def addresses_in(text: str, *, hosts_anywhere: bool) -> list[str]:
     """Every URL, IPv4 address and, inside a string literal (or anywhere when
     `hosts_anywhere`), host name with a listed last label."""
-    found = [match.group(0) for match in URL_TOKEN.finditer(text)]
+    found = [match.group("url") for match in _URL_TOKEN.finditer(text)]
     found += [match.group(0) for match in IPV4.finditer(text)]
     places = [text] if hosts_anywhere else string_literals(text)
     for place in places:
-        found += [match.group(0) for match in HOST_NAME.finditer(URL_TOKEN.sub(" ", place))]
+        found += [match.group(0) for match in HOST_NAME.finditer(without_urls(place))]
     return found
+
+
+def without_urls(text: str) -> str:
+    """The text with each URL replaced by one space, so no rule reads inside one twice."""
+    return _URL_TOKEN.sub(lambda match: match.group("lead") + " ", text)
 
 
 def string_literals(line: str) -> list[str]:

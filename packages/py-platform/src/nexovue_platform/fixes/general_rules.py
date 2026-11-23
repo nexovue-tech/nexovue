@@ -29,7 +29,7 @@ from nexovue_platform.fixes.general_lists import (
 )
 from nexovue_platform.fixes.patterns import addresses_in, is_hidden_character, mixed_script_words
 from nexovue_platform.fixes.policy import NEVER_CHANGED_BUILD, SOURCE_EXTENSIONS, matches_any
-from nexovue_platform.fixes.prose import BANNED, EMAIL, MARKUP
+from nexovue_platform.fixes.prose import BANNED, EMAIL, has_markup
 from nexovue_platform.fixes.records import (
     GENERAL_ABSTAIN_REASONS,
     GENERAL_LANGUAGES,
@@ -273,9 +273,7 @@ def _content(answer: GeneralSuggestion, known_aliases: frozenset[str]) -> Genera
 
 def _has_address(text: str) -> bool:
     """U4 and K6 with no "already in the file" allowance: there is no file (G4)."""
-    return bool(
-        EMAIL.search(text) or MARKUP.search(text) or addresses_in(text, hosts_anywhere=True)
-    )
+    return bool(EMAIL.search(text) or has_markup(text) or addresses_in(text, hosts_anywhere=True))
 
 
 def _starts_a_process(texts: Iterable[str], answer: GeneralSuggestion) -> bool:
