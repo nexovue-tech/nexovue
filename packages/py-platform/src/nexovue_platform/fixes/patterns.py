@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from typing import Final
 
-# K6: a URL with any scheme, as a token for the "not already in that file" comparison. Tried
-# only where a run of scheme characters starts, its digits and signs before the first letter
-# kept as `lead`, so a long run with no `://` is read once (CodeQL py/polynomial-redos).
-_URL_TOKEN: Final = re.compile(
-    r"(?<![a-z0-9+.-])(?P<lead>[0-9+.-]*)(?P<url>[a-z][a-z0-9+.-]*://[^\s'\"`<>()\[\]{}]*)",
-    re.IGNORECASE,
-)
+# K6: a URL with any scheme, as a token for the "not already in that file" comparison: a
+# letter, then letters, digits and `+.-` up to `://`, then the URL's tail. Each pattern is one
+# character class, and `_url_spans` joins them in code, so no pattern can re-read a run that
+# fails to become a URL (CodeQL py/polynomial-redos reads any repeated class followed by
+# something that can fail as quadratic, a guard like a lookbehind notwithstanding).
+_SCHEME_RUN: Final = re.compile(r"[a-z0-9+.-]+", re.IGNORECASE)
+_SCHEME_LETTER: Final = re.compile(r"[a-z]", re.IGNORECASE)
+_SCHEME_END: Final = "://"
+_URL_TAIL: Final = re.compile(r"[^\s'\"`<>()\[\]{}]*")
 _OCTET: Final = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
 # Four dot-separated numbers, each up to 255; a version `1.2.3` has three. A dot is part of
 # the address only before another number, so one ending a sentence is still an address.
@@ -54,7 +57,7 @@ _QUOTES: Final = "\"'`"
 def addresses_in(text: str, *, hosts_anywhere: bool) -> list[str]:
     """Every URL, IPv4 address and, inside a string literal (or anywhere when
     `hosts_anywhere`), host name with a listed last label."""
-    found = [match.group("url") for match in _URL_TOKEN.finditer(text)]
+    found = [text[start:end] for start, end in _url_spans(text)]
     found += [match.group(0) for match in IPV4.finditer(text)]
     places = [text] if hosts_anywhere else string_literals(text)
     for place in places:
@@ -64,7 +67,32 @@ def addresses_in(text: str, *, hosts_anywhere: bool) -> list[str]:
 
 def without_urls(text: str) -> str:
     """The text with each URL replaced by one space, so no rule reads inside one twice."""
-    return _URL_TOKEN.sub(lambda match: match.group("lead") + " ", text)
+    pieces: list[str] = []
+    kept_from = 0
+    for start, end in _url_spans(text):
+        pieces += [text[kept_from:start], " "]
+        kept_from = end
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
+
+
+def _url_spans(text: str) -> Iterator[tuple[int, int]]:
+    """Where each URL starts and ends, left to right, as a search for the whole URL would
+    find them. A URL starts at the first letter of a run of scheme characters that `://`
+    follows; the digits and signs before that letter stay outside it. A run inside the
+    tail of the URL before is part of that URL, not a new one. Each character is read a
+    fixed number of times: in its run, in that run's search for a letter, and in a tail."""
+    url_end = 0
+    for run in _SCHEME_RUN.finditer(text):
+        if run.start() < url_end or not text.startswith(_SCHEME_END, run.end()):
+            continue
+        letter = _SCHEME_LETTER.search(text, run.start(), run.end())
+        if letter is None:
+            continue
+        tail = _URL_TAIL.match(text, run.end() + len(_SCHEME_END))
+        assert tail is not None  # A pattern that may match nothing always matches.
+        url_end = tail.end()
+        yield letter.start(), url_end
 
 
 def string_literals(line: str) -> list[str]:

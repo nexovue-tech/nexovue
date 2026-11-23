@@ -39,9 +39,13 @@ BANNED: Final = re.compile(
     r"\b(?:" + "|".join(word.replace(" ", r"\s+") for word in BANNED_WORDS) + r")\b",
     re.IGNORECASE,
 )
-# Tried only where a run of address characters starts, so a long run with no `@` costs one
-# pass, not one per character (CodeQL py/polynomial-redos).
-EMAIL: Final = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# An email address: word characters and `.+-` up to `@`, then two or more labels of word
+# characters and `-` joined by dots. Each pattern is one character class and `_email_span` joins
+# them in code, so a run that never becomes an address is read once, not once per character
+# (CodeQL py/polynomial-redos reads any repeated class followed by something that can fail as
+# quadratic, a guard like a lookbehind notwithstanding).
+_EMAIL_LOCAL: Final = re.compile(r"[\w.+-]+")
+_EMAIL_LABEL: Final = re.compile(r"[\w-]+")
 # A Markdown link or image, an autolink, or an HTML tag: markup a renderer may follow. Each
 # is found by its opening, then its close anywhere after (`has_markup`).
 _IMAGE_OPENING: Final = "!["
@@ -78,7 +82,7 @@ def prose_refusal(text: str, book: AliasBook | None) -> ProseRefusal | None:
         return "control_character"
     if hidden_characters(text):
         return "hidden_character"
-    if EMAIL.search(text):
+    if email_in(text) is not None:
         return "email"
     if has_markup(text):
         return "markup"
@@ -86,6 +90,30 @@ def prose_refusal(text: str, book: AliasBook | None) -> ProseRefusal | None:
         return "address"
     if any(book is None or book.name_of(alias) is None for alias in ALIAS_TOKEN.findall(text)):
         return "unknown_alias"
+    return None
+
+
+def email_in(text: str) -> str | None:
+    """The first email address in the text, or None (U4)."""
+    span = _email_span(text)
+    return None if span is None else text[span[0] : span[1]]
+
+
+def _email_span(text: str) -> tuple[int, int] | None:
+    """Where the first email address starts and ends, as a search for the whole address
+    would find it: a whole run of local characters that `@` follows, then every dot-joined
+    label after the first. Each character is read at most twice: in its run and as a label."""
+    for local in _EMAIL_LOCAL.finditer(text):
+        if not text.startswith("@", local.end()):
+            continue
+        label = _EMAIL_LABEL.match(text, local.end() + 1)
+        if label is None:
+            continue
+        end, labels = label.end(), 1
+        while text.startswith(".", end) and (label := _EMAIL_LABEL.match(text, end + 1)):
+            end, labels = label.end(), labels + 1
+        if labels > 1:
+            return local.start(), end
     return None
 
 

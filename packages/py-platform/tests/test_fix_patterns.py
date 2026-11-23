@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 import pytest
 from nexovue_platform.fixes.patterns import addresses_in, without_urls
-from nexovue_platform.fixes.prose import EMAIL, has_markup
+from nexovue_platform.fixes.prose import email_in, has_markup
 
 # Generous for a linear pass of 100,000 characters, even on a loaded CI runner.
 LINEAR_BUDGET_SECONDS = 1.0
@@ -46,6 +46,21 @@ def test_a_long_run_of_letters_ending_in_a_scheme_is_one_url() -> None:
     assert timed(lambda: addresses_in(line, hosts_anywhere=False)) == [line[2:-2]]
 
 
+def test_a_scheme_inside_a_url_is_part_of_that_url() -> None:
+    line = "go http://a.example/x+y://b.example z ftp://c"
+
+    assert addresses_in(line, hosts_anywhere=False) == [
+        "http://a.example/x+y://b.example",
+        "ftp://c",
+    ]
+    assert without_urls(line) == "go   z  "
+
+
+def test_a_url_starts_at_the_first_letter_of_its_scheme() -> None:
+    assert addresses_in("1.-\u212a+s://x", hosts_anywhere=False) == ["\u212a+s://x"]
+    assert addresses_in("12+.://x", hosts_anywhere=False) == []
+
+
 def test_removing_urls_keeps_what_led_up_to_the_scheme() -> None:
     assert without_urls("x 1.-https://a.example/p y") == "x 1.-  y"
     assert timed(lambda: without_urls("a" * LONG)) == "a" * LONG
@@ -64,16 +79,28 @@ NO_EMAIL: dict[str, Callable[[], str]] = {
 def test_a_long_run_with_no_email_address_is_read_once(shape: str) -> None:
     text = NO_EMAIL[shape]()
 
-    assert timed(lambda: EMAIL.search(text)) is None
+    assert timed(lambda: email_in(text)) is None
 
 
 def test_an_email_address_after_a_long_run_is_found_whole() -> None:
     text = "+" * 2 * LONG + "ops@example.org"
 
-    found = timed(lambda: EMAIL.search(text))
+    assert timed(lambda: email_in(text)) == text
 
-    assert found is not None
-    assert found.group(0) == text
+
+@pytest.mark.parametrize(
+    ("text", "address"),
+    [
+        ("mail a.b+c@x.example.org now", "a.b+c@x.example.org"),
+        ("a@b.c.", "a@b.c"),
+        ("a@b@c.d", "b@c.d"),
+        ("a@localhost", None),
+        ("a@-.x", "a@-.x"),
+        ("a@.b.c", None),
+    ],
+)
+def test_an_email_address_is_a_run_then_two_or_more_labels(text: str, address: str | None) -> None:
+    assert email_in(text) == address
 
 
 # -------------------------------------------------------------- markup (U4, G4)
