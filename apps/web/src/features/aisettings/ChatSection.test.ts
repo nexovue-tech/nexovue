@@ -198,10 +198,7 @@ describe("the Chat section", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await act(async () => {});
     expect(shown.textContent).toContain("a built-in sample: this project has none yet");
-    expect(shown.textContent).toContain(
-      "These masking rules off".toLowerCase().replace("these", "these"),
-    );
-    expect(shown.textContent).toContain("cookies");
+    expect(shown.textContent).toContain("This project has these masking rules off: cookies.");
     expect(shown.textContent).toContain(SELLING_LINE);
     await act(async () => button("Agree to send this")?.click());
     await act(async () => {});
