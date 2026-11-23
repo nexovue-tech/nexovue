@@ -15,6 +15,8 @@ This suite fails rather than skips when the stores are absent; see tests/helpers
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from chat.live_support import load_api_test_environment, require_stores, served_bed
 
 load_api_test_environment()
@@ -76,12 +78,14 @@ async def test_every_answer_matches_what_its_tool_reads_through_the_api() -> Non
         assert not mismatches, mismatches
         assert checked >= 40
 
-        # The empty project's ticket reads no service at all.
+        # The empty project's ticket reads no service at all, over the last hour, where the
+        # main project's seed has every service. Not "since midnight": at 00:00 that window
+        # is empty and the catalog rightly refuses it.
         services = TOOLS_BY_NAME["list_services"]
         call = check_arguments(
             services,
             {
-                "from": (world.anchor.replace(hour=0, minute=0)).isoformat(),
+                "from": (world.anchor - timedelta(hours=1)).isoformat(),
                 "to": world.anchor.isoformat(),
             },
             level="facts_and_text",
