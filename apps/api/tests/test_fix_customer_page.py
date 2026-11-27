@@ -121,10 +121,11 @@ def test_the_page_says_branches_to_protect_and_pull_request_target() -> None:
     assert "`pull_request_target`" in flat
 
 
-def test_the_cost_example_is_labelled_an_estimate_with_its_date() -> None:
-    assert "This is an estimate, from one provider's prices read on 22 November 2026" in _flat(
-        _page()
-    )
+def test_the_cost_is_labelled_measured_with_its_model_and_prices() -> None:
+    """Live test, 2026-11-28: measured on Claude Sonnet 5.5 in place of the earlier estimate."""
+    page = _flat(_page())
+    assert "Measured, on Claude Sonnet 5.5" in page
+    assert "prices change, so check your provider's" in page
 
 
 def test_the_setup_front_page_links_it() -> None:

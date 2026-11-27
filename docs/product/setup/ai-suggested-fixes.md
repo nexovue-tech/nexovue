@@ -7,7 +7,9 @@
 A finding can carry a suggested change to your code, written by the AI provider you chose and
 checked against Nexovue's published rules before you see it. It is a suggestion: Nexovue does
 not compile it, run it or merge it, and a person must review it as they would an outside
-contribution.
+contribution. **Provided as is, without warranty: you review and you merge.** The terms are in
+`docs/legal/suggested-fixes.md`; an owner agrees to them when
+agreeing to send a repository's code.
 
 **Where it applies.** On self-hosted installs, for GitHub.com repositories mapped to a service. Automatic file selection needs a newly appeared error with a stack, and adds files that the top of the stack imports from the same folder; otherwise a person names up to 5 files. The AI may ask for a few more files, and they go only if a person agrees. A draft pull request also needs a deploy of this service as the likely cause; otherwise the same change can be downloaded as a patch. Where Nexovue cannot read the code, a general suggestion with example code may be offered from the finding's facts alone, when there is a likely cause or a recognised error type; Nexovue has not seen that code. Other findings get what changed and the brief.
 
@@ -23,18 +25,20 @@ Each step needs more from you than the one before, and you can stop at any of th
 | A general suggestion with example code, labelled "Example pattern, not your code" | AI on | The finding's facts and the language you pick. No code |
 | A suggested change on the finding, from your own files | AI on, the *Nexovue suggestions* GitHub App with read access, an owner's agreement for that repository | The files you see listed, the finding's facts and your hint, to your AI provider |
 | A patch file to download | As above | Nothing more |
-| A draft pull request | As above, plus write access, an owner allowing drafts for that repository, and a deploy of this service as the likely cause | The change, to your repository on GitHub |
+| A draft pull request | As above, plus write access, an owner allowing drafts for that repository, an admin allowing it if the repository is public, your own GitHub account linked, and a deploy of this service as the likely cause | The change, to your repository on GitHub |
 
-## Write access is off in this version
+## Write access, and the model it was evaluated on
 
-**Opening a draft pull request, and running CI on one, are switched off in code** in this
-version of Nexovue, until the safety evaluation of the AI models is done. No setting, environment variable or database row can switch them on. Where the
-page would offer a draft, it says:
+**Opening a draft pull request, and running CI on one, are on in this version,** by the
+founder's go of 28 November 2026, recorded in code (`nexovue_platform/fixes/write_gate.py`).
+The go followed the safety evaluation: attacks that try to steer a suggestion found no way
+past Nexovue's checks in 204 trials on **Claude Sonnet 5.5**, the model it names
+(`docs/research/f5-evaluation-2026-11.md`). That
+proves those trials only, not that any model resists every attack, and every attack still
+reached a person: the person's review is the protection. An install built with write access
+off says, where the page would offer a draft:
 
 > Opening a draft pull request is switched off in this version of Nexovue, until its safety evaluation is done. Download the patch instead.
-
-Everything else on this page that describes a draft describes how it works once write access
-is switched on.
 
 **Drafts work on every GitHub plan.** GitHub made draft pull requests available in every
 repository, public or private, on every plan, on 1 May 2025. If GitHub ever refuses a draft,
@@ -112,6 +116,15 @@ So, before an owner allows drafts for a repository:
 
   > This runs the model's code in this repository's CI, possibly with its secrets. Read the diff on GitHub first.
 
+**A public repository.** A draft's branch in a public repository is public too: anyone can see
+that something is broken, and where. So drafts there are refused until an admin allows them, on
+the *Nexovue suggestions App* panel in Connections, after that warning; the admin can withdraw
+it. Each is recorded in the audit log.
+
+**Your own GitHub account.** Before you open a draft, you link your GitHub account once, so
+GitHub can tell Nexovue what access you have to the repository. Nexovue keeps your GitHub user
+name and id, and no token.
+
 **The login note.** On a private repository the pull request names who asked for it:
 
 > Your GitHub login is written into the pull request, and stays on GitHub if you leave.
@@ -156,18 +169,20 @@ provider's address is planned before the first deployment. Until then, a firewal
 host or your network that lets the `scheduler-insight` container reach only your provider's
 address does the same job.
 
-## What it costs: one worked example
+## What it costs
 
-You pay your AI provider; Nexovue charges nothing for the call. **This is an estimate, from one
-provider's prices read on 22 November 2026,** for Anthropic's Claude Sonnet 4.6: $3 per million
-input tokens and $15 per million output tokens.
+You pay your AI provider; Nexovue charges nothing for the call. Before you click **Send**, the
+page says the most tokens that Send can use ("To api.anthropic.com, using up to about 27,144
+tokens."); afterwards it says the tokens used.
 
-- One round sends at most 64 KiB of files. At about 4 characters a token (an approximation;
-  code often has more tokens), that is about 16,400 tokens, plus about 2,000 for the facts and
-  instructions: **about 18,400 input tokens, about $0.06.**
-- The answer is held to 4,000 output tokens at most: **at most $0.06.**
-- **About $0.12 for one full round, and about $0.36 if the model uses all 3 rounds.** A round
-  whose answer could not be read is tried once more, which can double that round.
+**Measured, on Claude Sonnet 5.5** (Anthropic's price list: $2 per million input tokens and $10
+per million output tokens; prices change, so check your provider's):
 
-The page shows the tokens reserved before you click **Send**, and the tokens used afterwards.
+- In the safety evaluation's 204 trials, on small test files, a suggestion used a median of
+  3,443 tokens (95th percentile 5,286): about **$0.01 to $0.02** each.
+- In the live test, three Java files (21.5 KiB) and the finding's facts used 13,546 tokens:
+  about **$0.04**.
+- The most one Send can use is bounded: every attempt at the facts' own limit, the files (at
+  most 64 KiB) and 4,000 tokens of answer, times 2 attempts.
+
 A suggestion counts toward 3 a day per finding only when the model answered.
