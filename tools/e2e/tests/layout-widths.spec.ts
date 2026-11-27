@@ -12,6 +12,7 @@ import { expect, test } from "@playwright/test";
 
 import { newAccount, signUp } from "./support/accounts";
 import { CONSOLE_SCREENS } from "./support/console-screens";
+import { CHAT_NEEDS_SELF_HOSTED, isHosted } from "./support/deployment";
 import { paceReads } from "./support/paced-reads";
 
 const WIDTHS = [1024, 1280, 1440];
@@ -24,6 +25,7 @@ for (const width of WIDTHS) {
   test(`at ${width}px with the panel open, no screen scrolls sideways outside a table, diagram or code`, async ({
     page,
   }) => {
+    test.skip(await isHosted(page), CHAT_NEEDS_SELF_HOSTED);
     test.setTimeout(CONSOLE_SCREENS.length * SECONDS_A_SCREEN * 1000);
     await page.setViewportSize({ width, height: 900 });
     const readsAllowed = paceReads(page);

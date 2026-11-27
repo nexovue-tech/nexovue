@@ -12,12 +12,14 @@ import { expect, test } from "@playwright/test";
 
 import { newAccount, signUp } from "./support/accounts";
 import { CONSOLE_SCREENS } from "./support/console-screens";
+import { CHAT_NEEDS_SELF_HOSTED, isHosted } from "./support/deployment";
 import { paceReads } from "./support/paced-reads";
 
 // A screen's own reads, the panel opening, and three checks.
 const SECONDS_A_SCREEN = 10;
 
 test("every screen works with chat broken", async ({ page }) => {
+  test.skip(await isHosted(page), CHAT_NEEDS_SELF_HOSTED);
   test.setTimeout(CONSOLE_SCREENS.length * SECONDS_A_SCREEN * 1000);
   await page.route("**/api/v1/assistant/**", (route) =>
     route.fulfill({ status: 500, contentType: "application/problem+json", body: "{}" }),

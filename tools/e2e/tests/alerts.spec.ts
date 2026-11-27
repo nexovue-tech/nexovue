@@ -39,9 +39,12 @@ test("a new organization starts with a rule that emails its owners, and can add 
   await expect(page.getByRole("heading", { name: "Alerts", level: 1 })).toBeVisible();
   await expect(page.getByText("Nothing is open.")).toBeVisible();
   const rules = page.getByRole("region", { name: "Rules" });
-  await expect(rules.getByText("Any check down")).toBeVisible();
-  await expect(rules.getByText("Default")).toBeVisible();
-  await expect(rules.getByText("To Organization owners")).toBeVisible();
+  // Phase 2 added two more default rules (Critical problems, Reliability targets); this is
+  // the checks rule, so it is the one read.
+  const anyCheckDown = rules.getByRole("link", { name: /^Any check down\b/ });
+  await expect(anyCheckDown).toBeVisible();
+  await expect(anyCheckDown.getByText("Default")).toBeVisible();
+  await expect(anyCheckDown.getByText("To Organization owners")).toBeVisible();
 
   // A channel, connected and tested from its own screen.
   await page.goto("/settings/channels");

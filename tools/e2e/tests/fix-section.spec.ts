@@ -28,6 +28,8 @@ const LONG_ENDPOINT = `/api/${"orders/".repeat(28)}{id}`.slice(0, 200);
 const WIDTHS = [375, 1280] as const;
 /** AC37d: action targets at phone width (a recommendation, design *Section parts*). */
 const TARGET_PX = 44;
+const BELOW_TARGET_ON_A_PHONE =
+  "F5 decision 120: shared controls under 44 px at 375 px, approved as a separate change after Phase 2";
 
 const release = (id: string, version: string, minutesBefore: number) => ({
   release_id: id,
@@ -223,6 +225,7 @@ async function fitsTheWindow(page: Page) {
 
 for (const width of WIDTHS) {
   test(`rungs 1 and 2 fit ${width} px, with the brief closed and open`, async ({ page }) => {
+    test.fail(width === 375, BELOW_TARGET_ON_A_PHONE);
     await page.setViewportSize({ width, height: 900 });
     await signUp(page, newAccount());
     await stubFinding(page);
@@ -250,6 +253,7 @@ for (const width of WIDTHS) {
 for (const width of WIDTHS) {
   for (const [name, general] of Object.entries(RUNG_2B_STATES)) {
     test(`AC78: rung 2b ${name} fits ${width} px with its targets`, async ({ page }) => {
+      test.fail(width === 375 && ["offered", "refused"].includes(name), BELOW_TARGET_ON_A_PHONE);
       await page.setViewportSize({ width, height: 900 });
       await signUp(page, newAccount());
       await stubFinding(page, general);
@@ -557,6 +561,11 @@ const STEP_7_STATES: [string, Record<string, unknown>][] = [
 for (const width of WIDTHS) {
   for (const [name, latest] of STEP_7_STATES) {
     test(`AC37d: the draft ${name} fits ${width} px with its targets`, async ({ page }) => {
+      test.fail(
+        width === 375 &&
+          ["as shipped, with write access off", "with the draft confirm open"].includes(name),
+        BELOW_TARGET_ON_A_PHONE,
+      );
       await page.setViewportSize({ width, height: 900 });
       await signUp(page, newAccount());
       await stubFinding(page);

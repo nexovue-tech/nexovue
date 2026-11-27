@@ -17,6 +17,8 @@ import { newAccount, signUp } from "./support/accounts";
 
 const DRAG_STEPS = 25;
 const SIDEWAYS_OVERSHOOT_PX = 400;
+// @dnd-kit/core PointerSensor.detach: document click listeners removed after 50 ms; margin added.
+const DROP_CLICK_GUARD_MS = 150;
 
 const panels = (page: Page) => page.locator("section[data-panel-id]");
 
@@ -92,7 +94,10 @@ test("a panel is dragged by its handle, the others hold still, and the same orde
   await expect(status).toContainText("moved to position 3 of");
   await expect(page.locator("[data-drop-target]")).toHaveCount(0);
 
-  // The buttons are still the keyboard's way, over the same order.
+  // The buttons are still the keyboard's way, over the same order. @dnd-kit's pointer sensor
+  // swallows every click for 50 ms after a drop, so the drop's own release is no click; no
+  // person clicks that fast, but a test does.
+  await page.waitForTimeout(DROP_CLICK_GUARD_MS);
   await page
     .getByRole("button", { name: /^Move .* earlier$/ })
     .nth(2)
