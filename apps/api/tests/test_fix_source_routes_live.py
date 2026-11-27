@@ -248,9 +248,11 @@ async def test_the_forgery_warning_shows_only_when_a_file_came_from_a_stack(
     stacked = (await _read(db, rows.person(tenant), finding))["latest"]["files"]
     assert stacked["forgeable"] == GATHERED_FORGEABLE
 
+    listing = row.files_read
+    assert listing is not None
     row.files_read = {
-        **row.files_read,
-        "files": [{**each, "role": "named"} for each in row.files_read["files"]],
+        **listing,
+        "files": [{**each, "role": "named"} for each in listing["files"]],
     }
     await db.flush()
     named = (await _read(db, rows.person(tenant), finding))["latest"]["files"]

@@ -9,8 +9,8 @@
  */
 
 import { expect, test } from "@playwright/test";
-
 import { newAccount, signUp } from "./support/accounts";
+import { isHosted } from "./support/deployment";
 import { readExportSettings } from "./support/onboarding";
 import { exportProfiles, heavyProfileBatch, profileBatch } from "./support/otlp";
 
@@ -70,10 +70,17 @@ test("a profile sent with a new account's key becomes a flame graph, searchable 
     "main.(*Cart).Checkout",
   );
 
-  // Two samples accepted is two samples metered (AC13) — shown, and not billed.
+  // Two samples accepted is two samples metered (AC13) — shown, and on a hosted install not
+  // billed; a self-hosted install has no bill, so it shows the count alone.
+  const metered = (await isHosted(page)) ? "2 · not billed in preview" : "2";
   await expect(async () => {
     await page.goto("/settings/usage");
-    await expect(page.getByText("2 · not billed in preview")).toBeVisible({ timeout: 5_000 });
+    const samples = page
+      .locator("div")
+      .filter({ has: page.getByText("Profile samples", { exact: true }) })
+      .last()
+      .getByRole("definition");
+    await expect(samples).toHaveText(metered, { timeout: 5_000 });
   }).toPass({ timeout: STORED_TIMEOUT_MS });
 });
 
