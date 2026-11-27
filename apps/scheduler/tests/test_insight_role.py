@@ -171,6 +171,10 @@ def test_a_running_insight_child_holds_its_set_and_no_store_client(tmp_path: Pat
     assert not [name for name in loaded if name.startswith("nexovue_scheduler.evidence")]
     # NFR3: the child's own memory after a job, beyond what it shares with its forkserver,
     # is well under the role's per-child limit, so four fit its 384 MiB.
+    if not Path("/proc/self/smaps_rollup").exists():
+        pytest.skip(
+            "a child's memory is read from Linux's smaps_rollup; CI and the images run this"
+        )
     own = outcome[-1]
     assert own is not None
     assert own < worker.INSIGHT_CHILD_PRIVATE_BYTES, f"{own / 2**20:.1f} MiB of its own"
