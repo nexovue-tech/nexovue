@@ -7,12 +7,13 @@ from typing import Any
 
 from repo_audit import EXPECTED, drift
 
-# The API's answers on 2026-10-28, after Step 0's settings were applied (trimmed to what is read).
+# The API's answers on 2026-10-28, after Step 0's settings were applied (trimmed to what is read),
+# with the repository public since the founder's decision of 2026-11-27.
 APPLIED: dict[str, tuple[int, Any]] = {
     "": (
         200,
         {
-            "private": True,
+            "private": False,
             "has_wiki": False,
             "has_projects": False,
             "delete_branch_on_merge": True,
@@ -60,11 +61,11 @@ def test_the_applied_settings_pass() -> None:
     assert drift(_expected(), APPLIED.__getitem__) == []
 
 
-def test_a_repository_made_public_is_drift() -> None:
+def test_a_repository_made_private_is_drift() -> None:
     answers = dict(APPLIED)
-    answers[""] = (200, {**APPLIED[""][1], "private": False})
+    answers[""] = (200, {**APPLIED[""][1], "private": True})
 
-    assert drift(_expected(), answers.__getitem__) == ["/ private: expected True, found False"]
+    assert drift(_expected(), answers.__getitem__) == ["/ private: expected False, found True"]
 
 
 def test_alerts_switched_off_are_drift() -> None:
