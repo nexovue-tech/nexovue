@@ -2,7 +2,9 @@
 
 ## Lifecycle status
 
-**In development. Step 6 built 2026-11-22, committed.** (Step 5 built 2026-11-12, committed 2026-11-12.) The founder approved the specification, design and
+**Implemented, 2026-11-27.** Every plan step is built and on `feature/phase-2` (pull request #25), and `just check` passes in CI and on the founder's Mac. Not yet **Verified**: the live test with a real AI model and real GitHub, and the founder's checks, are owed; not **Released**. The notes below keep their own dates.
+
+**Step 6 built 2026-11-22, committed.** (Step 5 built 2026-11-12, committed 2026-11-12.) The founder approved the specification, design and
 plan on 2026-11-02. Steps 1a, 1b, 2 and 3 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder
 tests after Phase 2). Step 4 (the whole release page) and Step 5 (what other features need, and telling people) are
 committed 2026-11-12, pushed. Step 6 (launch claims, and the deferred hardening) is built 2026-11-22 and awaits the coordinator's commit; every F28 step is now built.
