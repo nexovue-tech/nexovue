@@ -1379,6 +1379,8 @@ Plan tasks T1.0 to T1.12, exactly as written. What exists now:
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): C1 to C4 passed against real GitHub on the founder's fork (two manifest fixes); webhooks were not tested, since the Mac has no public address. Jira waits on Atlassian (ECOHELP-191004, until 2026-12-25). Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 The coordinator commits Step 8. The founder answers open decisions 12 to 24 below, with Steps
 4's and 5's, and runs the Design QA hand list (below). Step 7 (Jira) is out of Phase 2. T4.9
 measures the built container. After Phase 2, the founder runs T3.0, T3.9's hand

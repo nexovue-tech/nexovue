@@ -700,6 +700,8 @@ Each was written with its code, then proved by removing the behaviour from the f
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): E2 to E5 passed with Claude Sonnet 5.5, including a real draft pull request (Raj-232/opentelemetry-demo#2, closed and its branch deleted through nexovue). Three Anthropic-path defects were found and fixed; AC21 passed (`docs/research/f5-evaluation-2026-11.md`); the go was given 2026-11-28. Open: A14 (Delete this branch stays offered). Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 The founder reads the wording list (*Wording waiting for the founder*) and the customer's page, decides decision 125 (the page in the console before approval; decision 120 approved 2026-11-27), and the coordinator commits Step 9. Open decisions 119 to 130 and those still open from Steps 2b to 8 (104 to 118, 90 to 103, 77 to 80, 82 to 89, and 16 to 33, 36 to 38, 40 to 51, 53, 56 to 74 and 76). After Phase 2, the founder runs T6.1, T6.3 and T6.4, records go or stop at T6.5, then T7.11, T8.4, the GitHub trial (which may change or remove Step 8), T9.4's setup timing and T9.7's demo for real, and reads T9.6's six unreachable rivals within 30 days of launch.
 
 ## Open decisions

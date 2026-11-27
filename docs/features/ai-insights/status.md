@@ -263,6 +263,8 @@ ADR-039 (an explanation is a frozen evidence record, with code choosing the caus
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): A1 to A5, B2 and B3 passed with Qwen 2.5 Coder 7B (local) and the Anthropic format proven by a real call; wording runs only past the cause bar or with the development override, and one Qwen sentence was wrong in meaning (evidence for keeping wording held). B5 (AI off: facts kept) passed. Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 Founder: review Steps 2c and 6's diff and open decisions 15 to 20; commit. Then, on a machine that stays on, T2.17's runs (above); after Phase 2, the real-model runs of T6.3. Step 7 next.
 
 Earlier (Step 5):

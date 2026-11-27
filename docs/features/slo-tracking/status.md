@@ -26,6 +26,8 @@ Plan Step 5, *What a burn may withhold*: on `feature/phase-2` (2026-11-09; migra
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): No live-test row of its own. The dev seed writes endpoint history without latency, so seeded windows show no percentiles; real traffic is complete (recorded as a tooling item). Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 **Step 6 (2026-11-22):** the coordinator reviews the diff, runs `just check`, and commits it. The founder answers open decisions 5 to 9, reads the claims table and the T6.9 list, runs the multi-day fault bed on a machine that stays on (AC49) and measures on the first deployed server (AC50, AC86), and finds AC38's tester. Nothing else in F19 is waiting on a build.
 
 **Step 5b (2026-11-21):** the coordinator reviews the diff and commits it with F20's T10.2, which reads it. The founder answers open decision 4 (which window `/budget` is for) and walks Step 5b's *Judgeable* (`GET /slos/{id}/budget` with a token on the demo; the panel renamed) after Phase 2. Step 6 next.

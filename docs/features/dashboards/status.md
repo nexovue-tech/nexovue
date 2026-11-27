@@ -170,6 +170,8 @@ Step 3 is on `feature/phase-2` (2026-11-09).
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): No live-test row of its own; the e2e suite passed (77, `docs/changes/phase-2-e2e-run/`) and the load measurement showed no HTTP 500 at 20 readers. Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 **Step 10 (2026-11-21):** the coordinator reviews the diff and commits, T10.2 with F19's Step 5b, which it reads. Then the founder's judging step for Step 10 (drag a panel in a real browser, see the same order save, and unplug the mouse and move it with the buttons; add a reliability-target panel on the demo, read the target page's figures, rename the target and see "No reliability target named … in production"), the founder's answer to decision 2 (drag kept on its conditions) and 36 to 38. Step 11 follows.
 
 **Step 9 (2026-11-12):** the coordinator reviews the diff and commits. Then the founder's judging step for Step 9 (open *Service health* from a service's screen; open each template; export a dashboard, import it and see it equal; try a hostile file and see nothing opened), open decisions 29 to 34, and AC129 on the demo in the hardening pass. Step 10 follows.

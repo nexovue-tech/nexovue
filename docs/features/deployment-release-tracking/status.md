@@ -905,6 +905,8 @@ SeaweedFS; the Step 1b, 4 and 5 tasks.
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): B4 passed: a signed deploy through the real webhook was named as a possible cause, with *Release before this* (the explain demo's stale signal shape and port were fixed). Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 Step 6 is built 2026-11-22 and awaits the coordinator's commit. What is left is the founder's: judge the demo recording;
 T2.10's timed new person; Steps 3 and 4's Design QA and the finding section at 375px with a real finding; a real send of
 the release summary; decide the open decisions below (2 and 3 are done, 4 is mostly done, 1 and 5 remain). The competitor

@@ -507,6 +507,8 @@ Stores: `f4s3-postgres` (45432, migrated by the real `setup` step to 0073; its l
 
 ## Next action
 
+**Live test, 2026-11-27 and 28** (`docs/changes/phase-2-live-test/checklist.md`): D1 passed; D2 failed safe with Qwen 7B and passed with Claude Sonnet 5.5 after a fix (the reservation now keeps room for the answer); D3 and D4 (planted instruction not followed) passed with Claude. Founder, 2026-11-27: chat ships with a note that it needs a model that calls tools reliably. Stays *Implemented* until the founder's review of PR #25 and this feature's readiness assessment.
+
 **Founder, 2026-11-27: chat ships in v0.2.0** with a release note that it needs a model that calls tools reliably; with a small local model it refuses safely instead of guessing (live test D2, `docs/changes/phase-2-live-test/checklist.md`).
 
 **Step 8 is in progress (2026-11-22) and awaits the founder's review of its diff** on `wt/f4s8`, including the shared `SettingsLayout.tsx` change; then the open decisions 63 to 65 and 67 (66 approved 2026-11-27), the launch brief's approval (T8.5), and after Phase 2 the real bed runs (T8.0) and AC80's two fault-bed runs (T8.1).
