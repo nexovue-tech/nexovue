@@ -247,7 +247,7 @@ exports[`TrendChart's options with no new prop > equal the snapshot recorded bef
     "tzDate": "ƒ tzDate",
     "width": 480,
   },
-  "tzDate": 19800000,
+  "tzDate": "05:30",
   "yRange": [
     [
       0,

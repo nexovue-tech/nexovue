@@ -34,6 +34,9 @@ const NOTHING = () => [];
 const NO_BAND = () => undefined;
 const formatMs = (value: number) => `${value} ms`;
 
+const wallClock = (date: Date) =>
+  `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
 /** Functions replaced by their name, and the ones that compute something, computed. */
 function asData(options: uPlot.Options): unknown {
   const plain = JSON.parse(
@@ -59,7 +62,9 @@ function asData(options: uPlot.Options): unknown {
     hooks: Object.fromEntries(
       Object.entries(options.hooks ?? {}).map(([name, list]) => [name, list?.length ?? 0]),
     ),
-    tzDate: options.tzDate ? options.tzDate(0).getTime() : null,
+    // The wall clock the chart shows for 00:00 UTC, read the way uPlot reads it: the same on any
+    // machine, where the shifted timestamp itself depends on the machine's own zone.
+    tzDate: options.tzDate ? wallClock(options.tzDate(0)) : null,
   };
 }
 

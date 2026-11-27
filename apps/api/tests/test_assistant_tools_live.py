@@ -146,7 +146,8 @@ def _telemetry(clickhouse: Any, written: list[str], tenant: ProvisionedTenant) -
     lookup and summary, and an error log."""
     org, project = str(tenant.organization.id), str(tenant.project.id)
     written.append(org)
-    started = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=5)
+    # Aware: clickhouse-connect's insert reads a naive datetime as the machine's local time.
+    started = datetime.now(UTC) - timedelta(minutes=5)
     clickhouse.insert(
         "spans",
         [

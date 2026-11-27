@@ -102,7 +102,8 @@ async def seeded() -> AsyncIterator[tuple[AsyncClient, str, dict[str, str], date
         database=(parts.path or "/").lstrip("/"),
     )
     tenant_id = str(uuid.uuid4())
-    started = datetime.now(UTC).replace(tzinfo=None, microsecond=0) - timedelta(minutes=20)
+    # Aware: clickhouse-connect's insert reads a naive datetime as the machine's local time.
+    started = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=20)
     ids = {name: uuid.uuid4().hex for name in TRACES}
     span_rows, summary_rows = [], []
     for offset, (name, spans) in enumerate(TRACES.items()):

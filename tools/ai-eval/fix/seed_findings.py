@@ -101,7 +101,8 @@ def span_rows(
     }
     rows = []
     for back in range(count):
-        at = (end - timedelta(minutes=back)).astimezone(UTC).replace(tzinfo=None)
+        # Aware: clickhouse-connect's insert reads a naive datetime as the machine's local time.
+        at = (end - timedelta(minutes=back)).astimezone(UTC)
         rows.append(
             [
                 at,

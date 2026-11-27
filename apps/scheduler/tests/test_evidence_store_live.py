@@ -215,13 +215,10 @@ def test_no_calls_read_as_none_never_as_a_zero_rate(tenant: tuple[str, str]) -> 
 def test_traffic_is_requests_a_minute_in_the_lead_in_and_the_hour_before(
     administrator: Client, tenant: tuple[str, str]
 ) -> None:
+    # Aware: clickhouse-connect's insert reads a naive datetime as the machine's local time.
     rows = [
-        (tenant[0], tenant[1], SERVICE, (START - timedelta(minutes=m)).replace(tzinfo=None), 60)
-        for m in range(16, 76)
-    ] + [
-        (tenant[0], tenant[1], SERVICE, (START - timedelta(minutes=m)).replace(tzinfo=None), 150)
-        for m in range(1, 16)
-    ]
+        (tenant[0], tenant[1], SERVICE, START - timedelta(minutes=m), 60) for m in range(16, 76)
+    ] + [(tenant[0], tenant[1], SERVICE, START - timedelta(minutes=m), 150) for m in range(1, 16)]
     administrator.insert(
         "service_stats_1m",
         rows,

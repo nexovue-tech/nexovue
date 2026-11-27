@@ -256,7 +256,8 @@ async def clickhouse() -> AsyncIterator[AsyncClient]:
 @pytest_asyncio.fixture
 async def owned(clickhouse: AsyncClient) -> OwnedProject:
     """A tenant of this test's own, holding the traces above."""
-    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    # Aware: clickhouse-connect's insert reads a naive datetime as the machine's local time.
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     first_start = (
         today - timedelta(hours=HOURS_PAST_MIDNIGHT) + timedelta(seconds=FIRST_TRACE_SECOND)
     )
