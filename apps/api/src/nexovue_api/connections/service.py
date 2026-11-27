@@ -292,24 +292,25 @@ def github_manifest(
 ) -> dict[str, object]:
     """The private App GitHub is asked to create (design, *Connecting GitHub*, step 2).
 
-    Unverified until the founder's real run (T3.0): whether GitHub accepts a manifest
-    with `hook_attributes.active` false, and whether `installation` events need asking
-    for. Polling and the hourly refresh carry everything either way."""
-    return {
+    An install GitHub cannot reach asks for no webhook and no events: GitHub refuses a hook
+    URL it cannot reach even with `active` false, and refuses events with no hook URL (the
+    founder's live test, 2026-11-27). Polling and the hourly refresh carry everything."""
+    manifest: dict[str, object] = {
         "name": f"{APP_NAME_PREFIX}{organization_slug}"[:APP_NAME_LIMIT],
         "url": base_url,
-        "hook_attributes": {
-            "url": base_url + WEBHOOK_PATH.format(connection_id=connection_id),
-            # An install GitHub cannot reach asks for no deliveries at all.
-            "active": reachable,
-        },
         "redirect_url": base_url + RETURN_PATH,
         "setup_url": base_url + INSTALLED_PATH,
         "setup_on_update": True,
         "public": False,
         "default_permissions": dict(APP_PERMISSIONS),
-        "default_events": list(APP_EVENTS),
+        "default_events": list(APP_EVENTS) if reachable else [],
     }
+    if reachable:
+        manifest["hook_attributes"] = {
+            "url": base_url + WEBHOOK_PATH.format(connection_id=connection_id),
+            "active": True,
+        }
+    return manifest
 
 
 def _post_url(github_organization: str | None) -> str:

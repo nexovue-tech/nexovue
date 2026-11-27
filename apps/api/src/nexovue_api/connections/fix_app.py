@@ -6,8 +6,9 @@ through F22's manifest flow and its connection row (`kind = 'github_fix'`):
 
 - **Read only, here:** `contents: read` and `metadata: read`. Write is added the first
   time a draft is wanted (Step 7), by editing the App on GitHub, behind the founder's go.
-- **No webhook** (`hook_attributes.active` false): F5 polls (D33). The account link's
-  callback lands on a console route, which posts here, so no public address is needed.
+- **No webhook** (no `hook_attributes`: GitHub refuses an unreachable hook even inactive):
+  F5 polls (D33). The account link's callback lands on a console route, which posts here,
+  so no public address is needed.
 - The conversion keeps the App's key and its OAuth client id and secret, both sealed
   under `CONNECTION_SECRET_KEY` by the job (`scheduler-connections`).
 
@@ -78,13 +79,12 @@ def _refuse_where_unavailable(availability: Availability) -> None:
 
 
 def fix_app_manifest(*, base_url: str, organization_slug: str) -> dict[str, object]:
-    """The App GitHub is asked to create. Unverified until the founder's real run after
-    Phase 2 (foundation item 28): whether GitHub keeps `callback_urls` on a manifest App
-    and accepts an inactive hook, as F22's manifest assumes too."""
+    """The App GitHub is asked to create. No `hook_attributes`: GitHub refuses a hook URL it
+    cannot reach even when inactive (live test, 2026-11-27), and F5 polls. Still unverified
+    until a real run: whether GitHub keeps `callback_urls` on a manifest App."""
     return {
         "name": f"{FIX_APP_NAME_PREFIX}{organization_slug}"[:APP_NAME_LIMIT],
         "url": base_url,
-        "hook_attributes": {"url": base_url, "active": False},
         "redirect_url": base_url + FIX_APP_RETURN_PATH,
         "callback_urls": [base_url + LINK_CALLBACK_PATH],
         "request_oauth_on_install": False,

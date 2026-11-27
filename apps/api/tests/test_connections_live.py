@@ -243,11 +243,9 @@ async def test_starting_creates_a_private_app_s_manifest_and_keeps_only_the_stat
     manifest = started.manifest
     assert manifest["public"] is False
     assert manifest["default_permissions"] == {"issues": "write", "metadata": "read"}
-    assert manifest["default_events"] == ["issues"]
-    assert manifest["hook_attributes"] == {
-        "url": f"{CONSOLE}/api/v1/connections/webhook/{started.connection_id}",
-        "active": False,
-    }
+    assert manifest["default_events"] == []
+    # GitHub cannot reach this install, so no webhook is asked for (test_github_manifests.py).
+    assert "hook_attributes" not in manifest
     assert manifest["redirect_url"] == f"{CONSOLE}/settings/connections/github/return"
     assert manifest["setup_url"] == f"{CONSOLE}/settings/connections/github/installed"
     assert manifest["name"].startswith("nexovue-")
