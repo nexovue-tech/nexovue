@@ -169,6 +169,7 @@ class FakeStore:
         from_time: datetime | None,
         to_time: datetime | None,
         state: StepState = "running",
+        failure: str | None = None,
     ) -> str | None:
         step_id = f"step{position}"
         self.steps[step_id] = {
@@ -179,6 +180,7 @@ class FakeStore:
             "from_time": from_time,
             "to_time": to_time,
             "state": state,
+            "failure": failure,
         }
         return step_id
 

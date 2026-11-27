@@ -59,7 +59,12 @@ class ValidCall:
 
 
 class ArgumentsRefused(ValueError):  # noqa: N818 — a refusal, named for the reader
-    pass
+    """Its message goes back to the model; its `kind`, a fixed word, is what is stored, since
+    the message can repeat names the model chose."""
+
+    def __init__(self, message: str, kind: str = "bad_value") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 def _time(name: str, value: object) -> datetime:
@@ -77,17 +82,19 @@ def check_arguments(
 ) -> ValidCall:
     """The call as the catalog allows it, or `ArgumentsRefused` with what to tell the model."""
     if not tool.offered_at(level):
-        raise ArgumentsRefused(f"{tool.name} is not offered here.")
+        raise ArgumentsRefused(f"{tool.name} is not offered here.", "not_offered")
     if arguments is None:
-        raise ArgumentsRefused("The arguments were not one JSON object.")
+        raise ArgumentsRefused("The arguments were not one JSON object.", "not_an_object")
     unknown = sorted(set(arguments) - set(tool.arguments))
     if unknown:
-        raise ArgumentsRefused(f"{tool.name} takes no argument named {', '.join(unknown)}.")
+        raise ArgumentsRefused(
+            f"{tool.name} takes no argument named {', '.join(unknown)}.", "unknown_argument"
+        )
     missing = sorted(
         n for n, rule in tool.arguments.items() if rule.required and n not in arguments
     )
     if missing:
-        raise ArgumentsRefused(f"{tool.name} needs {', '.join(missing)}.")
+        raise ArgumentsRefused(f"{tool.name} needs {', '.join(missing)}.", "missing_argument")
     query: dict[str, str] = {}
     path: dict[str, str] = {}
     stored: dict[str, Any] = {}

@@ -144,10 +144,10 @@ _ADD_STEP: Final = text(
     """
     INSERT INTO assistant_steps (
         org_id, message_id, position, tool, arguments, display_arguments, from_time, to_time,
-        state
+        state, failure
     ) VALUES (
         :org_id, :message_id, :position, :tool, CAST(:arguments AS jsonb), :display,
-        :from_time, :to_time, :state
+        :from_time, :to_time, :state, :failure
     )
     RETURNING id
     """
@@ -485,6 +485,7 @@ class PostgresQuestionStore:
         from_time: datetime | None,
         to_time: datetime | None,
         state: StepState = "running",
+        failure: str | None = None,
     ) -> str | None:
         """A step row; None when the question is no longer visible (a normal stop)."""
         async with self.engine.begin() as db:
@@ -501,6 +502,7 @@ class PostgresQuestionStore:
                         "from_time": from_time,
                         "to_time": to_time,
                         "state": state,
+                        "failure": failure,
                     },
                 )
             ).scalar_one_or_none()

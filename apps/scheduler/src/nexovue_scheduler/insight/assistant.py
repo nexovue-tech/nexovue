@@ -168,6 +168,7 @@ class QuestionStore(Protocol):
         from_time: datetime | None,
         to_time: datetime | None,
         state: StepState = "running",
+        failure: str | None = None,
     ) -> str | None: ...
     async def finish_step(
         self, question: Question, step_id: str, end: StepEnd, *, at: datetime
@@ -425,7 +426,9 @@ async def _one_call(run: _Run, parts: LoopParts) -> str | None:
     final = run.position >= MAX_STEPS or _seconds_left(run, parts) < 2 * call_seconds
     request = _request(run, parts, final=final)
     estimate = _estimate(request)
-    if not final and estimate > run.held:
+    # Like the clock, the budget keeps room for the answer: a step must leave enough for a
+    # last call at least as large as this one (live test D2, 2026-11-27).
+    if not final and 2 * estimate > run.held:
         final = True
         request = _request(run, parts, final=True)
         estimate = _estimate(request)
@@ -524,6 +527,7 @@ async def _step(
             from_time=None,
             to_time=None,
             state="refused",
+            failure="unknown_tool",
         )
         run.told.append(f"Step {key} was refused: there is no tool by that name here.")
         run.results.append(StepResult(key, "unknown", f"{key}: refused, no such tool", None))
@@ -540,6 +544,7 @@ async def _step(
             from_time=None,
             to_time=None,
             state="refused",
+            failure=refused.kind,
         )
         run.told.append(f"Step {key} ({tool.name}) was refused: {refused}")
         run.results.append(StepResult(key, tool.name, f"{key}: {tool.name} refused", None))

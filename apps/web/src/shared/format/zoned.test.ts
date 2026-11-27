@@ -7,6 +7,14 @@ const at = (iso: string, zone: string, now = iso) =>
   formatZonedTime(iso, { zone, now: Date.parse(now) });
 
 describe("an instant on a named clock", () => {
+  it("names today's date when asked to, for a record that outlives the day (live test D1)", () => {
+    const now = Date.parse("2026-11-27T18:00:00Z");
+    expect(formatZonedTime("2026-11-27T17:55:00Z", { zone: "UTC", now, withDate: true })).toBe(
+      "27 Nov, 17:55 UTC",
+    );
+    expect(formatZonedTime("2026-11-27T17:55:00Z", { zone: "UTC", now })).toBe("17:55 UTC");
+  });
+
   it("reads the same London wall clock on both sides of the clock change, named the same", () => {
     // British Summer Time ends at 01:00 UTC on 25 October 2026.
     expect(at("2026-10-24T13:02:00Z", "Europe/London")).toBe("14:02 London time");

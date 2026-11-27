@@ -33,7 +33,7 @@ from nexovue_platform.ai.testing import ScriptedProvider, answers, calls
 from nexovue_platform.assistant_records import MAX_STEPS, QUESTION_RESERVATION_TOKENS
 
 from nexovue_scheduler.insight.api_client import ApiAnswer
-from nexovue_scheduler.insight.assistant import LoopParts, ProviderFailed, answer
+from nexovue_scheduler.insight.assistant import LoopParts, ProviderFailed, _estimate, answer
 from nexovue_scheduler.insight.assistant_prompt import StepResult, build_request
 from nexovue_scheduler.insight.assistant_store import ChatConnection
 from nexovue_scheduler.insight.knowledge import EmbedFailed, Ready
@@ -133,6 +133,8 @@ async def test_an_argument_the_catalog_does_not_allow_is_told_and_counts_as_a_st
 
     assert state == "answered"
     assert store.steps["step1"]["state"] == "refused"
+    # Live test D2, 2026-11-27: the refusal's kind is kept for an operator, never its words.
+    assert store.steps["step1"]["failure"] == "unknown_argument"
     assert len(client.asked) == 1
     assert "takes no argument named method" in provider.requests[1].user_text()
 
@@ -203,6 +205,27 @@ async def test_a_spent_reservation_makes_no_further_call() -> None:
     # Too little left even for a final call: the steps stand alone.
     assert state == "partial"
     assert len(provider.requests) == 1
+
+
+async def test_a_reservation_too_small_for_a_step_and_an_answer_asks_for_the_answer() -> None:
+    """Live test D2, 2026-11-27: reads used the reservation until no answer fit. Like the
+    clock, the budget keeps room for the last call: a step that would leave too little for
+    the answer after it is not offered, and the answer is asked for instead."""
+    _, probe = await _ask(FakeStore(), [SERVICES_CALL, GOOD_ANSWER])
+    next_call = _estimate(probe.requests[1])
+    heavy = ChatResponse(
+        outcome="ok",
+        tool_call=SERVICES_CALL.tool_call,
+        input_tokens=QUESTION_RESERVATION_TOKENS - next_call * 6 // 5 - 100,
+        output_tokens=100,
+    )
+    store = FakeStore()
+
+    state, provider = await _ask(store, [heavy, GOOD_ANSWER])
+
+    # Offered tools here, Claude read again and no answer fit after it.
+    assert provider.requests[1].tools == ()
+    assert state == "partial" and store.finishes[0]["answer"]["sentences"]
 
 
 async def test_too_little_time_left_makes_no_call() -> None:

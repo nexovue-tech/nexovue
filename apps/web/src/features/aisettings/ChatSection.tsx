@@ -110,7 +110,7 @@ function ChatSettingsView({ settings, now }: { settings: ChatSettings; now: numb
         {settings.consent_current && settings.consented_at ? (
           <p className="max-w-prose text-ink">
             {settings.consented_by_name ?? "An owner"} agreed on{" "}
-            {formatZonedTime(settings.consented_at, { now })}, at "
+            {formatZonedTime(settings.consented_at, { now, withDate: true })}, at "
             {CHAT_DATA_LEVEL_WORDS[settings.data_level]}".
           </p>
         ) : (

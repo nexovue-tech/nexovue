@@ -170,8 +170,15 @@ async def availability(
             )
         )
         waiting = sorted(owners)
+    # Whether the model passed a real call is a fact about the connection, not about readiness.
+    tested = (
+        standing.connection is not None
+        and standing.connection.wire_format in formats_with_a_real_call()
+    )
     if not standing.ready or standing.connection is None or standing.settings is None:
-        return Availability(state=standing.state, waiting_for=waiting, may_manage=may_manage)
+        return Availability(
+            state=standing.state, tested=tested, waiting_for=waiting, may_manage=may_manage
+        )
     # Nothing to read yet: say so before anyone spends tokens. The ingest meter answers,
     # so a project whose telemetry has since expired still reads as one that reported.
     if project_id not in await project_queries.first_reported_days(session, identity.org_id):
@@ -183,7 +190,7 @@ async def availability(
         provider_label=provider_label(
             standing.connection.wire_format, standing.connection.base_url
         ),
-        tested=standing.connection.wire_format in formats_with_a_real_call(),
+        tested=tested,
         questions_left_today=max(0, standing.settings.daily_question_limit - asked),
         resets_at=tomorrow,
         may_manage=may_manage,

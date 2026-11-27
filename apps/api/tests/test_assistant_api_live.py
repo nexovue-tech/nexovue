@@ -347,6 +347,8 @@ async def test_availability_without_consent_names_the_owners_it_waits_for(db: As
 
     assert waiting.state == "no_consent"
     assert waiting.waiting_for == [made.user.name or made.user.email]
+    # Live test D1, 2026-11-27: whether the model passed a real call does not wait on consent.
+    assert waiting.tested is True
 
 
 async def test_consent_binds_the_fingerprint_disclosure_and_data_level(db: AsyncSession) -> None:
