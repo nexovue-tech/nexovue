@@ -149,6 +149,7 @@ async def a_proposing_fix(
     hint: str | None = HINT,
     state: str = "proposing",
     excluded: list[str] | None = None,
+    helper: str = MONEY,
 ) -> Proposing:
     """A repository, a consent naming the connection as it is (unless `consent_model`
     differs), an explanation, and a source row in `proposing` with its pack."""
@@ -272,12 +273,12 @@ async def a_proposing_fix(
                 "files": json.dumps(
                     [
                         {"ref": "file_1", "path": PATH, "content": HANDLER, "window": None},
-                        {"ref": "file_2", "path": HELPER_PATH, "content": MONEY, "window": None},
+                        {"ref": "file_2", "path": HELPER_PATH, "content": helper, "window": None},
                     ]
                 ),
                 "frames": json.dumps([{"ref": "file_1", "line": 9}, {"ref": "file_2", "line": 2}]),
                 "hint": hint,
-                "bytes": len(HANDLER) + len(MONEY),
+                "bytes": len(HANDLER) + len(helper),
                 "expires": at + timedelta(minutes=30),
             },
         )

@@ -37,7 +37,7 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 from nexovue_platform.ai.connection import provider_host
-from nexovue_platform.ai.contract import AIRequest, Trusted, canonical_json
+from nexovue_platform.ai.contract import AIRequest, HttpCall, Trusted, canonical_json
 from nexovue_platform.ai.formats import wire_format
 from nexovue_platform.ai.limits import fix_ceiling, input_estimate, reservation, too_long
 from nexovue_platform.ai.untrusted import Untrusted
@@ -221,21 +221,27 @@ async def _propose(
         return await leave("provider_unavailable")
     sent = sent_files(pack.files)
     fmt = wire_format(connection.wire_format)
-    call = fmt.build(
-        source_request(
-            model_input=model_input,
-            sent=sent,
-            frames=pack.frames,
-            hint=pack.hint,
-            round_number=fix.round,
-            retry_code=fix.retry_code,
-        ),
-        model=connection.model,
-        base_url=connection.base_url,
-        key=key,
-    )
+
+    def built(files: list[SentFile]) -> HttpCall:
+        return fmt.build(
+            source_request(
+                model_input=model_input,
+                sent=files,
+                frames=pack.frames,
+                hint=pack.hint,
+                round_number=fix.round,
+                retry_code=fix.retry_code,
+            ),
+            model=connection.model,
+            base_url=connection.base_url,
+            key=key,
+        )
+
+    call = built(sent)
     input_tokens = input_estimate(call.body)
-    if too_long(input_tokens):
+    # The code is bounded by the pack's byte cap, which the person confirmed; F3's input
+    # limit bounds everything else (live test E4, 2026-11-27).
+    if too_long(input_estimate(built([]).body)):
         return await leave("provider_too_long")
     reserve = reservation(input_tokens, MAX_OUTPUT_TOKENS)
     now = clock()

@@ -26,11 +26,13 @@ from insight_login import INSIGHT_ACCOUNT
 from live import require_stack
 from nexovue_platform.fixes.records import (
     BUILD_SOURCE_PACK_TASK,
+    MAX_SENT_BYTES,
     RETRY_SOURCE_MISQUOTE,
     RETRY_SOURCE_SHAPE,
 )
 from nexovue_platform.fixes.source_prompt import PROMPT_VERSION, RETRY_SENTENCES
 from propose_fix_fixtures import (
+    MONEY,
     NEW,
     OLD,
     a_proposing_fix,
@@ -116,6 +118,24 @@ async def test_ac14_a_usable_answer_is_stored_with_nexovue_s_display_facts_and_t
     assert (run.purpose, run.outcome, run.attempt) == ("fix", "done", 1)
     assert run.fields_sent == ["model_input", "files", "frames", "hint"]
     assert run.prompt_version == PROMPT_VERSION
+
+
+async def test_a_pack_inside_its_byte_cap_is_sent_not_refused_as_too_long(
+    ai_install: AsyncEngine,
+    ai_engine: AsyncEngine,
+    provider_site: RecordingSite,
+    ai_tenant: AlertTenant,
+    now: datetime,
+) -> None:
+    """The person confirmed files within `MAX_SENT_BYTES`; F3's input limit bounds the rest
+    of the request, never the code (live test E4, 2026-11-27)."""
+    helper = MONEY + "# a long helper module\n" * 1700
+    assert 36_000 < len(helper) < MAX_SENT_BYTES
+    connected, fix = await _ready(ai_install, ai_tenant, provider_site, now, helper=helper)
+    provider_site.replies[CHAT_PATH] = openai_reply(edits_answer())
+
+    assert await run_propose(ai_engine, connected, fix, at=now) == "proposed"
+    assert [each.path for each in provider_site.requests].count(CHAT_PATH) == 1
 
 
 async def test_an_answer_carrying_its_own_display_facts_is_unusable_and_retried(
