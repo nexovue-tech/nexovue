@@ -2,12 +2,12 @@
 
 ## Lifecycle status
 
-**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR. **Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.9, and T2.9, which T8.8 found unwritten; migration 0085, the tracker role's own Postgres account; the Design QA list is written and **not run**, it is the founder's). Step 7 (Jira) is out of Phase 2 (foundation item 32).
+**In development.** The founder approved the specification, design and plan on 2026-11-02; F6 merged the same day (PR #24). Plan **Steps 1 and 2 are on `feature/phase-2`** (Step 2 without T2.9, which waits on F3). **Step 3 (2026-11-08)** is on `feature/phase-2`, built against a simulated GitHub (foundation item 28), with T3.0 not yet run; its four open decisions were answered by the founder on 2026-11-09. **Step 4 is on `feature/phase-2` (2026-11-09)**, against the simulated GitHub, without T4.8 (real GitHub, the founder's after Phase 2) and T4.9 (memory, not measured). **Step 5 is on `feature/phase-2` (2026-11-09):** the webhook doorbell (T5.1), against the simulated GitHub; T5.2 (a real delivery) is the founder's after Phase 2. **Step 6 is on `feature/phase-2` (2026-11-11):** reference links, promotion, the service mapping and public repositories (T6.1 to T6.3), against the simulated GitHub; migrations 0068 and 0069; no new ADR. **Step 8 built 2026-11-22, committed** (T8.1 to T8.9, and T2.9, which T8.8 found unwritten; migration 0085, the tracker role's own Postgres account; the Design QA list is written and **not run**, it is the founder's). Step 7 (Jira) is out of Phase 2 (foundation item 32).
 
 
 ## Current task
 
-**Step 8 built 2026-11-22, awaiting commit** (T8.1 to T8.9, with T2.9). Customer
+**Step 8 built 2026-11-22, committed** (T8.1 to T8.9, with T2.9). Customer
 documents, the AI-off case test with a real worker and its CI job, the timeline measured at
 D65's worst shape, the connections end-to-end test with real workers and a credential search,
 the claims check dated 2026-11-22, and the tracker role's own Postgres account

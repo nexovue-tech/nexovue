@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Step 9 built 2026-11-22, awaiting commit; T6.5 still not given.** Built in `wt/f5s9`, on 4ad5d47 (`feature/phase-2`): the sweep's figures and its stalled alert (migration 0085), the admin summary with notices (AC39), NFR2's click timing, the customer's page and the written demo (both drafts for your wording approval), the rivals re-read dated 2026-11-22, the architecture documents and ADR-103 to ADR-106; and from the hardening pass, `fix-section.spec.ts` run and the Docker restore release check run and passing. **Write access stays off in code** (`write_gate.WRITE_ACCESS_GO` is None). T9.4's timing, T9.6's six unreachable rivals and OneUptime install, and T9.7's real run are the founder's (*Step 9*, below).
+**Step 9 built 2026-11-22, committed; T6.5 still not given.** Built in `wt/f5s9`, on 4ad5d47 (`feature/phase-2`): the sweep's figures and its stalled alert (migration 0085), the admin summary with notices (AC39), NFR2's click timing, the customer's page and the written demo (both drafts for your wording approval), the rivals re-read dated 2026-11-22, the architecture documents and ADR-103 to ADR-106; and from the hardening pass, `fix-section.spec.ts` run and the Docker restore release check run and passing. **Write access stays off in code** (`write_gate.WRITE_ACCESS_GO` is None). T9.4's timing, T9.6's six unreachable rivals and OneUptime install, and T9.7's real run are the founder's (*Step 9*, below).
 
 **Earlier:** Step 8 built 2026-11-22, committed: Run CI and F5's own pull request poller, with write access off in code.
 

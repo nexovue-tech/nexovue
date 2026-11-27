@@ -2,15 +2,15 @@
 
 ## Lifecycle status
 
-**In development. Step 6 built 2026-11-22, awaiting commit.** (Step 5 built 2026-11-12, committed 2026-11-12.) The founder approved the specification, design and
+**In development. Step 6 built 2026-11-22, committed.** (Step 5 built 2026-11-12, committed 2026-11-12.) The founder approved the specification, design and
 plan on 2026-11-02. Steps 1a, 1b, 2 and 3 are on `feature/phase-2`; T2.10's timed new person is not yet run (founder
 tests after Phase 2). Step 4 (the whole release page) and Step 5 (what other features need, and telling people) are
-committed 2026-11-12, locally, not pushed. Step 6 (launch claims, and the deferred hardening) is built 2026-11-22 and awaits the coordinator's commit; every F28 step is now built.
+committed 2026-11-12, pushed. Step 6 (launch claims, and the deferred hardening) is built 2026-11-22 and awaits the coordinator's commit; every F28 step is now built.
 
 
 ## Current task
 
-**Step 6 built 2026-11-22, awaiting commit** (*Step 6, built 2026-11-22*, below). No migration, no ADR. One defect fixed
+**Step 6 built 2026-11-22, committed** (*Step 6, built 2026-11-22*, below). No migration, no ADR. One defect fixed
 (the `#deploys` links), the launch sentences written and checked, Playwright and the 375px check run, the errors read and
 the 2-second target measured, a labelled demo recording made; judging the recording is the founder's.
 
