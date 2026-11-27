@@ -24,7 +24,9 @@ const APP: FixAppView = {
   permissions: null,
   granted_at: null,
   connection_id: "c-1",
-  repositories: [{ id: "r-1", key: "acme/shop", is_private: true, is_reachable: true }],
+  repositories: [
+    { id: "r-1", key: "acme/shop", is_private: true, is_reachable: true, public_allowed_at: null },
+  ],
 };
 
 const LOCATIONS: CodeLocations = {

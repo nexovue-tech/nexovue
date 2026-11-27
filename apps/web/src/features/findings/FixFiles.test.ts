@@ -153,7 +153,9 @@ describe("rung 3's list of files (FR13a)", () => {
       return { found, text };
     };
     const stacked = await empties(GATHERED);
-    const named = await empties({ ...GATHERED, files: { ...GATHERED.files!, forgeable: null } });
+    const files = GATHERED.files;
+    if (files === null) throw new Error("GATHERED has its files");
+    const named = await empties({ ...GATHERED, files: { ...files, forgeable: null } });
 
     expect(stacked.text).toContain("an outsider can forge");
     expect(named.text).not.toContain("an outsider can forge");
