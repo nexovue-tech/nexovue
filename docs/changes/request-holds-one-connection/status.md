@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-Implemented — awaiting the founder's review of the diff. Not committed.
+Implemented and committed (see `git log -- docs/changes/request-holds-one-connection`).
 
 ## Current task
 

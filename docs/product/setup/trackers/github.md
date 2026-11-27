@@ -109,6 +109,7 @@ the case still works. Admins are emailed when a connection keeps failing.
 
 ## What is not checked yet
 
-This connection has been built and tested against a simulated GitHub. Its first run against
-real GitHub — the App setup from a private address, real issues and a real webhook — has not
-happened yet.
+This connection was tested against real GitHub on 2026-11-27, from a private address: the App
+created by its manifest, installed on one repository, an issue created and its close followed by
+polling. A real webhook delivery, and setup from a server GitHub can reach, have not been tested
+yet.

@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Implemented, 2026-11-27.** Every plan step is built and on `feature/phase-2` (pull request #25), and `just check` passes in CI and on the founder's Mac. Not yet **Verified**: the live test with a real AI model and real GitHub, and the founder's checks, are owed; not **Released**. The notes below keep their own dates.
+**Implemented, 2026-11-27; live-tested 2026-11-28.** Every plan step is built and on `feature/phase-2` (pull request #25). The live test with Claude Sonnet 5.5 and real GitHub passed E2 to E5, including a real draft pull request; AC21 passed and the founder gave the T6.5 go on 2026-11-28, so write access is on. Not yet **Verified**: the founder's review of PR #25 and the blockers in `readiness.md` are owed; not **Released**.
 
 **Step 9 built 2026-11-22, committed; T6.5 still not given.** Built in `wt/f5s9`, on 4ad5d47 (`feature/phase-2`): the sweep's figures and its stalled alert (migration 0085), the admin summary with notices (AC39), NFR2's click timing, the customer's page and the written demo (both drafts for your wording approval), the rivals re-read dated 2026-11-22, the architecture documents and ADR-103 to ADR-106; and from the hardening pass, `fix-section.spec.ts` run and the Docker restore release check run and passing. **Write access stays off in code** (`write_gate.WRITE_ACCESS_GO` is None). T9.4's timing, T9.6's six unreachable rivals and OneUptime install, and T9.7's real run are the founder's (*Step 9*, below).
 

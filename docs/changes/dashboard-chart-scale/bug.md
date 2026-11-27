@@ -96,4 +96,4 @@ Validation is in `status.md`.
 
 ## Status
 
-Implemented, uncommitted. See `status.md`.
+Implemented and committed (9365692d). See `status.md`.
