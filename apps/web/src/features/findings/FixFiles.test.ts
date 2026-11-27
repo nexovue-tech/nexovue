@@ -96,7 +96,7 @@ const GATHERED: SourceFix = {
     lapses_at: "2026-11-21T12:10:00Z",
     forgeable:
       "These files came from the error's stack, which an outsider can forge. If one looks unrelated to this error, remove it.",
-    send_host: "To provider.example:",
+    send_host: "To provider.example, using up to about 24,082 tokens.",
     send: "Send these files",
   },
 };
@@ -141,6 +141,23 @@ describe("rung 3's list of files (FR13a)", () => {
     expect(text).toContain("This file has changed on the default branch");
     const link = section?.querySelector<HTMLAnchorElement>("a[href^='https://github.com']");
     expect(link?.textContent).toBe("services/shop/app/handler.py");
+  });
+
+  it("shows no forgery warning when no file came from a stack (live test E3)", async () => {
+    const empties = async (latest: SourceFix) => {
+      const { section } = await page(source({ latest }));
+      const found = section?.querySelectorAll("p:empty").length;
+      const text = readable(section as Element);
+      unmountAll();
+      return { found, text };
+    };
+    const stacked = await empties(GATHERED);
+    const named = await empties({ ...GATHERED, files: { ...GATHERED.files!, forgeable: null } });
+
+    expect(stacked.text).toContain("an outsider can forge");
+    expect(named.text).not.toContain("an outsider can forge");
+    // No empty paragraph left where the warning was.
+    expect(named.found).toBe(stacked.found);
   });
 
   it("sends bound to the digest on screen, and shows the API's sentence back", async () => {

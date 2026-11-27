@@ -99,7 +99,7 @@ class SourceFiles(BaseModel):
     provider_host: str
     round: int
     lapses_at: datetime
-    forgeable: str
+    forgeable: str | None
     send_host: str
     send: str
 

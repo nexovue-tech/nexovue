@@ -24,6 +24,8 @@ from typing import Final
 from nexovue_platform.ai.contract import estimate_tokens
 from nexovue_platform.ai.explain_prompt import MAX_OUTPUT_TOKENS
 from nexovue_platform.evidence import MAX_INPUT_TOKENS
+from nexovue_platform.fixes.records import SUGGEST_MAX_ATTEMPTS
+from nexovue_platform.fixes.source_prompt import MAX_OUTPUT_TOKENS as FIX_MAX_OUTPUT_TOKENS
 
 RUNS_PER_FINDING: Final = 3
 RUN_CAP_WINDOW: Final = timedelta(hours=24)
@@ -95,3 +97,10 @@ def next_run_at(decided_started: list[datetime]) -> datetime | None:
         return None
     oldest_counted = sorted(decided_started)[-RUNS_PER_FINDING]
     return oldest_counted + RUN_CAP_WINDOW
+
+
+def most_fix_tokens(code_bytes: int) -> int:
+    """The most one suggested fix's Send can use (FR13a): every attempt at F3's limit for the
+    request without its files, the files themselves, and the most it may write."""
+    one_attempt = MAX_INPUT_TOKENS + estimate_tokens(code_bytes) + FIX_MAX_OUTPUT_TOKENS
+    return SUGGEST_MAX_ATTEMPTS * one_attempt

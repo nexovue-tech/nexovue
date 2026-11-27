@@ -19,6 +19,7 @@ import pytest
 import source_fix_rows as source
 from general_fix_rows import POSTGRES_DSN, reachable
 from live import require_stack
+from nexovue_platform.ai.limits import most_fix_tokens
 from nexovue_platform.fixes.records import (
     BUILD_SOURCE_PACK_TASK,
     FIX_QUEUE,
@@ -28,6 +29,7 @@ from nexovue_platform.fixes.records import (
 )
 from nexovue_platform.fixes.sentences import (
     ELIGIBILITY_SENTENCES,
+    GATHERED_FORGEABLE,
     REASON_SENTENCES,
     TYPED_REFUSED,
 )
@@ -234,6 +236,40 @@ async def test_a_requester_reads_the_list_and_a_viewer_reads_only_a_state(
         assert other["latest"]["files"] is None and other["offer"] is None
         assert "handler" not in json.dumps(other)
     assert support["support_view_note"]
+
+
+async def test_the_forgery_warning_shows_only_when_a_file_came_from_a_stack(
+    db: AsyncSession, now: datetime
+) -> None:
+    """Live test E3, 2026-11-27: files a person named carried the stack's forgery warning."""
+    tenant, finding, _ = await source.ready(db, now)
+    await _ask(db, rows.person(tenant), finding)
+    row = await _gathered(db, finding, tenant)
+    stacked = (await _read(db, rows.person(tenant), finding))["latest"]["files"]
+    assert stacked["forgeable"] == GATHERED_FORGEABLE
+
+    row.files_read = {
+        **row.files_read,
+        "files": [{**each, "role": "named"} for each in row.files_read["files"]],
+    }
+    await db.flush()
+    named = (await _read(db, rows.person(tenant), finding))["latest"]["files"]
+    assert named["forgeable"] is None
+
+
+async def test_the_send_line_names_the_host_and_the_most_tokens_it_can_use(
+    db: AsyncSession, now: datetime
+) -> None:
+    """FR13a: the most tokens this can use, before Send (live test E3, 2026-11-27)."""
+    tenant, finding, _ = await source.ready(db, now)
+    await _ask(db, rows.person(tenant), finding)
+    await _gathered(db, finding, tenant)
+
+    files = (await _read(db, rows.person(tenant), finding))["latest"]["files"]
+
+    most = most_fix_tokens(files["bytes_sent"])
+    assert most > 0
+    assert files["send_host"] == f"To provider.example, using up to about {most:,} tokens."
 
 
 async def test_ac3b_send_with_an_old_digest_is_409_with_the_new_list(

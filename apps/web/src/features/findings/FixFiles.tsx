@@ -447,7 +447,9 @@ function FileList({
           {miss.sentence}
         </p>
       ))}
-      <p className="max-w-prose text-ink-dim text-sm">{files.forgeable}</p>
+      {files.forgeable ? (
+        <p className="max-w-prose text-ink-dim text-sm">{files.forgeable}</p>
+      ) : null}
       <p className="text-ink-dim text-sm">
         {SOURCE_WORDS.lapses(minutesLeft(files.lapses_at, now))}
       </p>

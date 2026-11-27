@@ -450,8 +450,9 @@ def test_the_recorded_host_never_holds_a_path() -> None:
 
 
 def test_a_format_is_offered_only_once_a_dated_real_call_is_recorded() -> None:
-    """AC77: only `openai_chat` has a real call (2026-11-27, Ollama), so only it is offered."""
-    assert formats_with_a_real_call() == ("openai_chat",)
+    """AC77: `openai_chat` (Ollama) and `anthropic_messages` (Anthropic) have real calls, both
+    2026-11-27, so only they are offered; a call with no token counts earns nothing."""
+    assert formats_with_a_real_call() == ("openai_chat", "anthropic_messages")
     assert formats_with_a_real_call(()) == ()
     recorded = (
         RealCall("openai_chat", date(2026, 11, 20), "Gemini", "gemini-2.5-flash", 40, 6),
@@ -459,3 +460,137 @@ def test_a_format_is_offered_only_once_a_dated_real_call_is_recorded() -> None:
         RealCall("anthropic_messages", date(2026, 11, 22), "Anthropic", "claude", 0, 0),
     )
     assert formats_with_a_real_call(recorded) == ("openai_chat",)
+
+
+# ----------------------------------------- Anthropic's schema dialect (live test, 2026-11-27)
+
+# What Anthropic's structured outputs refuse (its docs, *JSON Schema limitations*); a real
+# call refused `maxItems` and an `enum` beside a list of types with a 400.
+_ANTHROPIC_REFUSES: Final = frozenset(
+    {
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
+)
+
+
+def _provider_schemas() -> dict[str, Any]:
+    from nexovue_platform.ai.explain_prompt import RESPONSE_SCHEMA as WORDING
+    from nexovue_platform.fixes.general_prompt import RESPONSE_SCHEMA as GENERAL
+    from nexovue_platform.fixes.source_prompt import response_schema
+
+    return {
+        "wording": WORDING,
+        "general_fix": GENERAL,
+        "source_fix": response_schema(may_ask=True),
+        "source_fix_last_round": response_schema(may_ask=False),
+        "check": CHECK_REQUEST.response_schema,
+    }
+
+
+def _refused_parts(schema: Any, path: str = "") -> list[str]:
+    found: list[str] = []
+    if isinstance(schema, dict):
+        found += [f"{path}/{key}" for key in schema if key in _ANTHROPIC_REFUSES]
+        if isinstance(schema.get("type"), list) and "enum" in schema:
+            found.append(f"{path}: enum beside a list of types")
+        for key, value in schema.items():
+            found += _refused_parts(value, f"{path}/{key}")
+    elif isinstance(schema, list):
+        for value in schema:
+            found += _refused_parts(value, path)
+    return found
+
+
+@pytest.mark.parametrize("name", sorted(_provider_schemas()))
+def test_anthropic_receives_every_schema_in_the_dialect_it_accepts(name: str) -> None:
+    schema = _provider_schemas()[name]
+    request = AIRequest(
+        instructions="i",
+        parts=(Trusted("t"),),
+        response_schema=schema,
+        schema_name="s",
+        max_output_tokens=10,
+        purpose="explain",
+    )
+    call = wire_format("anthropic_messages").build(
+        request, model="m", base_url="https://api.anthropic.com", key=None
+    )
+    sent = json.loads(call.body)["output_config"]["format"]["schema"]
+
+    assert _refused_parts(sent) == []
+
+
+def test_a_nullable_choice_keeps_its_choices_for_anthropic() -> None:
+    from nexovue_platform.fixes.checks import ABSTAIN_REASONS
+    from nexovue_platform.fixes.source_prompt import response_schema
+
+    request = AIRequest(
+        instructions="i",
+        parts=(Trusted("t"),),
+        response_schema=response_schema(may_ask=True),
+        schema_name="s",
+        max_output_tokens=10,
+        purpose="fix",
+    )
+    call = wire_format("anthropic_messages").build(
+        request, model="m", base_url="https://api.anthropic.com", key=None
+    )
+    reason = json.loads(call.body)["output_config"]["format"]["schema"]["properties"][
+        "abstain_reason"
+    ]
+
+    assert reason == {
+        "anyOf": [{"type": "string", "enum": list(ABSTAIN_REASONS)}, {"type": "null"}]
+    }
+
+
+def test_other_formats_still_receive_the_schema_unchanged() -> None:
+    from nexovue_platform.fixes.source_prompt import response_schema
+
+    schema = response_schema(may_ask=True)
+    request = AIRequest(
+        instructions="i",
+        parts=(Trusted("t"),),
+        response_schema=schema,
+        schema_name="s",
+        max_output_tokens=10,
+        purpose="fix",
+    )
+    call = wire_format("openai_chat").build(
+        request, model="m", base_url="https://x.example", key=None
+    )
+
+    assert json.loads(call.body)["response_format"]["json_schema"]["schema"] == json.loads(
+        json.dumps(schema)
+    )
+
+
+def _optional_fields(schema: Any, path: str = "") -> list[str]:
+    found: list[str] = []
+    if isinstance(schema, dict):
+        if isinstance(schema.get("properties"), dict):
+            required = set(schema.get("required", []))
+            found += [f"{path}/{name}" for name in schema["properties"] if name not in required]
+        for key, value in schema.items():
+            found += _optional_fields(value, f"{path}/{key}")
+    elif isinstance(schema, list):
+        for value in schema:
+            found += _optional_fields(value, path)
+    return found
+
+
+@pytest.mark.parametrize("name", sorted(_provider_schemas()))
+def test_every_answer_field_is_required_and_absence_is_null(name: str) -> None:
+    """Live test, 2026-11-27: with `edits` optional, Claude's schema-bound answers came back
+    as an `edits` outcome with no edits; with every field required and null for absent, the
+    same request got a correct fix. The other schemas already follow this."""
+    assert _optional_fields(_provider_schemas()[name]) == []

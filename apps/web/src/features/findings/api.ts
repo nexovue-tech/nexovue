@@ -1300,7 +1300,8 @@ export interface SourceFiles {
   provider_host: string;
   round: number;
   lapses_at: string;
-  forgeable: string;
+  /** Null when no file came from a stack: only a stack can be forged from outside. */
+  forgeable: string | null;
   send_host: string;
   send: string;
 }

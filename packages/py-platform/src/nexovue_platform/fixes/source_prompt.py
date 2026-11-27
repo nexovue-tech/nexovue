@@ -49,6 +49,8 @@ from nexovue_platform.fixes.records import (
 PROMPT_VERSION: Final = "fix-source-1"
 # The most one call may write (a guess the bed replaces, T6.2).
 MAX_OUTPUT_TOKENS: Final = 4000
+
+
 SCHEMA_NAME: Final = "suggested_fix"
 OUTCOME_NEEDS_FILES: Final = "needs_files"
 # FR15b: an asked-for name and its reason (design: 200 characters each).
@@ -145,18 +147,20 @@ def response_schema(*, may_ask: bool) -> Mapping[str, Any]:
     properties: dict[str, Any] = {
         "outcome": {"type": "string", "enum": outcomes},
         "abstain_reason": {"type": ["string", "null"], "enum": [*ABSTAIN_REASONS, None]},
-        "edits": {"type": "array", "items": _EDIT_SCHEMA},
+        "edits": {"type": ["array", "null"], "items": _EDIT_SCHEMA},
     }
     if may_ask:
         properties["requests"] = {
-            "type": "array",
+            "type": ["array", "null"],
             "maxItems": MAX_ASKED_PATHS,
             "items": _REQUEST_SCHEMA,
         }
+    # Every field required, null for absent, as the other answers are: with fields optional,
+    # a schema-bound model answered `edits` with no edits (live test, 2026-11-27).
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["outcome"],
+        "required": list(properties),
         "properties": properties,
     }
 

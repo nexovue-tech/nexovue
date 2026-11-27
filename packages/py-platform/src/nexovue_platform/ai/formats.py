@@ -19,6 +19,7 @@ a parse never copies the provider's own words anywhere but `text`.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -125,6 +126,47 @@ class OpenAIChat:
         )
 
 
+# What Anthropic's structured outputs refuse with a 400 (its docs, *JSON Schema limitations*;
+# live test, 2026-11-27). Each limit is still checked after parsing, as its own SDKs do.
+_ANTHROPIC_DROPS: Final = frozenset(
+    {
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
+)
+
+
+def anthropic_schema(schema: Any) -> Any:
+    """The same schema in Anthropic's dialect: limits it refuses left out, and a choice that
+    may be null written as `anyOf`, since it refuses an `enum` beside a list of types."""
+    if isinstance(schema, list):
+        return [anthropic_schema(each) for each in schema]
+    if not isinstance(schema, Mapping):
+        return schema
+    kept = {
+        key: anthropic_schema(value) for key, value in schema.items() if key not in _ANTHROPIC_DROPS
+    }
+    kinds, choices = kept.get("type"), kept.get("enum")
+    if isinstance(kinds, list) and isinstance(choices, list):
+        del kept["type"], kept["enum"]
+        branches = [
+            {"type": "null"}
+            if kind == "null"
+            else {"type": kind, "enum": [each for each in choices if each is not None]}
+            for kind in kinds
+        ]
+        kept["anyOf"] = branches
+    return kept
+
+
 class AnthropicMessages:
     name: Final = "anthropic_messages"
 
@@ -135,7 +177,10 @@ class AnthropicMessages:
             "system": request.instructions,
             "messages": [{"role": "user", "content": request.user_text()}],
             "output_config": {
-                "format": {"type": "json_schema", "schema": dict(request.response_schema)}
+                "format": {
+                    "type": "json_schema",
+                    "schema": anthropic_schema(request.response_schema),
+                }
             },
         }
         headers: tuple[tuple[str, str], ...] = (

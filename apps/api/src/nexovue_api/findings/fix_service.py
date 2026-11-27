@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final, cast, get_args
 from urllib.parse import quote
 
+from nexovue_platform.ai.limits import most_fix_tokens
 from nexovue_platform.fixes import write_gate
 from nexovue_platform.fixes.draft import DRAFT_CAUSE_RULES
 from nexovue_platform.fixes.prose import prose_refusal
@@ -438,8 +439,11 @@ async def _files(db: AsyncSession, row: FindingFix, state: FixState) -> SourceFi
         provider_host=host,
         round=row.round,
         lapses_at=row.state_changed_at + GATHERED_LAPSES_AFTER,
-        forgeable=GATHERED_FORGEABLE,
-        send_host=GATHERED_SEND_HOST.format(host=host),
+        # Only a stack can be forged from outside; files a person named carry no warning.
+        forgeable=GATHERED_FORGEABLE if any(file.role == "stack" for file in files) else None,
+        send_host=GATHERED_SEND_HOST.format(
+            host=host, tokens=most_fix_tokens(sum(file.bytes for file in files))
+        ),
         send=GATHERED_SEND,
     )
 

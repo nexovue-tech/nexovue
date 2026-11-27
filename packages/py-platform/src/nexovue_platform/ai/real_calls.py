@@ -32,6 +32,7 @@ REAL_CALLS: Final[tuple[RealCall, ...]] = (
     RealCall(
         "openai_chat", date(2026, 11, 27), "Ollama 0.40.11 (local)", "qwen2.5-coder:7b", 42, 9
     ),
+    RealCall("anthropic_messages", date(2026, 11, 27), "Anthropic", "claude-sonnet-5-5", 238, 9),
 )
 
 

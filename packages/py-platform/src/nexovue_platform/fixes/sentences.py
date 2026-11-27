@@ -326,7 +326,7 @@ GATHERED_FORGEABLE: Final = (
     "These files came from the error's stack, which an outsider can forge. If one looks "
     "unrelated to this error, remove it."
 )
-GATHERED_SEND_HOST: Final = "To {host}:"
+GATHERED_SEND_HOST: Final = "To {host}, using up to about {tokens:,} tokens."
 GATHERED_SEND: Final = "Send these files"
 TOP_FILE_LEFT_OUT: Final = (
     "The file at the top of the stack was left out. A change made without it may be "

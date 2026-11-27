@@ -239,7 +239,9 @@ async def test_ai_is_off_for_a_new_organization_and_says_what_is_missing(
     )
     assert view.on is False and view.connection is None
     assert view.missing == ["connection"]
-    assert view.formats_offered == ["openai_chat"], "only openai_chat has a dated real call (AC77)"
+    assert view.formats_offered == ["openai_chat", "anthropic_messages"], (
+        "only formats with a dated real call are offered (AC77)"
+    )
     with pytest.raises(ConflictError):
         await service.switch(db, actor=_actor(tenant), on=True, availability=SELF_HOSTED)
 
