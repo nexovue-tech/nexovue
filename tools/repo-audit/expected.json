@@ -1,7 +1,7 @@
 {
   "_comment": "The GitHub settings nexovue is held to (docs/changes/ready-to-deploy, Step 0). A key is an API path under /repos/nexovue-tech/nexovue, or under the API's root when it starts with '@'; each value lists the fields that must match. Change this file in the same commit as the setting.",
   "": {
-    "private": true,
+    "private": false,
     "has_wiki": false,
     "has_projects": false,
     "delete_branch_on_merge": true,
