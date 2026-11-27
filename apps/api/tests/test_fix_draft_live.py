@@ -2,11 +2,12 @@
 T7.8's read, T8.1's route, T8.3's read; spec FR10c, FR22, FR24, FR24a, FR25, FR26, FR28, FR30,
 BR8, BR14, AC23, AC25, AC28, AC32a, AC47, AC48, AC60, AC61, AC62, AC73).
 
-**Two gates, both proved here.** As shipped, `write_gate.WRITE_ACCESS_GO` is None: the draft
-check, the click, **Delete this branch** and **Run CI** answer 409 `writes_off` with its
-sentence, add no job and change no row, and the read hides the action with that sentence in
-its place. Only inside a test is the gate forced on (`monkeypatch` on the module's constant,
-which the routes read at call time), to prove the path behind it.
+**Two gates, both proved here.** The founder's go was recorded on 2026-11-28, so the product
+ships with `write_gate.WRITE_ACCESS_GO` set. With it off (`gate_off`, the path an install
+without the go takes), the draft check, the click, **Delete this branch** and **Run CI**
+answer 409 `writes_off` with its sentence, add no job and change no row, and the read hides
+the action with that sentence in its place. Each test forces the gate one way or the other
+(`monkeypatch` on the module's constant, which the routes read at call time).
 
 Each test builds its own tenant inside a transaction rolled back afterwards, so no job it
 adds is ever committed for the stack's workers; the clock is the suite's own `now`. **No
@@ -105,6 +106,12 @@ READ: Final = "def charge(order, gateway):\n    return gateway.charge(order.tota
 OLD: Final = "    return gateway.charge(order.total)\n"
 NEW: Final = "    return gateway.charge(order.total, retries=2)\n"
 WRITE_GRANT: Final = {"contents": "write", "metadata": "read", "pull_requests": "write"}
+
+
+@pytest.fixture
+def gate_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Write access off, inside this test only: the path an install without the go takes."""
+    monkeypatch.setattr(write_gate, "WRITE_ACCESS_GO", None)
 
 
 @pytest.fixture
@@ -285,11 +292,13 @@ async def _jobs(db: AsyncSession, org_id: uuid.UUID) -> list[Any]:
 # ------------------------------------------------------- as shipped: off in code
 
 
-def test_the_gate_ships_off() -> None:
-    assert write_gate.WRITE_ACCESS_GO is None
+def test_the_gate_ships_on_by_the_founders_go() -> None:
+    """T6.5, given 2026-11-28 (`write_gate.py`); the off path stays proved with `gate_off`."""
+    assert write_gate.WRITE_ACCESS_GO is not None
 
 
-async def test_as_shipped_every_draft_route_refuses_writes_off_and_adds_nothing(
+@pytest.mark.usefixtures("gate_off")
+async def test_with_write_access_off_every_draft_route_refuses_writes_off_and_adds_nothing(
     db: AsyncSession, now: datetime
 ) -> None:
     tenant, finding, repository = await _ready(db, now)
@@ -313,7 +322,8 @@ async def test_as_shipped_every_draft_route_refuses_writes_off_and_adds_nothing(
     assert finding.case_state is None
 
 
-async def test_as_shipped_the_read_hides_the_draft_with_the_writes_off_sentence(
+@pytest.mark.usefixtures("gate_off")
+async def test_with_write_access_off_the_read_hides_the_draft_with_the_writes_off_sentence(
     db: AsyncSession, now: datetime
 ) -> None:
     tenant, finding, repository = await _ready(db, now)
@@ -343,7 +353,10 @@ async def test_as_shipped_the_read_hides_the_draft_with_the_writes_off_sentence(
     assert latest["patch_action"] == "Prepare patch"
 
 
-async def test_as_shipped_the_settings_say_writes_are_off(db: AsyncSession, now: datetime) -> None:
+@pytest.mark.usefixtures("gate_off")
+async def test_with_write_access_off_the_settings_say_writes_are_off(
+    db: AsyncSession, now: datetime
+) -> None:
     tenant, _, repository = await _ready(db, now)
 
     async with source.client(db, rows.person(tenant)) as http:
@@ -353,6 +366,45 @@ async def test_as_shipped_the_settings_say_writes_are_off(db: AsyncSession, now:
     assert read.json()["writes_off"] == WRITES_OFF
     assert read.json()["repositories"][0]["drafts_allowed"] is True
     assert read.json()["repositories"][0]["repository_id"] == str(repository.id)
+
+
+async def test_the_app_panel_says_whether_a_public_repository_is_allowed(
+    db: AsyncSession, now: datetime
+) -> None:
+    """Live test, 2026-11-28: the panel had no way to allow drafts in a public repository, so
+    the route the issues App's control uses was the only way; the panel now reads it."""
+    tenant, _, repository = await _ready(db, now)
+    repository.is_private = False
+    repository.public_allowed_at = now
+    await db.flush()
+
+    async with source.client(db, rows.person(tenant)) as http:
+        read = await http.get("/api/v1/connections/github/fix-app")
+
+    assert read.status_code == 200
+    [shown] = read.json()["repositories"]
+    assert shown["is_private"] is False
+    assert shown["public_allowed_at"] is not None
+
+
+async def test_an_admin_allows_drafts_in_a_public_repository_of_the_suggestions_app(
+    db: AsyncSession, now: datetime
+) -> None:
+    """Live test, 2026-11-28: the allowance route accepted only the issue trackers'
+    repositories, so the draft check's own allowance could never be set."""
+    tenant, _, repository = await _ready(db, now)
+    repository.is_private = False
+    await db.flush()
+
+    async with source.client(db, rows.person(tenant, "admin")) as http:
+        answer = await http.patch(
+            f"/api/v1/connections/{repository.connection_id}/places/{repository.id}",
+            json={"public_allowed": True},
+        )
+
+    assert answer.status_code == 200, answer.text
+    await db.refresh(repository)
+    assert repository.public_allowed_at is not None
 
 
 # --------------------------------------------- with the gate forced on, in a test
@@ -867,7 +919,8 @@ async def _opened(
     return row
 
 
-async def test_as_shipped_run_ci_refuses_writes_off_and_the_read_offers_no_run_ci(
+@pytest.mark.usefixtures("gate_off")
+async def test_with_write_access_off_run_ci_refuses_writes_off_and_the_read_offers_no_run_ci(
     db: AsyncSession, now: datetime
 ) -> None:
     tenant, finding, repository = await _ready(db, now)

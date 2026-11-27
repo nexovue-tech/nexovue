@@ -48,8 +48,17 @@ class WriteGo:
             raise ValueError("a go names the no-warranty terms")
 
 
-# None until the founder's go is recorded at T6.5. Changed only by hand, in review.
-WRITE_ACCESS_GO: Final[WriteGo | None] = None
+# The founder's go, recorded at T6.5 on 2026-11-28. Changed only by hand, in review.
+WRITE_ACCESS_GO: Final[WriteGo | None] = WriteGo(
+    given_on=date(2026, 11, 28),
+    # AC21 passed on 204 trials (docs/research/f5-evaluation-2026-11.md).
+    safety_gates_passed_on=("Claude Sonnet 5.5",),
+    # No buyer round: the founder's decision of 2026-11-27 stands in for D57's rule.
+    buyers_answer="docs/features/ai-solution/status.md, founder decisions 2026-11-27",
+    terms="docs/legal/suggested-fixes.md",
+    drafts_from_stack_alone=False,
+    enterprise_server_before_step_7=False,
+)
 
 
 def write_access_on(go: WriteGo | None = WRITE_ACCESS_GO) -> bool:

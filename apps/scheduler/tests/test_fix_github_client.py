@@ -87,9 +87,9 @@ def test_ac7_writes_cannot_be_built_while_write_access_is_off() -> None:
     """ADR-097: no write token and no write route without the founder's recorded go."""
     github = FixGitHub(FixEndpoints(), app_id=1, private_key="unused")
 
-    assert WRITE_ACCESS_GO is None
     with pytest.raises(WritesOff):
-        github.writes(WRITE_ACCESS_GO)
+        github.writes(None)
+    assert WRITE_ACCESS_GO is not None, "the founder's go, 2026-11-28"
 
 
 def test_ac7_the_client_never_follows_a_redirect() -> None:

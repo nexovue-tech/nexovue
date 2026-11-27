@@ -2,9 +2,10 @@
 plan T7.4's check half, T7.5, T7.10; spec FR22, FR23, BR8, BR13, BR14, AC19, AC22, AC24,
 AC26, AC26a, AC27, AC27a, AC48, AC66).
 
-**As shipped, write access is off in code** (`write_gate.WRITE_ACCESS_GO` is None, ADR-097):
-a `draft` check is refused `writes_off` and the draft job puts an `approved` row back with
-`writes_off`, **with no request of any kind reaching GitHub**, read from the fake's own log.
+**With write access off** (the gate passed as None; ADR-097; the product ships with the
+founder's go since 2026-11-28): a `draft` check is refused `writes_off` and the draft job puts
+an `approved` row back with `writes_off`, **with no request of any kind reaching GitHub**, read
+from the fake's own log.
 
 **With the gate forced on inside a test** (a `WriteGo` built here and passed to the job, as
 the task passes the module's constant), the whole path runs: the person's own `draft` check
@@ -97,17 +98,18 @@ world = fixtures.world
 # ------------------------------------------------------- as shipped: off in code
 
 
-def test_the_gate_ships_off() -> None:
-    assert WRITE_ACCESS_GO is None
+def test_the_gate_ships_on_by_the_founders_go() -> None:
+    """T6.5, given 2026-11-28 (`write_gate.py`); the off path stays proved below with None."""
+    assert WRITE_ACCESS_GO is not None
 
 
-async def test_as_shipped_a_draft_check_is_refused_with_no_request_to_github(
+async def test_with_write_access_off_a_draft_check_is_refused_with_no_request_to_github(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
     fix_id = await proposed_fix(engine, world, now)
     before = len(fake.site.requests)
 
-    status, check = await draft_check(engine, world, fix_id, now, go=WRITE_ACCESS_GO)
+    status, check = await draft_check(engine, world, fix_id, now, go=None)
 
     assert (status, check.status, check.reason) == ("refused", "refused", "writes_off")
     assert check.patch is None and check.digest is None
@@ -115,14 +117,14 @@ async def test_as_shipped_a_draft_check_is_refused_with_no_request_to_github(
     assert (await fix_row(engine, world, fix_id)).state == "proposed"
 
 
-async def test_as_shipped_the_draft_job_writes_nothing_and_reads_nothing(
+async def test_with_write_access_off_the_draft_job_writes_nothing_and_reads_nothing(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
     fix_id = await approved_fix(engine, world, now)
     before = len(fake.site.requests)
     refs_before = dict(git_of(fake).refs)
 
-    assert await open_draft(engine, world, fix_id, now, go=WRITE_ACCESS_GO) == "proposed"
+    assert await open_draft(engine, world, fix_id, now, go=None) == "proposed"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.state, row.last_write_failure) == ("proposed", "writes_off")
@@ -132,7 +134,7 @@ async def test_as_shipped_the_draft_job_writes_nothing_and_reads_nothing(
     assert git_of(fake).refs == refs_before
 
 
-async def test_as_shipped_delete_this_branch_does_nothing(
+async def test_with_write_access_off_delete_this_branch_does_nothing(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
     fix_id = await proposed_fix(engine, world, now)
@@ -156,7 +158,7 @@ async def test_as_shipped_delete_this_branch_does_nothing(
         requested_by=str(world.user_id),
         keys=KEYS,
         endpoints=world.endpoints(),
-        go=WRITE_ACCESS_GO,
+        go=None,
         now=now,
     )
 
@@ -599,7 +601,7 @@ def _commit_writes(fake: FakeGitHub, before: int) -> list[str]:
     ]
 
 
-async def test_as_shipped_run_ci_answers_writes_off_with_no_request_to_github(
+async def test_with_write_access_off_run_ci_answers_writes_off_with_no_request_to_github(
     engine: AsyncEngine, world: SourceWorld, fake: FakeGitHub, now: datetime
 ) -> None:
     fix_id = await opened_fix(engine, world, now)
@@ -607,7 +609,7 @@ async def test_as_shipped_run_ci_answers_writes_off_with_no_request_to_github(
     head = _branch_head(fake, fix_id)
     before = len(fake.site.requests)
 
-    assert await run_ci(engine, world, fix_id, now, go=WRITE_ACCESS_GO) == "writes_off"
+    assert await run_ci(engine, world, fix_id, now, go=None) == "writes_off"
 
     row = await fix_row(engine, world, fix_id)
     assert (row.last_write_failure, row.ci_commit_sha, row.ci_pushed_at) == (

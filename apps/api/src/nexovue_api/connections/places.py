@@ -41,6 +41,9 @@ from nexovue_api.data.postgres.models import (
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
 
 NO_SUCH_PLACE: Final = "No such repository on this organization's connection."
+# A public repository is allowed per connection: issues for a tracker (FR42), drafts for the
+# suggestions App, whose draft check reads its own repository's allowance (F5 FR22).
+PUBLIC_ALLOWANCE_KINDS: Final = (*TRACKER_KINDS, "github_fix")
 NO_SUCH_PROJECT: Final = "No such project."
 NO_SUCH_MAPPING: Final = "This service has no repository set."
 PRIVATE_NEEDS_NO_ALLOWANCE: Final = (
@@ -62,7 +65,7 @@ def place_view(place: ConnectionRepository) -> ConnectionPlace:
 async def _locked_place(
     session: AsyncSession, *, org_id: uuid.UUID, connection_id: uuid.UUID, place_id: uuid.UUID
 ) -> ConnectionRepository:
-    """A place of this organization's live tracker connection, locked; else the 404."""
+    """A place of this organization's live tracker or suggestions App, locked; else 404."""
     found: ConnectionRepository | None = await session.scalar(
         select(ConnectionRepository)
         .join(
@@ -76,7 +79,7 @@ async def _locked_place(
             ConnectionRepository.id == place_id,
             Connection.org_id == org_id,
             Connection.state != DISCONNECTED,
-            Connection.kind.in_(TRACKER_KINDS),
+            Connection.kind.in_(PUBLIC_ALLOWANCE_KINDS),
         )
         .with_for_update(of=ConnectionRepository)
     )

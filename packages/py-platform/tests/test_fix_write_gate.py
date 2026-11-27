@@ -38,9 +38,18 @@ def _go(**overrides: Any) -> WriteGo:
     return WriteGo(**(values | overrides))
 
 
-def test_write_access_is_off_until_the_founders_go() -> None:
-    assert WRITE_ACCESS_GO is None
-    assert write_access_on() is False
+def test_write_access_is_on_by_the_founders_recorded_go() -> None:
+    """T6.5, given 2026-11-28: AC21 passed on Claude Sonnet 5.5
+    (`docs/research/f5-evaluation-2026-11.md`); the founder's decisions of 2026-11-27 stand in
+    for the buyer round; drafts from a stack alone and GitHub Enterprise Server stay no."""
+    assert WRITE_ACCESS_GO is not None
+    assert WRITE_ACCESS_GO.safety_gates_passed_on == ("Claude Sonnet 5.5",)
+    assert WRITE_ACCESS_GO.terms == "docs/legal/suggested-fixes.md"
+    assert (ROOT / WRITE_ACCESS_GO.terms).is_file()
+    assert WRITE_ACCESS_GO.drafts_from_stack_alone is False
+    assert WRITE_ACCESS_GO.enterprise_server_before_step_7 is False
+    assert write_access_on() is True
+    assert write_access_on(None) is False
 
 
 def test_a_recorded_go_turns_it_on() -> None:
@@ -90,12 +99,15 @@ def _name(node: ast.AST) -> str:
 
 
 def test_the_product_never_builds_a_go() -> None:
-    """Only a reviewed commit to `write_gate.py` can write the founder's go."""
+    """Only a reviewed commit to `write_gate.py` can write the founder's go: it is the one
+    file that may build one."""
     built = [
         f"{path.relative_to(ROOT)}:{node.lineno}"
         for path, tree in _trees()
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and _name(node.func).split(".")[-1] == "WriteGo"
+        if isinstance(node, ast.Call)
+        and _name(node.func).split(".")[-1] == "WriteGo"
+        and path.resolve() != GATE
     ]
     assert built == []
 

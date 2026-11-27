@@ -24,6 +24,8 @@ class FixAppRepository(BaseModel):
     key: str
     is_private: bool
     is_reachable: bool
+    # When an admin allowed drafts in this public repository; None while refused (FR42).
+    public_allowed_at: datetime | None = None
 
 
 class FixAppView(BaseModel):

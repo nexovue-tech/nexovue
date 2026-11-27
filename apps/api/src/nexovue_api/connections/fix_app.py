@@ -263,6 +263,7 @@ async def view(
                 key=place.key,
                 is_private=place.is_private,
                 is_reachable=place.is_reachable,
+                public_allowed_at=place.public_allowed_at,
             )
             for place in places
         ],
