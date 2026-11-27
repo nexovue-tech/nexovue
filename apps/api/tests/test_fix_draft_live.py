@@ -783,10 +783,13 @@ async def test_fr26_an_opened_draft_reads_its_state_link_and_what_holding_ci_mea
     viewer = await _latest(db, rows.person(tenant, "viewer"), finding)
 
     sentence = "A draft pull request is open: https://github.com/acme/shop/pull/7."
-    assert (requester["heading"], requester["sentence"]) == ("Draft pull request", sentence)
+    # Said once, in the draft part with its link (live test, 2026-11-28).
+    assert (requester["heading"], requester["sentence"]) == ("Draft pull request", None)
+    assert requester["draft"]["pull_request_sentence"] == sentence
     assert requester["draft"]["ci_note"] == CI_HELD_ON_PAGE
     assert requester["draft"]["pull_request_url"] == "https://github.com/acme/shop/pull/7"
-    assert viewer["sentence"] == sentence and viewer["draft"]["delete_branch_action"] is None
+    assert viewer["sentence"] is None and viewer["draft"]["pull_request_sentence"] == sentence
+    assert viewer["draft"]["delete_branch_action"] is None
 
 
 async def test_did_not_finish_names_the_branch_left_behind(
@@ -936,6 +939,21 @@ async def test_with_write_access_off_run_ci_refuses_writes_off_and_the_read_offe
     await db.refresh(row)
     assert (row.ci_requested_by, row.ci_requested_at) == (None, None)
     assert draft["ci_action"] is None and draft["ci_confirm"] is None
+
+
+async def test_an_open_draft_says_its_sentence_once_with_its_link(
+    db: AsyncSession, now: datetime
+) -> None:
+    """Live test, 2026-11-28: the section and its draft part both carried the sentence, so
+    the page showed it twice; the draft part, which links it, owns it."""
+    tenant, finding, repository = await _ready(db, now)
+    await _opened(db, finding, repository, now)
+
+    latest = await _latest(db, rows.person(tenant), finding)
+
+    assert latest["draft"]["pull_request_sentence"] is not None
+    assert latest["sentence"] is None
+    assert latest["heading"]
 
 
 async def test_ac28_run_ci_stores_the_request_audits_it_and_adds_one_job_with_ids_only(

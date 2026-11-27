@@ -725,7 +725,7 @@ describe("Step 7: the draft pull request (T7.8; FR10c, FR22, FR24, FR24a, FR26)"
       ...PROPOSED,
       state: "opened",
       heading: "Draft pull request",
-      sentence: "A draft pull request is open: https://github.com/acme/shop/pull/7.",
+      sentence: null,
       proposal: null,
       draft: draft({
         pull_request_state: "open",

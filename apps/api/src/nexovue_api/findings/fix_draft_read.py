@@ -225,7 +225,8 @@ async def opened(
             pull_request_sentence=sentence,
             ci_note=CI_HELD_ON_PAGE if held else None,
         )
-        return OPENED_HEADING, sentence, view
+        # The draft part says it, with its link; the section's own line would repeat it.
+        return OPENED_HEADING, None, view
     failure = _ci_failure(row)
     requested_at = row.ci_requested_at
     unanswered = requested_at is not None and failure is None and not _ci_done(row)
@@ -247,7 +248,7 @@ async def opened(
         ci_status=_ci_status(row, waiting=waiting, lapsed=lapsed),
         merged_facts=await _merged_facts(db, row),
     )
-    return OPENED_HEADING, sentence, view
+    return OPENED_HEADING, None, view
 
 
 def _ci_done(row: FindingFix) -> bool:
