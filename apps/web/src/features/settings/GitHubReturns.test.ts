@@ -8,7 +8,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -89,6 +89,7 @@ async function mount(
   path: string,
   at: string,
   seed: (client: QueryClient) => void = () => {},
+  strict = false,
 ) {
   const container = document.createElement("div");
   document.body.append(container);
@@ -120,7 +121,9 @@ async function mount(
   const root = createRoot(container);
   mounted.push(root);
   await act(async () => {
-    root.render(createElement(RouterProvider, { router }));
+    const app = createElement(RouterProvider, { router });
+    // The console runs in StrictMode in development, which runs each effect twice (main.tsx).
+    root.render(strict ? createElement(StrictMode, null, app) : app);
   });
   await settle();
   return { container, router, client };
@@ -205,6 +208,28 @@ describe("the account link's return (decision 34)", () => {
 
     const posted = sent.find((each) => each.path === "connections/github/user-link/complete");
     expect(posted?.body).toEqual({ code: "c0de", state: "s2" });
+    expect(router.state.location.pathname).toBe("/findings/f-1");
+  });
+
+  it("lands on the finding under StrictMode too, whose effects run twice (live test)", async () => {
+    rememberLinkReturn("/findings/f-1", "a-1");
+    const sent = stubApi((path) =>
+      path === "connections/github/user-link/complete"
+        ? json({ id: "a-1", status: "linked", reason: null }, 202)
+        : undefined,
+    );
+    const { router } = await mount(
+      GitHubLinkReturnScreen,
+      "/settings/github-link/return",
+      "/settings/github-link/return?code=c0de&state=s2",
+      () => {},
+      true,
+    );
+
+    // One post, since the state is spent by the first; and the page moves on.
+    expect(
+      sent.filter((each) => each.path === "connections/github/user-link/complete"),
+    ).toHaveLength(1);
     expect(router.state.location.pathname).toBe("/findings/f-1");
   });
 

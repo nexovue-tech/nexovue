@@ -41,7 +41,8 @@ from typing import Any, Final
 
 from seed import DEFAULT_CLICKHOUSE, DEFAULT_POSTGRES, Project, _clickhouse, _resolve, require_local
 
-DEFAULT_API: Final = "http://localhost:8000"
+# The dev API as `just stack` publishes it (API_HOST_PORT, deploy/compose).
+DEFAULT_API: Final = "http://localhost:18000"
 RULES: Final = (1, 2, 3, 4, 5, 6, 7, 8)
 DISCLAIMER: Final = (
     "Detection did not judge this finding: explain-demo opened it directly, so its page shows "

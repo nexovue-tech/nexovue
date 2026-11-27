@@ -31,16 +31,24 @@ export function GitHubLinkReturnScreen() {
   const [words, setWords] = useState<string | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const [back, setBack] = useState(LINK_FALLBACK_PATH);
-  // Once per page: the `state` is spent by the first post.
-  const sent = useRef(false);
+  // Once per page: the `state` is spent by the first post, and the remembered finding is taken
+  // once. Each run of the effect follows that one request, so the run that stays mounted
+  // settles it (StrictMode runs an effect twice; live test, 2026-11-28).
+  const once = useRef<{ request: Promise<Attempt>; destination: string } | null>(null);
 
   useEffect(() => {
-    if (sent.current) return;
-    sent.current = true;
-    const remembered = takeLinkReturn();
-    const destination = remembered?.path ?? LINK_FALLBACK_PATH;
+    if (once.current === null) {
+      const parameters = new URLSearchParams(search);
+      once.current = {
+        destination: takeLinkReturn()?.path ?? LINK_FALLBACK_PATH,
+        request: apiClient.post<Attempt>("connections/github/user-link/complete", {
+          code: parameters.get("code") ?? "",
+          state: parameters.get("state") ?? "",
+        }),
+      };
+    }
+    const { request, destination } = once.current;
     setBack(destination);
-    const parameters = new URLSearchParams(search);
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (attempt: Attempt, polls: number) => {
@@ -58,18 +66,14 @@ export function GitHubLinkReturnScreen() {
         }, POLL_MS);
       }
     };
-    apiClient
-      .post<Attempt>("connections/github/user-link/complete", {
-        code: parameters.get("code") ?? "",
-        state: parameters.get("state") ?? "",
-      })
-      .then(
-        (attempt) => settle(attempt, 0),
-        (error: unknown) => {
-          if (error instanceof ApiError && error.problem?.detail) setWords(error.problem.detail);
-          else setFailure(error);
-        },
-      );
+    request.then(
+      (attempt) => settle(attempt, 0),
+      (error: unknown) => {
+        if (stopped) return;
+        if (error instanceof ApiError && error.problem?.detail) setWords(error.problem.detail);
+        else setFailure(error);
+      },
+    );
     return () => {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);

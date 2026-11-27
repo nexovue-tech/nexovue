@@ -1477,20 +1477,27 @@ export function sourceFixQueryKey(findingId: string) {
   return ["findings", "fixes", "source", findingId] as const;
 }
 
-/** Rung 3's own read: polls while files are being read or a suggestion written (5 s). */
+/** Whether a job this suggestion started is still running, so the page re-reads it: files,
+ * the suggestion, a check, the patch, the draft's own check, or the draft being opened (the
+ * last two were missed; live test, 2026-11-28). */
+export function sourceFixWaiting(latest: SourceFix | null | undefined): boolean {
+  return (
+    latest?.state === "gathering" ||
+    latest?.state === "proposing" ||
+    latest?.state === "approved" ||
+    latest?.check?.status === "running" ||
+    latest?.patch?.status === "running" ||
+    latest?.draft?.check?.status === "running"
+  );
+}
+
+/** Rung 3's own read: polls while a job it started is running (5 s). */
 export function useSourceFix(findingId: string) {
   return useQuery<FindingSourceFix>({
     queryKey: sourceFixQueryKey(findingId),
     placeholderData: keepPreviousData,
-    refetchInterval: (query) => {
-      const latest = query.state.data?.latest;
-      const waiting =
-        latest?.state === "gathering" ||
-        latest?.state === "proposing" ||
-        latest?.check?.status === "running" ||
-        latest?.patch?.status === "running";
-      return waiting ? GENERAL_FIX_POLL_MS : false;
-    },
+    refetchInterval: (query) =>
+      sourceFixWaiting(query.state.data?.latest) ? GENERAL_FIX_POLL_MS : false,
     queryFn: ({ signal }) =>
       apiClient.get<FindingSourceFix>(`findings/${encodeURIComponent(findingId)}/fixes/source`, {
         signal,

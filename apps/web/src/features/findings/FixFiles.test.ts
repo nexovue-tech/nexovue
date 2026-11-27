@@ -4,6 +4,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatTimestamp } from "@/shared/format/time";
 import type { FindingSourceFix, SourceFix } from "./api";
+import { sourceFixWaiting } from "./api";
 import { SUGGESTED_FIX } from "./fix-page";
 import {
   finding,
@@ -872,5 +873,21 @@ describe("Step 7: the draft pull request (T7.8; FR10c, FR22, FR24, FR24a, FR26)"
         `A deploy recorded with the merge's commit: ${formatTimestamp(facts.deployed_at)}.`,
       ]);
     });
+  });
+});
+
+describe("the page follows a job it started (live test A11, 2026-11-28)", () => {
+  const running = { status: "running" } as NonNullable<SourceFix["patch"]>;
+  it("re-reads while the draft's own check runs, and while the draft is being opened", () => {
+    expect(
+      sourceFixWaiting({ ...GATHERED, state: "proposed", draft: { check: running } } as SourceFix),
+    ).toBe(true);
+    expect(sourceFixWaiting({ ...GATHERED, state: "approved", draft: null } as SourceFix)).toBe(
+      true,
+    );
+    expect(sourceFixWaiting({ ...GATHERED, state: "opened", draft: null } as SourceFix)).toBe(
+      false,
+    );
+    expect(sourceFixWaiting(null)).toBe(false);
   });
 });
