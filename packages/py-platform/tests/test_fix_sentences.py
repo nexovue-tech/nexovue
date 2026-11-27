@@ -103,3 +103,11 @@ def test_ac8_rung_3_s_requester_sentences_name_who_can_change_it() -> None:
     assert ELIGIBILITY_SENTENCES["no_code_location"].requester.endswith("An admin can set it.")
     assert ELIGIBILITY_SENTENCES["no_consent"].requester.endswith("Ask an owner.")
     assert "name files" in ELIGIBILITY_SENTENCES["cause_is_elsewhere"].requester
+
+
+def test_every_written_suggestion_leads_with_the_as_is_terms() -> None:
+    """Founder decision 2026-11-27: plain terms above every suggestion (spec FD1)."""
+    from nexovue_platform.fixes.sentences import AS_IS, PROPOSED_LEAD
+
+    assert AS_IS in PROPOSED_LEAD
+    assert "as is" in AS_IS and "you review and you merge" in AS_IS

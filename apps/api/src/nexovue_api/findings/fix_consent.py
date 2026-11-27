@@ -34,6 +34,7 @@ from nexovue_platform.fixes.records import (
     CONSENT_WITHDRAWN_BY_OWNER,
     KIND_SOURCE,
 )
+from nexovue_platform.fixes.sentences import AS_IS
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,7 +59,8 @@ from nexovue_api.findings import fix_access, fix_takeback
 
 WHOLE_REPOSITORY_SCOPE: Final = "whole-repository"
 # FR7's sentences, exact (spec FR7). The first is the provider sentence; the next the
-# gateway, secret-scan and outbound sentences; the last how long code lasts (D29).
+# gateway, secret-scan and outbound sentences; then how long code lasts (D29); the last the
+# plain terms an owner agrees to (founder decision 2026-11-27).
 CONSENT_SENTENCES: Final = (
     "Nexovue cannot see or control what this provider keeps or trains on; check your "
     "contract. The secret scan is a net: a secret in an unrecognized format in a chosen "
@@ -68,6 +70,8 @@ CONSENT_SENTENCES: Final = (
     "The AI process can reach the network unless your operator limits it; here is how.",
     "Quoted code is kept at most 30 days, and less when a suggestion ends; backups hold it "
     "up to about 4 weeks.",
+    f"{AS_IS} Nexovue's authors are not liable for what a suggestion does, as in sections 15 "
+    "and 16 of the AGPL-3.0; the terms are in docs/legal/suggested-fixes.md.",
 )
 _SCOPE_EXACTLY_ONE: Final = (
     "Name a folder, or the whole repository, but not both: `folder=<path>` or "

@@ -507,6 +507,8 @@ Stores: `f4s3-postgres` (45432, migrated by the real `setup` step to 0073; its l
 
 ## Next action
 
+**Founder, 2026-11-27: chat ships in v0.2.0** with a release note that it needs a model that calls tools reliably; with a small local model it refuses safely instead of guessing (live test D2, `docs/changes/phase-2-live-test/checklist.md`).
+
 **Step 8 is in progress (2026-11-22) and awaits the founder's review of its diff** on `wt/f4s8`, including the shared `SettingsLayout.tsx` change; then the open decisions 63 to 65 and 67 (66 approved 2026-11-27), the launch brief's approval (T8.5), and after Phase 2 the real bed runs (T8.0) and AC80's two fault-bed runs (T8.1).
 
 **Step 4 (code) is built (2026-11-22) and awaits the founder's review of its diff and a commit** on `wt/f4s4`; then the open decisions 50 to 62, and after Phase 2 the founder's real runs (the commands under *Step 4 (code)*), the accuracy bar after the tune run, D83 applied to the report and recorded here, and the constants changed from the cost table. Earlier:
@@ -600,11 +602,11 @@ Raised while building Step 4 (code) (2026-11-22), each with a recommendation; no
 
 Raised in Step 8:
 
-63. **The unclaimed alert reads the question's row, not the job's.** The design says "unclaimed `assistant` jobs older than 2 minutes", which can never fire: a chat job leaves the ready count once its queue clock runs out, at least 120 s (`MIN_QUEUE_SECONDS`), and chat's sweep runs in `scheduler-insight`, so with that role stopped questions simply stay `queued`. **Recommended:** accept, and correct the design's wording.
-64. **AC80's detection half has no measuring tool on the fault bed.** `detection-scale watch` measures every minute's judging, but only for AC29's generated tenants. **Recommended:** give `chat_load run` an optional Postgres reader of `detection_project_runs` and the job queue, so each project job's due-to-done time is recorded beside the load; fix its pass rule (finished before the next sweep) before any run.
-65. **`scheduler-insight`'s 768 MB stays.** The measured peak was 318 MiB PSS with chat alone on a development VM. **Recommended:** keep it until a real server's container is read with wording and suggested fixes beside chat; lower it then if the margin holds.
+63. **The unclaimed alert reads the question's row, not the job's.** The design says "unclaimed `assistant` jobs older than 2 minutes", which can never fire: a chat job leaves the ready count once its queue clock runs out, at least 120 s (`MIN_QUEUE_SECONDS`), and chat's sweep runs in `scheduler-insight`, so with that role stopped questions simply stay `queued`. **Recommended:** accept, and correct the design's wording. **Approved by the founder 2026-11-27, as recommended.**
+64. **AC80's detection half has no measuring tool on the fault bed.** `detection-scale watch` measures every minute's judging, but only for AC29's generated tenants. **Recommended:** give `chat_load run` an optional Postgres reader of `detection_project_runs` and the job queue, so each project job's due-to-done time is recorded beside the load; fix its pass rule (finished before the next sweep) before any run. **Approved by the founder 2026-11-27, as recommended.**
+65. **`scheduler-insight`'s 768 MB stays.** The measured peak was 318 MiB PSS with chat alone on a development VM. **Recommended:** keep it until a real server's container is read with wording and suggested fixes beside chat; lower it then if the margin holds. **Approved by the founder 2026-11-27, as recommended.**
 66. **`CHAT_DISCLOSURE_VERSION` raised from 3 to 4** for BR18's sentence on the consent step, by the rule its comment states (the preview's words changed); every owner agrees again. Pre-deployment, it costs nothing. **Recommended:** accept. **Approved by the founder, 2026-11-27 (foundation item 37f):** version 4 stands.
-67. **AC80's alert half needs a second full fault-bed run** (about 11.5 days) with chat looping, compared with the AC36 run. **Recommended:** run it right after the AC36 run on the same machine, with the same seed and order, so the injections pair; or the founder accepts a shorter labelled demo (one fault, one round) that proves the path and not the result.
+67. **AC80's alert half needs a second full fault-bed run** (about 11.5 days) with chat looping, compared with the AC36 run. **Recommended:** run it right after the AC36 run on the same machine, with the same seed and order, so the injections pair; or the founder accepts a shorter labelled demo (one fault, one round) that proves the path and not the result. **Founder, 2026-11-27: no second long run; a shorter labelled demo (one fault, one round) that proves the path, not the result.**
 
 ## Blocked
 

@@ -343,9 +343,11 @@ PROPOSING_REQUESTER: Final = (
     "Writing a suggestion. You may leave this page. The result will be here, and on the "
     "finding's timeline."
 )
+# The plain terms (founder decision 2026-11-27; docs/legal/suggested-fixes.md).
+AS_IS: Final = "Provided as is, without warranty: you review and you merge."
 PROPOSED_LEAD: Final = (
     "Suggested fix: {files} {files_word}, {lines} {lines_word}, in {folder}. Not compiled and "
-    "not run."
+    "not run. " + AS_IS
 )
 PROPOSED_VIEWER: Final = (
     "Code is shown to people who can ask for a suggested fix. Ask an owner, admin or member."

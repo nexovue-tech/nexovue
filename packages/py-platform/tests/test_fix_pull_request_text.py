@@ -28,7 +28,7 @@ from nexovue_platform.fixes.pull_request_text import (
     pull_request_text,
     run_ci_commit_message,
 )
-from nexovue_platform.fixes.sentences import NOT_CHECKED
+from nexovue_platform.fixes.sentences import AS_IS, NOT_CHECKED
 
 FIX_ID = "0193c3f2-0000-7000-8000-000000000001"
 
@@ -160,3 +160,9 @@ def test_fr25_run_ci_s_commit_carries_no_skip_instruction_and_names_its_suggesti
     assert SKIP_CI_MARKER not in message and SKIP_CHECKS_TRAILER not in message
     assert "skip" not in message.lower()
     assert message.splitlines()[0] == "Run CI for nexovue suggestion f-1"
+
+
+@pytest.mark.parametrize("private", [True, False])
+def test_every_body_says_as_is_you_review_and_merge(private: bool) -> None:
+    """Founder decision 2026-11-27: the plain terms travel with every draft."""
+    assert AS_IS in pull_request_text(_facts(private=private)).body

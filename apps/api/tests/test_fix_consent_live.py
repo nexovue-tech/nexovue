@@ -17,6 +17,7 @@ import source_fix_rows as source
 from general_fix_rows import POSTGRES_DSN, reachable
 from live import require_stack
 from nexovue_platform.checks.sealing import ConfiguredKeys, generate_key
+from nexovue_platform.fixes.sentences import AS_IS
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -194,6 +195,9 @@ async def test_fr7_the_overview_carries_the_exact_sentences_and_who_can_ask(
 
     assert body["sentences"] == list(CONSENT_SENTENCES)
     assert body["sentences"][0].startswith("Nexovue cannot see or control what this provider")
+    # Founder decision 2026-11-27: agreeing to send code agrees to the plain terms too.
+    assert body["sentences"][-1].startswith(AS_IS)
+    assert "docs/legal/suggested-fixes.md" in body["sentences"][-1]
     assert body["requesters"] == 1 and body["provider_host"] == "provider.example"
     assert body["repositories"][0]["consents"][0]["standing"] == "live"
 

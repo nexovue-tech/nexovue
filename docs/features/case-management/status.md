@@ -1632,6 +1632,7 @@ committed now with T2.9 unticked, waiting on F3, because F3's
 
 ## Blocked
 
+- **Founder, 2026-11-27: T0.1 sent through Atlassian's Developer and Marketplace Support portal, ticket ECOHELP-191004** (*Ecosystem Support Request*, Cloud → Jira Software). The founder's Atlassian account had no earlier request on that portal, so the 2026-11-08 entry below is not confirmed there. The 4-week wait counts from 2026-11-27 and ends **2026-12-25**; without a written yes by then, F22 ships with GitHub only.
 - **Founder, 2026-11-08: T0.1 sent.** The founder emailed Atlassian's developer support the T0.1 question; no reply yet. Jira (Step 7) waits for a written yes (foundation item 17; at most 4 weeks, then GitHub only). **GitHub ships now.** Steps 3 to 6 must keep the connection layer kind-agnostic (one `connections` table with `kind`, shared sync machinery, per-kind adapters, foundation section 6), so Jira is an added adapter, not a rework.
 - **Founder decision, 2026-11-08:** Steps 3 to 6 are built against a simulated GitHub; T3.0's manifest-flow trial and T5.2's real webhook are run by the founder after Phase 2 (foundation item 28). Step 7 (Jira) still waits on Atlassian's written answer.
 - T3.0 and T3.9's hand checks (AC73) wait for the founder's real-GitHub run after Phase 2; T5.2 (a real webhook delivery, AC130) for the Oracle deployment.

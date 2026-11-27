@@ -25,7 +25,7 @@ from typing import Final
 
 from nexovue_platform.fixes.prose import prose_refusal
 from nexovue_platform.fixes.records import REQUESTER_NOTE_MAX_CHARACTERS, fix_branch
-from nexovue_platform.fixes.sentences import FLAG_LABELS, NOT_CHECKED
+from nexovue_platform.fixes.sentences import AS_IS, FLAG_LABELS, NOT_CHECKED
 
 # GitHub Actions' two skip instructions (FR23): the subject's marker, and the trailer.
 SKIP_CI_MARKER: Final = "[skip ci]"
@@ -183,7 +183,7 @@ def _body(facts: PullRequestFacts) -> str:
                 for flag in facts.flags
             )
         )
-    parts += [f"## {NOT_CHECKED_HEADING}", NOT_CHECKED]
+    parts += [f"## {NOT_CHECKED_HEADING}", NOT_CHECKED, AS_IS]
     note = checked_note(facts.note)
     if note is not None and (facts.private or facts.note_confirmed):
         parts += [f"## {NOTE_HEADING}", _code(note)]
