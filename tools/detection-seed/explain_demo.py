@@ -239,7 +239,16 @@ INSERT INTO release_periods (org_id, release_id, project_id, service_name, start
                              start_basis, already_running, is_return)
 SELECT $1::uuid, release.id, $2::uuid, $3, $5, 'seen', false, false FROM release
 """
-_SLOWER: Final = [{"signal": "slower", "key": "slower", "normal": 120.0, "worst": 480.0}]
+_SLOWER: Final = [
+    {
+        "signal": "slower",
+        "key": "slower",
+        "normal": 120.0,
+        "current": 480.0,
+        "worst": 480.0,
+        "comparison": "the same hour, last 3 weeks",
+    }
+]
 
 
 async def _open(postgres: str, project: Project, demo: Demo, *, now: datetime) -> str:

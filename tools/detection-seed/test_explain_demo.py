@@ -90,3 +90,14 @@ def test_it_refuses_a_host_other_than_this_machine() -> None:
 
     with pytest.raises(SystemExit, match="refusing"):
         main(["--rule", "1", "--postgres", "postgresql://u:p@db.example.com:5432/x"])
+
+
+def test_the_finding_s_signals_read_as_the_api_stores_them() -> None:
+    """Live test, 2026-11-28: the stored shape gained required fields and the demo's finding
+    answered 500 on its own page."""
+    from explain_demo import _SLOWER
+
+    from nexovue_api.findings.schemas import StoredSignal
+
+    for entry in _SLOWER:
+        StoredSignal.model_validate(entry)
