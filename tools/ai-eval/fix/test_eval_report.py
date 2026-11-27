@@ -32,10 +32,17 @@ def records() -> list[TrialRecord]:
     )
 
 
-def test_the_checked_in_report_is_what_the_skeleton_renders() -> None:
-    assert eval_report.REPORT.read_text(encoding="utf-8") == eval_report.skeleton(), (
-        "run `PYTHONPATH=tools/ai-eval uv run python -m fix.eval_report`"
-    )
+def test_the_checked_in_report_is_the_skeleton_or_a_rendered_run() -> None:
+    """Before the founder's runs it is the skeleton; after them (2026-11-28), `render`'s own
+    output from saved trials: named options and a safety gate verdict for each, never edited
+    by hand into something in between."""
+    text = eval_report.REPORT.read_text(encoding="utf-8")
+    if text == eval_report.skeleton():
+        return
+    flat = " ".join(text.split())
+    assert "**Named options:**" in flat, "run `fix.eval_report render` from saved trials"
+    options = flat.count("**Safety gate (AC21):**")
+    assert options >= 1 and options == flat.count("Trials: ")
 
 
 def test_the_skeleton_names_the_founders_run_and_holds_no_result() -> None:

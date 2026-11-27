@@ -117,10 +117,22 @@ PROBES_PER_MINUTE: Final = 2
 # The busier of a service's two routes takes this share of its other requests.
 MAIN_ROUTE_SHARE: Final = 0.7
 INBOUND_KIND: Final = "SERVER"
+# Each row's latencies become its quantile state in the insert, as the worker's view builds it
+# from durations (000012_endpoint_stats_1m_mv): without it a seeded window reads NaN percentiles.
 _ENDPOINT_INSERT: Final = (
     "INSERT INTO endpoint_stats_1m (tenant_id, derived_retention_days, project_id, service_name, "
-    "span_kind, span_name, minute, request_count, error_count) FORMAT JSONEachRow"
+    "span_kind, span_name, minute, request_count, error_count, latency_quantiles) "
+    "SELECT tenant_id, derived_retention_days, project_id, service_name, span_kind, span_name, "
+    "minute, any(request_count), any(error_count), quantilesState(0.5, 0.95, 0.99)(latency) "
+    "FROM input('tenant_id String, derived_retention_days UInt16, project_id String, "
+    "service_name String, span_kind String, span_name String, minute DateTime, "
+    "request_count UInt64, error_count UInt64, latencies_ms Array(Float64)') "
+    "ARRAY JOIN latencies_ms AS latency "
+    "GROUP BY tenant_id, derived_retention_days, project_id, service_name, span_kind, span_name, "
+    "minute FORMAT JSONEachRow"
 )
+# At most this many latencies stand for one endpoint minute, drawn from its service's buckets.
+LATENCY_SAMPLES: Final = 64
 # A check's runs, as the prober publishes them (apps/scheduler/.../publish.py).
 CHECK_STATUS_METRIC: Final = "synthetic.check.status"
 PROBER_SERVICE: Final = "nexovue-prober"
@@ -246,6 +258,7 @@ class EndpointRow:
     minute: datetime
     request_count: int
     error_count: int
+    latencies_ms: tuple[float, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +417,20 @@ def generate(
             at += timedelta(minutes=1)
 
 
+def sample_latencies(buckets: Sequence[int]) -> tuple[float, ...]:
+    """Up to LATENCY_SAMPLES latencies in the proportions of a minute's buckets, each at its
+    bucket's upper bound, so the quantiles read from them land in the right bucket."""
+    total = sum(buckets)
+    if total == 0:
+        return (LATENCY_BOUNDS[0],)
+    bounds = (*LATENCY_BOUNDS, LATENCY_CEILING_MS)
+    samples: list[float] = []
+    for index, count in enumerate(buckets):
+        if count:
+            samples += [bounds[index]] * max(1, round(count * LATENCY_SAMPLES / total))
+    return tuple(samples[:LATENCY_SAMPLES])
+
+
 def endpoint_rows(rows: Iterable[Row]) -> Iterator[EndpointRow]:
     """Each service minute split into endpoints that add up to it: a probe that never fails, and
     two routes carrying the rest, failures on the routes. A route with no requests writes no row,
@@ -418,10 +445,11 @@ def endpoint_rows(rows: Iterable[Row]) -> Iterator[EndpointRow]:
             (f"POST /{row.service_name}", main, main_errors),
             (f"GET /{row.service_name}", rest - main, row.error_count - main_errors),
         )
+        latencies = sample_latencies(row.latency_buckets)
         for name, requests, errors in split:
             if requests > 0:
                 yield EndpointRow(
-                    row.service_name, INBOUND_KIND, name, row.minute, requests, errors
+                    row.service_name, INBOUND_KIND, name, row.minute, requests, errors, latencies
                 )
 
 
@@ -650,6 +678,7 @@ def _endpoint_json(project: Project, row: EndpointRow) -> dict[str, Any]:
         "minute": int(row.minute.timestamp()),
         "request_count": row.request_count,
         "error_count": row.error_count,
+        "latencies_ms": list(row.latencies_ms),
     }
 
 

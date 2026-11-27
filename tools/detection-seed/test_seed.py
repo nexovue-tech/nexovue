@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from seed import (
+    _ENDPOINT_INSERT,
     DEPLOYS_ON_BUSIEST,
     HEALTH_ENDPOINT,
     LAST_RELEASE_BEFORE_END,
@@ -184,6 +185,19 @@ def test_endpoint_rows_add_up_to_their_service_and_a_probe_comes_every_busy_minu
         probed += len(probes)
     assert probed >= 0.9 * len(rows)
     assert len({e.span_name for e in endpoints}) > 2
+
+
+def test_endpoint_rows_carry_their_service_s_latency_so_percentiles_read() -> None:
+    """Live test, 2026-11-28: endpoint rows were written with counts and no latency, so the
+    overview read NaN percentiles over seeded history. Each row now carries latencies drawn
+    from its service minute's buckets, which the insert turns into the quantile state."""
+    rows = _hour(WEDNESDAY)
+    for endpoint in endpoint_rows(rows):
+        assert endpoint.latencies_ms, endpoint
+        assert len(endpoint.latencies_ms) <= 64
+        assert all(0 < value <= LATENCY_BOUNDS[-1] * 2 for value in endpoint.latencies_ms)
+    assert "quantilesState(0.5, 0.95, 0.99)" in _ENDPOINT_INSERT
+    assert "latency_quantiles" in _ENDPOINT_INSERT
 
 
 def test_check_readings_hold_every_kind_of_run_the_uptime_rule_tells_apart() -> None:
