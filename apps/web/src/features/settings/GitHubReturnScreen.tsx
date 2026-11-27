@@ -1,12 +1,13 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, apiClient } from "@/shared/api-client";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
-import { completeGitHub, refreshGitHub } from "./api";
+import { completeGitHub, connectionsQueryKey, refreshGitHub } from "./api";
 import { EXPIRED_SETUP, INVALID_SETUP } from "./connection-words";
 
 const SETTINGS_PATH = "/settings/connections";
@@ -35,13 +36,23 @@ function completeFixApp(code: string, state: string) {
   });
 }
 
+/** Lands on settings with what Connections showed marked out of date: GitHub just changed it. */
+function useLandOnSettings() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: connectionsQueryKey });
+    void navigate({ to: SETTINGS_PATH });
+  }, [navigate, queryClient]);
+}
+
 function ManifestReturn({
   complete,
 }: {
   complete: (code: string, state: string) => Promise<unknown>;
 }) {
   const search = useRouterState({ select: (state) => state.location.searchStr });
-  const navigate = useNavigate();
+  const landOnSettings = useLandOnSettings();
   const [refusal, setRefusal] = useState<string | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   // Once per page: the `state` is spent by the first post, so a second (React's development
@@ -53,7 +64,7 @@ function ManifestReturn({
     sent.current = true;
     const parameters = new URLSearchParams(search);
     complete(parameters.get("code") ?? "", parameters.get("state") ?? "").then(
-      () => void navigate({ to: SETTINGS_PATH }),
+      landOnSettings,
       (error: unknown) => {
         const reason = error instanceof ApiError ? error.problem?.reason : undefined;
         if (reason === "expired") setRefusal(EXPIRED_SETUP);
@@ -61,7 +72,7 @@ function ManifestReturn({
         else setFailure(error);
       },
     );
-  }, [search, navigate, complete]);
+  }, [search, landOnSettings, complete]);
 
   return (
     <SettingsLayout title="Connect GitHub" description="Finishing the setup GitHub started.">
@@ -88,15 +99,15 @@ function ManifestReturn({
  * the API has a job ask GitHub which installation is the App's, then this lands on settings.
  */
 export function GitHubInstalledScreen() {
-  const navigate = useNavigate();
+  const landOnSettings = useLandOnSettings();
   const [failure, setFailure] = useState<unknown>(null);
   const sent = useRef(false);
 
   useEffect(() => {
     if (sent.current) return;
     sent.current = true;
-    refreshGitHub().then(() => void navigate({ to: SETTINGS_PATH }), setFailure);
-  }, [navigate]);
+    refreshGitHub().then(landOnSettings, setFailure);
+  }, [landOnSettings]);
 
   return (
     <SettingsLayout

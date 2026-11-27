@@ -16,6 +16,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/shared/api-client";
 import { PERMISSIONS_OF, type TestRole } from "@/shared/identity.test-util";
 
+import { OnboardScreen } from "./OnboardScreen";
 import { OrganizationScreen } from "./OrganizationScreen";
 import { PlatformScreen } from "./PlatformScreen";
 
@@ -208,6 +209,15 @@ function typeInto(input: HTMLInputElement, value: string) {
 }
 
 describe("the platform area", () => {
+  it("lets the onboarding form go without the owner's name, which it calls optional", async () => {
+    stubApi("super_admin");
+    const container = await mount(() => createElement(OnboardScreen), "/admin/onboard");
+
+    const name = container.querySelector<HTMLInputElement>('input[name="owner-name"]');
+    expect(name).not.toBeNull();
+    expect(name?.required).toBe(false);
+  });
+
   it("refuses a customer, whatever their role in their own organization", async () => {
     stubApi("owner");
     const container = await mount(() => createElement(PlatformScreen));

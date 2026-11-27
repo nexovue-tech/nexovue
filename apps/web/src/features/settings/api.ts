@@ -264,6 +264,18 @@ export interface ConnectionTestResult {
 }
 
 export const connectionsQueryKey = ["connections"] as const;
+
+/** How often a page re-reads while GitHub finishes a setup in a background job. */
+export const SETUP_POLL_MS = 5_000;
+
+/** Re-read while any setup is in progress; an expired one is final, so it stops there. */
+export function pollWhileSettingUp(
+  views: ReadonlyArray<{ state: string | null; setup_step: string | null }>,
+): number | false {
+  return views.some((view) => view.state === "setting_up" && view.setup_step !== "expired")
+    ? SETUP_POLL_MS
+    : false;
+}
 // The API waits this long for a test's result per request, as a send test does.
 const TEST_WAIT_SECONDS = 10;
 const TEST_ROUNDS = 3;
@@ -273,6 +285,7 @@ export function useConnections(enabled = true) {
     queryKey: connectionsQueryKey,
     queryFn: ({ signal }) => apiClient.get<ConnectionsOverview>("connections", { signal }),
     enabled,
+    refetchInterval: (query) => pollWhileSettingUp(query.state.data?.connections ?? []),
   });
 }
 

@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { identityFor } from "@/shared/identity.test-util";
 import { mount, settle, unmountAll } from "@/shared/router-harness.test-util";
-
+import { pollWhileSettingUp, SETUP_POLL_MS } from "./api";
 import type { CodeLocations, FixAppView } from "./FixAppPanel";
 import { FixAppPanel } from "./FixAppPanel";
 
@@ -93,6 +93,45 @@ describe("the Nexovue suggestions App (T3.3)", () => {
     expect(shown.textContent).toContain("Create the App on GitHub");
   });
 
+  it("says why a code location was not saved, rather than nothing (live test E2)", async () => {
+    stub(APP);
+    const plain = fetch as unknown as (url: URL, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) =>
+        url.pathname === `${API_PREFIX}/code-locations` && init?.method === "PUT"
+          ? new Response(
+              JSON.stringify({
+                title: "Unprocessable",
+                status: 422,
+                detail: "That folder is outside the repository.",
+              }),
+              { status: 422, headers: { "content-type": "application/problem+json" } },
+            )
+          : plain(url, init),
+      ),
+    );
+    const shown = await mount(() => createElement(FixAppPanel));
+    for (let round = 0; round < 4; round += 1) await settle();
+    const field = (name: string) => shown.querySelector<HTMLInputElement>(`input[name="${name}"]`);
+    for (const [name, value] of [
+      ["service", "checkout"],
+      ["repository", "acme/shop"],
+    ] as const) {
+      const input = field(name);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    for (let round = 0; round < 4; round += 1) await settle();
+    // Folder and path in production are left blank: both are optional.
+    [...shown.querySelectorAll("button")]
+      .find((button) => button.textContent === "Save code location")
+      ?.click();
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    expect(shown.textContent).toContain("The code location was not saved");
+  });
+
   it("offers to stop a setup still on GitHub, rather than a dead end, and stopping deletes it", async () => {
     stub({ ...APP, state: "setting_up", setup_step: "on_github", repositories: [] });
     const shown = await mount(() => createElement(FixAppPanel));
@@ -127,5 +166,57 @@ describe("the Nexovue suggestions App (T3.3)", () => {
     expect(raise?.textContent).not.toContain("check your plan");
     expect(raise?.textContent).toContain("GitHub's organization owner then accepts");
     expect(raise?.textContent).toContain("a draft's commit may not count as signed");
+  });
+});
+
+describe("drafts in a public repository (FR42; live test, 2026-11-28)", () => {
+  it("refuses until an admin allows it after a warning, and sends the allowance", async () => {
+    stub({
+      ...APP,
+      repositories: [
+        {
+          id: "r-1",
+          key: "acme/site",
+          is_private: false,
+          is_reachable: true,
+          public_allowed_at: null,
+        },
+      ],
+    });
+    const shown = await mount(() => createElement(FixAppPanel));
+    for (let round = 0; round < 4; round += 1) await settle();
+    expect(shown.textContent).toContain("Public: drafts refused until an admin allows them.");
+
+    const press = (words: string) =>
+      [...shown.querySelectorAll("button")].find((button) => button.textContent === words)?.click();
+    press("Allow drafts");
+    for (let round = 0; round < 2; round += 1) await settle();
+    expect(shown.textContent).toContain("anyone can see that something is broken, and where");
+    press("Allow drafts in acme/site");
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const calls = (fetch as unknown as { mock: { calls: [URL, RequestInit?][] } }).mock.calls;
+    const sent = calls.find(
+      ([url, init]) =>
+        url.pathname === `${API_PREFIX}/connections/c-1/places/r-1` && init?.method === "PATCH",
+    );
+    expect(sent?.[1]?.body).toBe(JSON.stringify({ public_allowed: true }));
+  });
+});
+
+describe("a setup GitHub finishes in the background (live tests C1, E2)", () => {
+  it("re-reads while a setup is in progress, and stops once it settles or expires", () => {
+    expect(pollWhileSettingUp([{ state: "setting_up", setup_step: "on_github" }])).toBe(
+      SETUP_POLL_MS,
+    );
+    expect(
+      pollWhileSettingUp([
+        { state: "working", setup_step: null },
+        { state: "setting_up", setup_step: "not_installed" },
+      ]),
+    ).toBe(SETUP_POLL_MS);
+    expect(pollWhileSettingUp([{ state: "setting_up", setup_step: "expired" }])).toBe(false);
+    expect(pollWhileSettingUp([{ state: "working", setup_step: null }])).toBe(false);
+    expect(pollWhileSettingUp([])).toBe(false);
   });
 });

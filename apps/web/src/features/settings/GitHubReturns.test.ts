@@ -84,10 +84,16 @@ async function settle() {
   }
 }
 
-async function mount(Screen: () => unknown, path: string, at: string) {
+async function mount(
+  Screen: () => unknown,
+  path: string,
+  at: string,
+  seed: (client: QueryClient) => void = () => {},
+) {
   const container = document.createElement("div");
   document.body.append(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seed(client);
   const rootRoute = createRootRoute();
   const landing = (where: string, words: string) =>
     createRoute({
@@ -117,7 +123,7 @@ async function mount(Screen: () => unknown, path: string, at: string) {
     root.render(createElement(RouterProvider, { router }));
   });
   await settle();
-  return { container, router };
+  return { container, router, client };
 }
 
 function anchor(container: Element, words: string): HTMLAnchorElement | undefined {
@@ -142,6 +148,27 @@ describe("the Fix App's return (decision 34)", () => {
     );
     expect(posted?.body).toEqual({ code: "0123", state: "s1" });
     expect(router.state.location.pathname).toBe("/settings/connections");
+  });
+
+  it("marks what Connections showed as out of date, so the new state shows unrefreshed", async () => {
+    stubApi((path) =>
+      path === "connections/github/fix-app/manifest/complete"
+        ? json({ connection_id: "c-1" }, 202)
+        : undefined,
+    );
+    const { client } = await mount(
+      FixAppReturnScreen,
+      "/settings/connections/fix-app/return",
+      "/settings/connections/fix-app/return?code=0123&state=s1",
+      (seeded) => {
+        seeded.setQueryData(["connections"], { connections: [] });
+        seeded.setQueryData(["connections", "fix-app"], { state: "setting_up" });
+      },
+    );
+
+    // Live test C1 and E2, 2026-11-27: the page kept its old state until a manual refresh.
+    expect(client.getQueryState(["connections"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["connections", "fix-app"])?.isInvalidated).toBe(true);
   });
 
   it("an expired setup link is refused in words, with Start again", async () => {

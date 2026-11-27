@@ -102,6 +102,7 @@ export function OnboardScreen() {
           name="owner-name"
           value={ownerName}
           onChange={setOwnerName}
+          required={false}
         />
         <SelectField
           stacked

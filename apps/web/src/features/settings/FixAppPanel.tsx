@@ -3,12 +3,25 @@ import { useState } from "react";
 
 import { apiClient } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
+import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
+import { formatTimestamp } from "@/shared/format/time";
+
+import { pollWhileSettingUp, usePublicAllowance } from "./api";
 
 /* F5 Step 3 (plan T3.3, T3.4, T3.6): the Nexovue suggestions App and code locations, on
  * `/settings/connections` (an admin's). Unknown values read as an em dash, never as false. */
+
+export interface FixAppRepository {
+  id: string;
+  key: string;
+  is_private: boolean;
+  is_reachable: boolean;
+  /** When an admin allowed drafts in this public repository; null while refused (FR42). */
+  public_allowed_at: string | null;
+}
 
 export interface FixAppView {
   available: boolean;
@@ -18,7 +31,7 @@ export interface FixAppView {
   permissions: Record<string, string> | null;
   granted_at: string | null;
   connection_id: string | null;
-  repositories: { id: string; key: string; is_private: boolean; is_reachable: boolean }[];
+  repositories: FixAppRepository[];
 }
 
 export interface CodeLocationView {
@@ -43,6 +56,12 @@ export const FIX_APP_WORDS = {
   lead: "Reads the code of the repositories you install it on, so a suggested fix can list files for you to confirm. Nothing is written to any repository.",
   create: "Create the App on GitHub",
   stop: "Stop setting up",
+  saveFailed: "The code location was not saved",
+  publicRefused: "Public: drafts refused until an admin allows them.",
+  publicWarning:
+    "A draft's branch in a public repository is public too: anyone can see that something is broken, and where.",
+  allowDraftsIn: (key: string) => `Allow drafts in ${key}`,
+  publicAllowedSince: (since: string) => `Public. Drafts allowed here since ${since}.`,
   install: "Install the App",
   notCreated: "The Nexovue suggestions App is not set up yet. Create it first.",
   failed: "The Nexovue suggestions App could not be loaded",
@@ -79,6 +98,7 @@ export function useFixApp() {
   return useQuery<FixAppView>({
     queryKey: FIX_APP_KEY,
     queryFn: ({ signal }) => apiClient.get<FixAppView>("connections/github/fix-app", { signal }),
+    refetchInterval: (query) => pollWhileSettingUp(query.state.data ? [query.state.data] : []),
   });
 }
 
@@ -214,9 +234,14 @@ export function FixAppPanel() {
           </div>
           <ul className="flex flex-col gap-1 text-sm">
             {view.repositories.map((repository) => (
-              <li key={repository.id} className="[overflow-wrap:anywhere]">
-                <span className="font-mono">{repository.key}</span> ·{" "}
-                {repository.is_reachable ? FIX_APP_WORDS.reachable : FIX_APP_WORDS.unreachable}
+              <li key={repository.id} className="flex flex-col gap-1 [overflow-wrap:anywhere]">
+                <span>
+                  <span className="font-mono">{repository.key}</span> ·{" "}
+                  {repository.is_reachable ? FIX_APP_WORDS.reachable : FIX_APP_WORDS.unreachable}
+                </span>
+                {repository.is_private || view.connection_id === null ? null : (
+                  <PublicDrafts connectionId={view.connection_id} repository={repository} />
+                )}
               </li>
             ))}
           </ul>
@@ -224,6 +249,71 @@ export function FixAppPanel() {
       )}
       <CodeLocationsPanel app={view} />
     </section>
+  );
+}
+
+/** FR42: a public repository refuses drafts until an admin allows them, after the warning
+ * (live test, 2026-11-28: the panel had no such control, only the issues App had). */
+function PublicDrafts({
+  connectionId,
+  repository,
+}: {
+  connectionId: string;
+  repository: FixAppRepository;
+}) {
+  const allowance = usePublicAllowance();
+  const [confirming, setConfirming] = useState(false);
+  const change = (allowed: boolean) =>
+    allowance.mutate(
+      { connectionId, placeId: repository.id, allowed },
+      { onSuccess: () => setConfirming(false) },
+    );
+  if (repository.public_allowed_at) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-ink-dim">
+          {FIX_APP_WORDS.publicAllowedSince(formatTimestamp(repository.public_allowed_at))}
+        </span>
+        <Button
+          variant="secondary"
+          pending={allowance.isPending}
+          pendingLabel="Withdrawing…"
+          onClick={() => change(false)}
+        >
+          Withdraw
+        </Button>
+      </div>
+    );
+  }
+  if (confirming) {
+    return (
+      <ConfirmPanel label={FIX_APP_WORDS.allowDraftsIn(repository.key)}>
+        <p className="max-w-prose text-ink text-sm">{FIX_APP_WORDS.publicWarning}</p>
+        <div className="mt-3 flex flex-wrap gap-3">
+          <Button
+            pending={allowance.isPending}
+            pendingLabel="Allowing…"
+            onClick={() => change(true)}
+          >
+            {FIX_APP_WORDS.allowDraftsIn(repository.key)}
+          </Button>
+          <Button variant="secondary" onClick={() => setConfirming(false)}>
+            Keep refusing
+          </Button>
+        </div>
+        {allowance.error ? (
+          <InlineFailure title="The repository was not changed" error={allowance.error} />
+        ) : null}
+      </ConfirmPanel>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="text-ink-dim">{FIX_APP_WORDS.publicRefused}</span>
+      <Button variant="secondary" onClick={() => setConfirming(true)}>
+        Allow drafts
+      </Button>
+    </div>
   );
 }
 
@@ -293,12 +383,20 @@ export function CodeLocationsPanel({ app }: { app: FixAppView }) {
           value={repository}
           onChange={setRepository}
         />
-        <TextField label={FIX_APP_WORDS.folder} name="folder" value={folder} onChange={setFolder} />
+        {/* Both optional: a blank folder is the whole repository (live test E2). */}
+        <TextField
+          label={FIX_APP_WORDS.folder}
+          name="folder"
+          value={folder}
+          onChange={setFolder}
+          required={false}
+        />
         <TextField
           label={FIX_APP_WORDS.production}
           name="production"
           value={production}
           onChange={setProduction}
+          required={false}
         />
         <div>
           <Button
@@ -309,6 +407,7 @@ export function CodeLocationsPanel({ app }: { app: FixAppView }) {
             {FIX_APP_WORDS.save}
           </Button>
         </div>
+        {set.error ? <InlineFailure title={FIX_APP_WORDS.saveFailed} error={set.error} /> : null}
       </form>
     </div>
   );
