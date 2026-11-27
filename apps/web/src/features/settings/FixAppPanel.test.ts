@@ -85,6 +85,34 @@ describe("the Nexovue suggestions App (T3.3)", () => {
     expect(shown.textContent).toContain("The Nexovue suggestions App is not set up yet.");
   });
 
+  it("offers to create the App again when a setup expired, rather than a dead end", async () => {
+    stub({ ...APP, state: "setting_up", setup_step: "expired", repositories: [] });
+    const shown = await mount(() => createElement(FixAppPanel));
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    expect(shown.textContent).toContain("Create the App on GitHub");
+  });
+
+  it("offers to stop a setup still on GitHub, rather than a dead end, and stopping deletes it", async () => {
+    stub({ ...APP, state: "setting_up", setup_step: "on_github", repositories: [] });
+    const shown = await mount(() => createElement(FixAppPanel));
+    for (let round = 0; round < 4; round += 1) await settle();
+
+    const stop = [...shown.querySelectorAll("button")].find(
+      (button) => button.textContent === "Stop setting up",
+    );
+    expect(stop).toBeDefined();
+    stop?.click();
+    for (let round = 0; round < 4; round += 1) await settle();
+    const calls = (fetch as unknown as { mock: { calls: [URL, RequestInit?][] } }).mock.calls;
+    expect(
+      calls.some(
+        ([url, init]) =>
+          url.pathname === `${API_PREFIX}/connections/c-1` && init?.method === "DELETE",
+      ),
+    ).toBe(true);
+  });
+
   it("T7.7: before raising, warns what write reaches and signed commits, and names no plan requirement (F5 decision 95)", async () => {
     stub(APP);
     const shown = await mount(() => createElement(FixAppPanel));

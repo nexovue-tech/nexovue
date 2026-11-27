@@ -42,6 +42,7 @@ export const FIX_APP_WORDS = {
   heading: "Nexovue suggestions App",
   lead: "Reads the code of the repositories you install it on, so a suggested fix can list files for you to confirm. Nothing is written to any repository.",
   create: "Create the App on GitHub",
+  stop: "Stop setting up",
   install: "Install the App",
   notCreated: "The Nexovue suggestions App is not set up yet. Create it first.",
   failed: "The Nexovue suggestions App could not be loaded",
@@ -100,6 +101,16 @@ function useStartFixApp() {
   });
 }
 
+/** Deletes a setup that never came back from GitHub, through the connections route. */
+function useStopFixAppSetup() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["connections", "fix-app", "stop"],
+    mutationFn: (connectionId: string) => apiClient.delete<null>(`connections/${connectionId}`),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: FIX_APP_KEY }),
+  });
+}
+
 function useSetLocation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -131,6 +142,7 @@ function postManifest(postUrl: string, state: string, manifest: object): void {
 export function FixAppPanel() {
   const app = useFixApp();
   const start = useStartFixApp();
+  const stop = useStopFixAppSetup();
   if (app.isPending) return <SkeletonRows rows={2} label={FIX_APP_WORDS.heading} />;
   if (app.isError) {
     return (
@@ -149,7 +161,8 @@ export function FixAppPanel() {
         {FIX_APP_WORDS.heading}
       </h2>
       <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.lead}</p>
-      {view.state === null ? (
+      {/* An expired setup offers a fresh start; the API retires the abandoned one first. */}
+      {view.state === null || view.setup_step === "expired" ? (
         <div>
           <Button
             pending={start.isPending}
@@ -171,6 +184,19 @@ export function FixAppPanel() {
             >
               {FIX_APP_WORDS.install}
             </a>
+          ) : null}
+          {view.state === "setting_up" && view.connection_id !== null ? (
+            <div>
+              {/* A setup left on GitHub is stopped here, as F22's is, rather than waited out. */}
+              <Button
+                variant="secondary"
+                pending={stop.isPending}
+                pendingLabel="Stopping…"
+                onClick={() => view.connection_id !== null && stop.mutate(view.connection_id)}
+              >
+                {FIX_APP_WORDS.stop}
+              </Button>
+            </div>
           ) : null}
           <p className="text-ink text-sm">
             {FIX_APP_WORDS.permissions}:{" "}
