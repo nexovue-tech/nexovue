@@ -283,9 +283,23 @@ test-py: gate-seed
     # A bound below CI's 60-minute job limit (the suite takes about 20): a run that hangs is
     # interrupted here, so pytest prints what was running and the step fails with its log kept,
     # instead of the job being cancelled mid-step with no log at all.
-    timeout --signal=INT --kill-after=60s 40m uv run pytest -n 6 --dist loadfile
+    # A watchdog in plain bash, not coreutils' `timeout`, which macOS does not ship: the founder's
+    # Mac runs this recipe too. pytest stays in the foreground, because a background job ignores
+    # INT; the watchdog sends INT to this shell's children (pytest prints the stacks), then KILL.
+    timed_out=$(mktemp)
+    (
+      trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+      sleep 2400 & nap=$!; wait "$nap"
+      echo yes > "$timed_out"; pkill -INT -P $$
+      sleep 60 & nap=$!; wait "$nap"
+      pkill -KILL -P $$
+    ) &
+    watchdog_pid=$!
+    uv run pytest -n 6 --dist loadfile
     code=$?
-    if [ $code -eq 124 ]; then echo "test-py did not finish in 40 minutes: a test hung; see the stacks above"; fi
+    kill "$watchdog_pid" 2>/dev/null
+    if [ -s "$timed_out" ]; then echo "test-py did not finish in 40 minutes: a test hung; see the stacks above"; code=124; fi
+    rm -f "$timed_out"
     if [ $code -eq 5 ]; then echo "no tests collected yet — see the testing policy"; exit 0; fi
     exit $code
 
