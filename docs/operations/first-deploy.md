@@ -47,6 +47,12 @@ as `sudo NEXOVUE_LAYOUT=hosted ./nexovue install`; then add `SUPER_ADMIN_*`, the
 mail provider to `nexovue.env` ([first-accounts](first-accounts.md)), with `BACKUP_S3_*` and
 `NEXOVUE_MONITORING='yes'`, and run `install` again to apply them.
 
+**Before this step:** the AI container (`scheduler-insight`) cannot reach the cloud metadata address
+`169.254.169.254`. Without that block, a broken-into AI process can ask the cloud for the server's own
+credentials. It is met by the outbound proxy (F5 T4.11), which is not built yet (founder, 2026-11-27;
+`phase-2-foundation.md`, items 36c and 37a). **Proved by:** a request to `http://169.254.169.254/` from
+inside `scheduler-insight` fails, and the provider's host still answers through the proxy.
+
 **Proved by:** `nexovue status` all healthy; the console signs in over HTTPS; a span sent to the ingest
 name appears; `/api/v1/system/info` names the version and the deployment.
 

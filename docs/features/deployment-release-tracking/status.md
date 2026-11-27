@@ -931,7 +931,8 @@ review gate in `plan.md` are the lifecycle's, not done here.
    **Done 2026-11-22 (founder, foundation item 36b).** See *Decisions 2 and 3, built 2026-11-22*.
 4. **Allow the vendor sites for the competitor reading.** **Mostly done 2026-11-22:** the hosts were allowed and ten of eleven rows
    opened (research section 10). **Left:** Observe (`docs.observeinc.com` refused; `www.observeinc.com` now redirects to
-   `www.snowflake.com`, refused); allow `docs.observeinc.com` and `www.snowflake.com`, or drop the row. Original text: 12 hosts were refused in this build (research section 10). The
+   `www.snowflake.com`, refused); allow `docs.observeinc.com` and `www.snowflake.com`, or drop the row. **Approved by
+   the founder, 2026-11-27 (foundation item 37h): the row is dropped** (*Founder answers, 2026-11-27*). Original text: 12 hosts were refused in this build (research section 10). The
    rows marked *extract* and every price except Datadog's need a second read before any public claim. Allow `signoz.io`,
    `docs.coroot.com`, `coroot.com`, `sentry.io`, `docs.sentry.io`, `clickhouse.com`, `docs.honeycomb.io`,
    `docs.newrelic.com`, `docs.observeinc.com`, `grafana.com`, `docs.dynatrace.com`, `openobserve.ai` in the build's network
@@ -1507,6 +1508,10 @@ Every open question in this feature's documents was checked against the code, th
   check alone means keep and pay if it fits the 16 GB server (`docs/self-hosting/sizing.md`); a correctness check means time
   comparison only. It stays the founder's, and only if the gate fails.
 - **Still outside F28:** F3's `plan.md:125` (T1.4) must say it calls D56's reads instead of adding them.
+
+## Founder answers, 2026-11-27
+
+Approved by the founder, 2026-11-27, as recommended in pull request #25 (foundation item 37h): competitor rows taken from vendor hosts that could not be reached are dropped. **Observe's row is removed from `research.md` section 10** (`docs.observeinc.com` refused; `www.observeinc.com` redirects to `www.snowflake.com`, also refused). No claim may rest on Observe until its own page is read. Section 10's other ten rows were opened on 2026-11-22 and stay. The claims check in `plan.md` stays unticked: it also asks for a refresh within two weeks of announcing.
 
 ## Founder answers, 2026-11-02
 

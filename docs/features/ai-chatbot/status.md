@@ -505,7 +505,7 @@ Stores: `f4s3-postgres` (45432, migrated by the real `setup` step to 0073; its l
 
 ## Next action
 
-**Step 8 is in progress (2026-11-22) and awaits the founder's review of its diff** on `wt/f4s8`, including the shared `SettingsLayout.tsx` change; then the open decisions 63 to 67, the launch brief's approval (T8.5), and after Phase 2 the real bed runs (T8.0) and AC80's two fault-bed runs (T8.1).
+**Step 8 is in progress (2026-11-22) and awaits the founder's review of its diff** on `wt/f4s8`, including the shared `SettingsLayout.tsx` change; then the open decisions 63 to 65 and 67 (66 approved 2026-11-27), the launch brief's approval (T8.5), and after Phase 2 the real bed runs (T8.0) and AC80's two fault-bed runs (T8.1).
 
 **Step 4 (code) is built (2026-11-22) and awaits the founder's review of its diff and a commit** on `wt/f4s4`; then the open decisions 50 to 62, and after Phase 2 the founder's real runs (the commands under *Step 4 (code)*), the accuracy bar after the tune run, D83 applied to the report and recorded here, and the constants changed from the cost table. Earlier:
 
@@ -601,7 +601,7 @@ Raised in Step 8:
 63. **The unclaimed alert reads the question's row, not the job's.** The design says "unclaimed `assistant` jobs older than 2 minutes", which can never fire: a chat job leaves the ready count once its queue clock runs out, at least 120 s (`MIN_QUEUE_SECONDS`), and chat's sweep runs in `scheduler-insight`, so with that role stopped questions simply stay `queued`. **Recommended:** accept, and correct the design's wording.
 64. **AC80's detection half has no measuring tool on the fault bed.** `detection-scale watch` measures every minute's judging, but only for AC29's generated tenants. **Recommended:** give `chat_load run` an optional Postgres reader of `detection_project_runs` and the job queue, so each project job's due-to-done time is recorded beside the load; fix its pass rule (finished before the next sweep) before any run.
 65. **`scheduler-insight`'s 768 MB stays.** The measured peak was 318 MiB PSS with chat alone on a development VM. **Recommended:** keep it until a real server's container is read with wording and suggested fixes beside chat; lower it then if the margin holds.
-66. **`CHAT_DISCLOSURE_VERSION` raised from 3 to 4** for BR18's sentence on the consent step, by the rule its comment states (the preview's words changed); every owner agrees again. Pre-deployment, it costs nothing. **Recommended:** accept.
+66. **`CHAT_DISCLOSURE_VERSION` raised from 3 to 4** for BR18's sentence on the consent step, by the rule its comment states (the preview's words changed); every owner agrees again. Pre-deployment, it costs nothing. **Recommended:** accept. **Approved by the founder, 2026-11-27 (foundation item 37f):** version 4 stands.
 67. **AC80's alert half needs a second full fault-bed run** (about 11.5 days) with chat looping, compared with the AC36 run. **Recommended:** run it right after the AC36 run on the same machine, with the same seed and order, so the injections pair; or the founder accepts a shorter labelled demo (one fault, one round) that proves the path and not the result.
 
 ## Blocked
@@ -1060,6 +1060,15 @@ A second panel tried to break each answer above against the code, the foundation
 **Classification:** all three founder items stay the founder's (scope that changes what is sold, a public promise, public exposure about named companies). No agent decision was found to be a founder matter.
 
 **Not checked:** whether Ollama truncates an over-long prompt silently or with an error (T2.0's first real call); whether `gpt-oss:20b` with a reduced stack actually fits (Step 4's first run).
+
+## Founder answers, 2026-11-27
+
+Approved by the founder, 2026-11-27, as recommended in pull request #25 (foundation item 37):
+
+- **Open decision 66:** `CHAT_DISCLOSURE_VERSION` 4 stands; every owner agrees again. Pre-deployment, no agreement exists to end.
+- **F5 open decision 131, which names F4's `insight/assistant_answer.py`:** its `_MARKDOWN_LINK`, `_HTML_TAG` and `_HOST_LIKE` patterns are made linear in a separate change after Phase 2. No code changed here.
+
+Open decisions 63, 64, 65 and 67 stay open.
 
 ## Founder answers, 2026-11-02
 

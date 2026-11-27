@@ -44,7 +44,7 @@ When a finding opens, Nexovue can say what is wrong and, once F3 exists, what pr
 - **Getting help from a coding tool means copying context by hand.** "Too much manual input of required context" is the top barrier in Grafana's survey
   (foundation, section 12; seller-published and not specific to small companies). Telemetry is also unsafe to paste into an agent with a shell, because anyone
   with a browser key can write words into it (`alerts/payloads.py:204`). **Rung 2 reduces this copying and does not end it:** the brief holds facts, and the engineer still chooses whether to add the raw stack, on purpose, because it is attacker-written (D19).
-- **Rivals already offer a fix.** Sentry, Datadog, Better Stack, OneUptime, Middleware, Grafana and incident.io each describe drafting a change for a pull request (`research.md`, *How competitors do it*, read 2026-11-02). A
+- **Rivals already offer a fix.** Sentry, Datadog, OneUptime and Grafana each describe drafting a change for a pull request (`research.md`, *How competitors do it*, read 2026-11-02 and 2026-11-22; rivals whose pages could not be read again were dropped on 2026-11-27). A
   self-hosted product whose chain ends at "here is the likely cause" stops one step short of what buyers will compare it with.
 - **The stakes are unusual.** This is the one place in Phase 2 where words from a model can become code that runs. Opening a pull request probably runs the customer's CI, possibly with
   its secrets, before anyone has reviewed it (`research.md`: inferred from GitHub's documents, not tested).
@@ -680,7 +680,6 @@ A small script (T2.11) must fail if a requirement or acceptance criterion has no
 | "Why not assign it to Copilot?" | Copilot's cloud agent has stronger checks in places: a real workflow hold, and blocking the requester from approving. F5 starts from Nexovue's stored evidence on the finding, with no agent loop, and shows the exact file list first |
 | "Why not Seer?" | Seer is ahead on code context and iteration, and has stopping points and an editable plan. It needs hosted source control and Sentry's own pricing. F5 runs beside your own telemetry store, and shows each file before it leaves |
 | "Why not OneUptime?" | It is close in shape: open source and self-hostable, with an agent container, own or local models, and on your own Runner it builds and tests before the pull request. It reaches more git hosts. F5 does not build or test. F5 shows the file list before sending, and its rules are published |
-| "Why not Better Stack?" | It says it writes and validates a fix (method unstated), and opens the pull request from its own App, on GitHub or GitLab. F5 does not validate by running anything, and says so |
 | "Can I see the exact files before they leave?" | Yes. Nothing is sent until you agree to the list |
 | "Could this put a backdoor in my code?" | Yes, a subtle one could pass our rules. Treat it as an outside contribution |
 | "Does the provider keep or train on my code?" | Nexovue cannot see or control that. It follows your contract with them. The consent screen says so |

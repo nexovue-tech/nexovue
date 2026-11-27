@@ -280,10 +280,10 @@ The founder reviews Step 2's diff; then commit. The founder's checks after Phase
 
 **From Step 7, 2026-11-22:**
 
-22. **AC70 cannot hold with the page's one DOM order.** On 390 by 664 the case and signal controls (F22 D86, NFR8: work before evidence) come before the explanation, so *Look next* is below the fold; FR14 says it sits directly under the header line with no cause. The one link in view, the service in the header, carries no window. Seen by Playwright, kept as `test.fail`. **Recommendation:** make the header's service link carry the finding's window (`from`, `to`, `project`, `finding`; `/services/$name` already reads them): small, above the fold at any title length, no reorder of F22's page. Alternative: move *Look next* above the case, which reopens D86.
+22. **AC70 cannot hold with the page's one DOM order.** On 390 by 664 the case and signal controls (F22 D86, NFR8: work before evidence) come before the explanation, so *Look next* is below the fold; FR14 says it sits directly under the header line with no cause. The one link in view, the service in the header, carries no window. Seen by Playwright, kept as `test.fail`. **Recommendation:** make the header's service link carry the finding's window (`from`, `to`, `project`, `finding`; `/services/$name` already reads them): small, above the fold at any title length, no reorder of F22's page. Alternative: move *Look next* above the case, which reopens D86. **Approved by the founder, 2026-11-27 (foundation item 37e): the header link carries the time window.** Not built yet; AC70's `test.fail` stays until it is.
 23. **Candidate ADR: a likely cause is released rule by rule, only after a bar recorded before the report rounds** (FR50, A60, A83, A85; built, `CAUSE_BAR_RECORDED`). Material, settled and founder-approved, so it meets the ADR test, but ADR numbers are given at commit and parallel builders may collide. **Recommendation:** file it as the next free number when this is committed.
 24. **Two document-only gaps outside this feature:** F6's `status.md` and FR16 do not mention that a browser key can open a finding (F28 owns the change, built); and T0.2 (`tools/spec-check`, fails when an acceptance criterion is cited by no task) was never built, so the check was a one-off script (needs `pyproject.toml`'s two path lists, which other builders also edit). **Recommendation:** do both in the commit that merges the branches.
-25. **Security S1, S2, S4** (`readiness.md`): S2 is decision 7 again; S1 waits on F5 T4.11 (item 36c); S4 is a one-line save-time refusal of `0.0.0.0`. **Recommendation:** S4 now, in the hardening pass; the others as already decided.
+25. **Security S1, S2, S4** (`readiness.md`): S2 is decision 7 again; S1 waits on F5 T4.11 (item 36c); S4 is a one-line save-time refusal of `0.0.0.0`. **Recommendation:** S4 now, in the hardening pass; the others as already decided. **S1, approved by the founder, 2026-11-27 (foundation item 37a):** blocking `169.254.169.254` from `scheduler-insight` is a requirement before the first deploy, with F5 T4.11's proxy (`docs/operations/first-deploy.md`, step 5). S2 and S4 stay open.
 26. **Decisions 11 and 13 (owners' names on the consent view; FR26's quiet line)** are recommendations to build in the hardening pass; not built, since the founder has not said yes.
 
 **From Steps 2c and 6, 2026-11-21:**
@@ -902,6 +902,14 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 ## Founder approval, 2026-11-02
 
 The founder approved all eight shared founder decisions in [`phase-2-foundation.md`](../../product/phase-2-foundation.md#founder-decisions), each as recommended. Decisions this feature raises in its own spec are still open. The documents stay Proposed until the founder approves the spec.
+
+## Founder answers, 2026-11-27
+
+Approved by the founder, 2026-11-27, as recommended in pull request #25 (foundation item 37):
+
+- **Open decision 22:** the header's service link carries the finding's window (`from`, `to`, `project`, `finding`). To build in the hardening pass; AC70's `test.fail` comes off then.
+- **Security S1 (open decision 25):** the AI container must not reach `169.254.169.254`. A requirement before the first deploy, met by F5 T4.11's outbound proxy; not built now (`docs/operations/first-deploy.md`, step 5).
+- **F5 open decision 131, which names F3's `ai/validate.py`:** its `URL`, `EMAIL` and `_DOMAIN` patterns are made linear in a separate change after Phase 2. No code changed here.
 
 ## Founder answers, 2026-11-02
 

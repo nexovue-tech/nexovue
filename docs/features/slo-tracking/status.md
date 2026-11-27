@@ -184,10 +184,9 @@ Each row was read from the rival's own page by `curl` from the shell on 2026-11-
 | Dynatrace | SLOs exist, with burn rate and error budget | the SLO page defines "Error budget burn rate" | docs.dynatrace.com/docs/deliver/service-level-objectives | Read only for existence. Nothing else about Dynatrace may be claimed |
 | Sentry | No SLO feature | no "SLO" or "service level" on the uptime-monitoring page read | docs.sentry.io/product/monitors-and-alerts/monitors/uptime-monitoring/ | **Not confirmed absent.** One page was read and Sentry's docs search is not reachable from here |
 | SigNoz | No native SLO | `signoz.io`'s home, docs index and pricing pages hold no SLO text, and the docs sitemap's addresses hold none (only `collecting_syslogs` and `slog-to-signoz` contain the letters) | signoz.io, signoz.io/docs/sitemap.xml | **Weak support only.** The sitemap may be partial |
-| SigNoz | Issue 658 still open, last comment 2026-10-23 | **Unreachable:** `github.com` is not an allowed host for the shell, and the repository is not one this session may read | github.com/SigNoz/signoz/issues/658 | **Not re-read.** The foundation's "SigNoz's lack is the only rival gap supported, as of 2026-11-02" stands as of that date only, and may not be dated later |
-| Elastic | SLO burn-rate rules | **Unreachable:** `elastic.co` is not an allowed host | elastic.co/docs/solutions/observability/incident-management/create-an-slo-burn-rate-rule | **Not re-read.** The 2026-11-02 row stands as a search-summary fact and may not be used |
-| Better Stack | Monthly "Compound SLA" and "Average SLA" reports | **Unreachable:** `betterstack.com` is not an allowed host | betterstack.com/docs/uptime/reporting | **Not re-read.** The 2026-11-02 row may not be used |
 | Every rival | How each groups alerts | no rival's page read states that a burn alert is grouped with other alerts. Coroot: "An incident will be triggered"; OpenObserve: nothing on grouping; Honeycomb: nothing; Datadog: see above | the pages above | **Unverified for every rival.** Foundation's "the others do not suppress" is not a fact this pass supports, so no comparison of noise may be made |
+
+**Rows dropped 2026-11-27 (founder, foundation item 37h):** SigNoz issue 658, Elastic's burn-rate rules and Better Stack's reports. Their hosts could not be reached on 2026-11-22, so no row may rest on them.
 
 ### T6.9: launch text against *Must not be claimed*, the founder's list to review
 
@@ -209,7 +208,7 @@ Each row was read from the rival's own page by `curl` from the shell on 2026-11-
 | "Specific to nexovue" or "only nexovue" | launch text | Not said. The claims table shows Coroot and OpenObserve list SLOs in their free self-hosted products (re-read 2026-11-22), and Datadog's monitor-based SLOs take Synthetic tests |
 | A rival fact | launch text | **Only a row of the claims table marked Matches may be used**; rows marked Not re-read, Unknown or Unreachable may not |
 
-**The foundation's section 12 line "SLOs on the free product with no small count limit. SigNoz's lack is the only rival gap supported, as of 2026-11-02" must not be dated later until issue 658 is read again.** The founder signs the launch sheet (T6.12); this table is the reviewed list for it.
+**The foundation's section 12 line "SLOs on the free product with no small count limit" was dropped on 2026-11-27 (item 37h), since issue 658 could not be read again.** The founder signs the launch sheet (T6.12); this table is the reviewed list for it.
 
 ## Step 5b, built 2026-11-21
 
@@ -533,7 +532,7 @@ The founder's own decisions from 2026-11-02 stay answered (*Founder answers*, be
 - **The suggestion has never been tried on real traffic.**
 - **`sumForEachMergeIf` is untested.** T1.3 is the first check.
 - **Demand.** Nothing shows SLOs win a purchase. Coroot and OpenObserve give this away on self-hosted, so it is a gap-filler against SigNoz, as of 2026-11-02, and that gap may close. The gate comes before the alert work.
-- **Competitor facts** were re-read from the pages on 2026-11-22 (Step 6, T6.8). Elastic, Better Stack and SigNoz issue 658 could not be reached and stay unusable; Grafana's self-managed status and any rival's alert grouping are unknown.
+- **Competitor facts** were re-read from the pages on 2026-11-22 (Step 6, T6.8). Elastic, Better Stack and SigNoz issue 658 could not be reached, and their rows were dropped on 2026-11-27 (founder); Grafana's self-managed status and any rival's alert grouping are unknown.
 - **No test server, by the founder's choice** (foundation item 9, 2026-11-02). AC49's weeks-long run waits for Oracle after deployment and reads "not run" until then, so F19 launches unproved on faults. AC50 runs on the Mac's Docker; the 16 GB server is confirmed only on Oracle, whose free allowance (2 Arm CPUs, 12 GB) is below that size.
 - **13 months on Free gives away what a rival charges for** (Grafana Cloud keeps 13 months on its paid plan). Approved knowingly on 2026-11-02.
 - **AC38's outside tester** comes from the conversation round (spec D64). If nobody there agrees to a later screen test, it reads "not proved".
@@ -882,6 +881,10 @@ Every open question in research, spec, design, plan and status was checked again
 - **Held unchanged:** founder decision 2 (legal), D62, D65, and the foundation pointers for items 4, 6, 7 and 8. P2 still has no owner, which blocks Step 4. Naming one is the founder's under foundation item 7.
 
 Also read for the gate: [SigNoz issue 658](https://github.com/SigNoz/signoz/issues/658) is still open on 2026-11-02; its last activity is an outside offer of a design proposal on 2026-10-23. Not changed: plan T6.8, T6.10 and T6.12 name the founder as a signer or as naming an owner once a customer exists. Those are approval steps at the time, not open questions.
+
+## Founder answers, 2026-11-27
+
+Approved by the founder, 2026-11-27, as recommended in pull request #25 (foundation item 37h): competitor rows taken from vendor hosts that could not be reached are dropped. Removed from T6.8's claims table above: SigNoz issue 658 (`github.com`), Elastic's SLO burn-rate rules (`elastic.co`) and Better Stack's monthly reports (`betterstack.com`). The foundation's section 12 claim 5, which rested on issue 658, is dropped too. `research.md` keeps its 2026-11-02 reading as history; launch text uses only rows marked Matches.
 
 ## Founder answers, 2026-11-02
 

@@ -156,13 +156,8 @@ not that the product lacks it.
 |---|---|---|---|---|
 | **Sentry Seer Autofix** | Root cause, solution, code, then pull request iteration | Per project: stop after Root Cause, Plan, or PR Drafted. People can remove plan steps and add instructions. Local checkout. Handoff to coding agents, on GitHub only. An organization can disable code generation | GitHub.com and GitLab.com only, no self-hosted source control. Automatic runs need 10+ events in the last 14 days and a "fixability score" | **$40 per active contributor a month** (2+ pull requests in an enabled repository). GitHub bots not counted |
 | **Datadog Bits** | Generates fixes **by default** for code-related causes (can be turned off). Bits Code iterates on CI logs and comments | "Bits Code never auto-merges". Guardrails Ask or Deny, in Preview | **Lists GitHub Enterprise Server and GitLab Self-Managed** ([Bits Code](https://docs.datadoghq.com/bits_ai/bits_code/), read 2026-11-02). Not on US government sites | AI Credits; roughly $6.50 to $8.45 an investigation by arithmetic, from competitors research |
-| **incident.io** | "The only change Investigations can make to your systems is a pull request you review and merge yourself" | Person merges | Sandboxed containers torn down after use; providers cannot store data: vendor claims | Add-on; no price shown |
-| **Splunk AI SRE** | A Claude Managed Agent proposes and opens a pull request, in a "disposable, network-isolated sandbox" | Engineer reviews | **Remediation is in Alpha.** Source is a blog post, no technical documents found | Not stated |
-| **Rootly** | Remediation steps and draft pull requests | "Every change requires explicit human sign-off" | Docs warn it does not filter write-capable MCP tools (carried) | By quote |
-| **OneUptime** (open source, self-hostable) | Starts fixes on a click (**Fix with AI**, **Start task**). Can also start from investigations. Automatic fixing for incidents: "Fixing starts off, for new projects too". On a Runner you host, "builds and tests its change before the pull request opens". A Global Runner runs no commands | "A person reviews and merges every one". Shows files read as it works, with a log; attached context is shown as sent. **A preview before sending was not found on the page read, which proves nothing** | GitHub through its App; GitLab, including self-managed; Forgejo and Gitea, including self-hosted. Own or local models; with those, "your code never leaves your infrastructure". Its production-review step says a diff and title "are data to OneUptime AI, never instructions". Read [ai-agent](https://oneuptime.com/docs/en/ai/ai-agent), 2026-11-02 | Apache 2.0, except `ee/`; Community edition "Free and open source" ([README](https://github.com/OneUptime/oneuptime)). Connecting a repository "Needs the Growth plan", stated for Cloud; **whether the self-hosted fix path is free is not stated, and nothing was installed** |
-| **Better Stack AI SRE** | "Writes and validates a minimum-viable fix"; on a click, "will autonomously submit a pull request" from its own App. Runs "in an isolated environment for each conversation" | A person clicks. **How it validates is not stated** | GitHub and GitLab. Read [error pull requests](https://betterstack.com/docs/ai-sre/writing-code/error-pull-requests/), 2026-11-02 | Not read |
+| **OneUptime** (open source, self-hostable) | "When you turn fixing on, it can open a pull request with a fix for your team to review" ([README](https://github.com/OneUptime/oneuptime), read again 2026-11-22) | "For your team to review" | Its AI agent and pricing pages could not be reached on 2026-11-22, so nothing from them is kept here (founder, 2026-11-27) | Apache 2.0, except `ee/`; Community edition "Free and open source"; Enterprise edition "Production use needs a license". **Whether the self-hosted fix path is free is not stated, and nothing was installed** |
 | **Grafana Managed Sandboxes** | The agent "runs tests and builds, and commits to a branch" in a sandbox, and shows the diff with Create PR. Public preview | "Grafana never merges or deploys". Per repository: approval, or automatic drafts for verified private repositories | The page does not say Cloud only; its docs link points to a Grafana Cloud path. Read [what's new, 2026-10-19](https://grafana.com/whats-new/2026-10-19-grafana-managed-sandboxes--from-root-cause-to-pull-request--without-leaving-grafana/), 2026-11-02 | Not read |
-| **Middleware OpsAI** | "Open a pull request for review", and "a ready-to-apply fix". Also an Autofix that applies "fixes on Kubernetes without waiting on a review" | Review implied for standard fixes; who reviews is not stated | GitHub and Bitbucket named. Read [overview](https://docs.middleware.io/opsai/opsai_overview), 2026-11-02 | Not read |
 | **New Relic Autopilot** | "Recommends actions but does not take them" (carried) | Person | No evidence found of it opening a pull request | Compute units |
 | **OpenObserve** | Remediation plans. No pull requests on the page read (carried) | Not stated | AI is in Enterprise, not AGPL | Free licence to 50 GB/day; above that, sales |
 | **HolmesGPT** | "Can even open PRs to fix what it finds"; also says "read-only access" by design | Approval not stated | The README does not reconcile these | Free, own model |
@@ -173,12 +168,13 @@ not that the product lacks it.
 
 Each rival's own page was fetched again on 2026-11-22 from the build session with `curl` (the
 web-fetch tool cannot resolve hosts outside the session's allowed network). **Six hosts could not
-be reached at all**, so their rows above stand as read on 2026-11-02 and are **not re-dated**:
+be reached at all**, so their rows could **not be re-dated**:
 `incident.io`, `docs.rootly.com`, `oneuptime.com` (both the AI agent page and pricing),
 `betterstack.com`, `docs.middleware.io` and `www.splunk.com`. Each refused the same way: the
 session's outbound proxy answered `CONNECT` with 403, and the web-fetch tool could not resolve
-the name. That is this session's network, not the vendor; someone with open network must read
-them before launch.
+the name. That is this session's network, not the vendor. **Dropped 2026-11-27 (founder, foundation
+item 37h):** the rows of incident.io, Rootly, Better Stack, Middleware and Splunk are removed from the
+table above, and OneUptime's keeps only what its README says.
 
 | Product | Page read 2026-11-22 | What it says now | Change since 2026-11-02 |
 |---|---|---|---|
@@ -193,8 +189,8 @@ them before launch.
 | **OpenSRE** | [README](https://github.com/Tracer-Cloud/opensre) | "pushes a fix for you to review"; "Self-hosted, with your own models"; "Public Alpha" | Confirmed from its own page (was carried) |
 
 **AC52's release item still stands:** rival claims must be dated within 30 days of launch. No
-launch date is set, so these rows need reading once more in the 30 days before it, the six
-unreachable ones first. Nothing here changes what F5 may say (`spec.md`, *What may be said*); it
+launch date is set, so these rows need reading once more in the 30 days before it. A dropped
+rival returns only when its own page is read. Nothing here changes what F5 may say (`spec.md`, *What may be said*); it
 removes one hedge (Grafana is Cloud only) and changes one price (Sentry after 8 December 2026).
 
 ### The reference design is not an observability product
@@ -216,7 +212,7 @@ removes one hedge (Grafana is Cloud only) and changes one price (Sentry after 8 
 - **Aurora and OneUptime describe injection measures; no product checked was found publishing injection test results for this step.**
 - **Seer needs hosted source control, and names self-hosted as unsupported. Datadog and OneUptime reach self-managed source control.** F5 starts with GitHub.com only, so that gap is F5's own.
 - Most products gate on evidence: Seer's fixability score, Rootly's "Inconclusive". *Superseded for F5 by D35.*
-- **Verifying before the diff is a growing group:** Grafana, OneUptime's own Runner, Better Stack (method unstated). Splunk and incident.io describe using sandboxes; the pages read do not say they verify a change. F5 runs nothing, and has no answer except small scope and saying so.
+- **Verifying before the diff is a growing group:** Grafana, OneUptime's own Runner. F5 runs nothing, and has no answer except small scope and saying so.
 - **Draft plans.** "Draft pull requests are available in public repositories with GitHub Free and GitHub Free for organizations", GitHub Pro and legacy per-repository plans, and in public and private repositories on GitHub Team and Enterprise Cloud ([GitHub's pull requests API page](https://docs.github.com/en/rest/pulls/pulls), read 2026-11-02).
 - **Copilot and models.** GitHub's pages read list custom API keys for Copilot Chat, the CLI and IDEs. A statement that they reach the cloud agent was not found, so "on the customer's chosen model" is not used as a contrast.
 
@@ -263,7 +259,7 @@ removes one hedge (Grafana is Cloud only) and changes one price (Sentry after 8 
 | **M1.** A task brief to copy into the customer's own coding agent, from facts | F3's facts. No AI call, no source sent, no write | Cheap. Respects tools people already have. Seer has a similar handoff. Partly answers "why not just use Claude?" | Their agent is outside Nexovue's fence, and docs must say so | **Build** |
 | **M2.** Model reads a fixed source pack and returns validated edits | Consent, read token | Model steers nothing. Cost and privacy are bounded. Testable | Misses context outside the pack; more refusals | **The first version** |
 | **M3.** Agent loop with read-only repository tools | As M2, plus tools | Better context, likely higher quality | Injected text chooses what is read next. Costs more and multiplies steps | Later, if the bed shows M2's misses are missing context |
-| **M4.** Sandboxed agent that runs tests | A disposable, network-isolated runner | The market's direction (Grafana and OneUptime's own Runner run tests; Splunk and incident.io describe sandboxes). Real test evidence | Runs customer code with its dependencies on a customer's server. The 16 GB sizing, "two images" and the small-team setting all oppose it. METR says passing is not proof | **Do not attempt** in Phase 2 |
+| **M4.** Sandboxed agent that runs tests | A disposable, network-isolated runner | The market's direction (Grafana and OneUptime's own Runner run tests). Real test evidence | Runs customer code with its dependencies on a customer's server. The 16 GB sizing, "two images" and the small-team setting all oppose it. METR says passing is not proof | **Do not attempt** in Phase 2 |
 | **M5.** Automatic runs for every eligible finding | As M2 | Fix is ready when you arrive. Datadog's default | Spends budget and discloses source without anyone asking. Attackers can trigger it | **No** |
 
 ### What the model returns

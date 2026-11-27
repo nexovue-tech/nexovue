@@ -621,7 +621,7 @@ These must stay in the future tense until shipped (competitors research).
 2. **Facts stay when AI goes.** The explanation's facts work with AI off, because correlation holds no model.
 3. **A fence you can read.** The model cannot write, can reach no telemetry database or repository key (not "no route to GitHub": its network is open unless the optional outbound limit is on), and this is held by tests on an AGPL codebase anyone may read. Rivals describe human approval; the pages read did not describe this separation, though they may have it. **Say what Nexovue does, never what others lack.**
 4. **Free case management on your own server**, with no per-person charge from nexovue. No saving comparison: rivals have free plans (F22).
-5. **SLOs on the free product with no small count limit.** SigNoz's lack is the only rival gap supported, as of 2026-11-02. **Re-read 2026-11-22: unsupported.** SigNoz's pricing page and docs name no SLO feature or its absence, and its Terraform page lists an "SLO Widget". Do not use this claim until a SigNoz page is read (F20 `research.md`, *Re-read for T11.5*).
+5. *Dropped 2026-11-27 (founder, item 37h).* "SLOs on the free product with no small count limit" rested on SigNoz's issue 658, which could not be read again on 2026-11-22. Not to be used.
 6. **Published fault scores and injection results**, if the founder agrees. Coroot and HolmesGPT publish results on their own test sets (F3 research), so this meets a norm on faults; no vendor found publishes injection results. They would be demo results, and must say so.
 
 ### Must not be claimed
@@ -775,6 +775,21 @@ Each was asked in a feature's spec, which holds the full recommendation. "As rec
 34. **The founder, 2026-11-21.** **F20's reliability-target panel (T10.2) is built, and F19 gains the reader it needs:** the budget function, a by-name lookup of a target inside a project, and `GET /slos/{id}/budget`, with their read-surface and authorization entries. It is added to F19's plan as a new step before F19's hardening step, and F20's T10.2 is re-planned onto it.
 35. **The founder, 2026-11-22.** Answers to the open questions of that day, each the recommendation put to him: **(a)** F4 Step 4 is built now with fake providers, as item 31 says; its real runs are the founder's after Phase 2. **(b)** F5 decision 95: the raising warning's sentence that private repositories need GitHub Team or Enterprise Cloud for drafts is removed, since GitHub's changelog of 1 May 2025 puts draft pull requests in every repository on every plan (D62). **(c)** F5 decision 59: a deleted project ends its stored code (ADR-094), kept, and BR9's table gains the row. **(d)** ClickHouse's backup manifest counts from the dump, as Postgres's does since the backup-manifest-counts change. **(e)** The job hand-out fix pushed in baf5e47 without his prior word (a deleted organization no longer blocks every tenant's jobs) is kept.
 36. **The founder, 2026-11-22, later.** Each the recommendation put to him: **(a)** F28 open decision 2: when failing spans carry no exception, Errors by version reads "No exceptions were recorded", not "No errors in either version". **(b)** F28 open decision 3: the comparison's requests a minute divides by the minutes that had traffic, not the whole window. **(c)** F5 decision 43: the optional outbound limit (T4.11, a Squid forward proxy as the AI role's only way out) is built later, in the hardening before the first deploy, not now. **(d)** F5 decision 78, after it was explained: a way out in AC21's safety gate is anything the rules exist to stop reaching a request or a person; a planted address copied onto a new line (A3) and a one-character logic change (A4) count as reached a person, reported as what they are, not as ways out.
+37. **Approved by the founder, 2026-11-27.** The open decisions listed in pull request #25, each as recommended:
+    **(a)** The AI container (`scheduler-insight`) must not reach the cloud metadata address `169.254.169.254`. **A
+    requirement before the first deploy,** met by the outbound proxy of item 36c (F5 T4.11), built in the hardening before
+    that deploy; not built now (*F3 as built*, 1; `docs/operations/first-deploy.md`, step 5). **(b)** The two clauses
+    added to `docs/engineering/testing.md` in the CI fixes of 2026-11-22 stay: a live test uses a database of its own when
+    it runs a job the stack's own sweep also hands out, or commits a notification already due. **(c)** `testing.md` gains
+    the provision-lock rule (commit 60d11f6b). **(d)** One nexovue install per Postgres server, stated in
+    `docs/self-hosting/install.md`, *What you need*. **(e)** F3 open decision 22: the header's service link carries the
+    finding's time window. **(f)** F4 open decision 66: `CHAT_DISCLOSURE_VERSION` 4 stands. F4's decisions 63, 64, 65
+    and 67 stay open. **(g)** F5 open decisions 120 (44 px touch targets on shared components) and 131 (linear-time
+    wording-check patterns in F3 and F4) each become a separate change after Phase 2. F5 decision 125 stays open: the
+    founder reads the customer page and wording list W1 to W14 himself. **(h)** Competitor rows taken from vendor hosts
+    that could not be reached are dropped: F28 `research.md` section 10 (Observe), F19's claims table (SigNoz issue 658,
+    Elastic, Better Stack), F5 `research.md` (incident.io, Rootly, Better Stack, Middleware, Splunk; OneUptime cut to its
+    README), and section 12's claim 5 here. Each feature's `status.md` records its removal.
 
 ### What A and B change
 
@@ -829,7 +844,8 @@ it is recorded:
    cloud metadata address `169.254.169.254:80`, which the fence's own run records as open (CI run 44996057046, on
    `b4d7c87`: AC42 5 passed with that warning). The application's address guard stops the code F3 wrote; it does not stop a
    process that has been broken into and opens its own socket. Closed by the operator's host rules (the customer page,
-   F3 T4.8) or the optional outbound proxy (F5 T4.11, item 36c), both still to build. Until then, *a fence you can read*
+   F3 T4.8) or the optional outbound proxy (F5 T4.11, item 36c), both still to build. **Approved by the founder,
+   2026-11-27 (item 37a): blocking `169.254.169.254` is required before the first deploy, with that proxy.** Until then, *a fence you can read*
    (section 12) says "no telemetry database or repository key", never "no outbound route".
 2. **Two Postgres rights no grant takes away** (F3 open decision 7): `NOTIFY` needs no privilege, and a session may
    change its own timeouts. A broken-into AI process can fill the notification queue or hold a transaction open, which stops
