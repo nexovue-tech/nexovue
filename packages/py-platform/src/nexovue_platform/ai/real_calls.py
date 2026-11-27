@@ -1,8 +1,9 @@
 """The dated record of real calls, one per wire format (spec AC77; plan T4.10).
 
 A format is offered on `/settings/ai` only once it has completed one real call, reporting
-token counts, recorded here with its date. **None has yet** (2026-11-11): each needs a real
-account, and the founder's free-tier key is foundation item 4. `tools/ai-eval/real_call.py`
+token counts, recorded here with its date. The first, `openai_chat` through a local Ollama, ran
+in the founder's live test on 2026-11-27 (`docs/changes/phase-2-live-test`); the other formats
+still need a real account. `tools/ai-eval/real_call.py`
 makes the call and prints the line to add here, by hand, in the change that records it, so a
 record is reviewed like any other code.
 
@@ -27,7 +28,11 @@ class RealCall:
     output_tokens: int
 
 
-REAL_CALLS: Final[tuple[RealCall, ...]] = ()
+REAL_CALLS: Final[tuple[RealCall, ...]] = (
+    RealCall(
+        "openai_chat", date(2026, 11, 27), "Ollama 0.40.11 (local)", "qwen2.5-coder:7b", 42, 9
+    ),
+)
 
 
 def formats_with_a_real_call(records: tuple[RealCall, ...] = REAL_CALLS) -> tuple[str, ...]:

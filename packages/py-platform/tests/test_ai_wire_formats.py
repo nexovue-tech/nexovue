@@ -449,9 +449,10 @@ def test_the_recorded_host_never_holds_a_path() -> None:
 # ---------------------------------------------------------------- real calls
 
 
-def test_no_format_is_offered_until_a_dated_real_call_is_recorded() -> None:
-    """AC77: none has run (2026-11-11; foundation item 4), so the screen offers none."""
-    assert formats_with_a_real_call() == ()
+def test_a_format_is_offered_only_once_a_dated_real_call_is_recorded() -> None:
+    """AC77: only `openai_chat` has a real call (2026-11-27, Ollama), so only it is offered."""
+    assert formats_with_a_real_call() == ("openai_chat",)
+    assert formats_with_a_real_call(()) == ()
     recorded = (
         RealCall("openai_chat", date(2026, 11, 20), "Gemini", "gemini-2.5-flash", 40, 6),
         RealCall("openai_chat", date(2026, 11, 21), "Ollama", "llama3.1:8b", 38, 5),
