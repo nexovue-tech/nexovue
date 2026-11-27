@@ -260,7 +260,8 @@ test-go:
 gate-seed:
     go run ./tools/gateseed
 
-test-py: gate-seed
+# FILES, when given, are the test files to run instead of every one: CI passes one shard's.
+test-py *FILES: gate-seed
     #!/usr/bin/env bash
     set -uo pipefail
     # `.env` if it exists, because the live suites need what it holds. Every
@@ -295,7 +296,7 @@ test-py: gate-seed
       pkill -KILL -P $$
     ) &
     watchdog_pid=$!
-    uv run pytest -n 6 --dist loadfile
+    uv run pytest -n 6 --dist loadfile {{FILES}}
     code=$?
     kill "$watchdog_pid" 2>/dev/null
     if [ -s "$timed_out" ]; then echo "test-py did not finish in 40 minutes: a test hung; see the stacks above"; code=124; fi

@@ -111,7 +111,7 @@ asyncio_mode = "auto"
 faulthandler_timeout = 300
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
-pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval"]
+pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval", "tools/test-shard"]
 # Test tenants' ClickHouse rows are deleted once at the end of the run: a mutation
 # per test held thousands of superseded parts in memory (tests/helpers/clickhouse_cleanup.py).
 # FastAPI's dependency caches are emptied after each test: they kept every test's overrides,
@@ -130,7 +130,7 @@ markers = [
     "release_check: run by hand per release against real volumes, never in the gate (F5 T5.5)",
     "ai_off: needs a Postgres with AI never set up; CI's `ai-off` job runs it (F22 AC56)",
 ]
-testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval"]
+testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval", "tools/test-shard"]
 
 [tool.uv.sources]
 nexovue-platform = { workspace = true }

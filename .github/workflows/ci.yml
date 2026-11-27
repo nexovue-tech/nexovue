@@ -16,9 +16,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  # `just check`, in three parts on three runners, each with its own stack: everything but the
+  # Python tests, and the Python tests in two halves of equal test count (tools/test-shard). Run
+  # whole, it took 28 to 37 minutes against its 45-minute step limit (2026-11-23).
+  check-part:
+    name: check (${{ matrix.part }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: rest
+          - part: python-1
+            shard: 1
+          - part: python-2
+            shard: 2
     steps:
       # The runner ships toolkits nothing here uses; the stack, its images and the gate's data left
       # the disk 96% full (2026-10-28), so they go first.
@@ -66,6 +79,7 @@ jobs:
 
       # Known vulnerabilities in what production runs; before the stack, because it needs none of it.
       - name: just audit
+        if: matrix.part == 'rest'
         run: just audit
 
       # The development stack, prepared by the same setup step a deployment runs.
@@ -74,12 +88,22 @@ jobs:
           docker compose version
           just stack
 
-      - name: just check
-        # Below the job's 60 minutes: a run that hangs fails this step, so its log is kept and the
-        # memory and service-log steps below run, instead of the job being cancelled with no log
-        # (three runs on 2026-11-21 were). The suite takes about 25 minutes.
+      # Below the job's 60 minutes: a run that hangs fails this step, so its log is kept and the
+      # memory and service-log steps below run, instead of the job being cancelled with no log
+      # (three runs on 2026-11-21 were). Together the parts are `just check`'s recipes.
+      - name: just check, everything but the Python tests
+        if: matrix.part == 'rest'
         timeout-minutes: 45
-        run: just check
+        run: just fmt-check lint test-go test-web contracts-check bundle-check
+      - name: just check, one half of the Python tests
+        if: matrix.part != 'rest'
+        timeout-minutes: 45
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          read -ra files <<< "$(uv run python tools/test-shard/shard.py "$SHARD" 2)"
+          [ "${#files[@]}" -gt 0 ] || { echo "the shard named no test files"; exit 1; }
+          just test-py "${files[@]}"
 
       - name: Memory and disk the stack used
         if: always()
@@ -90,6 +114,18 @@ jobs:
       - name: Service logs on failure
         if: failure()
         run: docker compose -f deploy/compose/docker-compose.yaml logs --tail 200
+
+  # The required status check: it passes only when every part of `check` passed.
+  check:
+    if: always()
+    needs: check-part
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every part of check passed
+        env:
+          RESULT: ${{ needs.check-part.result }}
+        run: test "$RESULT" = success
 
   # F3 plan T3.11: the AI role's fence on a really installed kit (AC42, AC46). Separate from
   # `check`: it builds both images and installs them, which `just check` must stay fast without.
