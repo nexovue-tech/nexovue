@@ -14,26 +14,58 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import pytest
+from nexovue_platform.ai_records import CALL_SECONDS_MAX
+from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import CheckDefinition
+from nexovue_platform.connections import (
+    CONNECTIONS_INTERACTIVE_QUEUE,
+    CONNECTIONS_QUEUE,
+    SWEEP_CONNECTIONS_TASK,
+)
+from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
+from nexovue_platform.fixes.records import (
+    NOTIFY_REQUESTERS_TASK,
+    POLL_FIX_PULL_REQUESTS_TASK,
+    SWEEP_FIXES_TASK,
+    SWEEP_GENERAL_FIXES_TASK,
+)
+from nexovue_platform.knowledge import EMBED_CHECK_TASK, EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler import metrics
 from nexovue_scheduler.beat import (
+    ASSISTANT_SWEEP_ENTRY,
     ATTEMPT_PRUNE_ENTRY,
     BASELINE_SWEEP_ENTRY,
+    CASES_SWEEP_ENTRY,
+    CONNECTIONS_SWEEP_ENTRY,
     DELIVERY_SWEEP_ENTRY,
     DETECTION_SWEEP_ENTRY,
+    EMBED_SWEEP_ENTRY,
     ERASURE_ENTRY,
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
+    FIX_NOTIFY_ENTRY,
+    FIX_PULL_REQUESTS_ENTRY,
+    FIX_SWEEP_ENTRY,
+    FIX_SWEEP_SECONDS,
+    GENERAL_FIX_SWEEP_ENTRY,
     GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
+    INSIGHT_SWEEP_ENTRY,
+    KNOWLEDGE_SWEEP_ENTRY,
+    RELEASE_SWEEP_ENTRY,
     Beat,
     _start_offset,
     _unchanged,
 )
+from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck
+from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.leader import LeaderLock
+from nexovue_scheduler.releases import RELEASES_QUEUE, SWEEP_RELEASES_TASK
 from nexovue_scheduler.settings import Settings
 
 ORG_ID = uuid.uuid4()
@@ -183,6 +215,170 @@ def test_detection_is_swept_every_minute_and_its_normal_hourly_on_its_own_queue(
     assert judging.request.expires_seconds == 60
 
 
+def test_cases_are_swept_every_five_minutes_on_light_by_a_registered_task() -> None:
+    """F22 T2.6: `cases_sweep` ends idle and untouched cases and heals races. It
+    holds mail's settings, so it runs on `light`, never on a connections queue;
+    beat names it, and a worker must be able to run it."""
+    sweep = _scheduler()._sweep_entries()[CASES_SWEEP_ENTRY]
+
+    assert sweep.request.task == CASES_SWEEP_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 300
+    assert sweep.request.expires_seconds == 300
+    assert CASES_SWEEP_TASK in registry.registered()
+
+
+def test_chat_s_fact_lines_are_swept_every_five_minutes_on_light_where_ai_may_be_offered() -> None:
+    """F4 T5.5: the knowledge sweep runs on the shared queue, by a task every worker loads,
+    and is not scheduled on the hosted service, which offers no chat (AC92)."""
+    sweep = _scheduler("self-hosted")._sweep_entries()[KNOWLEDGE_SWEEP_ENTRY]
+
+    assert sweep.request.task == KNOWLEDGE_SWEEP_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 300
+    assert KNOWLEDGE_SWEEP_TASK in registry.registered()
+    assert "nexovue_scheduler.knowledge.tasks" in registry.TASK_MODULES
+    assert KNOWLEDGE_SWEEP_ENTRY not in _scheduler("hosted")._sweep_entries()
+
+
+def test_chat_questions_are_swept_every_minute_on_insight_by_an_insight_task() -> None:
+    """F4 T2.9: who writes `unavailable` and settles a dead question's tokens. It runs only
+    where the AI account is, on `insight`, by a task only the insight set loads."""
+    sweep = _scheduler()._sweep_entries()[ASSISTANT_SWEEP_ENTRY]
+
+    assert sweep.request.task == ASSISTANT_SWEEP_TASK
+    assert sweep.request.queue == "insight"
+    assert sweep.interval_seconds == 60
+    assert ASSISTANT_SWEEP_TASK in registry.registered(registry.TASK_SETS["insight"])
+    assert "nexovue_scheduler.insight.assistant_sweep" not in registry.TASK_MODULES
+
+
+@pytest.mark.parametrize("ai_on", [False, True])
+def test_general_fixes_are_swept_every_minute_on_light_whether_ai_is_on_or_not(
+    ai_on: bool,
+) -> None:
+    """F5 T2b.9: rung 2b's sweep ends stuck rows and records results once. It holds no key
+    and calls nothing, so it runs on `light` by a task every full worker loads, and it runs
+    with AI off too, since a row asked for before AI was turned off must still end."""
+    beat = _scheduler("self-hosted")
+    beat.ai_on = ai_on
+    sweep = beat._sweep_entries()[GENERAL_FIX_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_GENERAL_FIXES_TASK
+    assert sweep.request.queue == "light"
+    assert sweep.interval_seconds == 60
+    assert sweep.request.expires_seconds == 60
+    assert SWEEP_GENERAL_FIXES_TASK in registry.registered()
+    assert "nexovue_scheduler.fixes.sweep" in registry.TASK_MODULES
+    assert "nexovue_scheduler.fixes.sweep" not in registry.TASK_SETS["insight"]
+
+
+@pytest.mark.parametrize("ai_on", [True, False])
+def test_fix_requesters_are_emailed_every_minute_on_light(ai_on: bool) -> None:
+    """F5 T4.8 (D46, AC64): the one email per event goes from `light`, which holds the mail
+    settings and no connection key, always, so an email owed before AI or connections were
+    turned off still goes. `fixes/notify.py` is the one F5 module in `TASK_MODULES`."""
+    beat = _scheduler("self-hosted")
+    beat.ai_on = ai_on
+    notify = beat._sweep_entries()[FIX_NOTIFY_ENTRY]
+
+    assert notify.request.task == NOTIFY_REQUESTERS_TASK
+    assert notify.request.queue == "light"
+    assert notify.interval_seconds == 60
+    assert NOTIFY_REQUESTERS_TASK in registry.registered()
+    assert "nexovue_scheduler.fixes.notify" in registry.TASK_MODULES
+    assert "nexovue_scheduler.fixes.notify" not in registry.TASK_SETS["connections"]
+
+
+def test_with_no_live_connection_beat_adds_no_connection_sweep() -> None:
+    """AC118's beat clause (moved to T4.5, founder 2026-11-09): with connections off, or
+    none live, there is no sweep job at all, so nothing waits for a role not running."""
+    assert CONNECTIONS_SWEEP_ENTRY not in _scheduler("self-hosted")._sweep_entries()
+
+
+def test_a_live_connection_is_swept_every_30_seconds_by_scheduler_connections() -> None:
+    """F22 T4.5: `sweep_connections` adds each due sync and hourly refresh; it runs on
+    the role's interactive queue, which a hung sync can never fill (AC86)."""
+    beat = _scheduler("self-hosted")
+    beat.connections_live = True
+    sweep = beat._sweep_entries()[CONNECTIONS_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_CONNECTIONS_TASK
+    assert sweep.request.queue == CONNECTIONS_INTERACTIVE_QUEUE
+    assert sweep.interval_seconds == 30
+    assert sweep.request.expires_seconds == 30
+    assert SWEEP_CONNECTIONS_TASK in registry.registered(registry.TASK_SETS["connections"])
+
+    beat.connections_live = False
+    assert CONNECTIONS_SWEEP_ENTRY not in beat._sweep_entries()
+
+
+async def test_beat_reads_whether_a_connection_is_live_with_the_setting() -> None:
+    """The one EXISTS `connections_active` reads (a named cross-tenant exception), and
+    `NEXOVUE_CONNECTIONS=no` makes it false whatever rows remain (AC118)."""
+    answered: list[bool] = []
+
+    class Connection:
+        async def scalar(self, *_: Any) -> bool:
+            return True
+
+    for enabled in (True, False):
+        answered.append(await metrics.connections_live(cast(Any, Connection()), enabled=enabled))
+    assert answered == [True, False]
+
+
+def test_releases_are_swept_every_minute_on_their_own_capped_queue() -> None:
+    """F28 T1.10 (D31, AC72): the sweep and its project jobs run on `releases`, which
+    `scheduler-light` takes with a cap, so a slow read never holds an alert sweep's slot.
+    A sweep not started before the next is due is dropped."""
+    sweep = _scheduler()._sweep_entries()[RELEASE_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_RELEASES_TASK
+    assert sweep.request.queue == RELEASES_QUEUE
+    assert sweep.interval_seconds == 60
+    assert sweep.request.expires_seconds == 60
+    assert SWEEP_RELEASES_TASK in registry.registered()
+
+
+def test_the_ai_sweep_runs_every_five_minutes_on_the_ai_role_s_own_queue() -> None:
+    """F3 T5.5 (AC54, AC81): the sweep runs as the AI account, so it goes on `insight`,
+    which only `scheduler-insight` claims, and only while an AI connection is on, so an
+    install without that container queues nothing for it. Only that role's task set can
+    run it, and the full set, which holds every other key, cannot."""
+    beat = _scheduler()
+    assert INSIGHT_SWEEP_ENTRY not in beat._sweep_entries()
+    beat.ai_on = True
+    sweep = beat._sweep_entries()[INSIGHT_SWEEP_ENTRY]
+
+    assert sweep.request.task == SWEEP_INSIGHT_TASK
+    assert sweep.request.queue == INSIGHT_QUEUE
+    assert sweep.interval_seconds == 300
+    assert sweep.request.expires_seconds == 300
+    assert SWEEP_INSIGHT_TASK in registry.registered(registry.TASK_SETS["insight"])
+    assert not any("insight" in module for module in registry.TASK_SETS["all"])
+
+
+def test_chunks_are_embedded_every_five_minutes_on_insight_only_while_ai_is_on() -> None:
+    """F4 T6.1: the embedding sweep calls a provider as the AI account, so it goes on
+    `insight` beside F3's sweep, only while an AI connection is on, with limits that leave
+    room for the last call at the longest a connection allows. Only that role's task set
+    can run it, with the embedding check."""
+    beat = _scheduler()
+    assert EMBED_SWEEP_ENTRY not in beat._sweep_entries()
+    beat.ai_on = True
+    sweep = beat._sweep_entries()[EMBED_SWEEP_ENTRY]
+
+    assert sweep.request.task == EMBED_SWEEP_TASK
+    assert sweep.request.queue == INSIGHT_QUEUE
+    assert sweep.interval_seconds == 300
+    assert sweep.request.hard_limit_seconds > sweep.request.soft_limit_seconds
+    assert sweep.request.soft_limit_seconds >= CALL_SECONDS_MAX
+    insight = registry.registered(registry.TASK_SETS["insight"])
+    assert {EMBED_SWEEP_TASK, EMBED_CHECK_TASK} <= set(insight)
+    assert "nexovue_scheduler.insight.knowledge" in registry.TASK_SETS["insight"]
+    assert "nexovue_scheduler.insight.knowledge" not in registry.TASK_SETS["all"]
+
+
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:
     """ADR-014. The task works only in its hour; its mutations can take hours, so
     a sweep's one-minute limit would kill every night's run."""
@@ -224,3 +420,32 @@ def test_a_check_first_comes_due_inside_its_interval_not_all_at_once() -> None:
     entry = beat._entries_for([_check(interval=60)])[f"check:{CHECK_ID}:mumbai"]
 
     assert before < entry.due_at <= beat._monotonic() + 60
+
+
+def test_f5s_rung_3_sweep_runs_every_minute_on_connections_only_while_connections_are_on() -> None:
+    """F5 T3.13: `sweep_fixes` on `connections`, consumed by `scheduler-connections` alone,
+    and only while connections are on, so no job waits for a role that is not running."""
+    beat = _scheduler()
+    assert FIX_SWEEP_ENTRY not in beat._sweep_entries()
+
+    beat.connections_on = True
+    entry = beat._sweep_entries()[FIX_SWEEP_ENTRY]
+
+    assert entry.request.task == SWEEP_FIXES_TASK
+    assert entry.request.queue == CONNECTIONS_QUEUE
+    assert entry.interval_seconds == FIX_SWEEP_SECONDS
+
+
+def test_f5s_pull_request_poller_runs_every_5_minutes_on_connections_while_they_are_on() -> None:
+    """F5 T8.2: `poll_fix_pull_requests` on `connections`, every 5 minutes, with the design's
+    60 and 90 second limits, only while connections are on."""
+    beat = _scheduler()
+    assert FIX_PULL_REQUESTS_ENTRY not in beat._sweep_entries()
+
+    beat.connections_on = True
+    entry = beat._sweep_entries()[FIX_PULL_REQUESTS_ENTRY]
+
+    assert entry.request.task == POLL_FIX_PULL_REQUESTS_TASK
+    assert entry.request.queue == CONNECTIONS_QUEUE
+    assert entry.interval_seconds == 300
+    assert (entry.request.soft_limit_seconds, entry.request.hard_limit_seconds) == (60, 90)

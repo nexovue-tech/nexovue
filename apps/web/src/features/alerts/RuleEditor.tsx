@@ -41,6 +41,7 @@ import {
   useMuteRule,
   useSaveRule,
   useServiceReadings,
+  useSloTargetChoices,
 } from "./api";
 import { ChannelForm } from "./ChannelForm";
 
@@ -149,7 +150,7 @@ function RuleEditorPage({ title, children }: { title: string; children: React.Re
             Alerts
           </Link>
         </p>
-        <h1 className="mt-1 font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
+        <h1 className="mt-1 heading-page">{title}</h1>
       </header>
       {children}
     </div>
@@ -339,7 +340,7 @@ function RuleForm({
         />
 
         <fieldset className="flex flex-col gap-3">
-          <legend className="font-medium font-serif text-base text-ink">Who to tell</legend>
+          <legend className="heading-section">Who to tell</legend>
           {channels.isPending ? (
             <SkeletonRows rows={2} label="Loading channels" />
           ) : channels.isError ? (
@@ -381,7 +382,7 @@ function RuleForm({
         </fieldset>
 
         <fieldset className="flex flex-col gap-3">
-          <legend className="font-medium font-serif text-base text-ink">Noise</legend>
+          <legend className="heading-section">Noise</legend>
           {draft.kind === "anomaly_finding" ? (
             <p className="text-ink-dim text-sm leading-relaxed">
               A finding is sent when it opens, turns critical, gains a signal and closes — never
@@ -497,6 +498,8 @@ function Watch({
 }) {
   const checks = useCheckChoices(projectId);
   const services = useServiceReadings(projectId);
+  const burn = draft.kind === "slo_burn";
+  const targets = useSloTargetChoices(projectId, burn);
   const threshold = draft.kind === "service_error_rate" || draft.kind === "service_latency_p95";
   // Detection's kind is an owner's or an admin's (D11): nobody else is offered it.
   const canConfigureDetection = useCan("configure_detection");
@@ -506,7 +509,7 @@ function Watch({
   return (
     <>
       <fieldset className="flex flex-col gap-3">
-        <legend className="font-medium font-serif text-base text-ink">What to watch</legend>
+        <legend className="heading-section">What to watch</legend>
         {kindFixed ? (
           <p className="text-ink text-sm">
             <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">When </span>
@@ -523,7 +526,18 @@ function Watch({
             onChange={(kind) => update(withKind(draft, kind as ConditionKind))}
           />
         )}
-        {draft.kind === "check_state" ? (
+        {burn ? (
+          <Scope
+            what="target"
+            all="Every reliability target in this project, including ones set later"
+            scope={draft.scope}
+            onScope={(scope) => update({ scope })}
+            error={problems.targets}
+            choices={targets}
+            chosen={draft.sloIds}
+            onToggle={(id) => update({ sloIds: toggled(draft.sloIds, id) })}
+          />
+        ) : draft.kind === "check_state" ? (
           <Scope
             what="check"
             all="Every check in this project, including ones created later"
@@ -552,7 +566,7 @@ function Watch({
       </fieldset>
 
       <fieldset className="flex flex-col gap-3">
-        <legend className="font-medium font-serif text-base text-ink">How bad</legend>
+        <legend className="heading-section">How bad</legend>
         {draft.kind === "check_state" ? (
           <>
             <p className="text-ink-dim text-sm leading-relaxed">
@@ -591,9 +605,9 @@ function Watch({
           <>
             <SelectField
               stacked
-              label={anomaly ? "Send findings that are" : "Severity"}
+              label={anomaly ? "Send findings that are" : burn ? "Send burns that are" : "Severity"}
               value={draft.severity}
-              options={anomaly ? MINIMUM_SEVERITIES : SEVERITIES}
+              options={anomaly || burn ? MINIMUM_SEVERITIES : SEVERITIES}
               optionLabel={(option) => option.label}
               onChange={(severity) => update({ severity: severity as Severity })}
             />
@@ -602,6 +616,12 @@ function Watch({
                 Detection decides how bad a finding is, from how far the service moved from its own
                 normal. Warnings always appear in the findings feed; this rule decides which are
                 also sent.
+              </p>
+            ) : null}
+            {burn ? (
+              <p className="text-ink-dim text-sm leading-relaxed">
+                How fast decides how bad: a target using its allowed failures fast enough to run out
+                within days is critical, a slow one a warning that can wait for working hours.
               </p>
             ) : null}
             {threshold ? (
@@ -675,7 +695,7 @@ function Scope({
   chosen,
   onToggle,
 }: {
-  what: "check" | "service";
+  what: "check" | "service" | "target";
   all: string;
   scope: "all" | "chosen";
   onScope: (scope: "all" | "chosen") => void;

@@ -421,3 +421,27 @@ func DatabaseReadings(cfg Config, at time.Time) map[string]any {
 		}}},
 	}}}
 }
+
+// LogBody is one OTLP/JSON logs export carrying exactly the chosen text as a
+// single record — the planted line for F4 Step 1's demonstration (T1.0): plant
+// "ignore your instructions" with it, then read what a customer's own AI,
+// connected over MCP, does with the labelled result.
+func LogBody(cfg Config, body string, at time.Time) map[string]any {
+	return map[string]any{
+		"resourceLogs": []any{map[string]any{
+			"resource": resource(cfg.ServiceName),
+			"scopeLogs": []any{map[string]any{
+				"scope": map[string]any{keyName: "gateseed"},
+				"logRecords": []any{map[string]any{
+					// Both clocks and a severity, because normalization drops a
+					// record it cannot place in time or rank.
+					"timeUnixNano":         nanos(at),
+					"observedTimeUnixNano": nanos(at),
+					"severityNumber":       9,
+					"severityText":         "INFO",
+					"body":                 map[string]any{"stringValue": body},
+				}},
+			}},
+		}},
+	}
+}

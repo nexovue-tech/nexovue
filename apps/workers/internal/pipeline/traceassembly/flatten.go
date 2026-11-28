@@ -80,6 +80,9 @@ type spanRow struct {
 	// the only evidence of who published the message: the consumer starts its
 	// own trace and links back, so `parent_span_id` names nothing.
 	Links []spanLink
+	// Door is `consume.StoredDoor` of the envelope: whether this span came through
+	// the browser door, whose site key anyone can read (F28 D38).
+	Door string
 	// Peer is what a caller-side span says about what it called. Carried for
 	// edge derivation and never written: it is only ever read to name a callee
 	// that sent us nothing of its own.
@@ -199,6 +202,7 @@ func flattenSpan(
 		ExceptionType:     exception.Type,
 		ExceptionMessage:  exception.Message,
 		Links:             spanLinks(span.GetLinks()),
+		Door:              consume.StoredDoor(envelope.GetDoor()),
 		Peer:              peerOf(attributes, rpc.system),
 		// Carried for the sampler alone, which reads an explicit `rv` out of it
 		// when a producer upstream has already fixed the trace's randomness. Not
@@ -287,11 +291,13 @@ func rpcStatusText(attributes []*commonpb.KeyValue) string {
 // Every span is read, not only the caller-side ones. Which kinds can open an
 // edge is the graph's business, and this file's job is to say what arrived.
 func peerOf(attributes []*commonpb.KeyValue, rpcSystem string) serviceedges.Peer {
+	serviceAttr, service := firstPresentKey(attributes, attrPeerServiceCurrent, attrPeerServiceLegacy)
 	return serviceedges.Peer{
-		Service:   firstPresent(attributes, attrPeerServiceCurrent, attrPeerServiceLegacy),
-		Address:   otlpvalue.StringOrEmpty(attributes, attrServerAddress),
-		System:    peerSystem(attributes),
-		Transport: rpcSystem,
+		Service:     service,
+		ServiceAttr: serviceAttr,
+		Address:     otlpvalue.StringOrEmpty(attributes, attrServerAddress),
+		System:      peerSystem(attributes),
+		Transport:   rpcSystem,
 	}
 }
 
@@ -308,12 +314,18 @@ func peerSystem(attributes []*commonpb.KeyValue) string {
 }
 
 func firstPresent(attributes []*commonpb.KeyValue, keys ...string) string {
+	_, value := firstPresentKey(attributes, keys...)
+	return value
+}
+
+// firstPresentKey is firstPresent, also naming the key the value came from.
+func firstPresentKey(attributes []*commonpb.KeyValue, keys ...string) (key, value string) {
 	for _, key := range keys {
 		if value := otlpvalue.StringOrEmpty(attributes, key); value != "" {
-			return value
+			return key, value
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // clampStatus keeps a nonsensical status out of the UInt16 column, where it

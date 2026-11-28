@@ -42,7 +42,7 @@ export function SpanProfile({ traceId, span }: { traceId: string; span: Span }) 
 
   return (
     <section aria-label="Profile" className="mb-5">
-      <h3 className="mb-1.5 flex items-center justify-between border-line-subtle border-b pb-1 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h3 className="mb-1.5 flex items-center justify-between border-line-subtle border-b pb-1 heading-sub">
         Profile
         <PreviewLabel />
       </h3>

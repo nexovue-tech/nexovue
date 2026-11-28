@@ -84,6 +84,19 @@ NOT_FOUND: Final = register(
     "No such resource in this organization",
     HTTPStatus.NOT_FOUND,
 )
+# F20 (design, *Telling the two 404s apart*): a dashboard page names a dashboard and a
+# project, and says which one this reader cannot open. Each still answers an unknown
+# id and another organization's alike (NFR1).
+DASHBOARD_NOT_FOUND: Final = register(
+    "dashboard-not-found",
+    "No such dashboard in this organization",
+    HTTPStatus.NOT_FOUND,
+)
+PROJECT_NOT_FOUND: Final = register(
+    "project-not-found",
+    "No such project in this organization",
+    HTTPStatus.NOT_FOUND,
+)
 CONFLICT: Final = register(
     "conflict",
     "The request conflicts with the current state",
@@ -107,6 +120,13 @@ CONTENT_TOO_LARGE: Final = register(
 DEPENDENCY_UNAVAILABLE: Final = register(
     "dependency-unavailable",
     "A dependency this request needs is not available",
+    HTTPStatus.SERVICE_UNAVAILABLE,
+)
+# Every pooled Postgres connection is in use: we are at capacity, not broken, and a retry
+# shortly will be served. Separate from `dependency-unavailable`, which says a store is down.
+SERVICE_BUSY: Final = register(
+    "service-busy",
+    "The service is busy",
     HTTPStatus.SERVICE_UNAVAILABLE,
 )
 INTERNAL_ERROR: Final = register(

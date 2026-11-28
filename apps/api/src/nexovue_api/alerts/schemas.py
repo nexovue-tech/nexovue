@@ -79,6 +79,24 @@ class IncidentNotification(BaseModel):
     delivered_at: datetime | None
 
 
+class BurnFinding(BaseModel):
+    """A finding a burn joined (F19 FR20): its id and nexovue's composed title."""
+
+    id: uuid.UUID
+    title: str
+
+
+class BurnFacts(BaseModel):
+    """What a reliability target's burn page adds (F19 design, *Elsewhere*; AC85): the
+    findings it joined, the last deploy of its service before it began, whether deploys
+    are connected at all, and whether its target has since been deleted."""
+
+    findings: list[BurnFinding]
+    last_deploy_at: datetime | None
+    deploys_connected: bool
+    target_deleted: bool
+
+
 class IncidentSummary(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
@@ -99,6 +117,10 @@ class IncidentSummary(BaseModel):
     check_deleted: bool
     # Which channels were told, and how that went.
     notifications: list[IncidentNotification]
+    # The project's zone, which every time on the incident page shows (F19 FR13, AC108).
+    zone: str
+    # A reliability target's burn only (F19); null for every other kind.
+    burn: BurnFacts | None
 
 
 class OpenIncidentCount(BaseModel):

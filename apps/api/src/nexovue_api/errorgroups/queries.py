@@ -276,8 +276,7 @@ def error_groups_sql(*, one_group: bool, one_service: bool, new_only: bool = Fal
 #
 # Deliberately never narrowed to a service: arriving from a service's own screen, the
 # other services a group also happens in are the useful part of opening it.
-GROUP_OCCURRENCES_SQL: Final = _narrowed_to_service(
-    f"""
+_GROUP_OCCURRENCES_TEMPLATE: Final = f"""
 SELECT
     source,
     service_name,
@@ -292,11 +291,81 @@ FROM ({_GROUPED_WITH_DETAIL})
 WHERE group_id = {{group_id:String}}
 ORDER BY occurred_nanos DESC
 LIMIT {{limit:UInt32}}
-""",
-    one_service=False,
+"""
+GROUP_OCCURRENCES_SQL: Final = _narrowed_to_service(_GROUP_OCCURRENCES_TEMPLATE, one_service=False)
+# F5 (FR11, AC12d): the same instances, of one service only, so another service's
+# occurrences can never fill the sample a suggestion's candidate paths are read from.
+GROUP_SERVICE_OCCURRENCES_SQL: Final = _narrowed_to_service(
+    _GROUP_OCCURRENCES_TEMPLATE, one_service=True
 )
 
 
 def group_trends_sql(*, one_service: bool) -> str:
     """The per-bucket occurrence counts, narrowed to one service when one is named."""
     return _narrowed_to_service(_GROUP_TRENDS_TEMPLATE, one_service=one_service)
+
+
+# ------------------------------------------------- errors by version (F28 FR29)
+#
+# The release page's "new here, gone here, in both": one service's groups for two
+# versions, this version's from the period's start and the previous version's over the
+# equal stretch before it, split at `split_nanos`. The same occurrence rows as the list,
+# with one version predicate per table (a span's promoted column; a log record's
+# resource attribute, as `release` reads it) and a door predicate (D38): a release with
+# server traffic reads no browser-door row, since a site key is printed in its page and
+# anyone could name a server version through it (BR7, AC69). Group presence and counts
+# only, never a rate (BR6).
+
+_SPAN_VERSION: Final = "deployment_version"
+_LOG_VERSION: Final = f"ifNull(resource_attrs.{RELEASE_PATH}.:String, '')"
+# Written by the worker since 000041; '' on a row stored before, read as not browser.
+DOOR_BROWSER: Final = "browser"
+
+
+def _of_versions(version: str) -> str:
+    return (
+        f"AND {version} IN ({{this_version:String}}, {{previous_version:String}})"
+        f" AND (door != '{DOOR_BROWSER}' OR {{browser_door_too:UInt8}} = 1)"
+    )
+
+
+_SPAN_ERRORS_OF_VERSIONS: Final = _SPAN_ERRORS.replace(
+    _ONE_SERVICE_PLACEHOLDER, f"{ONE_SERVICE_CLAUSE} {_of_versions(_SPAN_VERSION)}"
+)
+_LOG_ERRORS_OF_VERSIONS: Final = _LOG_ERRORS.replace(
+    _ONE_SERVICE_PLACEHOLDER, f"{ONE_SERVICE_CLAUSE} {_of_versions(_LOG_VERSION)}"
+)
+_VERSIONED_OCCURRENCES: Final = f"""
+    SELECT {_SPAN_COLUMNS}, door = '{DOOR_BROWSER}' AS from_browser {_SPAN_ERRORS_OF_VERSIONS}
+    UNION ALL
+    SELECT {_LOG_COLUMNS}, door = '{DOOR_BROWSER}' AS from_browser {_LOG_ERRORS_OF_VERSIONS}
+"""
+
+_THIS_SIDE: Final = "release = {this_version:String} AND occurred_nanos >= {split_nanos:UInt64}"
+_PREVIOUS_SIDE: Final = (
+    "release = {previous_version:String} AND occurred_nanos < {split_nanos:UInt64}"
+)
+
+
+def _occurrences_where(side: str) -> str:
+    """Occurrences on one side, deduplicated as the list counts them."""
+    return (
+        f"uniqExactIf(occurrence_key, occurrence_key != '' AND {side})"
+        f" + countIf(occurrence_key = '' AND {side})"
+    )
+
+
+ERRORS_BY_VERSION_SQL: Final = f"""
+SELECT
+    group_id,
+    argMax(exception_type, occurred_nanos) AS exception_type,
+    argMax(message_template, occurred_nanos) AS message_template,
+    {_occurrences_where(_THIS_SIDE)} AS this_occurrences,
+    {_occurrences_where(_PREVIOUS_SIDE)} AS previous_occurrences,
+    max(from_browser) AS from_browser
+FROM (SELECT {_GROUPING}, from_browser FROM ({_VERSIONED_OCCURRENCES}))
+GROUP BY group_id
+HAVING this_occurrences + previous_occurrences > 0
+ORDER BY this_occurrences + previous_occurrences DESC, group_id
+LIMIT {{limit:UInt32}}
+"""

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Current state, verified 2026-09-12; profiles added 2026-09-19; anomaly detection added 2026-11-01.** This document describes implemented system behavior. Planned insight/AI capabilities are excluded unless explicitly called out as future work.
+**Current state, verified 2026-09-12; profiles added 2026-09-19; anomaly detection added 2026-11-01; suggested fixes (F5) added 2026-11-22.** This document describes implemented system behavior. Planned insight/AI capabilities are excluded unless explicitly called out as future work.
 
 ## System boundary
 
@@ -31,7 +31,8 @@ Added 2026-09-19; the design is [`features/alerts/design.md`](../features/alerts
   `alerts/check_state.py`): the incident and its notifications commit with the state or not at all.
 - **The service conditions are judged every minute by beat** on the `light` queue: error rate and p95 from
   ClickHouse's `endpoint_stats_1m`, new error groups from `spans` and `logs`, silence from Postgres's
-  `service_last_seen`, which the Go usage meter writes. The scheduler reads ClickHouse through its own
+  `service_last_seen`, which the Go usage meter writes (never from the browser door, whose site key is public:
+  `docs/changes/browser-door-last-seen`). The scheduler reads ClickHouse through its own
   tenant-scoped reader (`alerts/telemetry.py`), held to the API's chokepoint rules (ADR-012).
 - **Notifications are a Postgres outbox** (ADR-013), delivered by the `scheduler-deliveries` worker on its own
   `deliveries` queue, through the prober's SSRF-guarded client. Leases, not locks, cover a send; one batch per
@@ -78,6 +79,35 @@ Added 2026-11-01; the design is
   or the project itself (for *detection stopped* and *running again*). The webhook body is version 2.
 - **Operators see it stall**: beat's leader publishes install-wide gauges with no project label, and three
   Prometheus alerts page on a stalled sweep, a project behind, and a hold by nexovue's intake.
+
+## Suggested fixes (F5)
+
+Built 2026-11-11 to 2026-11-22, Steps 1 to 9; the design is
+[`features/ai-solution/design.md`](../features/ai-solution/design.md), the runbook entries are in
+[`operations/ai.md`](../operations/ai.md), the customer's page is
+[`product/setup/ai-suggested-fixes.md`](../product/setup/ai-suggested-fixes.md). Self-hosted only
+(D59), GitHub.com only. **Write access is off in code** until the founder's recorded go
+(`nexovue_platform/fixes/write_gate.py`, ADR-097, ADR-101): no draft opens and Run CI writes
+nothing, each refused before any request reaches GitHub.
+
+- **Two rooms, never one** (ADR-103). `scheduler-insight`, as `nexovue_insight`, calls the AI
+  provider through F3's guarded transport, on the `insight-fix` queue (2 slots), and may change a
+  `finding_fixes` row only while it is `proposing`. `scheduler-connections` holds the *Nexovue
+  suggestions* App's key (ADR-106), reads GitHub through one client with a method per route
+  (`connections/fix_github.py`), builds each source pack, runs a person's check before a patch or
+  a draft, and would write the draft (`fix_writer.py`, behind the gate). Neither runs the other's
+  work.
+- **Nexovue's rules** (`nexovue_platform/fixes/checks.py`, K1 to K10; `policy.py`, the lists) run
+  in the AI room, again when the sweep first records a result, on every API read, and at each
+  check run (ADR-096). The same rules refusing the same inputs is the tamper signal and its alert.
+- **Rung 2b** (a general suggestion, no code) runs on `insight` and is swept on `light`
+  (`fixes/sweep.py`); rung 3's rows are swept on `connections` (`connections/fix_sweep.py`), which
+  records each pass's end in `fix_sweep_status` for the operator's alert (T9.1). F5's own pull
+  request poller (`connections/fix_poller.py`) only reads.
+- **Operators see it**: beat's leader publishes rows by state and reason, the oldest row in
+  flight, the tamper count and the sweep's age; two alerts (`NexovueSuggestionRefusedAgain`,
+  `NexovueSuggestionSweepStalled`). **Admins see it** on `/settings/ai`: 30 days of counts and a
+  notice for each refusal by K2, K7, K9 or K10 (UR12; K6 and K8 once T6.3's report is read).
 
 ## Non-negotiable delivery behavior
 

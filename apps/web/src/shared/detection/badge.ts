@@ -90,7 +90,8 @@ export function describeBadge(
 const JUDGED_LATER: Record<SignalKind, string> = {
   slower: "Slowness is",
   failing: "Failures are",
-  traffic: "Traffic drops are",
+  // Why it is later, so the two days beside each other do not read as a contradiction.
+  traffic: "Traffic drops need 3 weeks of history, so they are",
 };
 
 /**

@@ -9,6 +9,11 @@ The expiry sweep (`sweep:expired-rows`) deletes:
 - the install-wide records, `intake_refusals` and `detection_events`, and the
   `baseline_shifts`, once no normal reads them: after the baseline job's history.
 
+The stack's own scheduler runs the same sweep every minute against the same
+database, so it may delete a lapsed row before this suite's sweep does. Each test
+therefore asserts which of its own rows remain, never how many rows a sweep reports,
+and builds each fixture in one transaction, so no sweep sees half of one.
+
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
@@ -24,7 +29,7 @@ import pytest
 from alert_fixtures import AlertTenant, drop_tenant, make_tenant, postgres_reachable
 from live import require_stack
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.detection.baselines import HISTORY
 from nexovue_scheduler.jobs import expiry
@@ -58,35 +63,38 @@ async def paid(engine: AsyncEngine) -> AsyncIterator[AlertTenant]:
 
 
 async def _finding(
-    engine: AsyncEngine, tenant: AlertTenant, *, closed_ago: timedelta | None, service: str
+    connection: AsyncConnection,
+    tenant: AlertTenant,
+    *,
+    closed_ago: timedelta | None,
+    service: str,
 ) -> uuid.UUID:
     now = datetime.now(UTC)
     started = now - (closed_ago or DAY) - DAY
-    async with engine.begin() as connection:
-        found: uuid.UUID = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO findings
-                        (org_id, project_id, scope, service_name, severity, state,
-                         closed_reason, title, started_at, closed_at)
-                    VALUES (:org_id, :project_id, 'service', :service, 'warning', :state,
-                            :reason, :title, :started, :closed)
-                    RETURNING id
-                    """
-                ),
-                {
-                    "org_id": tenant.org_id,
-                    "project_id": tenant.project_id,
-                    "service": service,
-                    "state": "open" if closed_ago is None else "closed",
-                    "reason": None if closed_ago is None else "recovered",
-                    "title": f"{service} is twice as slow as normal",
-                    "started": started,
-                    "closed": None if closed_ago is None else now - closed_ago,
-                },
-            )
-        ).scalar_one()
+    found: uuid.UUID = (
+        await connection.execute(
+            text(
+                """
+                INSERT INTO findings
+                    (org_id, project_id, scope, service_name, severity, state,
+                     closed_reason, title, started_at, closed_at)
+                VALUES (:org_id, :project_id, 'service', :service, 'warning', :state,
+                        :reason, :title, :started, :closed)
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "service": service,
+                "state": "open" if closed_ago is None else "closed",
+                "reason": None if closed_ago is None else "recovered",
+                "title": f"{service} is twice as slow as normal",
+                "started": started,
+                "closed": None if closed_ago is None else now - closed_ago,
+            },
+        )
+    ).scalar_one()
     return found
 
 
@@ -104,15 +112,17 @@ async def test_a_closed_finding_is_purged_once_its_project_s_derived_retention_p
     """Security m4: a finding's title and signals name services and endpoints, so a
     closed one goes with the telemetry it names. An open one stays, however old: it
     is still the customer's current problem. A paid plan keeps its 395 days."""
-    expired = await _finding(engine, project, closed_ago=FREE_DERIVED + DAY, service="old")
-    kept = await _finding(engine, project, closed_ago=FREE_DERIVED - DAY, service="recent")
-    still_open = await _finding(engine, project, closed_ago=None, service="ongoing")
-    paid_kept = await _finding(engine, paid, closed_ago=FREE_DERIVED + DAY, service="paid")
-    paid_expired = await _finding(engine, paid, closed_ago=PAID_DERIVED + DAY, service="paid-old")
+    async with engine.begin() as connection:
+        expired = await _finding(connection, project, closed_ago=FREE_DERIVED + DAY, service="old")
+        kept = await _finding(connection, project, closed_ago=FREE_DERIVED - DAY, service="recent")
+        still_open = await _finding(connection, project, closed_ago=None, service="ongoing")
+        paid_kept = await _finding(connection, paid, closed_ago=FREE_DERIVED + DAY, service="paid")
+        paid_expired = await _finding(
+            connection, paid, closed_ago=PAID_DERIVED + DAY, service="paid-old"
+        )
 
-    removed = await expiry.sweep(engine)
+    await expiry.sweep(engine)
 
-    assert removed["findings"] >= 2
     remaining = await _remaining(
         engine, "findings", [expired, kept, still_open, paid_kept, paid_expired]
     )
@@ -167,11 +177,8 @@ async def test_install_wide_records_and_shifts_go_once_no_normal_reads_them(
             for at in (old, recent)
         ]
 
-    removed = await expiry.sweep(engine)
+    await expiry.sweep(engine)
 
-    assert removed["intake_refusals"] >= 1
-    assert removed["detection_events"] >= 1
-    assert removed["baseline_shifts"] >= 1
     async with engine.connect() as connection:
         minutes = await connection.execute(
             text("SELECT minute FROM intake_refusals WHERE receiver_id = :receiver"),
@@ -188,3 +195,100 @@ async def test_install_wide_records_and_shifts_go_once_no_normal_reads_them(
         await connection.execute(
             text("DELETE FROM detection_events WHERE id = ANY(:ids)"), {"ids": events}
         )
+
+
+# ------------------------------------------------------- a case keeps its finding (F22 T2.5)
+
+
+async def _give_case(
+    connection: AsyncConnection,
+    tenant: AlertTenant,
+    finding: uuid.UUID,
+    *,
+    resolved_ago: timedelta | None,
+) -> None:
+    """A case on `finding`, active when `resolved_ago` is None, else resolved then."""
+    now = datetime.now(UTC)
+    opened = now - (resolved_ago or DAY) - DAY
+    await connection.execute(
+        text(
+            "UPDATE findings SET case_state = 'investigating', case_opened_at = :opened, "
+            "case_activity_at = :opened WHERE org_id = :org_id AND id = :id"
+        ),
+        {"org_id": tenant.org_id, "id": finding, "opened": opened},
+    )
+    if resolved_ago is not None:
+        await connection.execute(
+            text(
+                "UPDATE findings SET case_state = 'resolved', case_resolution = 'resolved', "
+                "case_resolved_at = :at WHERE org_id = :org_id AND id = :id"
+            ),
+            {"org_id": tenant.org_id, "id": finding, "at": now - resolved_ago},
+        )
+
+
+async def _join(
+    connection: AsyncConnection, tenant: AlertTenant, joined: uuid.UUID, root: uuid.UUID
+) -> None:
+    await connection.execute(
+        text("UPDATE findings SET root_finding_id = :root WHERE org_id = :org_id AND id = :id"),
+        {"org_id": tenant.org_id, "id": joined, "root": root},
+    )
+
+
+async def test_a_case_keeps_its_finding_until_retention_passes_after_it_ends(
+    engine: AsyncEngine, project: AlertTenant
+) -> None:
+    """AC29, FR24, FR25: a closed finding with an active case survives its retention;
+    a resolved one goes once retention has passed since `case_resolved_at`, not
+    since it closed; one with no case keeps today's rule."""
+    past = FREE_DERIVED + DAY
+    async with engine.begin() as connection:
+        active = await _finding(connection, project, closed_ago=past, service="active")
+        await _give_case(connection, project, active, resolved_ago=None)
+        resolved_lately = await _finding(connection, project, closed_ago=past, service="lately")
+        await _give_case(connection, project, resolved_lately, resolved_ago=FREE_DERIVED - DAY)
+        resolved_long_ago = await _finding(
+            connection, project, closed_ago=past + DAY, service="long-ago"
+        )
+        await _give_case(connection, project, resolved_long_ago, resolved_ago=past)
+        no_case = await _finding(connection, project, closed_ago=past, service="no-case")
+
+    await expiry.sweep(engine)
+
+    remaining = await _remaining(
+        engine, "findings", [active, resolved_lately, resolved_long_ago, no_case]
+    )
+    assert remaining == {active, resolved_lately}
+
+
+async def test_a_joined_finding_keeps_its_own_clock_and_outlives_its_root(
+    engine: AsyncEngine, project: AlertTenant
+) -> None:
+    """AC30, FR24, FR27, D43: a closed joined finding past its own retention goes even
+    while its root's case is active, so one case cannot pin an unbounded set of rows;
+    and deleting a root leaves its joined findings standing, with no root."""
+    past = FREE_DERIVED + DAY
+    async with engine.begin() as connection:
+        root = await _finding(connection, project, closed_ago=DAY, service="checkout")
+        await _give_case(connection, project, root, resolved_ago=None)
+        old_joined = await _finding(connection, project, closed_ago=past, service="checkout")
+        await _join(connection, project, old_joined, root)
+
+        resolved_root = await _finding(connection, project, closed_ago=past + DAY, service="cart")
+        await _give_case(connection, project, resolved_root, resolved_ago=past)
+        young_joined = await _finding(connection, project, closed_ago=DAY, service="cart")
+        await _join(connection, project, young_joined, resolved_root)
+
+    await expiry.sweep(engine)
+
+    remaining = await _remaining(
+        engine, "findings", [root, old_joined, resolved_root, young_joined]
+    )
+    assert remaining == {root, young_joined}
+    async with engine.connect() as connection:
+        orphan = await connection.execute(
+            text("SELECT root_finding_id FROM findings WHERE org_id = :org_id AND id = :id"),
+            {"org_id": project.org_id, "id": young_joined},
+        )
+        assert orphan.scalar_one() is None

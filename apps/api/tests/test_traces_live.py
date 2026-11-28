@@ -16,13 +16,17 @@ real server:
   show they agree — and that what the worker wrote there matches `spans`.
 
 It fails when the stack is not up, because a skip here is indistinguishable
-from a pass. It reads only; nothing is written, so nothing is cleaned up.
+from a pass. Every test but the last reads a project this suite writes for itself, under a
+tenant of its own, and its rows are deleted at the end of the run (`delete_after_run`): another
+suite's rows, or a development stack's, can neither change what it reads nor be changed by it.
+The last test reads the one stored span only the gate seed makes, by its service's name.
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -32,6 +36,7 @@ from urllib.parse import urlsplit
 import clickhouse_connect
 import pytest
 import pytest_asyncio
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
@@ -90,14 +95,48 @@ require_stack(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class BusiestProject:
-    """The project holding the most spans, and two windows over it.
+# The tables a `spans` insert fills: the table itself, the two views over it, and the summary
+# the worker writes beside it. All four are this suite's to clean up.
+WRITTEN_TABLES: Final = ("spans", "span_trace_lookup", "endpoint_stats_1m", "trace_summaries")
 
-    Every assertion but one runs over `window_start`..`window_end`, the hour
-    that failed most. The widest window is what the memory regression is about
-    and costs 640 MiB a time; running sixteen of those back to back exhausts
-    the dev server and proves nothing about the filters.
+# The traces one test's project holds: more than two pages, so the cursor has a page to
+# continue to, and enough shapes (three services, a failure in every fourth trace, five
+# durations, two attribute values) for every filter to separate something from something.
+TRACE_COUNT: Final = 60
+SECONDS_BETWEEN_TRACES: Final = 20
+CHILD_OFFSET_MS: Final = 5
+FAILING_EVERY: Final = 4
+ROOT_DURATIONS_MS: Final = (40, 70, 100, 130, 160)
+ATTRIBUTE_PATH: Final = "app.order.tier"
+ATTRIBUTE_VALUES: Final = ("gold", "standard")
+SEVERITY_ERROR: Final = 2
+SEVERITY_OK: Final = 1
+
+# Seconds into the first minute that the first trace starts, so no trace sits on a minute edge.
+FIRST_TRACE_SECOND: Final = 17
+# The traces start at noon yesterday, UTC: past, so inside every table's retention, and ten hours
+# from either midnight, so the run's day does not change which day's partition they fall in.
+HOURS_PAST_MIDNIGHT: Final = 12
+
+SPAN_COLUMNS: Final = [
+    "tenant_id", "project_id", "trace_id", "span_id", "parent_span_id",
+    "service_name", "span_name", "span_kind", "timestamp", "received_at",
+    "duration_ms", "status_code", "span_attrs",
+]  # fmt: skip
+SUMMARY_COLUMNS: Final = [
+    "tenant_id", "project_id", "start_time", "trace_id", "received_at", "duration_ms",
+    "span_count", "error_count", "worst_severity", "root_service", "root_name",
+    "span_services", "span_endpoints",
+]  # fmt: skip
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedProject:
+    """A project this test's suite wrote, and two windows over it.
+
+    Every assertion but one runs over `window_start`..`window_end`, the span of the traces with
+    their margins. The widest window is what the memory regression is about, reached from the
+    newest trace as the screen reaches it.
     """
 
     tenant_id: str
@@ -106,6 +145,96 @@ class BusiestProject:
     window_end: datetime
     widest_start: datetime
     widest_end: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _Span:
+    service_name: str
+    span_name: str
+    offset_ms: int
+    duration_ms: int
+    status_code: str
+
+
+def _trace_spans(position: int) -> list[_Span]:
+    """The spans of the trace at this position, root first: a frontend call that reaches
+    checkout, and on every other trace payments; every fourth trace fails in payments."""
+    failing = position % FAILING_EVERY == 0
+    root_ms = ROOT_DURATIONS_MS[position % len(ROOT_DURATIONS_MS)]
+    spans = [
+        _Span("frontend", "GET /cart", 0, root_ms, "OK"),
+        _Span("checkout", "PlaceOrder", CHILD_OFFSET_MS, root_ms - CHILD_OFFSET_MS, "OK"),
+    ]
+    if position % 2 == 0:
+        spans.append(
+            _Span(
+                "payments",
+                "Charge",
+                2 * CHILD_OFFSET_MS,
+                CHILD_OFFSET_MS,
+                "ERROR" if failing else "OK",
+            )
+        )
+    elif failing:
+        spans[1] = _Span(
+            "checkout", "PlaceOrder", CHILD_OFFSET_MS, root_ms - CHILD_OFFSET_MS, "ERROR"
+        )
+    return spans
+
+
+def _written_rows(
+    tenant_id: str, project_id: str, first_start: datetime
+) -> tuple[list[list[object]], list[list[object]]]:
+    """The spans, and the one summary per trace the worker would write for them."""
+    span_rows: list[list[object]] = []
+    summary_rows: list[list[object]] = []
+    for position in range(TRACE_COUNT):
+        started = first_start + timedelta(seconds=position * SECONDS_BETWEEN_TRACES)
+        received = started + timedelta(seconds=2)
+        trace_id = uuid.uuid4().hex
+        spans = _trace_spans(position)
+        root_id = uuid.uuid4().hex[:16]
+        tier = ATTRIBUTE_VALUES[position % len(ATTRIBUTE_VALUES)]
+        for index, span in enumerate(spans):
+            span_rows.append(
+                [
+                    tenant_id,
+                    project_id,
+                    trace_id,
+                    root_id if index == 0 else uuid.uuid4().hex[:16],
+                    "" if index == 0 else root_id,
+                    span.service_name,
+                    span.span_name,
+                    "SERVER",
+                    started + timedelta(milliseconds=span.offset_ms),
+                    received,
+                    float(span.duration_ms),
+                    span.status_code,
+                    {ATTRIBUTE_PATH: tier},
+                ]
+            )
+        failed = sum(1 for span in spans if span.status_code == "ERROR")
+        summary_rows.append(
+            [
+                tenant_id,
+                project_id,
+                started,
+                trace_id,
+                received,
+                float(max(span.offset_ms + span.duration_ms for span in spans)),
+                len(spans),
+                failed,
+                SEVERITY_ERROR if failed else SEVERITY_OK,
+                spans[0].service_name,
+                spans[0].span_name,
+                sorted({span.service_name for span in spans}),
+                sorted(
+                    f"{span.service_name}{queries.ENDPOINT_SEPARATOR}{span.span_name}"
+                    for span in spans
+                ),
+            ]
+        )
+    return span_rows, summary_rows
 
 
 @pytest_asyncio.fixture
@@ -125,45 +254,29 @@ async def clickhouse() -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
-async def busiest(clickhouse: AsyncClient) -> BusiestProject:
-    result = await clickhouse.query(
-        "SELECT tenant_id, project_id, max(timestamp) AS newest "
-        "FROM spans GROUP BY tenant_id, project_id ORDER BY count() DESC LIMIT 1"
+async def owned(clickhouse: AsyncClient) -> OwnedProject:
+    """A tenant of this test's own, holding the traces above."""
+    # Aware: clickhouse-connect's insert reads a naive datetime as the machine's local time.
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    first_start = (
+        today - timedelta(hours=HOURS_PAST_MIDNIGHT) + timedelta(seconds=FIRST_TRACE_SECOND)
     )
-    assert result.result_rows, (
-        "`spans` is empty — this suite would prove nothing. Run the load "
-        "generator, or check that the trace pipeline is writing spans."
-    )
-    tenant_id, project_id, newest = result.result_rows[0]
+    tenant_id, project_id = str(uuid.uuid4()), str(uuid.uuid4())
+    for table in WRITTEN_TABLES:
+        delete_after_run(table, tenant_id)
 
-    # The hour that failed most, rather than the busiest or the latest. What
-    # these assertions need is variety — failures beside healthy traces, across
-    # several services — and the busiest hour of a load test has one service and
-    # no failures in it. This is also the smallest of the three by some way,
-    # which is what lets the whole suite run without exhausting the server.
-    #
-    # Bounded by that hour's first and last span, with a margin, rather than by the clock: the
-    # summary test looks five minutes inside each edge, and traces sent at 10:02 lie outside
-    # 10:05..10:55 — CI's seeded traces did exactly that (2026-10-28). Never wider than the hour
-    # plus its margins, so the suite's memory cost is what it was.
-    hour = await clickhouse.query(
-        "SELECT toStartOfHour(timestamp) AS window, min(timestamp), max(timestamp) FROM spans "
-        "WHERE tenant_id = {tenant_id:String} AND project_id = {project_id:String} "
-        "GROUP BY window HAVING countIf(status_code = 'ERROR') > 0 "
-        "ORDER BY countIf(status_code = 'ERROR') DESC LIMIT 1",
-        parameters={"tenant_id": str(tenant_id), "project_id": str(project_id)},
-    )
-    assert hour.result_rows, (
-        "no hour of the busiest project holds a failed span — the status filter "
-        "below would prove nothing. Run the load generator against a failing service."
-    )
-    _, first_span, last_span = hour.result_rows[0]
+    span_rows, summary_rows = _written_rows(tenant_id, project_id, first_start)
+    await clickhouse.insert("spans", span_rows, column_names=SPAN_COLUMNS)
+    await clickhouse.insert("trace_summaries", summary_rows, column_names=SUMMARY_COLUMNS)
 
-    return BusiestProject(
-        tenant_id=str(tenant_id),
-        project_id=str(project_id),
-        window_start=first_span - WINDOW_MARGIN,
-        window_end=last_span + WINDOW_MARGIN,
+    newest = first_start + timedelta(seconds=(TRACE_COUNT - 1) * SECONDS_BETWEEN_TRACES)
+    # Margins on the traces' own span rather than the clock: the summary test looks five minutes
+    # inside each edge, so every trace lies wholly inside it.
+    return OwnedProject(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        window_start=first_start - WINDOW_MARGIN,
+        window_end=newest + timedelta(seconds=1) + WINDOW_MARGIN,
         widest_start=newest - WIDEST_WINDOW,
         widest_end=newest + timedelta(seconds=1),
     )
@@ -174,7 +287,7 @@ def _repository(client: AsyncClient, tenant_id: str) -> TenantScopedRepository:
 
 
 async def _list(
-    clickhouse: AsyncClient, project: BusiestProject, filters: TraceFilters, limit: int = PAGE
+    clickhouse: AsyncClient, project: OwnedProject, filters: TraceFilters, limit: int = PAGE
 ) -> list[str]:
     page = await service.list_traces(
         _repository(clickhouse, project.tenant_id),
@@ -189,12 +302,12 @@ async def _list(
 
 
 @pytest_asyncio.fixture
-async def facets(clickhouse: AsyncClient, busiest: BusiestProject) -> TraceFacetsResponse:
+async def facets(clickhouse: AsyncClient, owned: OwnedProject) -> TraceFacetsResponse:
     return await service.trace_facets(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
     )
 
 
@@ -202,7 +315,7 @@ async def facets(clickhouse: AsyncClient, busiest: BusiestProject) -> TraceFacet
 
 
 async def test_the_widest_window_the_screen_offers_is_one_the_server_can_answer(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """The regression this endpoint was rebuilt for.
 
@@ -212,29 +325,29 @@ async def test_the_widest_window_the_screen_offers_is_one_the_server_can_answer(
     The roots are now read for the page alone.
     """
     page = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.widest_start,
-        to_time=busiest.widest_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.widest_start,
+        to_time=owned.widest_end,
         filters=TraceFilters(),
         limit=PAGE,
         cursor=None,
     )
 
-    assert page.traces, "the busiest project returned no traces over a week"
+    assert page.traces, "the project returned no traces over a week"
     assert all(trace.root_service and trace.root_name for trace in page.traces), (
         "a trace came back unnamed — the second read did not answer for this page"
     )
 
 
 async def test_a_page_is_newest_first_and_the_cursor_continues_it(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     first = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(),
         limit=PAGE,
         cursor=None,
@@ -244,10 +357,10 @@ async def test_a_page_is_newest_first_and_the_cursor_continues_it(
     assert first.next_cursor, "a full page offered no cursor"
 
     second = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(),
         limit=PAGE,
         cursor=first.next_cursor,
@@ -263,21 +376,21 @@ async def test_a_page_is_newest_first_and_the_cursor_continues_it(
 
 
 async def test_a_service_filter_returns_traces_that_contain_that_service(
-    clickhouse: AsyncClient, busiest: BusiestProject, facets: TraceFacetsResponse
+    clickhouse: AsyncClient, owned: OwnedProject, facets: TraceFacetsResponse
 ) -> None:
     """And the row still describes the whole trace, not the matching spans."""
     service_name = facets.services[0].service_name
 
     page = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(service_name=service_name),
         limit=PAGE,
         cursor=None,
     )
-    assert page.traces, f"no traces matched the busiest service, {service_name}"
+    assert page.traces, f"no traces matched the first service, {service_name}"
 
     # Counted straight out of `spans`, so a filter that matched the wrong traces
     # — or a row describing only the matching spans — shows. No time predicate:
@@ -291,8 +404,8 @@ async def test_a_service_filter_returns_traces_that_contain_that_service(
             "FROM spans WHERE tenant_id = {tenant_id:String} "
             "AND project_id = {project_id:String} AND trace_id = {trace_id:String}",
             parameters={
-                "tenant_id": busiest.tenant_id,
-                "project_id": busiest.project_id,
+                "tenant_id": owned.tenant_id,
+                "project_id": owned.project_id,
                 "trace_id": trace.trace_id,
                 "service_name": service_name,
             },
@@ -303,22 +416,22 @@ async def test_a_service_filter_returns_traces_that_contain_that_service(
 
 
 async def test_a_status_filter_separates_the_traces_that_failed_from_the_rest(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     failed = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(status=queries.STATUS_ERROR),
         limit=PAGE,
         cursor=None,
     )
     healthy = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(status=queries.STATUS_OK),
         limit=PAGE,
         cursor=None,
@@ -332,25 +445,26 @@ async def test_a_status_filter_separates_the_traces_that_failed_from_the_rest(
 
 
 async def test_a_duration_floor_returns_only_traces_that_took_at_least_that_long(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     floor_ms = 50.0
 
     page = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(min_duration_ms=floor_ms),
         limit=PAGE,
         cursor=None,
     )
 
+    assert page.traces, f"no trace took {floor_ms} ms"
     assert all(trace.duration_ms >= floor_ms for trace in page.traces)
 
 
 async def test_an_arbitrary_attribute_path_is_filtered_without_entering_the_sql(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """The escape hatch, on a path taken from the data rather than assumed.
 
@@ -361,10 +475,10 @@ async def test_an_arbitrary_attribute_path_is_filtered_without_entering_the_sql(
     be filtered without building SQL from what a caller typed.
     """
     window = {
-        "tenant_id": busiest.tenant_id,
-        "project_id": busiest.project_id,
-        "from_time": busiest.window_start,
-        "to_time": busiest.window_end,
+        "tenant_id": owned.tenant_id,
+        "project_id": owned.project_id,
+        "from_time": owned.window_start,
+        "to_time": owned.window_end,
     }
     in_the_window = (
         "FROM spans WHERE tenant_id = {tenant_id:String} "
@@ -392,11 +506,11 @@ async def test_an_arbitrary_attribute_path_is_filtered_without_entering_the_sql(
     value = str(sampled.result_rows[0][0])
 
     matched = await _list(
-        clickhouse, busiest, TraceFilters(attribute_path=path, attribute_value=value)
+        clickhouse, owned, TraceFilters(attribute_path=path, attribute_value=value)
     )
     unmatchable = await _list(
         clickhouse,
-        busiest,
+        owned,
         TraceFilters(attribute_path=path, attribute_value=f"{value}-no-span-carries-this"),
     )
 
@@ -405,14 +519,14 @@ async def test_an_arbitrary_attribute_path_is_filtered_without_entering_the_sql(
 
 
 async def test_a_path_nothing_ever_wrote_is_answered_rather_than_refused(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """A JSON column past its path limit spills to shared data; an unknown path
     must come back empty, not as an error the screen shows as a failure."""
     assert (
         await _list(
             clickhouse,
-            busiest,
+            owned,
             TraceFilters(attribute_path="nexovue.no.such.attribute", attribute_value="x"),
         )
         == []
@@ -421,30 +535,30 @@ async def test_a_path_nothing_ever_wrote_is_answered_rather_than_refused(
 
 @pytest.mark.parametrize("path", sorted(queries.PROMOTED_ATTRIBUTE_CLAUSES))
 async def test_every_promoted_attribute_path_produces_a_statement_the_server_accepts(
-    clickhouse: AsyncClient, busiest: BusiestProject, path: str
+    clickhouse: AsyncClient, owned: OwnedProject, path: str
 ) -> None:
     """`http_status` is a UInt16 and the filter value is text; the cast has to be
     there, and only the server says whether it is."""
-    await _list(clickhouse, busiest, TraceFilters(attribute_path=path, attribute_value="200"))
+    await _list(clickhouse, owned, TraceFilters(attribute_path=path, attribute_value="200"))
 
 
 async def test_the_filters_narrow_together_rather_than_replacing_one_another(
-    clickhouse: AsyncClient, busiest: BusiestProject, facets: TraceFacetsResponse
+    clickhouse: AsyncClient, owned: OwnedProject, facets: TraceFacetsResponse
 ) -> None:
     operation = facets.operations[0]
 
     by_service = await _list(
-        clickhouse, busiest, TraceFilters(service_name=operation.service_name), limit=PAGE
+        clickhouse, owned, TraceFilters(service_name=operation.service_name), limit=PAGE
     )
     by_both = await _list(
         clickhouse,
-        busiest,
+        owned,
         TraceFilters(service_name=operation.service_name, operation=operation.operation),
         limit=PAGE,
     )
 
-    assert by_service, "the busiest operation's service matched nothing"
-    assert by_both, "the busiest operation matched nothing"
+    assert by_service, "the first operation's service matched nothing"
+    assert by_both, "the first operation matched nothing"
     # Deliberately not a subset check: each page is the newest of a different
     # result set, so the narrower one can name a trace the wider page cut off.
     for trace_id in by_both:
@@ -453,8 +567,8 @@ async def test_the_filters_narrow_together_rather_than_replacing_one_another(
             "AND project_id = {project_id:String} AND trace_id = {trace_id:String} "
             "AND service_name = {service_name:String} AND span_name = {operation:String}",
             parameters={
-                "tenant_id": busiest.tenant_id,
-                "project_id": busiest.project_id,
+                "tenant_id": owned.tenant_id,
+                "project_id": owned.project_id,
                 "trace_id": trace_id,
                 "service_name": operation.service_name,
                 "operation": operation.operation,
@@ -469,7 +583,7 @@ async def test_the_filters_narrow_together_rather_than_replacing_one_another(
 
 
 async def test_a_tenant_with_nothing_reads_nothing_however_it_filters(
-    clickhouse: AsyncClient, busiest: BusiestProject, facets: TraceFacetsResponse
+    clickhouse: AsyncClient, owned: OwnedProject, facets: TraceFacetsResponse
 ) -> None:
     """The same window and the same filters, under an organization that owns none
     of it. The tenant predicate is the only difference."""
@@ -485,9 +599,9 @@ async def test_a_tenant_with_nothing_reads_nothing_however_it_filters(
     ):
         page = await service.list_traces(
             stranger,
-            project_id=busiest.project_id,
-            from_time=busiest.window_start,
-            to_time=busiest.window_end,
+            project_id=owned.project_id,
+            from_time=owned.window_start,
+            to_time=owned.window_end,
             filters=filters,
             limit=PAGE,
             cursor=None,
@@ -496,19 +610,19 @@ async def test_a_tenant_with_nothing_reads_nothing_however_it_filters(
 
 
 async def test_the_facets_offer_only_what_this_window_holds(
-    clickhouse: AsyncClient, busiest: BusiestProject, facets: TraceFacetsResponse
+    clickhouse: AsyncClient, owned: OwnedProject, facets: TraceFacetsResponse
 ) -> None:
-    assert facets.services, "the busiest project reported no services"
+    assert facets.services, "the project reported no services"
 
     named = await clickhouse.query(
         "SELECT DISTINCT service_name FROM spans WHERE tenant_id = {tenant_id:String} "
         "AND project_id = {project_id:String} AND timestamp >= {from_time:DateTime64(9)} "
         "AND timestamp < {to_time:DateTime64(9)}",
         parameters={
-            "tenant_id": busiest.tenant_id,
-            "project_id": busiest.project_id,
-            "from_time": busiest.window_start,
-            "to_time": busiest.window_end,
+            "tenant_id": owned.tenant_id,
+            "project_id": owned.project_id,
+            "from_time": owned.window_start,
+            "to_time": owned.window_end,
         },
     )
     in_the_window = {str(row[0]) for row in named.result_rows}
@@ -518,14 +632,14 @@ async def test_the_facets_offer_only_what_this_window_holds(
 
 
 async def test_a_stranger_is_offered_no_filters_at_all(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """The facet list is a list of another tenant's service names."""
     stranger = await service.trace_facets(
         _repository(clickhouse, TENANT_THAT_NEVER_EXISTED),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
     )
 
     assert stranger.services == []
@@ -536,22 +650,22 @@ async def test_a_stranger_is_offered_no_filters_at_all(
 
 
 async def test_the_summary_row_says_what_the_spans_of_that_trace_say(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """`trace_summaries` is derived in the worker and read here, so nothing but
     this compares the two. A drift in the derivation — a duration measured on the
     root span, a status folded the wrong way — is invisible to every other test.
     """
     page = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=busiest.window_start,
-        to_time=busiest.window_end,
+        _repository(clickhouse, owned.tenant_id),
+        project_id=owned.project_id,
+        from_time=owned.window_start,
+        to_time=owned.window_end,
         filters=TraceFilters(),
         limit=PAGE,
         cursor=None,
     )
-    assert page.traces, "the busiest hour returned no traces"
+    assert page.traces, "the window returned no traces"
 
     for trace in page.traces:
         answer = await clickhouse.query(
@@ -564,8 +678,8 @@ async def test_the_summary_row_says_what_the_spans_of_that_trace_say(
             "FROM spans WHERE tenant_id = {tenant_id:String} "
             "AND project_id = {project_id:String} AND trace_id = {trace_id:String}",
             parameters={
-                "tenant_id": busiest.tenant_id,
-                "project_id": busiest.project_id,
+                "tenant_id": owned.tenant_id,
+                "project_id": owned.project_id,
                 "trace_id": trace.trace_id,
             },
         )
@@ -579,7 +693,7 @@ async def test_the_summary_row_says_what_the_spans_of_that_trace_say(
 
 
 async def test_the_list_never_reads_spans_unless_an_attribute_was_asked_for(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """The regression this was built for, as a property of the statements rather
     than of a timing. Grouping a week of `spans` cost 292 MiB and 393 ms here,
@@ -598,7 +712,7 @@ async def test_the_list_never_reads_spans_unless_an_attribute_was_asked_for(
 
 
 async def test_the_summary_and_the_span_grouping_name_the_same_traces(
-    clickhouse: AsyncClient, busiest: BusiestProject
+    clickhouse: AsyncClient, owned: OwnedProject
 ) -> None:
     """Both paths are live — one for the attribute filter, one for everything
     else — so they have to agree. They are compared over the traces that fall
@@ -606,8 +720,8 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
     at its edges: the summary keys on when a trace *started*, the grouping on
     whether a span of it lies inside.
     """
-    inner_start = busiest.window_start + timedelta(minutes=5)
-    inner_end = busiest.window_end - timedelta(minutes=5)
+    inner_start = owned.window_start + timedelta(minutes=5)
+    inner_end = owned.window_end - timedelta(minutes=5)
 
     # The docstring above said the comparison was over traces wholly inside the
     # window and the code never did it — it narrowed the window by five minutes
@@ -637,7 +751,7 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
     # nothing wholly inside, rather than failing on page one, is what survives
     # that — a wider scan during that incident found good candidates well
     # within the first ten pages.
-    repository = _repository(clickhouse, busiest.tenant_id)
+    repository = _repository(clickhouse, owned.tenant_id)
     summarised: dict[str, TraceSummary] = {}
     grouped: dict[str, TraceSummary] = {}
     summary_cursor: str | None = None
@@ -649,7 +763,7 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
         if not summary_exhausted:
             from_summary = await service.list_traces(
                 repository,
-                project_id=busiest.project_id,
+                project_id=owned.project_id,
                 from_time=inner_start,
                 to_time=inner_end,
                 filters=TraceFilters(),
@@ -663,7 +777,7 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
         if not spans_exhausted:
             from_spans = await service._list_by_grouping_spans(
                 repository,
-                project_id=busiest.project_id,
+                project_id=owned.project_id,
                 from_time=inner_start,
                 to_time=inner_end,
                 filters=TraceFilters(),
@@ -701,7 +815,7 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
 
 
 async def test_a_service_and_an_operation_together_match_one_span_not_two(
-    clickhouse: AsyncClient, busiest: BusiestProject, facets: TraceFacetsResponse
+    clickhouse: AsyncClient, owned: OwnedProject, facets: TraceFacetsResponse
 ) -> None:
     """The pair is stored joined for this reason. A service from one span and an
     operation from another is three unrelated spans reported as one trace."""
@@ -720,7 +834,7 @@ async def test_a_service_and_an_operation_together_match_one_span_not_two(
 
     crossed = await _list(
         clickhouse,
-        busiest,
+        owned,
         TraceFilters(service_name=operation.service_name, operation=other.operation),
     )
     for trace_id in crossed:
@@ -729,8 +843,8 @@ async def test_a_service_and_an_operation_together_match_one_span_not_two(
             "AND project_id = {project_id:String} AND trace_id = {trace_id:String} "
             "AND service_name = {service_name:String} AND span_name = {operation:String}",
             parameters={
-                "tenant_id": busiest.tenant_id,
-                "project_id": busiest.project_id,
+                "tenant_id": owned.tenant_id,
+                "project_id": owned.project_id,
                 "trace_id": trace_id,
                 "service_name": operation.service_name,
                 "operation": other.operation,

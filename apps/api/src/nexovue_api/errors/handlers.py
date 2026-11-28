@@ -19,6 +19,7 @@ from nexovue_platform.telemetry.context import (
     current_correlation_id,
 )
 from nexovue_platform.telemetry.logging import get_logger
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
@@ -32,6 +33,12 @@ logger = get_logger(__name__)
 GENERIC_INTERNAL_DETAIL: Final = (
     "The request could not be completed. Quote the correlation id when reporting this."
 )
+
+# How long a caller refused for a full Postgres pool is asked to wait. A connection is held
+# for the Postgres part of a request, milliseconds, so the pool frees within a second or two
+# of a burst. A proposal, not a measured value (docs/changes/request-holds-one-connection/).
+BUSY_RETRY_AFTER_SECONDS: Final = 2
+BUSY_DETAIL: Final = "Nexovue is busy right now. Try again in a few seconds."
 
 # Statuses Starlette raises on its own — a route that does not exist, a method
 # that is not allowed — mapped onto our registered types.
@@ -130,6 +137,8 @@ async def handle_unexpected_error(request: Request, error: Exception) -> JSONRes
     Public because the exception boundary middleware calls it directly, so both
     routes to a 500 produce the same body and the same log line.
     """
+    if isinstance(error, PoolTimeoutError):
+        return _busy(request)
     logger.error(
         "unhandled exception",
         exc_info=error,
@@ -137,6 +146,22 @@ async def handle_unexpected_error(request: Request, error: Exception) -> JSONRes
         method=request.method,
     )
     return problem_response(request, problems.INTERNAL_ERROR, GENERIC_INTERNAL_DETAIL)
+
+
+def _busy(request: Request) -> JSONResponse:
+    """Every pooled Postgres connection in use: a 503 with a time to come back, not a 500.
+
+    Here rather than as a handler of its own, because a full pool is met in middleware as
+    well (the rate limiter reads sessions before any route), and both reach this function.
+    Logged as a warning: it is load, and the count of them is what sizes the pool.
+    """
+    logger.warning("postgres pool exhausted", path=request.url.path, method=request.method)
+    return problem_response(
+        request,
+        problems.SERVICE_BUSY,
+        BUSY_DETAIL,
+        headers={"Retry-After": str(BUSY_RETRY_AFTER_SECONDS)},
+    )
 
 
 def _describe_validation_problem(item: dict[str, Any]) -> dict[str, str]:

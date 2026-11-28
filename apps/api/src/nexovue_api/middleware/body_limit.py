@@ -7,16 +7,17 @@ refused before the route runs, and every body is counted as it arrives whatever
 was declared.
 
 Every route gets `DEFAULT_CAP`, which is above the largest JSON body the API
-takes (a check's 256 K-character inline body). Two routes are raised to what
-their own validation accepts. The edge refuses anything above `LARGEST_CAP`
-first (`deploy/caddy/Caddyfile`); the routes that stream keep their own, smaller
-caps under this one.
+takes (a check's 256 K-character inline body). Some routes are raised to what
+their own validation accepts, and the runbook upload to its files' cap. The edge
+refuses anything above `LARGEST_CAP` first (`deploy/caddy/Caddyfile`); the routes
+that stream keep their own, smaller caps under this one.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
+from nexovue_platform.knowledge import MAX_RUNBOOK_BYTES, MAX_UPLOAD_FILES
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -39,6 +40,8 @@ RAISED_CAPS: Final[dict[str, int]] = {
     # Five million characters of document, each up to four bytes in UTF-8.
     f"{API_PREFIX}/check-imports/preview": 4 * MAX_IMPORT_CHARACTERS + _ENVELOPE,
     f"{API_PREFIX}/check-imports/commit": 4 * MAX_IMPORT_CHARACTERS + _ENVELOPE,
+    # F4: an upload of Markdown runbooks as JSON, each escaping to about twice its bytes.
+    f"{API_PREFIX}/runbooks/upload": 2 * MAX_UPLOAD_FILES * MAX_RUNBOOK_BYTES + _ENVELOPE,
 }
 LARGEST_CAP: Final = max(DEFAULT_CAP, *RAISED_CAPS.values())
 

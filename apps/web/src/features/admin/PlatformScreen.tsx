@@ -44,7 +44,7 @@ export function PlatformScreen() {
       <header className="shrink-0 px-4 pt-5 pb-3">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <div>
-            <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Platform</h1>
+            <h1 className="heading-page">Platform</h1>
             <p className="mt-1 text-ink-dim text-sm">
               Every organization on this deployment, and what nexovue can do about them.
             </p>

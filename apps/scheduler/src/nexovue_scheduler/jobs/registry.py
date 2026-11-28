@@ -27,7 +27,64 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.detection.coordinator",
     "nexovue_scheduler.detection.project_job",
     "nexovue_scheduler.detection.baselines",
+    "nexovue_scheduler.slos.job",
+    "nexovue_scheduler.releases.sync",
+    "nexovue_scheduler.releases.summary",
+    "nexovue_scheduler.cases",
+    "nexovue_scheduler.evidence.gather",
+    # F4 T5.5: chat's fact lines, on the shared queue; no AI is called or loaded by it.
+    "nexovue_scheduler.knowledge.tasks",
+    # F5: rung 2b's sweep, on `light`; it holds no key and calls nothing (plan T2b.9).
+    "nexovue_scheduler.fixes.sweep",
+    # F5 Step 4: a requester's emails, on `light`, which holds the mail settings (T4.8).
+    "nexovue_scheduler.fixes.notify",
 )
+
+# The modules each kind of worker loads (`--tasks`), F3's mechanism. A narrow role names
+# its own, so a task runs only where its keys are: `connections` holds tracker keys and
+# never imports ClickHouse, Kafka or object-store code (F22 D80, AC34).
+TASK_SETS: Final[dict[str, tuple[str, ...]]] = {
+    "all": TASK_MODULES,
+    # F5 (plan T3.10, T3.13, T3.17): reading files, the Fix App, the account link and
+    # rung 3's sweep run only where the connection key is, never in `TASK_MODULES`.
+    "connections": (
+        "nexovue_scheduler.connections.tasks",
+        "nexovue_scheduler.connections.source_pack",
+        "nexovue_scheduler.connections.fix_app",
+        "nexovue_scheduler.connections.fix_link",
+        "nexovue_scheduler.connections.fix_sweep",
+        # F5 Step 4: a person's check run (plan T4.12).
+        "nexovue_scheduler.connections.fix_check",
+        # F5 Step 7: the draft job and **Delete this branch** (plan T7.5, T7.10), each
+        # refusing before any GitHub call while write access is off (ADR-097).
+        "nexovue_scheduler.connections.fix_writer",
+        # F5 Step 8: F5's own pull request poller, reads only (plan T8.2); Run CI is in
+        # `fix_writer`, refusing before any GitHub call while write access is off.
+        "nexovue_scheduler.connections.fix_poller",
+    ),
+    # F3: the AI role, on its own account and network: the connection test (Step 4), the
+    # wording job and its sweep (Step 5). `all` never loads these.
+    # F4: chat's loop and its sweep (plan T2.9), here and never in `TASK_MODULES`.
+    "insight": (
+        "nexovue_scheduler.insight.check",
+        "nexovue_scheduler.insight.word",
+        "nexovue_scheduler.insight.sweep",
+        "nexovue_scheduler.insight.assistant",
+        "nexovue_scheduler.insight.assistant_sweep",
+        # F4 Step 6: the embedding sweep and the embedding check (plan T6.1).
+        "nexovue_scheduler.insight.knowledge",
+        # F5: rung 2b's general suggestion (plan T2b.6), on `insight-fix`.
+        "nexovue_scheduler.insight.suggest_general_fix",
+        # F5: rung 3's suggestion from the files a person sent (plan T4.4), on `insight-fix`.
+        "nexovue_scheduler.insight.propose_fix",
+    ),
+}
+# The module a worker's forkserver imports before any child exists, per task set.
+PRELOAD_OF: Final[dict[str, str]] = {
+    "all": "nexovue_scheduler.jobs.preload",
+    "connections": "nexovue_scheduler.jobs.preload_connections",
+    "insight": "nexovue_scheduler.jobs.preload_insight",
+}
 
 _TASKS: dict[str, Callable[..., None]] = {}
 _ATTEMPT: ContextVar[int] = ContextVar("job_attempt", default=1)

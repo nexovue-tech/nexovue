@@ -90,7 +90,10 @@ describe("the detection badge", () => {
     );
 
     expect(badge?.label).toBe("Learning until 3 Nov");
-    expect(badge?.detail).toBe("Traffic drops are judged from 21 Nov.");
+    // The reason goes with the later day, so two dates side by side do not read as a contradiction.
+    expect(badge?.detail).toBe(
+      "Traffic drops need 3 weeks of history, so they are judged from 21 Nov.",
+    );
   });
 
   it("adds nothing when every signal starts on the same day", () => {

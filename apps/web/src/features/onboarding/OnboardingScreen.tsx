@@ -102,11 +102,15 @@ export function OnboardingView({ setup, arrived, failed, silent }: OnboardingVie
       </div>
 
       <div className="mt-3 flex items-center gap-3">
-        <CopyButton value={variables.map(({ line }) => line).join("\n")} label="all three" />
+        <CopyButton
+          value={variables.map(({ line }) => line).join("\n")}
+          label="all three"
+          showLabel
+        />
         <p className="text-ink-dim text-xs">
           {setup
             ? "This key is shown once and is never retrievable again."
-            : "The key is shown once, when the account is created. Issue a new one under Settings → API keys, and use the ingest endpoint your account was given."}
+            : "The key is shown once, when the account is created. Issue a new one under Settings → Ingest keys, and use the ingest endpoint your account was given."}
         </p>
       </div>
 
@@ -120,7 +124,10 @@ export function OnboardingView({ setup, arrived, failed, silent }: OnboardingVie
             name={arrived.root_name}
           />
         ) : (
-          <Waiting failed={failed} silent={silent} endpoint={endpoint} />
+          <>
+            <Waiting failed={failed} silent={silent} endpoint={endpoint} />
+            <LeaveForTheConsole keyShown={setup !== undefined} />
+          </>
         )}
       </div>
     </div>
@@ -156,9 +163,7 @@ function Arrived({ traceId, service, name }: { traceId: string; service: string;
 
   return (
     <div role="status" aria-live="polite">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
-        Your first span arrived.
-      </h2>
+      <h2 className="heading-section">Your first span arrived.</h2>
       <p className="mt-2 text-ink-dim text-sm leading-relaxed">
         <span className="font-mono text-ink text-xs">{service}</span> reported{" "}
         <span className="text-ink">{name}</span>. Everything it calls will show up alongside it.
@@ -177,5 +182,32 @@ function Arrived({ traceId, service, name }: { traceId: string; service: string;
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * A way into the console before the first span (UX review, 2026-11-28): a reader who cannot
+ * set the variables now was held on this screen. The key is shown once, so it says to copy
+ * it first, and leaving forgets it, as finishing does.
+ */
+function LeaveForTheConsole({ keyShown }: { keyShown: boolean }) {
+  const navigate = useNavigate();
+  return (
+    <p className="mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-dim text-sm">
+      <Button
+        variant="quiet"
+        onClick={() => {
+          forgetFirstSetup();
+          void navigate({ to: "/", replace: true });
+        }}
+      >
+        Go to the console now
+      </Button>
+      <span>
+        {keyShown
+          ? "The key is not shown again, so copy the key first. Findings appear once a service reports."
+          : "Findings appear once a service reports."}
+      </span>
+    </p>
   );
 }

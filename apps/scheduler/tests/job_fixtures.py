@@ -23,7 +23,11 @@ RETRY: str = "jobs-test.retry"
 SPAN: str = "jobs-test.span"
 DIE: str = "jobs-test.die"
 WHO: str = "jobs-test.who"
+# F22 AC34: writes the child's `sys.modules`, for `test_connections_have_no_ai.py`.
+LOADED: str = "jobs-test.loaded"
 GROW: str = "jobs-test.grow"
+# F4 AC27: chat's real loop and store, its child killed between two calls or in a call.
+CHAT: str = "jobs-test.chat"
 # A real task module this suite never names: imported in a child only if it was preloaded.
 PRELOADED: str = "nexovue_scheduler.detection.baselines"
 
@@ -99,3 +103,66 @@ def grow(*, path: str, mebibytes: int) -> None:
     """Keeps `mebibytes` of its own memory after it ends."""
     _kept.append(bytearray(os.urandom(1024)) * (mebibytes * 1024))
     _write(path, f"pid {os.getpid()} grew")
+
+
+@task(LOADED)
+def loaded(*, path: str | None = None) -> None:
+    """Records every module this child holds, and how many objects it inherited frozen from
+    its forkserver's preload, where a narrow role's suite reads them: at `path`, or where
+    the connections suite looks."""
+    import json
+    import tempfile
+
+    record = {"modules": sorted(sys.modules), "frozen": gc.get_freeze_count()}
+    target = Path(path or Path(tempfile.gettempdir()) / "nexovue-connections-child-modules.json")
+    target.write_text(json.dumps(record))
+
+
+@task(CHAT)
+def chat(*, path: str, org_id: str, message_id: str, key: str, end: str) -> None:
+    """Chat's real loop and Postgres store, with an in-memory provider and API. `end` says
+    how the child dies: `between` two provider calls (killed outright, as the kernel kills
+    a child), or `blocked` in its first call, deaf to the soft limit until the hard kill.
+    Imported here, not at the top: other children of this suite must not load AI code."""
+    from datetime import UTC, datetime, timedelta
+
+    from assistant_fakes import RecordingClient
+    from nexovue_platform.ai.testing import ScriptedProvider, calls
+    from nexovue_platform.checks.sealing import ConfiguredKeys
+
+    from nexovue_scheduler.insight.assistant import LoopParts, answer
+    from nexovue_scheduler.insight.assistant_store import PostgresQuestionStore
+    from nexovue_scheduler.process_engine import with_engine
+
+    now = datetime.now(UTC)
+    window = {
+        "from": (now - timedelta(minutes=30)).isoformat(),
+        "to": now.isoformat(),
+    }
+
+    def second_call(_request: object) -> object:
+        _write(path, "killed between calls")
+        os.kill(os.getpid(), signal.SIGKILL)
+        raise AssertionError("unreachable")
+
+    def blocked_call(_request: object) -> object:
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+        _write(path, "blocked in a call")
+        time.sleep(60)
+        raise AssertionError("unreachable")
+
+    replies = [calls("list_services", window), second_call] if end == "between" else [blocked_call]
+    provider = ScriptedProvider(replies)  # type: ignore[arg-type]
+    with_engine(
+        lambda engine: answer(
+            org_id,
+            message_id,
+            LoopParts(
+                store=PostgresQuestionStore(engine),
+                client=RecordingClient(),
+                provider_for=lambda _connection, _key: provider,
+                keys=ConfiguredKeys(key, ""),
+                clock=lambda: datetime.now(UTC),
+            ),
+        )
+    )

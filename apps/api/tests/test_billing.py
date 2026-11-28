@@ -690,6 +690,7 @@ class TestSettings:
             payments_domestic_secret_key=SECRET,
             check_secret_key=DEPLOYED_KEYS["CHECK_SECRET_KEY"],
             credential_encryption_key=DEPLOYED_KEYS["CREDENTIAL_ENCRYPTION_KEY"],
+            connection_secret_key=DEPLOYED_KEYS["CONNECTION_SECRET_KEY"],
         )
 
     @pytest.mark.parametrize("key", ["rzp_test_abc123", "TEST_APP_ID"])

@@ -24,6 +24,8 @@ var spansColumns = []string{
 	// The `links` Nested column (000025), which the server stores — and so the
 	// writer fills — as the three arrays it flattens into.
 	"links.trace_id", "links.span_id", "links.attributes",
+	// The door it came through (000041).
+	"door",
 }
 
 func TestBlockCoversEveryColumnOfTheTable(t *testing.T) {

@@ -56,6 +56,11 @@ export interface ErrorGroupSummary {
   sample_source: string;
   /** Null when no deploy of these services is recorded before this appeared. */
   preceding_deploy: PrecedingDeploy | null;
+  /**
+   * What we hear about these services' deploys as of `first_seen` (F28 FR38). Null
+   * when it was not read: the one case the unknown mark stands for.
+   */
+  deploy_coverage: "deploys_and_versions" | "deploys_only" | "versions_only" | "none" | null;
 }
 
 export interface ErrorOccurrence {

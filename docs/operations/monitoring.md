@@ -73,6 +73,26 @@ Stopping the light worker on the dev stack raised `jobs_ready` on `light` and `l
 
 The Go services also export their runtime (`go_*`) and process (`process_*`) metrics.
 
+### Dashboards
+
+Dashboards add no metric of their own. What to read, and where (F20):
+
+- **The batch's log line.** Every dashboard read logs one `dashboard batch read` line, naming no title and no
+  service: `panels`, `scans_run`, `merged`, `kept_answers_used`, `joined`, `refused`, `timed_out`, `failed`,
+  `over_limit`, `paused` and `total_ms`. A rise in `refused` or `timed_out` is the signal that reads are crowding the
+  install.
+- **The API's ClickHouse account.** The API reads as `nexovue_api_reader`, bounded to 2.4 GiB of memory for the
+  account and 12 reads at once (`deploy/clickhouse/users.d/api-reader.xml`; both are guesses until the rerun on a
+  deployed server). In `system.query_log`, `user = 'nexovue_api_reader'` with `exception_code` 241
+  (`MEMORY_LIMIT_EXCEEDED`) or 202 (`TOO_MANY_SIMULTANEOUS_QUERIES`) means a bound was reached; the scheduler's
+  alert and detection reads use another account and are outside it.
+- **The off switch.** `DASHBOARD_SCANS_ENABLED=false` on the API makes every panel read "paused by the operator" while
+  everything else keeps working. The five tunables a self-hosted install may set are in
+  [sizing](../self-hosting/sizing.md).
+- **Measured 2026-11-22**, on a shared 4 vCPU VM and demo data only: see
+  [the report](../research/f20-measurement-2026-11-22.md). Its finding that twenty people reading at once
+  exhausted one API process's Postgres connections is open.
+
 ## The console's errors
 
 Production console builds send warnings and errors to `POST /api/v1/client-logs`, batched; the API
@@ -95,7 +115,7 @@ curl -s localhost:18000/metrics | grep ^nexovue_
 
 - `prometheus.yml` scrapes every service above by DNS, so each replica of the API and the receiver is
   its own target;
-- `rules/nexovue.yml` — 19 alerts on the thresholds in the tables above, plus **a service that is
+- `rules/nexovue.yml` — 27 alerts on the thresholds in the tables above and in [ai](ai.md), plus **a service that is
   missing altogether**: a stopped container leaves DNS, so it is never `up == 0`, only absent;
 - `tests/nexovue_test.yml` — `promtool test rules`, run by `just lint-deploy` in `just check`;
 - `alertmanager.yml` — routes to nowhere until a receiver is named.

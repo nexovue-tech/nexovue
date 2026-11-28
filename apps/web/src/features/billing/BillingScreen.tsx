@@ -118,7 +118,7 @@ function ThisMonth({ overview }: { overview: BillingOverview }) {
 
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">This month</h2>
+      <h2 className="heading-section">This month</h2>
 
       <dl className="flex flex-col gap-3 text-sm">
         <Row label="Plan" value={plan.name} />
@@ -251,7 +251,7 @@ function Arrangement({ overview, canSpend }: { overview: BillingOverview; canSpe
 
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Subscription</h2>
+      <h2 className="heading-section">Subscription</h2>
       <p className="max-w-3xl text-ink text-sm leading-relaxed">
         {describeSubscription(subscription)}
       </p>
@@ -315,7 +315,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
   if (!availability.available) {
     return (
       <section className="flex flex-col gap-3">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
+        <h2 className="heading-section">{heading}</h2>
         <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">{availability.reason}</p>
         {availability.nextStep === null ? null : (
           <>
@@ -339,7 +339,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
   if (!choosing) {
     return (
       <section className="flex flex-col gap-3">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
+        <h2 className="heading-section">{heading}</h2>
         {unfinished ? (
           <p className="max-w-3xl text-ink text-sm leading-relaxed">{unfinished}</p>
         ) : null}
@@ -371,7 +371,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
   if (!chosen) {
     return (
       <section className="flex flex-col gap-4">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
+        <h2 className="heading-section">{heading}</h2>
         {overview.plans.length === 0 ? (
           <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
             No other plan is priced in {currency} yet.
@@ -410,7 +410,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
 
   return (
     <section className="flex max-w-md flex-col gap-4">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h2 className="heading-section">
         {heading} — {chosen.name}
       </h2>
 
@@ -519,7 +519,7 @@ function Charges({ overview }: { overview: BillingOverview }) {
 
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Charges</h2>
+      <h2 className="heading-section">Charges</h2>
       <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">{HISTORY_IS_NOT_AN_INVOICE}</p>
       <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
         {PAYMENT_METHOD_IS_THE_PROVIDERS}

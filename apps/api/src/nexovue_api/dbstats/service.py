@@ -90,20 +90,7 @@ async def statement_trends(
         | {"bucket_seconds": bucket_seconds, "limit": MAX_TREND_ROWS},
     )
 
-    by_statement: dict[tuple[str, str, int], list[StatementTrendPoint]] = defaultdict(list)
-    for row in rows:
-        key = (
-            values.text(row["query_hash"]),
-            values.text(row["server_address"]),
-            int(row["server_port"]),
-        )
-        by_statement[key].append(
-            StatementTrendPoint(
-                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
-                mean_ms=_milliseconds(row["mean_seconds"]),
-            )
-        )
-
+    by_statement = _trends_by_statement(rows)
     return StatementTrendResponse(
         window_start=from_time,
         window_end=to_time,
@@ -117,6 +104,54 @@ async def statement_trends(
             for (query_hash, address, port), points in sorted(by_statement.items())
         ],
     )
+
+
+async def statement_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    query_hash: str,
+    server_address: str,
+    server_port: int,
+    from_time: datetime,
+    to_time: datetime,
+) -> tuple[int, list[StatementTrendPoint]]:
+    """One statement's cost across the window: the bucket width and its points, from one
+    statement bound to its hash and server, with `statement_trends`' buckets and
+    row-to-model step (F20, T5.1d)."""
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.STATEMENT_TREND_SQL,
+        _window_parameters(project_id, from_time, to_time)
+        | {
+            "bucket_seconds": bucket_seconds,
+            "limit": MAX_TREND_ROWS,
+            "query_hash": query_hash,
+            "server_address": server_address,
+            "server_port": server_port,
+        },
+    )
+    found = _trends_by_statement(rows).get((query_hash, server_address, server_port), [])
+    return bucket_seconds, found
+
+
+def _trends_by_statement(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str, int], list[StatementTrendPoint]]:
+    by_statement: dict[tuple[str, str, int], list[StatementTrendPoint]] = defaultdict(list)
+    for row in rows:
+        key = (
+            values.text(row["query_hash"]),
+            values.text(row["server_address"]),
+            int(row["server_port"]),
+        )
+        by_statement[key].append(
+            StatementTrendPoint(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                mean_ms=_milliseconds(row["mean_seconds"]),
+            )
+        )
+    return by_statement
 
 
 async def connection_health(

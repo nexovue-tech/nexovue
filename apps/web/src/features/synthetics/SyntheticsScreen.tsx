@@ -69,7 +69,7 @@ export function SyntheticsScreen() {
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="flex shrink-0 flex-wrap items-end justify-between gap-3 px-4 pt-5 pb-3">
         <div className="min-w-0">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Synthetics</h1>
+          <h1 className="heading-page">Synthetics</h1>
           <p className="mt-1 text-ink-dim text-sm">
             What we check for you, from outside: whether it is up, since when, and how it behaved in{" "}
             {windowPhrase}.
@@ -215,7 +215,7 @@ function CheckTable({
         <span className="min-w-0 flex-1">Check</span>
         <span className="w-20 text-right">Uptime</span>
         <span className="hidden w-20 text-right sm:block">p95</span>
-        <span className="hidden w-32 text-right lg:block">Certificate</span>
+        <span className="hidden w-32 text-right @3xl:block">Certificate</span>
         <span className={`hidden md:block ${TREND_COLUMN}`}>Trend</span>
       </div>
       {checks.map((check) => (
@@ -284,7 +284,7 @@ function CheckRow({
       <span className="hidden w-20 text-right font-mono text-2xs text-ink sm:block">
         {reading && reading.runs > 0 ? formatDuration(reading.p95_duration_ms) : missingReading}
       </span>
-      <span className="hidden w-32 truncate text-right font-mono text-2xs lg:block">
+      <span className="hidden w-32 truncate text-right font-mono text-2xs @3xl:block">
         {reading?.tls ? (
           <span
             className={URGENCY_TEXT[certificateUrgency(reading.tls.days_remaining)]}

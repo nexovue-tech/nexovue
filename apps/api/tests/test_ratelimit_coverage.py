@@ -128,3 +128,59 @@ def test_the_concurrency_cap_clears_what_one_screen_asks_for() -> None:
         f"the cap is {TELEMETRY_TIER.max_concurrent} and one screen asks for "
         f"{LARGEST_SCREEN_FANOUT} reads at once, so that screen loads incomplete"
     )
+
+
+def test_a_dashboard_at_its_scan_cap_and_refresh_floor_fits_a_persons_quota() -> None:
+    """F20 NFR3: a dashboard's request count is one, so `LARGEST_SCREEN_FANOUT` cannot
+    judge it. Its scans can: a dashboard at the scan cap, refreshed at the floor, must fit
+    one person's share at the largest supported number of API processes. At three
+    processes this fails on purpose, and the caps must be reconsidered (design section 6).
+    """
+    from nexovue_api.ratelimit.policy import (
+        LARGEST_SUPPORTED_API_INSTANCES,
+        MAX_SCANS_PER_READ,
+        REFRESH_FLOOR_SECONDS,
+    )
+
+    scans_a_minute = MAX_SCANS_PER_READ * 60 / REFRESH_FLOOR_SECONDS
+    share = TELEMETRY_TIER.quota.limit // LARGEST_SUPPORTED_API_INSTANCES
+
+    assert scans_a_minute <= share, (
+        f"{scans_a_minute:.0f} scans a minute against a share of {share}"
+    )
+
+
+def test_the_batch_reads_deadline_and_margin_are_the_consoles_timeout() -> None:
+    """D25: the deadline counts from arrival, and the console waits that plus a margin
+    for assembling and the network. The web test holds the console to the same number."""
+    from nexovue_api.ratelimit.policy import (
+        PANEL_READ_CLIENT_TIMEOUT_SECONDS,
+        PANEL_READ_DEADLINE_SECONDS,
+        PANEL_READ_MARGIN_SECONDS,
+    )
+
+    assert PANEL_READ_DEADLINE_SECONDS + PANEL_READ_MARGIN_SECONDS == (
+        PANEL_READ_CLIENT_TIMEOUT_SECONDS
+    )
+
+
+def test_chat_s_quotes_read_on_the_telemetry_tier_and_its_poll_on_the_default() -> None:
+    """F4 AC107: the quote route reads ClickHouse; the panel's 1.5 s poll reads one Postgres
+    row, and on the telemetry tier it would share a cap of 8 with the screen beside it."""
+    from nexovue_api.ratelimit.policy import DEFAULT_TIER
+
+    message = "0195f000-0000-7000-8000-000000000002"
+    assert tier_for_path(f"{API_PREFIX}/assistant-quotes/{message}") is TELEMETRY_TIER
+    poll = f"{API_PREFIX}/assistant/conversations/{message}/messages/{message}"
+    assert tier_for_path(poll) is DEFAULT_TIER
+
+
+def test_a_targets_budget_reads_on_the_default_tier_and_its_burn_line_on_the_telemetry() -> None:
+    """F19 D59, Step 5b: `/slos/{id}/budget` reads Postgres alone, for the list's reason: on
+    the telemetry tier a dashboard's reliability-target panels would wait behind ClickHouse
+    reads for a cap they never use. The burn line, which reads ClickHouse, stays there."""
+    from nexovue_api.ratelimit.policy import DEFAULT_TIER
+
+    target = "0195f000-0000-7000-8000-000000000003"
+    assert tier_for_path(f"{API_PREFIX}/slos/{target}/budget") is DEFAULT_TIER
+    assert tier_for_path(f"{API_PREFIX}/slo-readings/{target}/burn") is TELEMETRY_TIER

@@ -29,16 +29,32 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
 
+from nexovue_platform.ai.connection import AI_CONNECTION_PURPOSE, key_owner
+from nexovue_platform.ai.embed import EMBEDDING_KEY_PURPOSE, embedding_key_owner
+from nexovue_platform.assistant_records import TICKET_PURPOSE
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
+    DEPLOY_WEBHOOK_PURPOSE,
     NOTIFICATION_CHANNEL_PURPOSE,
     ConfiguredKeys,
     SealedBox,
     SealError,
     channel_secret_owner,
     check_secret_owner,
+    deploy_webhook_owner,
     keyring_from,
     sealed_key_id,
+)
+from nexovue_platform.connections import (
+    CONNECTION_CREDENTIAL_PURPOSE,
+    CONNECTION_MANIFEST_CODE_PURPOSE,
+    CONNECTION_WEBHOOK_SECRET_PURPOSE,
+    connection_secret_owner,
+)
+from nexovue_platform.fixes.records import (
+    FIX_APP_CLIENT_SECRET_PURPOSE,
+    GITHUB_LINK_CODE_PURPOSE,
+    github_link_code_owner,
 )
 from sqlalchemy import TextClause, text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
@@ -58,10 +74,14 @@ EXIT_NOT_CONFIGURED: Final = 3
 
 @dataclass(frozen=True, slots=True)
 class Keys:
-    """The two keyrings, read from the environment the API reads them from."""
+    """The keyrings, read from the environment the API reads them from."""
 
     check: ConfiguredKeys
     credential: ConfiguredKeys
+    # F22: tracker connections' keys, held only by the API and `scheduler-connections`.
+    connection: ConfiguredKeys
+    # F3: AI providers' keys, held only by the API and `scheduler-insight` (FD10).
+    ai: ConfiguredKeys
 
     @classmethod
     def from_environment(cls) -> Keys:
@@ -73,6 +93,14 @@ class Keys:
             credential=ConfiguredKeys(
                 os.environ.get("CREDENTIAL_ENCRYPTION_KEY", ""),
                 os.environ.get("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS", ""),
+            ),
+            connection=ConfiguredKeys(
+                os.environ.get("CONNECTION_SECRET_KEY", ""),
+                os.environ.get("CONNECTION_SECRET_PREVIOUS_KEYS", ""),
+            ),
+            ai=ConfiguredKeys(
+                os.environ.get("AI_SECRET_KEY", ""),
+                os.environ.get("AI_SECRET_PREVIOUS_KEYS", ""),
             ),
         )
 
@@ -88,6 +116,21 @@ class SealedColumn:
     page: TextClause
     replace: TextClause
     owner: Callable[[Any], str]
+
+
+def _connection_column(column: str, purpose: str) -> SealedColumn:
+    """One of a connection's sealed columns (F22, AC35), bound to its connection."""
+    return SealedColumn(
+        name=f"connections.{column}",
+        purpose=purpose,
+        keys=lambda keys: keys.connection,
+        page=text(
+            f"SELECT id AS pk, org_id, {column} AS sealed FROM connections "
+            f"WHERE {column} IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(f"UPDATE connections SET {column} = :new WHERE id = :pk AND {column} = :old"),
+        owner=lambda row: connection_secret_owner(str(row.org_id), str(row.pk)),
+    )
 
 
 SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
@@ -143,7 +186,91 @@ SEALED_COLUMNS: Final[tuple[SealedColumn, ...]] = (
         ),
         owner=lambda row: str(row.pk),
     ),
+    _connection_column("sealed_credential", CONNECTION_CREDENTIAL_PURPOSE),
+    _connection_column("sealed_webhook_secret", CONNECTION_WEBHOOK_SECRET_PURPOSE),
+    _connection_column("sealed_manifest_code", CONNECTION_MANIFEST_CODE_PURPOSE),
+    # F5's Fix App (ADR-082): its OAuth client secret, for the account link's exchange.
+    _connection_column("sealed_client_secret", FIX_APP_CLIENT_SECRET_PURPOSE),
+    # F5 (A18): a person's one-time GitHub code, for the minutes between the redirect back
+    # and its exchange, bound to its attempt.
+    SealedColumn(
+        name="github_link_attempts.sealed_code",
+        purpose=GITHUB_LINK_CODE_PURPOSE,
+        keys=lambda keys: keys.connection,
+        page=text(
+            "SELECT id AS pk, org_id, user_id, sealed_code AS sealed FROM github_link_attempts "
+            "WHERE sealed_code IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE github_link_attempts SET sealed_code = :new "
+            "WHERE id = :pk AND sealed_code = :old"
+        ),
+        owner=lambda row: github_link_code_owner(str(row.org_id), str(row.user_id), str(row.pk)),
+    ),
+    # F28 D7: deploy secrets, under the credential key, bound to project and row.
+    SealedColumn(
+        name="project_webhook_secrets.sealed_secret",
+        purpose=DEPLOY_WEBHOOK_PURPOSE,
+        keys=lambda keys: keys.credential,
+        page=text(
+            "SELECT id AS pk, project_id, sealed_secret AS sealed FROM project_webhook_secrets "
+            "WHERE id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE project_webhook_secrets SET sealed_secret = :new "
+            "WHERE id = :pk AND sealed_secret = :old"
+        ),
+        owner=lambda row: deploy_webhook_owner(str(row.project_id), str(row.pk)),
+    ),
+    # F3 T4.6: a provider key, bound to its organization, connection and address (AC34).
+    SealedColumn(
+        name="ai_connections.sealed_key",
+        purpose=AI_CONNECTION_PURPOSE,
+        keys=lambda keys: keys.ai,
+        page=text(
+            "SELECT id AS pk, org_id, base_url, sealed_key AS sealed FROM ai_connections "
+            "WHERE sealed_key IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE ai_connections SET sealed_key = :new WHERE id = :pk AND sealed_key = :old"
+        ),
+        owner=lambda row: key_owner(str(row.org_id), str(row.pk), row.base_url),
+    ),
+    # F4: a question's ticket, sealed for the worker while it is in flight, bound to its
+    # own message (design, section 1). Null once the question ends.
+    SealedColumn(
+        name="assistant_messages.sealed_ticket",
+        purpose=TICKET_PURPOSE,
+        keys=lambda keys: keys.ai,
+        page=text(
+            "SELECT id AS pk, sealed_ticket AS sealed FROM assistant_messages "
+            "WHERE sealed_ticket IS NOT NULL AND id > :after ORDER BY id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE assistant_messages SET sealed_ticket = :new "
+            "WHERE id = :pk AND sealed_ticket = :old"
+        ),
+        owner=lambda row: str(row.pk),
+    ),
+    # F4 Step 6: an embedding-only key (D61), bound to its organization and address. The
+    # settings row is keyed by `org_id`, so that is its page key.
+    SealedColumn(
+        name="assistant_settings.sealed_embedding_key",
+        purpose=EMBEDDING_KEY_PURPOSE,
+        keys=lambda keys: keys.ai,
+        page=text(
+            "SELECT org_id AS pk, embedding_base_url, sealed_embedding_key AS sealed "
+            "FROM assistant_settings WHERE sealed_embedding_key IS NOT NULL AND org_id > :after "
+            "ORDER BY org_id LIMIT :limit"
+        ),
+        replace=text(
+            "UPDATE assistant_settings SET sealed_embedding_key = :new "
+            "WHERE org_id = :pk AND sealed_embedding_key = :old"
+        ),
+        owner=lambda row: embedding_key_owner(str(row.pk), row.embedding_base_url),
+    ),
 )
+
 
 # A UUID below every real one, to start paging from.
 _FIRST: Final = "00000000-0000-0000-0000-000000000000"

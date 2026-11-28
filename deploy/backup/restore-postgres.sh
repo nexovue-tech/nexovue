@@ -8,6 +8,9 @@
 # The dump carries `alembic_version`, so the schema comes back at the revision it
 # was taken at. Do not run `just migrate-pg` first.
 #
+# F5's stored code is emptied after the restore, every consent withdrawn, and work in
+# flight ended (`clear-stored-code.sql`, BR9): a snapshot holds code deleted since.
+#
 # `usage_ingest_offsets` is emptied after the restore. It is the meter's Kafka
 # watermark and it is the same class of state as ClickHouse's KeeperMap tables,
 # which the ClickHouse restore already refuses to bring back; the same rule
@@ -49,7 +52,19 @@ pg -c "SELECT topic, partition_id, counted_through FROM $POSTGRES_WATERMARK_TABL
 pg -c "TRUNCATE $POSTGRES_WATERMARK_TABLE" > /dev/null
 echo "discarded $discarded watermark row(s)"
 
+# F5 (BR9, AC6a): code deleted after this snapshot must not come back. Every stored copy
+# goes again, work in flight ends, and every consent is withdrawn, so an owner agrees
+# again. One transaction. Between pg_restore and this line the code is back: the crash
+# window `docs/operations/backup-and-restore.md` states; `nexovue restore` has every
+# service stopped, and set -e keeps it from starting them after a failure here.
+echo "deleting suggested fixes' code the snapshot brought back, and withdrawing consent"
+pg -c "$(cat "$here/clear-stored-code.sql")" > /dev/null
+
 echo
 echo "postgres restored from $snapshot"
 echo "  alembic revision: $(pg_scalar 'SELECT version_num FROM alembic_version')"
 echo "check it with: just backup-verify $(basename "$snapshot")"
+# The dump is restored with --no-privileges, so the AI role's account has lost its grants and
+# its functions are anyone's again until `setup` runs (F3). `nexovue restore` runs it itself.
+echo "next: run setup (\`nexovue setup\`, or \`just migrate-pg\` in development), which grants"
+echo "      the AI role's account again; until then scheduler-insight cannot claim its jobs"

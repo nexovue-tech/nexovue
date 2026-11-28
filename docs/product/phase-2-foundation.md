@@ -77,7 +77,8 @@ The API is the exception to these rooms: it seals keys and must rotate them (`ke
 
 **What this means.** A successful injection can only change words, and those words are checked before anyone sees
 them. If the AI process itself were ever broken into, there would be no telemetry database, repository or alert
-channel within its reach.
+channel within its reach. **That holds for the stores and not for everything else** (F3 as built, below): its network
+is not an outbound firewall, and two Postgres rights no grant can take remain.
 
 **Rules the rooms create**
 
@@ -111,7 +112,7 @@ travel inside the worker; nothing here gives the model a write route, because th
 
 **The trap in `test_detection_has_no_ai.py`.** Its list of AI modules is fixed (`:37`), and it admits it cannot see a
 provider reached by plain HTTP (`:15-16`). So `nexovue_platform.ai` and `nexovue_scheduler.insight` must be added to
-that list in the same change that creates them, and all provider HTTP must live inside `nexovue_platform.ai`. The
+that list in the same change that creates them, and every provider call must leave through one function, `nexovue_scheduler.insight.transport.send` (the wire formats are in `nexovue_platform.ai`, which makes no call; F3 row 3). The
 evidence code must not import them either, and that gets the same test. **A walk from an API root needs one shared fix:** `lifespan.py:21` imports `mcp` only to type one argument, and every API route reaches it. Whichever of F5, F19 or F20 lands first types it as a small Protocol and moves the walker to `nexovue_platform/import_walk.py` (F19 D55, F20 D38).
 
 ## 2. One AI provider interface
@@ -609,6 +610,7 @@ to the feed, with Overview at `/overview`, because the founder's decision stands
 | Signed deploy records, and "before, not because" wording in the code. F28 hardens the signature, which today covers the body only | `deploys/signatures.py`, `errorgroups/schemas.py:15-26` |
 | Alerts to email, Slack, Teams, Discord, PagerDuty and webhooks | `channels.py:34-35` |
 | Pricing that never rises with people | `vision.md:152` |
+| Deploys and findings are drawn on a dashboard's charts, as marks, and a dashboard's panels come from a fixed list (parity with what rivals show on charts, **not** a difference). Wording for public use is the founder's to approve (F20 spec, founder decision 4) | F20 `status.md`; `docs/product/setup/dashboards.md` |
 
 ### True once built, only if these designs hold
 
@@ -619,7 +621,7 @@ These must stay in the future tense until shipped (competitors research).
 2. **Facts stay when AI goes.** The explanation's facts work with AI off, because correlation holds no model.
 3. **A fence you can read.** The model cannot write, can reach no telemetry database or repository key (not "no route to GitHub": its network is open unless the optional outbound limit is on), and this is held by tests on an AGPL codebase anyone may read. Rivals describe human approval; the pages read did not describe this separation, though they may have it. **Say what Nexovue does, never what others lack.**
 4. **Free case management on your own server**, with no per-person charge from nexovue. No saving comparison: rivals have free plans (F22).
-5. **SLOs on the free product with no small count limit.** SigNoz's lack is the only rival gap supported, as of 2026-11-02.
+5. *Dropped 2026-11-27 (founder, item 37h).* "SLOs on the free product with no small count limit" rested on SigNoz's issue 658, which could not be read again on 2026-11-22. Not to be used.
 6. **Published fault scores and injection results**, if the founder agrees. Coroot and HolmesGPT publish results on their own test sets (F3 research), so this meets a norm on faults; no vendor found publishes injection results. They would be demo results, and must say so.
 
 ### Must not be claimed
@@ -639,10 +641,57 @@ These must stay in the future tense until shipped (competitors research).
 | "Better than Grafana" for dashboards | Parity is the aim |
 | Anything on DPDP, RBI or SEBI compliance | No lawyer has read it. State only where data goes |
 | Naming rivals in public | Their facts change monthly, and four are unresolved (competitors research) |
+| "No paid edition" | Open-core is deferred, not rejected (`vision.md`), and hosting is paid (F3 spec, *Must not be claimed*) |
+| "A forged span cannot alert you" | A browser key can move a rollup and so open a finding until the browser-door change ships (built on `feature/phase-2`, not yet in `main`; F3 row 8; decision 7). Say what the finding's basis line shows instead |
+| "Your names stay on your server" | A person's alert channel carries names, and the AI's facts carry stand-in names only: say which of the two is meant (F3 spec) |
+| "A hard limit" on AI spend, said alone | It counts only nexovue's own use of the key, not the customer's other uses of it (F3 spec) |
+
+### F28: releases and deploys, what may be said (checked against the code, 2026-11-22)
+
+*True of `feature/phase-2` as built; nothing is released, and nothing here is said to anyone until it ships.* Each allowed
+sentence below was checked against the source named beside it, on 2026-11-22, by the F28 launch step (plan T6.2). Each banned
+sentence names what in the code makes it false. **A sentence outside both lists is not cleared.** Rivals are never named in
+public (above); the refreshed competitor reading is in F28's `research.md`, section 10.
+
+**Allowed**
+
+| # | The sentence | True because (source) | Its limit, said with it |
+|---|---|---|---|
+| 1 | "Releases appear from `service.version`: when your spans carry a build id, each new value is a new release, with no webhook." | `releases/sync.py` reads `service_versions_1m` each minute; F28's Playwright spec showed two versions become two rows labelled "Seen in traffic" with no deploy reported (2026-11-22) | The build must set a *different* value per build (`latest` is one release that never ends). Server spans only: a browser key never makes a release (`derive` filter, AC17) |
+| 2 | "A webhook from your CI adds what traffic cannot show: a failed or rolled-back state, a commit, and a deploy of a version that was already running." | `deploys/service.py` stores each signed item; `releases/service._place_one` opens a release period only for `started` and `finished` and not for a version still in service, so a redeploy is stored, drawn as a marker and listed on the release (`queries.deploys_of`: "same-version redeploys and failed ones included"); the row says "CI reported it failed" (`release-words.stateWords`) | A redeploy is **not a new release** and is not compared. A failed report opens no period (founder, 2026-11-09). Nothing alerts on a failed deploy |
+| 3 | "Nexovue compares old and new in the same minutes when two versions run together, compares the new version with the previous one's equal stretch before it once a rollout is done, and, when your traffic carries no version, compares around the deploy your CI reported. Every comparison says which it used, or says why it cannot compare." | `nexovue_platform/releases.choose_method` (`side_by_side`, `version_before_after`, `time_before_after`, and the `REASONS`); `method` is a required field of each comparison block (`releases/schemas.py`); the page states it | Floors: failure share needs 20 requests a side and p95 200 (`FAILURE_FLOOR`, `P95_FLOOR`); under them the page says "too little traffic". All thresholds are starting guesses |
+| 4 | "Request and error counts are taken before Nexovue's own sampling, so they are exact for the spans Nexovue receives. p95 is an estimate from latency buckets, and leaves out each version's first 5 minutes." | The worker derives before it samples (`AGENTS.md`, data plane order; `000035`); `P95_RATIO` 1.2 is about one bucket; `WARM_UP` is 5 minutes and the page says it | If your SDK or Collector samples first, every count is short by that factor and nothing shows it (the setup page and the comparison say so). When too many versions arrive in one minute they are combined, and the page says "Versions were combined" (`VERSIONS_COMBINED`) |
+| 5 | "It compares numbers. It does not say why they moved." | The release page prints this line; no F28 string says "caused", enforced for AI-free code by `test_detection_has_no_ai.py` (F28's modules are walked) and by the words test | A release opens **no finding**: only F6 can. The list's *failure share higher* flag and the optional summary come from the same stored reading, not from detection |
+| 6 | "A version seen in your traffic is not called a deploy." | `release-words.BASIS_WORDS`: "Seen in traffic" and "Reported by your CI" are different words, and "both" is a third | None. Keep it |
+| 7 | "Per-minute version counts are kept for up to 35 days, less if your plan keeps less. An older release says its numbers have expired." | `service_versions_1m` TTL is `least(derived_retention_days, 35)` (ClickHouse `000035` family, `VERSION_ROLLUP_DAYS`); the `numbers_expired` reason | The release itself and its reported deploys stay as long as the project |
+| 8 | "Deploys can be reported up to 7 days back and 5 minutes ahead." | `deploys/service.py` `BEHIND_LIMIT` 7 days, `AHEAD_LIMIT` 5 minutes | None |
+| 9 | "Your pipeline and your AI assistant can read the same comparison through the API; deploy records they get carry no text a sender wrote." | `list_deploys` sends exactly id, service, version, state, commit and times (`DeployRow`, `test_mcp_tools.py`); `GET /deploys` the same | None |
+| 10 | "You can switch on a summary of each release to one channel your team reads, about 30 minutes after it starts. It is off by default." | `releases/summary.py`, `PUT /projects/{id}/release-summary`, `release_summary_channel_id` null by default, due 30 minutes after the start | **Not yet sent through a real Slack, Teams, Discord or email channel** (only the delivery path's fakes ran): say "a channel your team reads", never name one as working |
+| 11 | "On demo data on a development machine, counting by version added about 10% more rows and about 10% more disk than the per-service table, with every service rolling out once an hour." | `docs/research/release-rollup-cost-2026-11-07.md` | **Not a figure for a customer's traffic or for a 16 GB server**, and said so with it |
+
+**Banned, with what makes each false**
+
+| Do not say | Why (in the code) |
+|---|---|
+| "Every release is compared" | Floors and reasons: low traffic reads "too little traffic" or "not clearly different"; a redeploy of the running version is not a release; a service with no version and no deploy has no comparison (`REASONS`) |
+| "Exact p95", "exact latency" | p95 is read from 64 buckets, `P95_RATIO` 1.2, and leaves out the first 5 minutes |
+| "No CI work", "no setup", "zero config" | A per-build value in `service.version` is one change per service; reporting deploys is a secret and a pipeline step |
+| "Automatic deploy detection" | It detects a *new version in traffic*, which is not a deploy (seen is not a deploy); config-only changes and same-version redeploys are invisible to it |
+| "A release caused it", "bad release", "this deploy broke it", a verdict of any kind | Order is a fact, cause is not; no F28 text states a cause |
+| "Alerts you when a release goes bad", "tells you a release is bad" | A comparison opens no finding and sends nothing by itself; F6 judges the service as a whole, and whether it fires on a small rollout share is being measured. Only the optional summary and the list's flags carry a comparison |
+| "A redeploy shows as a release / is compared" | `_place_one`: a version still in service opens no new period |
+| "Native GitHub or GitLab deploy receipts" | Not built: only the signed JSON from a recipe (GitHub's own `deployment_status` payload was never confirmed, and that route is deferred) |
+| "Works with Kubernetes rollouts automatically" | There is no Kubernetes watcher; a rollout is seen only through `service.version` or a pipeline step |
+| "On your own server" to a hosted buyer; "no extra charge" or "no extra disk" to anyone who pays for their own disk | The cost report is demo data and says ~10% more |
+| "Fast", "within 2 seconds", or any speed figure | Measured once on a 4-CPU development container with 1 and 10 million seeded spans for one service, not on a server (F28 `status.md`, *Step 6*) |
+| "Sent to your Slack / Teams / Discord / inbox" for the summary | The real send has not been run |
+| "Comparisons for any two versions", "per-endpoint comparison", "suspect commits", "automatic faulty-deployment detection" | Not built (the rivals' lead: see below). F22 and F5 build on `commit_sha` |
+| "More accurate than" anyone; naming a rival in public | Nothing is measured against any rival; their pages change monthly |
+| The demo recording as customer evidence | It is demo data from `tools/release-demo` and is labelled so in the picture (F28 `status.md`, *Launch text*) |
 
 ### Where rivals are plainly ahead
 
-Maturity and customers: Nexovue is pre-deployment with none. Grafana on dashboards. Sentry and Datadog on tying problems to code. incident.io and Rootly on running an incident. HolmesGPT on data sources, and **free agents bolted onto an existing stack are the competitor most likely to be missed.** Security paperwork was not checked.
+Maturity and customers: Nexovue is pre-deployment with none. On releases: Datadog compares any two versions of a service and detects a faulty deployment by itself; Sentry names suspect commits and the people who committed; Coroot audits each Kubernetes rollout without CI (F28 `status.md`, *Known to lag rivals*). Grafana on dashboards. Sentry and Datadog on tying problems to code. incident.io and Rootly on running an incident. HolmesGPT on data sources, and **free agents bolted onto an existing stack are the competitor most likely to be missed.** Security paperwork was not checked.
 
 ### Answering "why not just use Claude?"
 
@@ -716,6 +765,32 @@ Each was asked in a feature's spec, which holds the full recommendation. "As rec
 25. **The founder's own decision, 2026-11-02.** **F5 stays approved.** Its design had asked not to be approved before the GitHub trial and the buyer round. Instead both block F5's Step 1, and a result that changes the design comes back to the founder (F5 D64).
 26. **The founder's own decision, 2026-11-02.** **F5 rung 2b: a general fix suggestion without code access.** Where AI is on but Nexovue cannot read the service's code, a member may ask for a general pattern with example code, written from F3's facts only (FD18), checked by code, labelled "Example pattern, not your code. Nexovue has not seen your code. Check before using." It reads no repository and needs no GitHub connection or source consent. FD14 and section 5 carry it (F5 D65 to D72).
 
+27. **The founder's own decision, 2026-11-08.** **The buyer round is a customer-validation milestone, not a build gate.** It changes items 8, 21 and 25 and F5 D64: no step waits on the conversations. Every feature is built to its full approved plan, which is the "yes" side of each rule in item 21 (F4 Steps 2 to 7; F20's full builder; F19 Step 4 onward past its demand gate; F28 Step 1b; F5 Step 1 onward). The round still happens, using `docs/product/phase-2-buyer-round.md`, and its answers are read afterwards as validation: an answer that argues against something built comes back to the founder, it does not stop work.
+28. **The founder's own decision, 2026-11-08.** **No step waits on a real GitHub test organization (item 23).** F22 Steps 3 to 6 and F5's GitHub parts are built and tested against a simulated GitHub. Every check that needs real GitHub (F22 T3.0's manifest flow from a private address, T5.2's real webhook, F5's GitHub trial) is recorded as "not yet run, founder tests after Phase 2" and run by the founder then. Jira (F22 Step 7) still waits on Atlassian's written answer (item 17), which is a policy gate, not a test.
+29. **The founder, 2026-11-08.** **T0.1 is sent to Atlassian; no reply yet. GitHub ships now; Jira is added if a written yes comes** (item 17's 4-week rule stands). F22 Steps 3 to 6 keep the connection layer kind-agnostic so Jira is an added adapter, not a rework.
+30. **The founder, 2026-11-09.** **F3 Step 2b's stop-or-go is no longer a build gate.** F3 Steps 3 to 7 (and what waits on them: F4 Step 2 onward, F5 Steps 2b onward) are built to their approved plans now. T2.10 (watched users), T2.11 (the blind wording comparison) and the written go or stop become a validation the founder runs after Phase 2, like the buyer round (item 27). If the answer is stop, the customer-facing AI wording is turned off before release, and Steps 1, 2 and 2c stand; the fence and provider code stay, unused.
+31. **The founder, 2026-11-21.** **Every test against a real AI model is the founder's, after Phase 2 is built.** Steps whose only unbuilt part is a run against a real model (F3 Step 6's bed with models, F4 Step 4, F5's evaluation runs, each "first real call" and every bed re-run) are built with the fake providers and their harnesses, and the real runs are recorded as "not yet run: the founder's, after Phase 2". No step waits on a provider key.
+32. **The founder, 2026-11-21.** **Jira is not part of Phase 2.** F22 Step 7 is out of Phase 2's scope; F22 ships with GitHub only. Jira returns as later work for the founder to schedule.
+33. **The founder, 2026-11-21.** **F5 Steps 7 and 8 (the draft pull request and following its CI) are built now, against the simulated GitHub only, with write access switched off in code.** Write access is turned on only by the founder's written go (F5 T6.5), after his own real-AI evaluation (item 31). Until then no code path writes to a customer's repository.
+34. **The founder, 2026-11-21.** **F20's reliability-target panel (T10.2) is built, and F19 gains the reader it needs:** the budget function, a by-name lookup of a target inside a project, and `GET /slos/{id}/budget`, with their read-surface and authorization entries. It is added to F19's plan as a new step before F19's hardening step, and F20's T10.2 is re-planned onto it.
+35. **The founder, 2026-11-22.** Answers to the open questions of that day, each the recommendation put to him: **(a)** F4 Step 4 is built now with fake providers, as item 31 says; its real runs are the founder's after Phase 2. **(b)** F5 decision 95: the raising warning's sentence that private repositories need GitHub Team or Enterprise Cloud for drafts is removed, since GitHub's changelog of 1 May 2025 puts draft pull requests in every repository on every plan (D62). **(c)** F5 decision 59: a deleted project ends its stored code (ADR-094), kept, and BR9's table gains the row. **(d)** ClickHouse's backup manifest counts from the dump, as Postgres's does since the backup-manifest-counts change. **(e)** The job hand-out fix pushed in baf5e47 without his prior word (a deleted organization no longer blocks every tenant's jobs) is kept.
+36. **The founder, 2026-11-22, later.** Each the recommendation put to him: **(a)** F28 open decision 2: when failing spans carry no exception, Errors by version reads "No exceptions were recorded", not "No errors in either version". **(b)** F28 open decision 3: the comparison's requests a minute divides by the minutes that had traffic, not the whole window. **(c)** F5 decision 43: the optional outbound limit (T4.11, a Squid forward proxy as the AI role's only way out) is built later, in the hardening before the first deploy, not now. **(d)** F5 decision 78, after it was explained: a way out in AC21's safety gate is anything the rules exist to stop reaching a request or a person; a planted address copied onto a new line (A3) and a one-character logic change (A4) count as reached a person, reported as what they are, not as ways out.
+37. **Approved by the founder, 2026-11-27.** The open decisions listed in pull request #25, each as recommended:
+    **(a)** The AI container (`scheduler-insight`) must not reach the cloud metadata address `169.254.169.254`. **A
+    requirement before the first deploy,** met by the outbound proxy of item 36c (F5 T4.11), built in the hardening before
+    that deploy; not built now (*F3 as built*, 1; `docs/operations/first-deploy.md`, step 5). **(b)** The two clauses
+    added to `docs/engineering/testing.md` in the CI fixes of 2026-11-22 stay: a live test uses a database of its own when
+    it runs a job the stack's own sweep also hands out, or commits a notification already due. **(c)** `testing.md` gains
+    the provision-lock rule (commit 60d11f6b). **(d)** One nexovue install per Postgres server, stated in
+    `docs/self-hosting/install.md`, *What you need*. **(e)** F3 open decision 22: the header's service link carries the
+    finding's time window. **(f)** F4 open decision 66: `CHAT_DISCLOSURE_VERSION` 4 stands. F4's decisions 63, 64, 65
+    and 67 stay open. **(g)** F5 open decisions 120 (44 px touch targets on shared components) and 131 (linear-time
+    wording-check patterns in F3 and F4) each become a separate change after Phase 2. F5 decision 125 stays open: the
+    founder reads the customer page and wording list W1 to W14 himself. **(h)** Competitor rows taken from vendor hosts
+    that could not be reached are dropped: F28 `research.md` section 10 (Observe), F19's claims table (SigNoz issue 658,
+    Elastic, Better Stack), F5 `research.md` (incident.io, Rootly, Better Stack, Middleware, Splunk; OneUptime cut to its
+    README), and section 12's claim 5 here. Each feature's `status.md` records its removal.
+
 ### What A and B change
 
 **A. No rented test server now.** Building goes ahead. Anything that needs a machine that stays on for weeks, or a number about a real server, waits until the Phase 2 features are deployed on Oracle Cloud and measured there. Until then, every such number, limit, size or accuracy claim stays unpublished, and where a screen or page would show it, it reads "not yet measured".
@@ -756,6 +831,35 @@ What B costs, stated plainly:
 - Every memory ceiling in section 1, and every `sizing.md` row they add; item 6's raised retention default, which waits for the bed's disk figures.
 
 **Comes back to the founder at deployment:** which Oracle shape the measurements run on (the free allowance cannot show 16 GB), and whether the bed runs before the first customer or on its own instance.
+
+## F3 as built (2026-11-22): where the build departs from this document
+
+F3's design lists 33 differences from this document, by row, in its `design.md` (*Where this differs from the
+foundation*); each was applied to the sections above on 2026-11-02 and is not repeated here. Items 27 to 36 of the
+founder's decisions are not repeated either. What follows is only what the build found *after* that, each with where
+it is recorded:
+
+1. **The AI container's network is not an outbound firewall.** It reaches Postgres, and for F4 the API; Kafka,
+   ClickHouse and the object store are closed to it. But the same network is open to the Docker host's gateway and to the
+   cloud metadata address `169.254.169.254:80`, which the fence's own run records as open (CI run 44996057046, on
+   `b4d7c87`: AC42 5 passed with that warning). The application's address guard stops the code F3 wrote; it does not stop a
+   process that has been broken into and opens its own socket. Closed by the operator's host rules (the customer page,
+   F3 T4.8) or the optional outbound proxy (F5 T4.11, item 36c), both still to build. **Approved by the founder,
+   2026-11-27 (item 37a): blocking `169.254.169.254` is required before the first deploy, with that proxy.** Until then, *a fence you can read*
+   (section 12) says "no telemetry database or repository key", never "no outbound route".
+2. **Two Postgres rights no grant takes away** (F3 open decision 7): `NOTIFY` needs no privilege, and a session may
+   change its own timeouts. A broken-into AI process can fill the notification queue or hold a transaction open, which stops
+   Run now and migrations until it is ended. Recommended: a watchdog on beat's leader (not built). The operator's
+   runbook (`docs/operations/ai.md`) says so.
+3. **A likely cause is held until the bar is recorded, rule by rule** (FR50, A60, A85). `CAUSE_BAR_RECORDED` is false and
+   `RELEASED_RULES` is empty, production refuses the development override, and no wording run starts while causes are held.
+   F3 therefore ships facts only until T2.17's report and T2.18's reading (item 9, A).
+4. **The wording label names the model as configured**, never as the provider reports it (F3 open decision 12; FR19
+   allows the reported name). A gateway's answer cannot then put a name on the page.
+5. **`AI_SECRET_KEY` has no development default** (F3 open decision 9), so `/settings/ai` on a fresh `just dev` says AI is
+   unavailable until a developer sets one. Every other key here has one.
+6. **Every real-model result is the founder's, after Phase 2** (item 31): no provider format is offered on the settings
+   screen until it has a dated real call (ADR-047), and F3's bed report and rules report are skeletons that say so.
 
 ## Not checked
 

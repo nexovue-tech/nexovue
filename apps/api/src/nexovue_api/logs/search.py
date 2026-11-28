@@ -31,7 +31,7 @@ import io
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query, Response
@@ -108,6 +108,36 @@ WHERE tenant_id = {{tenant_id:String}}
 ORDER BY observed_nanos DESC, row_key DESC
 LIMIT {{limit:UInt32}}
 """
+
+# F4 T3.2: one record by what a chat quote stored of it (design, *Quote display*). An
+# exact timestamp bind would miss, since the wire cuts to milliseconds and the column holds
+# nanoseconds, so it is the millisecond's range; `received_at` bounds the partitions read;
+# service and severity are in the sorting key; the row key is the record's own hash.
+LOG_LINE_AT: Final = f"""
+SELECT
+    toUnixTimestamp64Nano(timestamp) AS observed_nanos,
+    {_ROW_KEY} AS row_key,
+    service_name,
+    severity,
+    severity_number,
+    body,
+    replaceAll(trace_id, '\\0', '') AS trace_ref,
+    replaceAll(span_id, '\\0', '') AS span_ref,
+    toJSONString(log_attrs) AS attributes_json
+FROM logs
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name = {{service_name:String}}
+  AND severity_number = {{severity_number:Int32}}
+  AND received_at >= {{received_from:DateTime64(9)}}
+  AND received_at < {{received_to:DateTime64(9)}}
+  AND timestamp >= {{from_time:DateTime64(9)}}
+  AND timestamp < {{to_time:DateTime64(9)}}
+  AND {_ROW_KEY} = {{row_key:UInt64}}
+LIMIT 1
+"""
+# The width of the instant a quote names: the wire's millisecond.
+LOG_LINE_INSTANT: Final = timedelta(milliseconds=1)
 
 # The filter options, counted over the same window the results come from — a
 # service that sent nothing in this hour should not be offered as a filter.
@@ -282,6 +312,34 @@ async def search_logs(
     return LogSearchResponse(
         logs=[to_line(row) for row in rows], next_cursor=_next_cursor(rows, limit)
     )
+
+
+async def log_line_at(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    observed_at: datetime,
+    service_name: str,
+    severity_number: int,
+    row_key: int,
+) -> LogLine | None:
+    """The one record a quote names, or None once it has aged out or been erased."""
+    instant_end = observed_at + LOG_LINE_INSTANT
+    received_from, received_to = receive_window(observed_at, instant_end)
+    rows = await repository.query(
+        LOG_LINE_AT,
+        {
+            "project_id": project_id,
+            "service_name": service_name,
+            "severity_number": severity_number,
+            "received_from": received_from,
+            "received_to": received_to,
+            "from_time": observed_at,
+            "to_time": instant_end,
+            "row_key": row_key,
+        },
+    )
+    return to_line(rows[0]) if rows else None
 
 
 # **Deliberately more than one screen holds and far less than a window can**, for

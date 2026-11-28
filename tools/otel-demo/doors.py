@@ -28,7 +28,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
-import uuid
+from datetime import UTC, datetime
 from http.cookiejar import CookieJar
 from typing import Any, Final
 
@@ -218,30 +218,31 @@ def ensure_checks(opener: urllib.request.OpenerDirector, project_id: str) -> Non
 def announce_deploys(opener: urllib.request.OpenerDirector, project_id: str) -> None:
     """Tell the product this demo was just deployed, signed as a real CI job would.
 
-    Two services, so the list is a list rather than a single row, and both carry
-    the release the storefront's pages report — which is what lets an error and
-    the build it came from be the same build.
+    Two services in one batch (F28's envelope), so the list is a list rather than a
+    single row, and both carry the release the storefront's pages report — which is
+    what lets an error and the build it came from be the same build.
+
+    A secret is shown once (F28 D7), so this mints one for the run and withdraws it
+    afterwards, as a person rotating would, rather than leaving one per `up` behind.
     """
-    secret, path, signature_header = webhook_secret(opener, project_id)
-
-    # `up` is run repeatedly and this release only changes when it is. Announcing
-    # the same build again is not a second deploy of it, and four rows saying one
-    # thing is worse than one.
-    already = {
-        (deploy["version"], deploy["service_name"])
-        for deploy in call(opener, "GET", f"/api/v1/deploys?project_id={project_id}")["deploys"]
-    }
-
-    for service_name in ("frontend-web", "frontend"):
-        if (RELEASE, service_name) in already:
-            print(f"  {service_name} {RELEASE} already announced")
-            continue
+    secret_id, secret, path, signature_header = mint_webhook_secret(opener, project_id)
+    try:
+        # One delivery id per build and service: `up` is run repeatedly, and announcing
+        # the same build again is a repeat the webhook answers without storing.
+        now = datetime.now(UTC).isoformat()
         body = json.dumps(
             {
-                "version": RELEASE,
-                "service_name": service_name,
-                "source": "otel-demo",
-                "metadata": {"upstream_ref": os.environ.get("NEXOVUE_UPSTREAM_REF", "")},
+                "deploys": [
+                    {
+                        "delivery_id": f"otel-demo-{service_name}-{RELEASE}",
+                        "service_name": service_name,
+                        "version": RELEASE,
+                        "deployed_at": now,
+                        "source": "otel-demo",
+                        "metadata": {"upstream_ref": os.environ.get("NEXOVUE_UPSTREAM_REF", "")},
+                    }
+                    for service_name in ("frontend-web", "frontend")
+                ]
             }
         ).encode("utf-8")
         # Over the exact bytes sent, which is the whole point: re-serialising
@@ -251,41 +252,39 @@ def announce_deploys(opener: urllib.request.OpenerDirector, project_id: str) -> 
         request = urllib.request.Request(f"{API}{path}", data=body, method="POST")
         request.add_header("content-type", "application/json")
         request.add_header(signature_header, f"sha256={digest}")
-        # Unique per delivery, which is what makes a replay detectable — the
-        # signature scheme itself carries no timestamp.
-        request.add_header("X-GitHub-Delivery", str(uuid.uuid4()))
         try:
-            opener.open(request, timeout=30).read()
+            with opener.open(request, timeout=30) as response:
+                answer = json.loads(response.read())
         except urllib.error.HTTPError as failure:
             raise DoorsError(
-                f"the deploy webhook refused a signed delivery for {service_name} "
+                f"the deploy webhook refused a signed batch "
                 f"({failure.code}): {failure.read().decode('utf-8', 'replace')[:200]}"
             ) from failure
+    finally:
+        call(opener, "DELETE", f"/api/v1/deploys/webhook-secrets/{secret_id}")
 
-    # The count, not the 201. A create that returned 201 and stored nothing is
-    # exactly the failure a status code cannot show.
-    stored = call(opener, "GET", f"/api/v1/deploys?project_id={project_id}")["deploys"]
-    print(
-        f"  deploys recorded: {len(stored)}, newest {stored[0]['version']}"
-        if stored
-        else "  deploys recorded: 0 — the webhook answered but stored nothing"
-    )
+    # The answer's own count, item by item: a repeat says so rather than storing again.
+    for item in answer["deploys"]:
+        print(
+            f"  {item['delivery_id']}: "
+            + ("already announced" if item["repeated"] else f"recorded as {item['deploy_id']}")
+        )
 
 
-def webhook_secret(opener: urllib.request.OpenerDirector, project_id: str) -> tuple[str, str, str]:
-    """An existing secret, or a new one. Returns it with the path and header to use.
+def mint_webhook_secret(
+    opener: urllib.request.OpenerDirector, project_id: str
+) -> tuple[str, str, str, str]:
+    """A new secret, with its id, the path and the header to sign with.
 
-    Both come back from the API rather than being spelled here, so a change to
-    either is a change in one place.
+    All come back from the API rather than being spelled here, so a change to any is
+    a change in one place.
     """
-    settings = call(opener, "GET", f"/api/v1/deploys/webhook-secrets?project_id={project_id}")
-    if not settings["secrets"]:
-        settings = call(opener, "POST", f"/api/v1/deploys/webhook-secrets?project_id={project_id}")
-        print("  webhook secret minted")
+    minted = call(opener, "POST", f"/api/v1/deploys/webhook-secrets?project_id={project_id}")
     return (
-        settings["secrets"][0]["secret"],
-        settings["webhook_path"],
-        settings["signature_header"],
+        minted["minted"]["id"],
+        minted["minted"]["secret"],
+        minted["webhook_path"],
+        minted["signature_header"],
     )
 
 

@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from nexovue_api.data.postgres import models
 from nexovue_api.data.postgres.base import Base
 
@@ -80,6 +82,11 @@ INSTALL_WIDE_TABLES: Final = (
         "alert_evaluation_status",
         "one row per sweep kind: when the sweep last finished, for the Alerts screen. It "
         "is the scheduler's own heartbeat, the same for every tenant",
+    ),
+    Decision(
+        "fix_sweep_status",
+        "one row: when F5's rung 3 sweep last finished a whole pass, for the operator's alert "
+        "(migration 0085, T9.1). The sweep's own heartbeat, the same for every tenant",
     ),
     Decision(
         "usage_ingest_offsets",
@@ -151,6 +158,63 @@ CROSS_TENANT_STATEMENTS: Final = (
         "what establishes the tenant: the project job is given a project id and reads its "
         "organization from the project's own row, never from the caller (design 2.1, m6)",
     ),
+    # Reliability targets (F19), handed out by the detection coordinator each minute.
+    _across(
+        "slos.job",
+        "_PROJECTS_TO_JUDGE",
+        "the SLO hand-out: every organization's projects holding a live target, longest-"
+        "waiting first, so each is handed its own judging (F19 design, 'Which projects get "
+        "a job', AC65)",
+    ),
+    _across(
+        "slos.job",
+        "_PROJECTS_TO_COUNT",
+        f"{_SWEEP}: the projects whose recent days are due a count (F19, by what is due)",
+    ),
+    _across(
+        "slos.job",
+        "_TARGETS_TO_READ",
+        f"{_SWEEP}: the targets whose history is behind their definition (F19 AC64)",
+    ),
+    _across(
+        "slos.job",
+        "_TARGET_PROJECT",
+        "what establishes the tenant: a history job is given a target id and reads its "
+        "project, and through it the organization, from the target's own row (F6's m6)",
+    ),
+    _across(
+        "slos.notices",
+        "_BLIND_PROJECTS",
+        f"{_SWEEP}: the projects whose enabled targets are not being judged, each told by "
+        "its own `org_id` (F19 FR13b, D58)",
+    ),
+    _across(
+        "slos.notices",
+        "_OPEN_BLIND",
+        f"{_SWEEP}: every open 'not being judged' notice, resolved by its own `org_id` once "
+        "its project is judged again (F19 FR13b, D58)",
+    ),
+    _across(
+        "slos.retention",
+        "_DUE_FOR_PURGE",
+        f"{_SWEEP}: deleted targets past restoring, purged one by one, each in its own "
+        "transaction binding its own `org_id` (F19 FR31)",
+    ),
+    _across(
+        "jobs.expiry",
+        "purge_deleted_dashboards",
+        f"{_SWEEP}: dashboards deleted more than 30 days ago, of every organization, removed "
+        "with their versions by `deleted_at` alone; nothing of one tenant reaches another "
+        "(F20 FR51)",
+    ),
+    # Releases seen in traffic (F28 T1.13, D48): the sweep finds whose services have moved;
+    # each project's job then binds the `org_id` read from the project's own row.
+    _across(
+        "releases.sync",
+        "_MOVED_SINCE_SYNC",
+        "the release sweep's hand-out: every organization's projects whose services have sent "
+        "anything since their last sync, so each is handed its own job (F28 design 3, step 1)",
+    ),
     # The job queue and its metrics.
     _across("jobs.queue", "_CLAIM", "a worker claims due jobs of every organization"),
     _across("jobs.queue", "_FINISH", "a claimed job, by its id and this worker's lease"),
@@ -160,12 +224,194 @@ CROSS_TENANT_STATEMENTS: Final = (
     _across("metrics", "_ALERTS_WAITING", "an install-wide gauge: notifications waiting"),
     _across(
         "metrics",
+        "_SLO_STATUS",
+        "an install-wide gauge: the stalest reliability target's last judging",
+    ),
+    _across(
+        "metrics",
+        "_SLO_WITHHELD",
+        "an install-wide gauge: notifications held back and not yet released",
+    ),
+    _across(
+        "metrics",
         "_DETECTION_PROJECTS",
         "an install-wide gauge: projects whose detection is behind",
+    ),
+    _across(
+        "metrics",
+        "_F3_READINGS",
+        "install-wide gauges, counts only: findings with no explanation, failed and cut "
+        "reads, AI connections on, the month's tokens (F3 design, *Observability*)",
+    ),
+    _across(
+        "metrics",
+        "_AI_ON",
+        "an EXISTS only: whether any AI connection is on, so beat schedules the AI sweep and "
+        "a missing scheduler-insight pages (F3 T5.5, T5.10)",
+    ),
+    _across(
+        "metrics",
+        "_AI_RUNS_RECENT",
+        "an install-wide gauge: AI runs by purpose and outcome, counts only (F3 T5.10)",
+    ),
+    _across(
+        "metrics",
+        "_CHAT_MONTH",
+        "an install-wide gauge: this month's chat outcomes and the checks' rejections, summed "
+        "across organizations by kind, closed lists only (F4 T8.2)",
+    ),
+    _across(
+        "metrics",
+        "_CHAT_IN_FLIGHT",
+        "install-wide gauges: chat questions in flight, the oldest, and the oldest no worker "
+        "has taken, counts and ages only (F4 T8.2)",
+    ),
+    _across(
+        "metrics",
+        "_FIX_CHECKS_REFUSED",
+        "an install-wide gauge: suggested fixes the rules refused again on the same files, a "
+        "count only, for F5's tamper alert (D18, T5.1)",
+    ),
+    _across(
+        "metrics",
+        "_FIX_ROWS_RECENT",
+        "an install-wide gauge: suggested fixes whose state moved in the last hour, counted by "
+        "kind, state and reason, all fixed vocabularies; no tenant label (F5 T9.1)",
+    ),
+    _across(
+        "metrics",
+        "_FIX_OLDEST_IN_FLIGHT",
+        "an install-wide gauge: the age of the oldest suggested fix a job is working on, one "
+        "number (F5 T9.1)",
+    ),
+    # F3's AI sweep, run as `nexovue_insight` (plan T5.5).
+    _across(
+        "insight.store",
+        "_DIED_RUNS",
+        f"{_SWEEP}: runs a killed child left `started`; each write that follows binds the "
+        "run's own `org_id` (F3 AC54)",
+    ),
+    _across(
+        "insight.store",
+        "_EXPIRED",
+        f"{_SWEEP}: wording left `pending` past its job's life, each row by its own id and "
+        "its runs by its own `org_id` (F3 AC81)",
+    ),
+    # F5's rung 2b sweep, on `light` (plan T2b.9).
+    _across(
+        "fixes.sweep",
+        "_STUCK",
+        f"{_SWEEP}: general suggestions left `proposing` past any attempt's life; each row "
+        "ends by its own id and carries its own `org_id`",
+    ),
+    _across(
+        "fixes.sweep",
+        "_UNRECORDED",
+        f"{_SWEEP}: ended general suggestions whose result is not yet recorded; the event, "
+        "audit entry and mark each bind the row's own `org_id`",
+    ),
+    # F5's rung 3 sweep, on `connections` (plan T3.13).
+    _across(
+        "connections.fix_sweep",
+        "_ENDED_WAITING",
+        f"{_SWEEP}: source suggestions left gathering past the pack job's life, gathered "
+        "past 15 minutes, or proposing past every attempt of the AI job (Step 4); each row "
+        "ends by its own id, and its pack goes by its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_DRAFTS_DID_NOT_FINISH",
+        f"{_SWEEP}: drafts whose job did not finish within its expiry, hard limit and margin "
+        "(F5 Step 7, AC26a); each row goes back to `proposed` by its own id",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_PULL_REQUEST_DONE",
+        f"{_SWEEP}: stored code 7 days after its pull request was merged or closed (F5 Step 8, "
+        "BR9); each row's code is deleted by its own `org_id` and id",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_OUT_OF_REACH",
+        f"{_SWEEP}: pull requests in a repository whose GitHub access has been gone 72 hours "
+        "(F5 Step 8, AC49); each row reads `untracked` by its own id",
+    ),
+    _across(
+        "connections.fix_poller",
+        "_FOLLOWED",
+        f"{_SWEEP}: drafts Nexovue still follows on GitHub (F5 Step 8, FR27, AC51); each row "
+        "is read and written by its own `org_id` and id",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_UNRECORDED",
+        f"{_SWEEP}: ended source suggestions whose result is not yet recorded (Step 4); the "
+        "rules' re-run reads, the event, the audit entry, the cleared code and the mark each "
+        "bind the row's own `org_id`",
+    ),
+    _across(
+        "fixes.notify",
+        "_DUE",
+        "F5's requester emails (T4.8): source suggestions owed an email, across every "
+        "organization; each is taken, and its person read, by its own `org_id`",
+    ),
+    CrossTenantStatement(
+        "nexovue_platform.fixes.statements",
+        "restore_sql",
+        "F5's restore (T5.5, ADR-095): run by `restore-postgres.sh` once over the whole "
+        "database a snapshot replaced, every organization's, never by a job; it deletes "
+        "code and withdraws consent only",
+    ),
+    _across(
+        "fixes.notify",
+        "_ENDED_CONSENTS",
+        "F5's owners' email (T5.3, AC59): organizations with an agreement that ended by itself, "
+        "each joined to its own AI connection; each is taken, and its owners read, by its "
+        "own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_CODE_DUE",
+        f"{_SWEEP}: stored code past BR9's limits, joined to its own organization's AI "
+        "connection; each cleared by its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_EXPIRED_PACKS",
+        f"{_SWEEP}: files read for a suggestion past their minutes (AC14)",
+    ),
+    _across("connections.fix_sweep", "_EXPIRED_CHECKS", f"{_SWEEP}: check runs past 15 minutes"),
+    _across(
+        "connections.fix_sweep",
+        "_EXPIRED_ATTEMPTS",
+        f"{_SWEEP}: GitHub link attempts past their ten minutes, each holding at most a code",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_APPS_DUE",
+        f"{_SWEEP}: Fix Apps due their hourly refresh; each job carries its own `org_id`",
+    ),
+    _across(
+        "connections.fix_sweep",
+        "_ACCESS_GONE",
+        f"{_SWEEP}: repositories with a live consent whose GitHub access has been gone past "
+        "BR9's 72 hours (Step 5); each repository's consents and code are taken back by its "
+        "own `org_id`, joined to its own organization's App",
+    ),
+    _across(
+        "metrics",
+        "_CONNECTIONS_ACTIVE",
+        "an install-wide gauge, an EXISTS only: whether any tracker connection is live, so "
+        "a missing scheduler-connections pages (F22 AC123, design *Observability*)",
     ),
     # Alerting (F21).
     _across("alerts.outbox", "_CLAIMABLE_CHANNELS", f"{_SWEEP}: the delivery claim"),
     _across("alerts.outbox", "_PRUNE_ATTEMPTS", f"{_SWEEP}: delivery attempts past keeping"),
+    _across(
+        "alerts.outbox",
+        "_CHANNELS_HOLDING",
+        f"{_SWEEP}: channels holding withheld rows to release (F19 FR23)",
+    ),
     _across("alerts.health", "_TO_REPORT", f"{_SWEEP}: channels newly failing"),
     _across("alerts.incidents", "_DUE_REPEATS", f"{_SWEEP}: incidents due a repeat"),
     _across("alerts.rules", "_RULES_OF_KINDS", f"{_SWEEP}: the rules a sweep evaluates"),
@@ -189,6 +435,48 @@ CROSS_TENANT_STATEMENTS: Final = (
         "a connector by its own id, from `_ACTIVE_INTEGRATIONS`; the poll that reports it "
         "carries no organization to bind",
     ),
+    # Cases (F22 T2.6): each step's first read finds the cases that need it in
+    # every organization; each case is then its own transaction, binding its own
+    # `org_id` (design, *Keeping and ending*).
+    _across(
+        "cases",
+        "_CLEARABLE_ASSIGNEES",
+        f"{_SWEEP}: active cases whose assignee left or became a viewer (AC10)",
+    ),
+    _across("cases", "_MISSED_JOINS", f"{_SWEEP}: open findings that missed their join (AC17)"),
+    _across(
+        "cases",
+        "_LEFT_ON_RESOLVED",
+        f"{_SWEEP}: open findings left on a resolved root (AC17)",
+    ),
+    _across("cases", "_IDLE_CASES", f"{_SWEEP}: active cases idle for 90 days (BR13)"),
+    _across(
+        "cases",
+        "_UNTOUCHED_CASES",
+        f"{_SWEEP}: untouched cases 72 hours after recovery (FR49)",
+    ),
+    _across("cases", "_DUE_WARNINGS", f"{_SWEEP}: active cases owed their idle warning (FR26)"),
+    # What the cases sweep sends (F22 T4.6): each first read finds what is owed in every
+    # organization; each row is then taken in its own transaction binding its `org_id`.
+    _across(
+        "case_emails",
+        "_OWED",
+        f"{_SWEEP}: the case emails owed, oldest first, each sent once (D90, AC94)",
+    ),
+    _across(
+        "case_emails",
+        "_TO_TELL",
+        f"{_SWEEP}: the connections whose admins are owed a failure or expiry email (FR33)",
+    ),
+    # Tracker sync (F22 T4.5): the sweep finds which connections have a due link or a due
+    # refresh; each job it adds carries the connection's own `org_id`, and the job binds
+    # it on every read (AC129).
+    _across(
+        "connections.sync",
+        "_CONNECTIONS_DUE",
+        f"{_SWEEP}: the connections with a due link or a due hourly refresh, so each is "
+        "handed its own job (design, *The job*)",
+    ),
     # Billing and erasure.
     _across("billing", "_END_LAPSED_GRACE", f"{_SWEEP}: subscriptions whose grace ended"),
     _across(
@@ -198,6 +486,28 @@ CROSS_TENANT_STATEMENTS: Final = (
         "an audit row with no organization",
     ),
     _across("erasure.owed", "_OVERDUE", "ADR-014: how many erasures are overdue, install-wide"),
+    # F4 T5.5: the knowledge sweep finds the organizations with chat on; every statement
+    # after it binds the one organization it is writing for.
+    _across(
+        "knowledge.tasks",
+        "_CHAT_ON",
+        f"{_SWEEP}: the organizations with chat on, whose recovered findings get fact lines",
+    ),
+    # F4: chat's sweep (design, *Settling*).
+    _across(
+        "insight.assistant_sweep",
+        "_LAPSED",
+        f"{_SWEEP}: questions past their clock in every organization, so each is ended "
+        "`unavailable` and what it held is settled; row-level security shows the AI account "
+        "only questions in flight or still holding tokens",
+    ),
+    # F4 Step 6: the embedding sweep (design, section 6, *Embedding*).
+    _across(
+        "insight.knowledge",
+        "_ORGANIZATIONS",
+        f"{_SWEEP}: the organizations with an embedding model or an opted-out project, so each "
+        "has its due chunks embedded or its opted-out vectors nulled, by its own `org_id`",
+    ),
 )
 
 
@@ -304,11 +614,6 @@ def _modules_under(source: Path, package: str) -> list[SourceModule]:
     return modules
 
 
-SCHEDULER_MODULES: Final = _modules_under(SCHEDULER_SOURCE, "nexovue_scheduler") + _modules_under(
-    PLATFORM_SOURCE, "nexovue_platform"
-)
-
-
 def _docstrings(tree: ast.AST) -> set[int]:
     """Docstrings are prose: they name tables they are about, and are no statement."""
     holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -409,7 +714,15 @@ def statements_in(modules: Iterable[SourceModule]) -> list[Statement]:
     return found
 
 
-SCHEDULER_STATEMENTS: Final = statements_in(SCHEDULER_MODULES)
+# A fixture, not a module constant: every xdist worker imports every test module and keeps
+# it for the whole run, so source parsed at import cost each worker 70 MB; a module-scoped
+# fixture parses it only where this file runs and releases it when it ends.
+@pytest.fixture(scope="module")
+def scheduler_statements() -> list[Statement]:
+    return statements_in(
+        _modules_under(SCHEDULER_SOURCE, "nexovue_scheduler")
+        + _modules_under(PLATFORM_SOURCE, "nexovue_platform")
+    )
 
 
 def _exempt(statement: Statement) -> bool:
@@ -422,13 +735,27 @@ def _exempt(statement: Statement) -> bool:
 # ------------------------------------------------------------------ the checks
 
 
-def test_the_source_this_check_walks_is_the_one_that_ships() -> None:
+def test_the_source_this_check_walks_is_the_one_that_ships(
+    scheduler_statements: list[Statement],
+) -> None:
     """A check that walks nothing passes everything."""
     assert SCHEDULER_SOURCE.is_dir(), f"no scheduler source at {SCHEDULER_SOURCE}"
     assert PLATFORM_SOURCE.is_dir(), f"no platform source at {PLATFORM_SOURCE}"
-    modules = {statement.module for statement in SCHEDULER_STATEMENTS}
+    modules = {statement.module for statement in scheduler_statements}
     assert "nexovue_scheduler.detection.project_job" in modules
     assert "nexovue_platform.detection" in modules
+    # F22 T2.2: the case writers are walked, so their statements are held too.
+    assert {
+        "nexovue_platform.cases",
+        "nexovue_scheduler.detection.events",
+        "nexovue_scheduler.cases",
+    } <= modules
+    # F28 T1.13: the release sync's statements are held too.
+    assert "nexovue_scheduler.releases.sync" in modules
+    # F22 T3.6: the connection jobs bind the job's own organization on every read (AC129).
+    assert "nexovue_scheduler.connections.tasks" in modules
+    # F22 T4.5: and so does the sync, its sweep aside.
+    assert {"nexovue_scheduler.connections.sync", "nexovue_scheduler.connections.store"} <= modules
 
 
 def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None:
@@ -439,10 +766,12 @@ def test_the_tables_this_check_guards_are_the_ones_that_carry_a_tenant() -> None
     assert {"intake_refusals", "detection_events"} <= TENANTLESS_RELATIONS
 
 
-def test_no_scheduler_statement_on_a_tenant_s_table_omits_the_tenant() -> None:
+def test_no_scheduler_statement_on_a_tenant_s_table_omits_the_tenant(
+    scheduler_statements: list[Statement],
+) -> None:
     found = [
         problem
-        for statement in SCHEDULER_STATEMENTS
+        for statement in scheduler_statements
         if not _exempt(statement)
         for problem in violations(statement)
     ]
@@ -452,14 +781,16 @@ def test_no_scheduler_statement_on_a_tenant_s_table_omits_the_tenant() -> None:
     )
 
 
-def test_every_table_without_a_tenant_the_scheduler_names_is_install_wide_on_purpose() -> None:
+def test_every_table_without_a_tenant_the_scheduler_names_is_install_wide_on_purpose(
+    scheduler_statements: list[Statement],
+) -> None:
     """A table the scheduler names with no `org_id` is either nexovue's own, by a
     decision recorded here, or a tenant's table that forgot its column."""
     declared = {each.name for each in INSTALL_WIDE_TABLES}
     undeclared = sorted(
         {
             f"{name} ({statement})"
-            for statement in SCHEDULER_STATEMENTS
+            for statement in scheduler_statements
             for name in statement.names & TENANTLESS_RELATIONS
             if name not in declared
         }
@@ -478,9 +809,11 @@ def test_every_install_wide_table_is_a_real_table_without_a_tenant_and_gives_its
         assert each.reason.strip(), f"{each.name} is install-wide without a recorded reason"
 
 
-def test_every_install_wide_table_is_one_the_scheduler_names() -> None:
+def test_every_install_wide_table_is_one_the_scheduler_names(
+    scheduler_statements: list[Statement],
+) -> None:
     """An exemption nothing uses would cover the next statement that forgets."""
-    named = {name for statement in SCHEDULER_STATEMENTS for name in statement.names}
+    named = {name for statement in scheduler_statements for name in statement.names}
     unused = sorted(each.name for each in INSTALL_WIDE_TABLES if each.name not in named)
     assert not unused, f"no scheduler statement names these install-wide tables: {unused}"
 
@@ -495,14 +828,16 @@ def test_every_view_is_created_by_a_migration() -> None:
         )
 
 
-def test_every_cross_tenant_exemption_still_names_an_unbound_statement() -> None:
+def test_every_cross_tenant_exemption_still_names_an_unbound_statement(
+    scheduler_statements: list[Statement],
+) -> None:
     """An exemption whose statement moved, or now binds the tenant, must be removed,
     or it would silently cover the next statement written under its name."""
     for each in CROSS_TENANT_STATEMENTS:
         assert each.reason.strip(), f"{each.module}.{each.owner} is exempt without a reason"
         held = [
             statement
-            for statement in SCHEDULER_STATEMENTS
+            for statement in scheduler_statements
             if (statement.module, statement.owner) == (each.module, each.owner)
         ]
         assert held, f"{each.module}.{each.owner} holds no statement any more"

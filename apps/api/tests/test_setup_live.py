@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Final
 from urllib.parse import urlsplit, urlunsplit
@@ -36,6 +36,15 @@ S3_SECRET: Final = os.environ.get("NEXOVUE_TEST_S3_SECRET", "nexovue_dev_secret"
 # migrations/env.py's MIGRATION_LOCK; env.py runs Alembic when imported, so it is repeated here.
 MIGRATION_LOCK: Final = 0x6E65786F76756502
 SETUP_WAIT_SAMPLED_SECONDS: Final = 4.0
+# How long the setup may take to start and ask for the lock, on a loaded CI runner.
+SETUP_START_SECONDS: Final = 60.0
+# Part of both pg_try_advisory_lock and pg_advisory_lock: the wait starts with the first statement
+# calling either.
+ADVISORY_LOCK_CALL: Final = "advisory_lock"
+# migrations/env.py's MIGRATION_LOCK_POLL_SECONDS, for the stand-in waiters.
+LOCK_POLL_SECONDS: Final = 0.5
+# Long enough that a 50 ms sampler cannot miss it.
+CONNECT_CHECK_HELD_SECONDS: Final = 1.0
 
 
 def _reachable(url: str) -> bool:
@@ -162,17 +171,29 @@ def test_two_setups_started_together_both_succeed(scratch_dsn: str) -> None:
 
 
 async def _waiting_setup_samples(dsn: str, holder_pid: int) -> list[asyncpg.Record]:
-    """pg_stat_activity of the setup's session, sampled while it waits for the lock."""
+    """pg_stat_activity of every session but the holder, sampled for SETUP_WAIT_SAMPLED_SECONDS
+    from the moment one asks for the lock.
+
+    Not from the moment the setup connects: SQLAlchemy's first connection runs a transaction of
+    server checks (version, schema, settings) before the wait starts. It waits on nothing and ends
+    on its own, so a concurrent index build waits for it a moment, never for the holder."""
     observer = await asyncpg.connect(dsn)
     try:
         samples: list[asyncpg.Record] = []
-        deadline = time.monotonic() + SETUP_WAIT_SAMPLED_SECONDS
-        while time.monotonic() < deadline:
-            samples += await observer.fetch(
-                "SELECT state, wait_event_type, wait_event FROM pg_stat_activity "
+        give_up = time.monotonic() + SETUP_START_SECONDS
+        stop_at: float | None = None
+        while time.monotonic() < (give_up if stop_at is None else stop_at):
+            sessions = await observer.fetch(
+                "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity "
                 "WHERE datname = current_database() AND pid NOT IN ($1, pg_backend_pid())",
                 holder_pid,
             )
+            if stop_at is None and any(
+                ADVISORY_LOCK_CALL in (session["query"] or "") for session in sessions
+            ):
+                stop_at = time.monotonic() + SETUP_WAIT_SAMPLED_SECONDS
+            if stop_at is not None:
+                samples += sessions
             await asyncio.sleep(0.05)
         return samples
     finally:
@@ -183,6 +204,76 @@ async def _hold_the_migration_lock(dsn: str) -> asyncpg.Connection:
     holder: asyncpg.Connection = await asyncpg.connect(dsn)
     await holder.execute(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
     return holder
+
+
+def _blocked(samples: list[asyncpg.Record]) -> list[dict[str, Any]]:
+    """Samples of a waiter that a concurrent index build would wait for while it waits."""
+    return [
+        {key: sample[key] for key in ("state", "wait_event_type", "wait_event", "query")}
+        for sample in samples
+        if sample["wait_event_type"] == "Lock" or str(sample["state"]).startswith("idle in")
+    ]
+
+
+async def _poll_for_the_lock(waiter: asyncpg.Connection) -> None:
+    while not await waiter.fetchval(f"SELECT pg_try_advisory_lock({MIGRATION_LOCK})"):
+        await asyncio.sleep(LOCK_POLL_SECONDS)
+
+
+async def _check_the_server_then_poll(waiter: asyncpg.Connection) -> None:
+    """SQLAlchemy's first connection: a transaction of server checks, ended before the wait."""
+    async with waiter.transaction():
+        await waiter.fetchval("SELECT current_schema()")
+        await asyncio.sleep(CONNECT_CHECK_HELD_SECONDS)
+    await _poll_for_the_lock(waiter)
+
+
+async def _poll_inside_a_transaction(waiter: asyncpg.Connection) -> None:
+    async with waiter.transaction():
+        await _poll_for_the_lock(waiter)
+
+
+async def _block_in_the_lock(waiter: asyncpg.Connection) -> None:
+    await waiter.execute(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
+
+
+async def _blocked_while_waiting(
+    dsn: str, wait: Callable[[asyncpg.Connection], Coroutine[Any, Any, None]]
+) -> list[dict[str, Any]]:
+    holder = await _hold_the_migration_lock(dsn)
+    waiter: asyncpg.Connection = await asyncpg.connect(dsn)
+    waiting = asyncio.create_task(wait(waiter))
+    try:
+        samples = await _waiting_setup_samples(dsn, holder.get_server_pid())
+    finally:
+        waiting.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiting
+        await waiter.close()
+        await holder.close()
+    assert samples, "the waiter was never seen waiting for the lock"
+    return _blocked(samples)
+
+
+def test_the_server_checks_on_connecting_are_not_counted_as_the_wait(
+    scratch_dsn: str,
+) -> None:
+    """They end on their own, so a concurrent index build waits for them a moment, not forever."""
+    assert asyncio.run(_blocked_while_waiting(scratch_dsn, _check_the_server_then_poll)) == []
+
+
+def test_a_waiter_polling_inside_a_transaction_is_caught(scratch_dsn: str) -> None:
+    blocked = asyncio.run(_blocked_while_waiting(scratch_dsn, _poll_inside_a_transaction))
+
+    assert blocked
+    assert {sample["state"] for sample in blocked} == {"idle in transaction"}
+
+
+def test_a_waiter_blocked_in_pg_advisory_lock_is_caught(scratch_dsn: str) -> None:
+    blocked = asyncio.run(_blocked_while_waiting(scratch_dsn, _block_in_the_lock))
+
+    assert blocked
+    assert {sample["wait_event_type"] for sample in blocked} == {"Lock"}
 
 
 def test_a_setup_waiting_for_the_migration_lock_holds_no_transaction_or_statement(
@@ -208,13 +299,8 @@ def test_a_setup_waiting_for_the_migration_lock_holds_no_transaction_or_statemen
         loop.close()
     _, stderr = setup.communicate(timeout=120)
 
-    assert samples, "the setup never connected while the lock was held"
-    blocked = [
-        dict(sample)
-        for sample in samples
-        if sample["wait_event_type"] == "Lock" or str(sample["state"]).startswith("idle in")
-    ]
-    assert blocked == []
+    assert samples, "the setup was never seen waiting for the lock"
+    assert _blocked(samples) == []
     assert setup.returncode == 0, stderr
     assert asyncio.run(_revision(scratch_dsn)) == _head()
 

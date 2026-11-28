@@ -43,3 +43,15 @@ function serviceOptions(groups: readonly ErrorGroupSummary[]) {
 
 /** The shape the route validates against before any group has arrived. */
 export const ERROR_FILTERS: readonly FilterDefinition[] = errorFilters([]);
+
+/** An error group's id as the API names it: hex, so nothing else reaches a query. */
+const GROUP_ID = /^[0-9a-f]{1,64}$/i;
+
+/**
+ * F3 (FR16, AC105): `?group=` opens that group, so an error fact on a finding links to it.
+ * The selection was this screen's own state; in the address it survives a copied link.
+ */
+export function parseErrorGroupSearch(search: Record<string, unknown>): { group?: string } {
+  const group = search.group;
+  return typeof group === "string" && GROUP_ID.test(group) ? { group } : {};
+}

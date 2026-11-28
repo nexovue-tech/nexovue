@@ -20,10 +20,19 @@ from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    AIConnection,
+    AIRun,
+    AIUsageMonth,
     ApiToken,
+    AssistantMonthlyCount,
+    AssistantReadLog,
+    AssistantSettings,
     AuditLogEntry,
     BillingSubscription,
     BillingWebhookDelivery,
+    Connection,
+    Dashboard,
+    ExplanationStoppedRule,
     Job,
     JobResult,
     NotificationChannel,
@@ -101,9 +110,59 @@ async def delete_jobs(session: AsyncSession, org_id: uuid.UUID) -> int:
     return await _rows_deleted(session, delete(Job).where(Job.org_id == org_id))
 
 
+async def delete_dashboards(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's dashboards, deleted ones too. Their versions go by cascade."""
+    return await _rows_deleted(session, delete(Dashboard).where(Dashboard.org_id == org_id))
+
+
 async def delete_job_results(session: AsyncSession, org_id: uuid.UUID) -> int:
     """What a Run now or a send test found, not yet collected."""
     return await _rows_deleted(session, delete(JobResult).where(JobResult.org_id == org_id))
+
+
+async def delete_connections(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Tracker connections and their sealed keys (F22); the places each reaches cascade."""
+    return await _rows_deleted(session, delete(Connection).where(Connection.org_id == org_id))
+
+
+async def delete_explanation_stopped_rules(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The rules the organization stopped from naming causes (F3 FR54)."""
+    return await _rows_deleted(
+        session, delete(ExplanationStoppedRule).where(ExplanationStoppedRule.org_id == org_id)
+    )
+
+
+async def delete_ai_connections(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's AI connection and its owner's consent (F3)."""
+    return await _rows_deleted(session, delete(AIConnection).where(AIConnection.org_id == org_id))
+
+
+async def delete_ai_usage_monthly(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's tokens, month by month (F3)."""
+    return await _rows_deleted(session, delete(AIUsageMonth).where(AIUsageMonth.org_id == org_id))
+
+
+async def delete_ai_runs(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Where each of the organization's model calls went, and how it ended (F3)."""
+    return await _rows_deleted(session, delete(AIRun).where(AIRun.org_id == org_id))
+
+
+async def delete_assistant_settings(session: AsyncSession, org_id: uuid.UUID) -> int:
+    return await _rows_deleted(
+        session, delete(AssistantSettings).where(AssistantSettings.org_id == org_id)
+    )
+
+
+async def delete_assistant_monthly_counts(session: AsyncSession, org_id: uuid.UUID) -> int:
+    return await _rows_deleted(
+        session, delete(AssistantMonthlyCount).where(AssistantMonthlyCount.org_id == org_id)
+    )
+
+
+async def delete_assistant_read_log(session: AsyncSession, org_id: uuid.UUID) -> int:
+    return await _rows_deleted(
+        session, delete(AssistantReadLog).where(AssistantReadLog.org_id == org_id)
+    )
 
 
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
@@ -117,6 +176,15 @@ DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitabl
     "notification_channels": delete_notification_channels,
     "jobs": delete_jobs,
     "job_results": delete_job_results,
+    "connections": delete_connections,
+    "dashboards": delete_dashboards,
+    "explanation_stopped_rules": delete_explanation_stopped_rules,
+    "ai_connections": delete_ai_connections,
+    "ai_usage_monthly": delete_ai_usage_monthly,
+    "ai_runs": delete_ai_runs,
+    "assistant_settings": delete_assistant_settings,
+    "assistant_monthly_counts": delete_assistant_monthly_counts,
+    "assistant_read_log": delete_assistant_read_log,
     "users": delete_users,
     "projects": delete_projects,
 }

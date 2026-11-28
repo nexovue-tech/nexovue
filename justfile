@@ -9,6 +9,8 @@ go_modules := "apps/receiver apps/workers packages/contracts tools/gateseed tool
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.
 postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "15432") + "/nexovue")
+insight_dev_password := env("POSTGRES_INSIGHT_PASSWORD", "nexovue_insight_dev")
+connections_dev_password := env("POSTGRES_CONNECTIONS_PASSWORD", "nexovue_connections_dev")
 # The setup command (apps/workers/cmd/setup) speaks ClickHouse's native protocol; its migration lock
 # lives in Postgres, which it reaches with the plain postgres:// form.
 clickhouse_dsn := env("CLICKHOUSE_SETUP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "/nexovue")
@@ -47,6 +49,12 @@ stack:
 # Production replica: the hosted install, from images built from this checkout
 dev-app:
     GIT_SHA=$(git rev-parse HEAD) docker compose -p nexovue-app --env-file {{compose}}/.env.replica -f {{compose}}/nexovue.yaml -f {{compose}}/nexovue.hosted.yaml -f {{compose}}/nexovue.build.yaml up -d --wait --build
+# F3 plan T3.11: build both images and a kit, install it under its own project, and try the AI
+# role's fence from inside (AC42), then back up, empty Postgres and restore (AC46). Needs Docker
+# with 12 GiB; slow, so its own CI job and never part of `just check`.
+# The AI role's fence, on a really installed kit
+insight-fence:
+    tools/insight-fence/fence.sh
 up:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
     -./tools/otel-demo/otel-demo.sh up
@@ -104,6 +112,19 @@ detection-measure *args:
 detection-seed *args:
     uv run python tools/detection-seed/seed.py {{args}}
 
+# F22 plan T1.0: make one dev service read slower than normal (`--clear` to recover), so the real
+# project job opens and closes a finding - no row is inserted into findings.
+# Break or heal one dev service, for judging case management by hand
+detection-fault *args:
+    uv run python tools/detection-seed/fault.py {{args}}
+
+# F3 plan T1.12: write what one explanation rule reads, open a finding directly (detection does
+# not judge it, and the tool says so) and queue its facts' read. Rules 1, 3 and 4 send a signed
+# deploy through the dev webhook, so they need `--secret`.
+# Show one of F3's rules on a dev finding within minutes
+explain-demo *args:
+    uv run python tools/detection-seed/explain_demo.py {{args}}
+
 # F6 plan T8.2 (AC29): 200 projects, 2,000 services. In order: tenants, load (keep it running),
 # seed, then watch while the scheduler runs. `profile` times project jobs; `remove --yes` closes
 # the tenants. Each command's options: `just detection-scale <command> --help`.
@@ -111,11 +132,45 @@ detection-seed *args:
 detection-scale *args:
     uv run python tools/detection-measure/scale.py {{args}}
 
+# F28 plan T1.5: releases through the real receiver, with `service.version` shaped by a mode (rolling,
+# swap, no-version, rollback, exceptions, cold-start, churn, many-services); `verify` reads the rollups
+# back against what was sent. Each command's options: `just release-demo <command> --help`.
+# Send demo releases through the receiver, and verify the rollups
+release-demo *args:
+    uv run python tools/release-demo/send.py {{args}}
+
+# F28 plan T1.6: the Step 1a cost run, against a baseline worker; writes JSON for the cost report.
+# Each command's options: `just release-measure <command> --help`.
+# Measure the version rollup's rows, disk and worker memory
+release-measure *args:
+    uv run python tools/release-demo/release_measure.py {{args}}
+
 # F6 plan T8.1: the demo's fault flags against detection, scored as AC36's table. A run takes about
 # 12 days after its warm-up; see tools/fault-bed/README.md. Needs NEXOVUE_TOKEN, a read API token.
 # Drive the demo's fault flags and score detection (check, run, score)
 fault-bed *args:
     uv run python tools/fault-bed/fault_bed.py {{args}}
+
+# F4 plan T8.1 (AC80, AC98): hostile chat questions looping 7-day reads beside the fault bed, then
+# `summary` (memory, the two poll routes) and `compare` (a chat run's alerts against a chat-idle
+# run's). See tools/fault-bed/README.md, *Chat under load*.
+# Load chat beside detection and alerts, and compare
+chat-load *args:
+    uv run python tools/fault-bed/chat_load.py {{args}}
+
+# F3 plan T2.15, T2.16, T6.3: the AI bed. `--run score|tune|payloads|models|forged`; the model runs use
+# fake providers unless a real wire format is named, and a real model is the founder's run after Phase 2.
+# See tools/ai-eval/run.py. The deploy scheduler and facts log are described in docs/research/f3-rules-report-2026-11.md.
+# Score the rules, replay stored facts, run the payloads, fakes and forged spans (--run ...)
+ai-eval *args:
+    uv run python tools/ai-eval/run.py {{args}}
+
+# F4 plan Step 4: chat's bed (`run`, `render`, `answers`), against the bed's own Postgres and ClickHouse
+# with no scheduler running. `--fake` tests the harness; a real option is the founder's run after Phase 2,
+# its key in AI_EVAL_KEY. Records and the report stay outside the repository. See tools/ai-eval/chat/bed.py.
+# Run chat's question, injection and cost bed (run, render, answers)
+chat-bed *args:
+    cd tools/ai-eval && uv run --all-packages python -m chat.bed {{args}}
 
 # Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
 # govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
@@ -171,6 +226,9 @@ lint-go:
     #!/usr/bin/env bash
     set -euo pipefail
     for m in {{go_modules}}; do (cd "$m" && golangci-lint run ./...); done
+    # Images build each module alone (GOWORK=off, as the pipeline image does), where go.work no
+    # longer lends a missing go.sum line; tidy here, outside the workspace, is that build's view.
+    for m in {{go_modules}}; do (cd "$m" && GOWORK=off go mod tidy -diff) || { echo "$m: run 'GOWORK=off go mod tidy' there"; exit 1; }; done
 
 lint-py:
     uv run ruff check .
@@ -202,7 +260,8 @@ test-go:
 gate-seed:
     go run ./tools/gateseed
 
-test-py: gate-seed
+# FILES, when given, are the test files to run instead of every one: CI passes one shard's.
+test-py *FILES: gate-seed
     #!/usr/bin/env bash
     set -uo pipefail
     # `.env` if it exists, because the live suites need what it holds. Every
@@ -222,8 +281,26 @@ test-py: gate-seed
     # fixtures, and a suite whose fixture writes rows for one tenant must not have
     # two workers inside it at once. It is not in `addopts`, so running one file
     # by hand stays serial and readable.
-    uv run pytest -n 6 --dist loadfile
+    # A bound below CI's 60-minute job limit (the suite takes about 20): a run that hangs is
+    # interrupted here, so pytest prints what was running and the step fails with its log kept,
+    # instead of the job being cancelled mid-step with no log at all.
+    # A watchdog in plain bash, not coreutils' `timeout`, which macOS does not ship: the founder's
+    # Mac runs this recipe too. pytest stays in the foreground, because a background job ignores
+    # INT; the watchdog sends INT to this shell's children (pytest prints the stacks), then KILL.
+    timed_out=$(mktemp)
+    (
+      trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+      sleep 2400 & nap=$!; wait "$nap"
+      echo yes > "$timed_out"; pkill -INT -P $$
+      sleep 60 & nap=$!; wait "$nap"
+      pkill -KILL -P $$
+    ) &
+    watchdog_pid=$!
+    uv run pytest -n 6 --dist loadfile {{FILES}}
     code=$?
+    kill "$watchdog_pid" 2>/dev/null
+    if [ -s "$timed_out" ]; then echo "test-py did not finish in 40 minutes: a test hung; see the stacks above"; code=124; fi
+    rm -f "$timed_out"
     if [ $code -eq 5 ]; then echo "no tests collected yet — see the testing policy"; exit 0; fi
     exit $code
 
@@ -284,6 +361,19 @@ e2e:
 e2e-headed:
     pnpm --filter @nexovue/e2e test --headed
 
+# F3 plan T5.9 (AC48, A77): with `scheduler-insight` stopped, every screen that is not AI's, and
+# the specs for the ones most likely to notice, still pass. Stops the role, runs them, and
+# starts it again whatever the result. Bring the stack up first. Run by hand: no CI job runs
+# Playwright, so its result is written in the feature's status.md.
+e2e-insight-stopped:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    compose=(docker compose -f {{compose}}/docker-compose.yaml)
+    "${compose[@]}" stop scheduler-insight
+    trap '"${compose[@]}" start scheduler-insight' EXIT
+    pnpm --filter @nexovue/e2e test non-ai-screens alerts errors first-span logs members \
+        profiles rum service-map services sign-in synthetics top-bar
+
 # The OpenTelemetry Demo — 16 services, 10 languages — against our receiver (P1-62).
 # Never part of `just check` or `just e2e`: it wants ~2.5 GB and several minutes,
 # and it is a realism gate run deliberately, not a dependency of anything.
@@ -330,9 +420,12 @@ topics:
 # Apply all migrations: Postgres then ClickHouse
 migrate: migrate-pg migrate-ch
 
+# `POSTGRES_INSIGHT_PASSWORD` and `POSTGRES_CONNECTIONS_PASSWORD`: the AI and tracker roles'
+# accounts, which setup creates (F3; F22 T8.7); the dev compose file's `scheduler-insight` and
+# `scheduler-connections` sign in with the same development values.
 # Postgres to the newest migration, and the object store's bucket: the deploy step's Python half.
 migrate-pg:
-    POSTGRES_DSN="{{postgres_dsn}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
+    POSTGRES_DSN="{{postgres_dsn}}" POSTGRES_INSIGHT_PASSWORD="{{insight_dev_password}}" POSTGRES_CONNECTIONS_PASSWORD="{{connections_dev_password}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
 
 migrate-ch:
     {{setup_go}} clickhouse

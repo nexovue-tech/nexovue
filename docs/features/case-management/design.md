@@ -212,7 +212,7 @@ At 375 px the feed has no sideways scroll, and no case sentence is truncated (AC
 
 ### `/settings/connections` (new, `features/settings/ConnectionsScreen.tsx`)
 
-One rail entry in `shared/settings/settings-nav.ts`, in *This organization*, `requires: "manage_connections"`, keywords `github`, `jira`, `issues`, `tracker`. Hidden, not disabled, from others (F6's C10 convention). The screen repeats *What leaves this server* from the spec, at the top. Repository and mapping tables reflow to stacked rows at 375 px.
+One rail entry in `shared/settings/settings-nav.ts`, in *This organization*, `requires: "manage_connections"`, keywords `github`, `issues`, `tracker`, with `jira` added by Step 7 only if it goes ahead (founder, 2026-11-09: nothing public mentions Jira until Atlassian answers). Hidden, not disabled, from others (F6's C10 convention). The screen repeats *What leaves this server* from the spec, at the top. Repository and mapping tables reflow to stacked rows at 375 px.
 
 | State | What it shows |
 |---|---|
@@ -237,7 +237,6 @@ One rail entry in `shared/settings/settings-nav.ts`, in *This organization*, `re
 | Abandoned on GitHub | "Setup did not finish on GitHub." Shown when they return to settings with a setup still open | **Start again** | Start route |
 | `state` wrong or reused | "This setup link is not valid. Nothing was changed." | **Start again** | Settings |
 | `state` or code expired, past one hour | "This setup link has expired. Nothing was changed." | **Start again** | Settings |
-| Session ended | The sign-in screen, then "Sign in finished, but setup must start again." | **Start again** | Settings |
 | App made, not installed | "Now choose which repositories it may reach." | **Install on GitHub** | GitHub's install page |
 | No repository chosen | "The App is installed, but reaches no repository." | **Choose repositories on GitHub** | GitHub |
 | First test failed | The failure in words (FR44) | **Test again** | Settings |
@@ -771,7 +770,7 @@ All arithmetic or guesses. Nothing is measured.
 
 **Narrow settings.** `scheduler-connections` does not use the `control-plane-env` anchor. It gets `ENV`, `NEXOVUE_DEPLOYMENT`, log settings, `SCHEDULER_ROLE: connections`, `POSTGRES_DSN`, `APP_BASE_URL`, and its key pair. `KAFKA_BROKERS` is not needed: F3's change gives it an empty default outside `full`. `CHECK_SECRET_KEY` is required only when `full`. All roles still share one Postgres account (foundation section 1), so this limits keys and not database reach.
 
-**Stated plainly: a compromise of this role reads and writes all of Postgres, and can tamper with the job queue.** It can alter findings, connections and allowances, and read or remove job rows. It cannot open check or channel secrets, and holds no AI, mail or object store key. This is the one role that opens tracker credentials and parses responses from the internet, so **T8.7 gives it its own account**, `nexovue_connections`, by F3's pattern (`ai-insights/design.md`, *The Postgres account*, `:647`), with grants limited to `connections`, `connection_repositories`, `finding_links`, `finding_events`, `finding_emails_owed`, its jobs and the findings case columns, and F5's tables once F5 lands (F5 design, *Grants and the checklist*). If F3's pattern is not merged by then, this stays a named risk.
+*Built in T8.7 (2026-11-22): the role signs in as `nexovue_connections`, below; what a compromise still reaches is in ADR-030.* **As first designed, stated plainly: a compromise of this role reads and writes all of Postgres, and can tamper with the job queue.** It can alter findings, connections and allowances, and read or remove job rows. It cannot open check or channel secrets, and holds no AI, mail or object store key. This is the one role that opens tracker credentials and parses responses from the internet, so **T8.7 gives it its own account**, `nexovue_connections`, by F3's pattern (`ai-insights/design.md`, *The Postgres account*, `:647`), with grants limited to `connections`, `connection_repositories`, `finding_links`, `finding_events`, `finding_emails_owed`, its jobs and the findings case columns, and F5's tables once F5 lands (F5 design, *Grants and the checklist*). If F3's pattern is not merged by then, this stays a named risk.
 
 **The attacker's paths,** from the research, each with what holds it:
 
@@ -804,7 +803,7 @@ All arithmetic or guesses. Nothing is measured.
 | `PATCH /case`, assign | `case.assigned` |
 | `PATCH /case`, resolve; `false-alarm`, `new-normal` on a root | `case.resolved` |
 | `PATCH /case`, reopen | `case.reopened` |
-| `POST /notes` | None: the timeline records it, and FD9 keeps audit for what is worth a trail. The note deletion below is audited because it destroys text |
+| `POST /notes` | None for the note: the timeline records it, and FD9 keeps audit for what is worth a trail. A note on a finding with no case starts one, and that is audited as `case.started`. The note deletion below is audited because it destroys text |
 | `DELETE /notes/{id}` | `note.deleted` |
 | `POST /links`, create | `link.issue_requested`, because data leaves to a third party |
 | `POST /links`, reference | `link.added` |
@@ -817,7 +816,7 @@ All arithmetic or guesses. Nothing is measured.
 | `DELETE /connections/{id}` | `connection.deleted` |
 | `PATCH /places/{id}`, allow | `connection.public_repository_allowed` |
 | `PATCH /places/{id}`, withdraw | `connection.public_repository_withdrawn` |
-| `PATCH /places/{id}`, other | `connection.place_changed` |
+| `PATCH /places/{id}`, other | None exists: the route changes only the public allowance, so `connection.place_changed` is not defined until Step 7 (Jira) adds an issue type and transitions |
 | `PUT`, `DELETE /service-repositories` | `service_repository.changed` |
 | `POST /connections/webhook/{id}` | None: it changes no record but when to read next |
 | `sync_connection`, `cases_sweep` | `case.resolved`, `case.reopened`, system actor |
@@ -883,19 +882,9 @@ All arithmetic or guesses. Nothing is measured.
 
 Written here, not in `docs/decisions/`. Each takes the next free number when approved.
 
-### Proposed ADR: Trackers are reconciled, and a webhook only rings the doorbell
+### Filed: Trackers are reconciled, and a webhook only rings the doorbell
 
-**Status:** Proposed. **Context.** Two systems hold a status. Either can be unreachable or written to by someone else. Neither GitHub's nor Jira's pages read promise delivery order, and a self-hosted install may not be reachable at all.
-
-**Decision.**
-
-1. Each synced link stores `seen_state` and `wanted_state`. One function compares them with a fresh read, per *The comparison*.
-2. A webhook, once its signature is proved, only makes that function run sooner. Nothing in its body changes a case, and it adds no job.
-3. Polling alone must be enough.
-4. No delivery table.
-5. Only status crosses, plus fixed comments within BR10's limit.
-
-**Consequences.** Duplicates, order and replay stop mattering. An unreachable install works. It costs a charged read per active link on a timer, and up to five minutes of delay without a webhook. It does not suit a future feature that needs every change, such as syncing comments. That would need its own decision.
+Filed as [ADR-035](../../decisions/ADR-035-trackers-are-reconciled-and-a-webhook-only-rings-the-doorbell.md) on 2026-11-09, when Step 4 built the reconcile. The text that stood here is that record now.
 
 ### Proposed ADR: A case is a finding's columns, with one active case per service
 
@@ -911,18 +900,9 @@ Written here, not in `docs/decisions/`. Each takes the next free number when app
 
 **Consequences.** A finding's meaning stays what F6 defined. F6's open indexes and the outbox are untouched. A check failure with no finding has no notes or tracker link, which is revisited if users ask. `retention.py`'s rule gains clauses.
 
-### Proposed ADR: `scheduler-connections` makes every tracker call, on narrow settings
+### Filed: `scheduler-connections` makes every tracker call, on narrow settings
 
-**Status:** Proposed; carries FD23, amends foundation section 1's "API, on a person's click", and adds a role under ADR-019. **Decision.**
-
-1. A new role, from the same image, on queues `connections` and `connections-interactive`, with sync, on `connections`, capped below the slots.
-2. It holds `CONNECTION_SECRET_KEY`, and not the shared anchor's keys. `SCHEDULER_ROLE` gains `connections`, and `TASK_SETS` an entry.
-3. The API adds jobs and reads results, per ADR-011's reason.
-4. It runs no model, enforced by a test on the modules it actually loads.
-5. Typed addresses are limited to known hosts until a self-hosted tracker is supported.
-6. It is optional: an install can leave it out, and hosted has none until founder decision 3 is answered.
-
-**Consequences.** A slow GitHub holds no alert. A click's result arrives a moment later, not in the response. One more container, memory unmeasured. F5's GitHub work runs here too.
+Filed as [ADR-030](../../decisions/ADR-030-scheduler-connections-makes-every-tracker-call.md) on 2026-11-08, when Step 3 built the role. The text that stood here is that record now.
 
 ## What other features must change
 

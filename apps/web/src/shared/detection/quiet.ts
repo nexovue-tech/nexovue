@@ -32,11 +32,15 @@ export const QUIET_CHOICES: Record<Quieting, readonly QuietChoice[]> = {
   ],
 };
 
-/** What arming a snooze or a mute will do, said before it is confirmed. */
+/**
+ * What arming a snooze or a mute will do, said before it is confirmed. A snooze also
+ * holds back a reliability target's messages; a mute does not, because a mute can last
+ * 30 days and a target's alert is one a person asked for (F19 FR26).
+ */
 export function quietEffect(kind: Quieting, service: string): string {
   return kind === "snooze"
-    ? `Nothing is sent about ${service} until the snooze ends, and its minutes stay out of its normal. Members can snooze a service for 4 hours in any 24.`
-    : `Nothing is sent about ${service} until the mute ends, nor afterwards for what it covered. Its findings are still recorded, under Muted.`;
+    ? `Nothing is sent about ${service} until the snooze ends, and its minutes stay out of its normal. Also holds back reliability target messages. Members can snooze a service for 4 hours in any 24.`
+    : `No finding about ${service} is sent until the mute ends, nor afterwards for what it covered. Its findings are still recorded, under Muted. Stops findings only. Reliability target alerts continue.`;
 }
 
 /** What a snooze or a mute did, from the API's answer, on the project's clock. */

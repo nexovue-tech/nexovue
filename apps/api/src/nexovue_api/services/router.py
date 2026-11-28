@@ -81,7 +81,7 @@ async def list_services(
 
 @router.get("/trend", summary="Each service's history across the window")
 async def service_trend(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -93,9 +93,9 @@ async def service_trend(
 
     Separate from the list rather than nested in it: a row is readable without
     its trend, and a hundred services should not carry six thousand points to
-    render one screen.
+    render one screen. On the read surface: chat's `get_service_trend` reads it (F4 T3.1a).
     """
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.service_trend(
         repository,
@@ -138,11 +138,10 @@ async def list_project_endpoints(
     with_errors: WithErrors = False,
     order: Order = "worst",
 ) -> EndpointListResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     return await _endpoints(
-        identity,
-        db,
         repository,
-        project_id=project_id,
+        project_id=project.id,
         service_name=None,
         from_time=from_time,
         to_time=to_time,
@@ -183,7 +182,7 @@ async def get_service(
 
 @router.get("/{service_name}/endpoints", summary="One service's endpoints, worst first")
 async def list_service_endpoints(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     service_name: str,
@@ -195,11 +194,11 @@ async def list_service_endpoints(
     with_errors: WithErrors = False,
     order: Order = "worst",
 ) -> EndpointListResponse:
+    """On the read surface: chat's `list_service_endpoints` reads it (F4 T3.1a)."""
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     return await _endpoints(
-        identity,
-        db,
         repository,
-        project_id=project_id,
+        project_id=project.id,
         service_name=service_name,
         from_time=from_time,
         to_time=to_time,
@@ -211,8 +210,6 @@ async def list_service_endpoints(
 
 
 async def _endpoints(
-    identity: CurrentIdentity,
-    db: DbSession,
     repository: TenantRepository,
     *,
     project_id: uuid.UUID,
@@ -224,12 +221,12 @@ async def _endpoints(
     with_errors: bool,
     order: str,
 ) -> EndpointListResponse:
-    """The two endpoint routes differ only in whether a service was named."""
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    """The two endpoint routes differ only in whether a service was named, once each has
+    proved its project."""
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_endpoints(
         repository,
-        project_id=str(project.id),
+        project_id=str(project_id),
         service_name=service_name,
         from_time=window_start,
         to_time=window_end,

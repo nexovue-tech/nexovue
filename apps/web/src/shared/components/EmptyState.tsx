@@ -24,7 +24,7 @@ export function EmptyState({
   const Heading = `h${headingLevel}` as const;
   return (
     <div className="mx-auto max-w-lg px-8 py-16 text-center">
-      <Heading className="font-medium font-serif text-ink text-lg tracking-tight">{title}</Heading>
+      <Heading className="heading-section">{title}</Heading>
       <p className="mt-2 text-ink-dim text-sm leading-relaxed">{detail}</p>
       {action ? <div className="mt-5 flex justify-center">{action}</div> : null}
     </div>

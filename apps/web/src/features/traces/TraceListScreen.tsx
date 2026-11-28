@@ -10,6 +10,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { keepUrlWindow } from "@/shared/url-window";
 
 import type { TraceSummary } from "./api";
 import { traceExportUrl, traceFailed, useTraceFacets, useTraceList } from "./api";
@@ -72,7 +73,12 @@ export function TraceListScreen() {
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every dropdown they tried on the way.
   const setFilters = (next: TraceFilters) =>
-    void navigate({ to: "/traces", search: () => toSearchParams(next), replace: true });
+    void navigate({
+      to: "/traces",
+      // F3 FR16: a finding's window, carried in the address, survives a filter change.
+      search: () => ({ ...keepUrlWindow(search), ...toSearchParams(next) }),
+      replace: true,
+    });
 
   const traces = list.data?.traces ?? [];
   const ceiling = slowestDuration(traces);
@@ -94,7 +100,7 @@ export function TraceListScreen() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Traces</h1>
+        <h1 className="heading-page">Traces</h1>
         <p className="mt-1 text-ink-dim text-sm">
           Every request assembled in {windowPhrase}, newest first.
         </p>
@@ -307,7 +313,7 @@ function AttributeFilter({
       // Apply 22px past the edge of a page that cannot scroll sideways, so the
       // filter could not be applied at all
       // (`docs/quality/console-review-2026-09-20.md`, D3).
-      className="flex flex-wrap items-baseline gap-2"
+      className="flex flex-wrap items-center gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -324,23 +330,22 @@ function AttributeFilter({
       <input
         name="attr"
         defaultValue={filters.attr ?? ""}
-        placeholder="db.system"
+        placeholder="Attribute, e.g. db.system"
         aria-label="Span attribute name"
-        className="w-32 min-w-24 flex-1 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        className="w-44 min-w-24 flex-1 rounded-sm border border-line bg-surface px-2 py-1 font-mono text-ink text-xs outline-none placeholder:font-sans placeholder:text-ink-dim/70 hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       />
       <input
         name="attr_value"
         defaultValue={filters.attrValue ?? ""}
-        placeholder="postgresql"
+        placeholder="Value, e.g. postgresql"
         aria-label="Span attribute value"
-        className="w-32 min-w-24 flex-1 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        className="w-44 min-w-24 flex-1 rounded-sm border border-line bg-surface px-2 py-1 font-mono text-ink text-xs outline-none placeholder:font-sans placeholder:text-ink-dim/70 hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       />
-      <button
-        type="submit"
-        className="rounded-sm border border-line bg-raised px-1.5 py-0.5 font-mono text-2xs text-ink uppercase tracking-caps hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
-      >
-        Apply
-      </button>
+      {/* Placeholders that read as examples, not as a filter already applied, and the shared
+          button (UX review, 2026-11-28). Enter submits too. */}
+      <Button type="submit" variant="secondary">
+        Filter
+      </Button>
     </form>
   );
 }
@@ -395,7 +400,7 @@ function InlineSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="max-w-44 cursor-pointer appearance-none truncate rounded-sm border-none bg-transparent py-0.5 pr-1 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        className="field-sizing-content max-w-44 cursor-pointer appearance-none truncate rounded-sm border-none bg-transparent py-0.5 pr-1 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

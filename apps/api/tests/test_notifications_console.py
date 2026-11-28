@@ -149,6 +149,64 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "reason": "the receiver answered 404",
             "link": "https://app.nexovue.com/settings/channels/1",
         },
+        Message.CASE_ASSIGNED: {
+            "service": "checkout",
+            "severity": "critical",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        # F22 Step 4: what the cases sweep owes about a case and a connection.
+        Message.CASE_TRACKER_CLOSED: {
+            "service": "checkout",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        Message.CASE_TRACKER_CLOSED_SIGNAL_OPEN: {
+            "service": "checkout",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        Message.CASE_IDLE_WARNING: {
+            "service": "checkout",
+            "ends_on": "16 Nov 2026",
+            "link": "https://app.nexovue.com/findings/1",
+        },
+        Message.CONNECTION_NEEDS_ATTENTION: {
+            "tracker": "GitHub",
+            "what": "the App was uninstalled.",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
+        Message.CONNECTION_FAILING: {
+            "tracker": "GitHub",
+            "what": "the tracker did not answer in time.",
+            "failing_since": "2026-11-08 14:02 UTC",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
+        # F3 AC102: an owner told their AI connection changed, with hosts and no key.
+        Message.AI_CONNECTION_CHANGED: {
+            "organization": "Acme Inc",
+            "what": "An admin changed the address AI wording sends facts to.",
+            "old_host": "https://api.anthropic.com",
+            "new_host": "https://gateway.example.com",
+            "until": "an owner agrees again",
+            "link": "https://app.nexovue.com/settings/ai",
+        },
+        Message.CONNECTION_EXPIRING: {
+            "tracker": "Jira",
+            "expires_on": "23 Nov 2026",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
+        Message.CONNECTION_REPOSITORY_PUBLIC: {
+            "tracker": "GitHub",
+            "repository": "acme/api",
+            "link": "https://app.nexovue.com/settings/connections",
+        },
+        # F5 D46: a requester told about the suggested fix they asked for, by a finding link.
+        Message.FIX_FILES_READY: {"link": "https://app.nexovue.com/findings/1"},
+        Message.FIX_SUGGESTION_READY: {"link": "https://app.nexovue.com/findings/1"},
+        Message.FIX_SUGGESTION_ENDED: {"link": "https://app.nexovue.com/findings/1"},
+        # F5 AC59: each owner told an agreement to send code ended, in fixed words.
+        Message.FIX_CONSENT_ENDED: {
+            "changed": "the AI provider's key and the AI model",
+            "link": "https://app.nexovue.com/settings/ai",
+        },
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 

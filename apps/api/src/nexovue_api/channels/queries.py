@@ -116,5 +116,6 @@ def summary_fields(channel: NotificationChannel) -> dict[str, Any]:
         "muted_until": channel.muted_until,
         "muted_by": channel.muted_by,
         "quiet_hours": channel.quiet_hours,
+        "sends_explained": channel.sends_explained,
         "created_at": channel.created_at,
     }

@@ -96,7 +96,8 @@ Takes `?period=` (default the latest) and `?finding=` (a finding id). In order:
    event in order.
 3. **Warnings, where true:** two environments; versions combined; incomplete with its minute count.
 4. **Comparison:** up to two blocks, "During the rollout" and "Since the rollout finished". In each, a row for failure share, p95, and
-   either traffic share or requests per minute; a column for each side, with counts and the plain word. Window chooser: 1, 6, 24 hours,
+   either traffic share or requests per minute (requests over the minutes that side had traffic, not the whole stretch; the platform's
+   `_side` computes it once and the API sends it as `requests_per_minute`, item 36b); a column for each side, with counts and the plain word. Window chooser: 1, 6, 24 hours,
    applying to the second block. Last week's column for before-and-after methods. Under the table: "Counts assume you do not sample
    before sending", the warm-up rule, and FR49's sentence under any `about_same`.
    **Phone:** one stacked block per measure: "Failure share: higher. v2.1 3.0% (180 of 6,012), v2.0 0.2% (12 of 5,844)", with last week
@@ -135,6 +136,7 @@ Takes `?period=` (default the latest) and `?finding=` (a finding id). In order:
 | Loading | Skeleton for each section, separately, so facts appear while ClickHouse reads |
 | Failure | Per section, `InlineFailure`; facts stay |
 | Error read timed out | "This read took too long. Try the 1-hour window." Never an empty list |
+| No exception groups | "No exceptions were recorded in either version during this window." Not "no errors": failing spans can carry no exception (item 36a) |
 | Error data expired | "Error details aged out on {date}" |
 | Incomplete | Label beside the numbers, with minute count |
 | Delayed | "As of 14:32" |
@@ -148,7 +150,7 @@ Takes `?period=` (default the latest) and `?finding=` (a finding id). In order:
 - **The strip:** an HTML strip above the plot, aligned by `valToPos`, carries word tags: "failed", "rolled back", "seen", "3 releases".
   It falls back to a short mark only when space is tight. A marker draws under the series and is clipped to the plot, so a letter painted
   on canvas would be overprinted (`:255-261,361-367`).
-- Markers within 8 pixels (*guess*) collapse into one tag with the count.
+- Markers within 8 pixels (*guess*) collapse into one tag with the count, and so do neighbours whose tags would print over each other (a tag is about 7 px a character; F20 fix, 2026-11-22).
 - **Hover** shows facts only (service, version, source, time), in a React portal fed from the cursor hook's state, so it renders as text.
   A **click** on a marker or tag pins the box, with its link to the release and an Escape or close control. A drag still selects. A box
   following the cursor could not otherwise be reached.
@@ -346,6 +348,7 @@ traffic it is the reported time, with `start_basis` `reported`. A webhook never 
 4. `INSERT ... ON CONFLICT DO NOTHING` on `delivery_id` for deploys, and one savepoint is no longer needed per item.
 5. `INSERT ... ON CONFLICT (project_id, service_name, version) DO UPDATE` on `releases`, by the rule above.
 6. If the version has no period: open one, `start_basis` `reported`. If its latest period has ended, and the service sends no version in traffic, and this `deployed_at` is later than the latest other period's start: open one, as a return (FR19). A service with versions in traffic ignores this step: the sync decides.
+   *Founder decision, 2026-11-09:* only a report whose `state` is `started` or `finished` takes this step. A `failed` or `rolled_back` report is stored, filed under its release and its state shown, but opens no period, ends none and brings no version back, since that deploy did not replace what was running. Working periods out again after `DELETE /deploys/{id}` or a withdrawn secret's removal follows the same rule. A release reported only as failed therefore has no period, and the list, which shows releases by period, leaves it out; its own page shows its facts.
 7. One `deploy.batch_recorded` audit row. Update `deploy_intake_state`.
 
 Apply the release cap (FR56): past 50,000, evict before creating.
@@ -438,16 +441,16 @@ This differs from the console's shared `Delta` threshold (D50).
     {
       "kind": "rollout", "method": "side_by_side",
       "from": "...", "to": "...", "minutes_compared": 3,
-      "this_version": {"version": "v2.1", "requests": 612, "errors": 2, "p95_ms": null},
-      "previous_version": {"version": "v2.0", "requests": 584, "errors": 1, "p95_ms": null},
+      "this_version": {"version": "v2.1", "requests": 612, "errors": 2, "p95_ms": null, "requests_per_minute": 204.0},
+      "previous_version": {"version": "v2.0", "requests": 584, "errors": 1, "p95_ms": null, "requests_per_minute": 194.7},
       "failure_share": {"reading": "not_clearly_different"},
       "p95": {"reading": null, "note": "warm_up"}
     },
     {
       "kind": "after_rollout", "method": "version_before_after",
       "from": "...", "to": "...", "minutes_compared": 42,
-      "this_version": {"version": "v2.1", "requests": 6012, "errors": 180, "p95_ms": 412.0},
-      "previous_version": {"version": "v2.0", "requests": 5844, "errors": 12, "p95_ms": 398.0},
+      "this_version": {"version": "v2.1", "requests": 6012, "errors": 180, "p95_ms": 412.0, "requests_per_minute": 143.1},
+      "previous_version": {"version": "v2.0", "requests": 5844, "errors": 12, "p95_ms": 398.0, "requests_per_minute": 139.1},
       "failure_share": {"reading": "higher"},
       "p95": {"reading": "about_same"},
       "last_week": null
@@ -478,8 +481,8 @@ Today a row cannot carry this. `names_one_subject` (`models.py:1454-1458`) requi
 | `names_one_subject` | `num_nonnulls(incident_id, finding_id, release_period_id) = CASE WHEN kind IN (project kinds) THEN 0 ELSE 1 END`. A new check also requires `release_period_id IS NOT NULL` exactly when the kind is `release_summary`. Replaced the way `0050` replaces its checks |
 | `uq_notifications_project_id_channel_id_kind_sequence_project` (`models.py:1446`) | Its condition gains `release_period_id IS NULL`. Otherwise every summary on a channel has both other subjects null and sequence 0, so the second release's summary would be dropped by the unique index |
 | `alerts/outbox.py` `_IN_ORDER` (`:95-105`) | Gains `release_period_id IS NOT DISTINCT FROM`. Otherwise all of a project's summaries count as one subject, and a retry on one holds the rest |
-| `alerts/outbox.py` `_TAKEN` (`:272-287`) | Selects `notifications.release_period_id`, and left-joins `release_periods` and `releases` by id and org for `release_id`, `service_name`, `version`, `previous_version`, `started_at`, `already_running` and `last_reading` |
-| `alerts/outbox.py` `_subject`, `SubjectKind` (`:388`, `:673`) | A new branch before the project fallback: kind `release`, id the period's, key `service:{name}`, label the service, `condition_kind` `release_summary`, `detail` the version, previous version, release id and `last_reading` |
+| `alerts/outbox.py` `_TAKEN` (`:272-287`) | Selects `notifications.release_period_id` only. *As built (Step 5, ADR-066):* the release tables are not joined in the claim, since detection imports the outbox and AC42 forbids it reaching them; `alerts/delivery.py` reads `release_id`, `service_name`, `version`, `previous_version`, `started_at` and `last_reading` after the claim on its own connection (`releases/facts.summarized_periods`), as FR44's line is read, and a failed read retries the batch |
+| `alerts/outbox.py` `_subject`, `SubjectKind` (`:388`, `:673`) | A new branch before the project fallback: kind `release`, id the period's, `condition_kind` `release_summary`. *As built:* delivery fills key `service:{name}`, label the service, and `detail` (the version, previous version, release id and `last_reading`) after the claim |
 | `alerts/messages.py` `compose`, `compose_batch` | `_compose_release`: "Release summary: v2.1 of checkout", then a line per measure with counts and the plain word, or the reason's words, then "Order only, not cause". Names pass `one_line`, and the channel escapes them after. The link is the release page. No severity tag in the text. `compose_batch` says "3 release summaries" when every notice is one. In a mixed digest a summary is one line, counted among "alerts", and that is a stated limit |
 | `alerts/payloads.py` `colour` (`:66-69`) | The `release_summary` kind is neutral. Amber would read as a verdict. The row's severity is `warning`, since `SEVERITIES` has only two values (`model.py:33`), and that lets quiet hours hold it as a digest |
 

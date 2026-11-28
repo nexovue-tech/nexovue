@@ -1,6 +1,7 @@
 package derive
 
 import (
+	"cmp"
 	"maps"
 	"math"
 	"slices"
@@ -49,9 +50,9 @@ func LatencyBucket(durationMS float64) int {
 }
 
 // MaxServicesPerTenant bounds how many services one organization may have
-// counted in one minute (design 2.1, security M5). Past it, the rest of that
-// tenant's services are not written for that minute: one customer minting
-// service names cannot grow the rollup, or detection's work, without limit.
+// counted in one minute (design 2.1, security M5). Past it, that tenant's least
+// busy services are not written for that minute: one customer minting service
+// names cannot grow the rollup, or detection's work, without limit.
 const MaxServicesPerTenant = 2000
 
 // ServiceStat is one row of `service_stats_1m`: what one service did in one
@@ -128,17 +129,48 @@ func (t *serviceTotals) add(share *serviceTotals) {
 	}
 }
 
-// ServiceCap is what the per-tenant cap left out of one drain. It names one
-// tenant, the one that lost the most, because the log line it becomes is a
-// pointer to go and look rather than a census.
+// ServiceCap is one tenant-minute the per-tenant cap left services out of in one
+// drain: one row of `services_over_cap_1m` (browser-door decision 1).
 type ServiceCap struct {
-	Services int
+	Minute   time.Time
+	TenantID string
+	// RetentionDays is the longest derived retention among the rows left out,
+	// so the record lasts as long as the rows it says are missing would have.
+	RetentionDays uint16
+	Services      uint64
+}
+
+// CapReport is what a drain's entries come to for the log line: how many
+// services were left out in all, and the tenant that lost the most. The line is
+// a pointer to go and look; the table is the census.
+type CapReport struct {
+	Services uint64
 	TenantID string
 }
 
-// observeService folds one inbound span into its service-minute. Its caller has
-// already applied the endpoint rollup's inbound filter, so the two rollups
-// count exactly the same spans.
+// CapReportOf totals one drain's entries. A tie names the first tenant in name
+// order, so the same drain names the same tenant every time.
+func CapReportOf(entries []ServiceCap) CapReport {
+	byTenant := make(map[string]uint64)
+	for _, entry := range entries {
+		byTenant[entry.TenantID] += entry.Services
+	}
+	var (
+		report CapReport
+		most   uint64
+	)
+	for _, tenantID := range slices.Sorted(maps.Keys(byTenant)) {
+		report.Services += byTenant[tenantID]
+		if byTenant[tenantID] > most {
+			report.TenantID, most = tenantID, byTenant[tenantID]
+		}
+	}
+	return report
+}
+
+// observeService folds one inbound span into its service-minute, and into its
+// version row. Its caller has already applied the endpoint rollup's inbound
+// filter, so the three rollups count exactly the same spans.
 func (c *Counters) observeService(minute time.Time, span Span) {
 	key := countedService{
 		serviceKey: serviceKey{
@@ -160,6 +192,7 @@ func (c *Counters) observeService(minute time.Time, span Span) {
 		totals.errors++
 	}
 	totals.buckets[LatencyBucket(span.DurationMS)]++
+	c.observeVersion(key, span)
 }
 
 // drainServices hands out the rows for every minute the caller calls closed,
@@ -169,7 +202,7 @@ func (c *Counters) observeService(minute time.Time, span Span) {
 // order, so which services are left out does not depend on how records from
 // different partitions interleaved. A replay therefore drains the same block,
 // and its deduplication token still recognises it.
-func (c *Counters) drainServices(closed func(minute time.Time) bool) ([]ServiceStat, ServiceCap) {
+func (c *Counters) drainServices(closed func(minute time.Time) bool) ([]ServiceStat, []ServiceCap) {
 	due := make([]countedService, 0, len(c.services))
 	for key := range c.services {
 		if closed(key.minute) {
@@ -199,41 +232,72 @@ func (c *Counters) drainServices(closed func(minute time.Time) bool) ([]ServiceS
 	return capServices(stats)
 }
 
-// capServices keeps at most MaxServicesPerTenant rows per tenant and minute,
-// in the order given. A service in two projects is two services here, because
-// detection judges each one.
-func capServices(sorted []ServiceStat) ([]ServiceStat, ServiceCap) {
-	kept := sorted[:0]
-	dropped := make(map[string]int)
-	var (
-		minute  time.Time
-		tenant  string
-		counted int
-	)
-	for _, stat := range sorted {
-		if !stat.Minute.Equal(minute) || stat.TenantID != tenant {
-			minute, tenant, counted = stat.Minute, stat.TenantID, 0
+// capServices keeps at most MaxServicesPerTenant rows per tenant and minute:
+// the busiest, so names minted to sort first cannot evict a real service. A
+// service in two projects is two services here, because detection judges each
+// one. The rows kept stay in the order given, and each tenant-minute over the
+// cap is reported in that order too, so a replay reports the same block.
+func capServices(sorted []ServiceStat) ([]ServiceStat, []ServiceCap) {
+	kept := make([]ServiceStat, 0, len(sorted))
+	var capped []ServiceCap
+	for start := 0; start < len(sorted); {
+		end := start + 1
+		for end < len(sorted) && sameTenantMinute(sorted[start], sorted[end]) {
+			end++
 		}
-		counted++
-		if counted > MaxServicesPerTenant {
-			dropped[stat.TenantID]++
-			continue
+		run := sorted[start:end]
+		keep := busiest(run, MaxServicesPerTenant)
+		entry := ServiceCap{Minute: run[0].Minute, TenantID: run[0].TenantID}
+		for i, stat := range run {
+			if keep[i] {
+				kept = append(kept, stat)
+				continue
+			}
+			entry.Services++
+			entry.RetentionDays = max(entry.RetentionDays, stat.RetentionDays)
 		}
-		kept = append(kept, stat)
+		if entry.Services > 0 {
+			capped = append(capped, entry)
+		}
+		start = end
 	}
+	return kept, capped
+}
 
-	var (
-		report ServiceCap
-		most   int
-	)
-	// In name order, so a tie names the same tenant every time.
-	for _, tenantID := range slices.Sorted(maps.Keys(dropped)) {
-		report.Services += dropped[tenantID]
-		if dropped[tenantID] > most {
-			report.TenantID, most = tenantID, dropped[tenantID]
+// sameTenantMinute reports whether two rows share the grain the cap counts at.
+func sameTenantMinute(a, b ServiceStat) bool {
+	return a.Minute.Equal(b.Minute) && a.TenantID == b.TenantID
+}
+
+// busiest marks which of one tenant-minute's rows the cap keeps: the limit with
+// the most requests, a tie going to the service name and then the rest of the
+// key, so the choice is a pure function of the rows and a replay keeps the same
+// ones (decision 2 of docs/changes/browser-door: per drain, knowingly).
+func busiest(run []ServiceStat, limit int) []bool {
+	keep := make([]bool, len(run))
+	if len(run) <= limit {
+		for i := range keep {
+			keep[i] = true
 		}
+		return keep
 	}
-	return kept, report
+	ranked := make([]int, len(run))
+	for i := range ranked {
+		ranked[i] = i
+	}
+	slices.SortFunc(ranked, func(i, j int) int {
+		a, b := run[i], run[j]
+		return cmp.Or(
+			cmp.Compare(b.RequestCount, a.RequestCount),
+			cmp.Compare(a.ServiceName, b.ServiceName),
+			cmp.Compare(a.ProjectID, b.ProjectID),
+			cmp.Compare(a.RetentionDays, b.RetentionDays),
+		)
+	})
+	for _, i := range ranked[:limit] {
+		keep[i] = true
+	}
+	return keep
 }
 
 // stat is the row one service-minute's summed totals become.

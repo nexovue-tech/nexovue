@@ -1,0 +1,1648 @@
+{
+  "anchor": "2026-11-22T10:37:00+00:00",
+  "questions": [
+    {
+      "id": "requests-hour-checkout",
+      "text": "How many requests did checkout serve in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "1620"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "errors-hour-checkout",
+      "text": "How many requests to checkout failed in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "3"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-3h-checkout",
+      "text": "How many requests did checkout serve in the last 3 hours?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "7607"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T07:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T07:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-30m-checkout",
+      "text": "How many requests did checkout handle in the last 30 minutes?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "561"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T10:07:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T10:07:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-hour-payment",
+      "text": "How many requests did payment serve in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "310"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "errors-hour-payment",
+      "text": "How many requests to payment failed in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "93"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-3h-payment",
+      "text": "How many requests did payment serve in the last 3 hours?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "1410"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T07:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T07:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-30m-payment",
+      "text": "How many requests did payment handle in the last 30 minutes?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "110"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T10:07:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T10:07:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-hour-search",
+      "text": "How many requests did search serve in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "155"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "search"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "search"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "errors-hour-search",
+      "text": "How many requests to search failed in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "0"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "search"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "search"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-3h-search",
+      "text": "How many requests did search serve in the last 3 hours?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "155"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T07:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "search"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "search"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T07:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "requests-30m-search",
+      "text": "How many requests did search handle in the last 30 minutes?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "55"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T10:07:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "search"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "search"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T10:07:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "endpoint-requests-checkout",
+      "text": "How many requests did checkout's POST /checkout endpoint get in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "672"
+      ],
+      "unit": "count",
+      "tool": "list_service_endpoints",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout",
+          "endpoint": "POST /checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "endpoint-errors-checkout",
+      "text": "How many of checkout's POST /checkout requests failed in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "3"
+      ],
+      "unit": "count",
+      "tool": "list_service_endpoints",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "checkout",
+          "endpoint": "POST /checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "endpoint-requests-cart",
+      "text": "How many requests did checkout's GET /cart endpoint get in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "948"
+      ],
+      "unit": "count",
+      "tool": "list_service_endpoints",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout",
+          "endpoint": "GET /cart"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "endpoint-errors-cart",
+      "text": "How many of checkout's GET /cart requests failed in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "0"
+      ],
+      "unit": "count",
+      "tool": "list_service_endpoints",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "checkout",
+          "endpoint": "GET /cart"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "endpoint-requests-charge",
+      "text": "How many requests did payment's POST /charge endpoint get in the last 3 hours?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "1410"
+      ],
+      "unit": "count",
+      "tool": "list_service_endpoints",
+      "arguments": {
+        "from": "2026-11-22T07:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "payment",
+          "endpoint": "POST /charge"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T07:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "errors-yesterday-checkout",
+      "text": "How many requests to checkout failed yesterday?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "144"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-21T00:00:00+00:00",
+        "to": "2026-11-22T00:00:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-21T00:00:00+00:00",
+      "window_to": "2026-11-22T00:00:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "errors-yesterday-payment",
+      "text": "How many requests to payment failed yesterday?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "0"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-21T00:00:00+00:00",
+        "to": "2026-11-22T00:00:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-21T00:00:00+00:00",
+      "window_to": "2026-11-22T00:00:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "zone-9",
+      "text": "How many requests did checkout serve yesterday between 9:00 and 10:00?",
+      "kind": "number",
+      "category": "zones",
+      "expected": [
+        "3240"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-21T03:30:00+00:00",
+        "to": "2026-11-21T04:30:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-21T03:30:00+00:00",
+      "window_to": "2026-11-21T04:30:00+00:00",
+      "zone": "Asia/Kolkata",
+      "project": "main"
+    },
+    {
+      "id": "zone-14",
+      "text": "How many requests did checkout serve yesterday between 14:00 and 15:00?",
+      "kind": "number",
+      "category": "zones",
+      "expected": [
+        "3270"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-21T08:30:00+00:00",
+        "to": "2026-11-21T09:30:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-21T08:30:00+00:00",
+      "window_to": "2026-11-21T09:30:00+00:00",
+      "zone": "Asia/Kolkata",
+      "project": "main"
+    },
+    {
+      "id": "zone-22",
+      "text": "How many requests did checkout serve yesterday between 22:00 and 23:00?",
+      "kind": "number",
+      "category": "zones",
+      "expected": [
+        "3180"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-21T16:30:00+00:00",
+        "to": "2026-11-21T17:30:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-21T16:30:00+00:00",
+      "window_to": "2026-11-21T17:30:00+00:00",
+      "zone": "Asia/Kolkata",
+      "project": "main"
+    },
+    {
+      "id": "zone-same-14",
+      "text": "How many requests did checkout serve yesterday between 14:00 and 15:00?",
+      "kind": "number",
+      "category": "zones",
+      "expected": [
+        "3360"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-21T14:00:00+00:00",
+        "to": "2026-11-21T15:00:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "request_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-21T14:00:00+00:00",
+      "window_to": "2026-11-21T15:00:00+00:00",
+      "zone": "UTC",
+      "project": "main"
+    },
+    {
+      "id": "traces-trap",
+      "text": "How many checkout traces failed in the last hour?",
+      "kind": "number",
+      "category": "how_many_sampled",
+      "expected": [
+        "3"
+      ],
+      "unit": "count",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "slow-endpoint",
+      "text": "Which endpoint of checkout got slow in the last 30 minutes?",
+      "kind": "name",
+      "category": "slow_endpoint",
+      "expected": [
+        "POST /checkout"
+      ],
+      "unit": null,
+      "tool": "list_service_endpoints",
+      "arguments": {
+        "from": "2026-11-22T10:07:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_service_endpoints"
+      ],
+      "pick": {
+        "how": "top",
+        "field": "p95_ms",
+        "where": {
+          "service_name": "checkout"
+        },
+        "name": "endpoint",
+        "word": ""
+      },
+      "window_from": "2026-11-22T10:07:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "most-errors",
+      "text": "Which service had the most failed requests in the last hour?",
+      "kind": "name",
+      "category": "names",
+      "expected": [
+        "payment"
+      ],
+      "unit": null,
+      "tool": "list_services",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_services"
+      ],
+      "pick": {
+        "how": "top",
+        "field": "error_count",
+        "where": {},
+        "name": "service_name",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "slowest-service",
+      "text": "Which service is slowest right now, judged on the last 30 minutes?",
+      "kind": "name",
+      "category": "names",
+      "expected": [
+        "checkout"
+      ],
+      "unit": null,
+      "tool": "list_services",
+      "arguments": {
+        "from": "2026-11-22T10:07:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_services"
+      ],
+      "pick": {
+        "how": "top",
+        "field": "p95_ms",
+        "where": {},
+        "name": "service_name",
+        "word": ""
+      },
+      "window_from": "2026-11-22T10:07:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "busiest-service",
+      "text": "Which service served the most requests in the last hour?",
+      "kind": "name",
+      "category": "names",
+      "expected": [
+        "checkout"
+      ],
+      "unit": null,
+      "tool": "list_services",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_services"
+      ],
+      "pick": {
+        "how": "top",
+        "field": "request_count",
+        "where": {},
+        "name": "service_name",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "stopped",
+      "text": "Is inventory still sending traffic?",
+      "kind": "word",
+      "category": "stopped_reporting",
+      "expected": [
+        "stopped",
+        "no traffic",
+        "no requests",
+        "not reporting",
+        "not sending"
+      ],
+      "unit": null,
+      "tool": "list_services",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_services"
+      ],
+      "pick": {
+        "how": "none",
+        "field": "",
+        "where": {
+          "service_name": "inventory"
+        },
+        "name": "",
+        "word": "no traffic"
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "learning",
+      "text": "Is nexovue's detection judging search yet?",
+      "kind": "word",
+      "category": "still_learning",
+      "expected": [
+        "learning"
+      ],
+      "unit": null,
+      "tool": "get_service_detection",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "search"
+      },
+      "tools": [
+        "get_service_detection"
+      ],
+      "pick": {
+        "how": "first",
+        "field": "state",
+        "where": {},
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "error-type",
+      "text": "Which exception does payment raise most in the last hour?",
+      "kind": "name",
+      "category": "errors",
+      "expected": [
+        "CardDeclinedError"
+      ],
+      "unit": null,
+      "tool": "list_error_groups",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_error_groups"
+      ],
+      "pick": {
+        "how": "top",
+        "field": "occurrences",
+        "where": {},
+        "name": "exception_type",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "open-finding",
+      "text": "Which service has an open finding?",
+      "kind": "name",
+      "category": "findings",
+      "expected": [
+        "payment"
+      ],
+      "unit": null,
+      "tool": "list_findings",
+      "arguments": {
+        "state": "open"
+      },
+      "tools": [
+        "list_findings"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "service_name",
+        "where": {
+          "state": "open"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "latest-release",
+      "text": "Which version of checkout was released most recently?",
+      "kind": "name",
+      "category": "releases",
+      "expected": [
+        "2.4.1"
+      ],
+      "unit": null,
+      "tool": "list_releases",
+      "arguments": {
+        "from": "2026-11-22T04:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "checkout"
+      },
+      "tools": [
+        "list_releases"
+      ],
+      "pick": {
+        "how": "first",
+        "field": "version",
+        "where": {},
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T04:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "third-party-host",
+      "text": "Which outside host does payment call?",
+      "kind": "name",
+      "category": "third_party_host",
+      "expected": [
+        "api.stripe.com"
+      ],
+      "unit": null,
+      "tool": "get_service_map",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "callee",
+        "where": {
+          "caller": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "third-party-errors",
+      "text": "How many of payment's calls to api.stripe.com failed in the last hour?",
+      "kind": "number",
+      "category": "third_party_host",
+      "expected": [
+        "93"
+      ],
+      "unit": "count",
+      "tool": "get_service_map",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_count",
+        "where": {
+          "caller": "payment",
+          "callee": "api.stripe.com"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "third-party-calls",
+      "text": "How many calls did payment make to api.stripe.com in the last hour?",
+      "kind": "number",
+      "category": "third_party_host",
+      "expected": [
+        "310"
+      ],
+      "unit": "count",
+      "tool": "get_service_map",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "call_count",
+        "where": {
+          "caller": "payment",
+          "callee": "api.stripe.com"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "checkout-calls-payment",
+      "text": "How many calls did checkout make to payment in the last hour?",
+      "kind": "number",
+      "category": "how_many",
+      "expected": [
+        "310"
+      ],
+      "unit": "count",
+      "tool": "get_service_map",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "call_count",
+        "where": {
+          "caller": "checkout",
+          "callee": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "checkout-callee",
+      "text": "Which service does checkout call?",
+      "kind": "name",
+      "category": "names",
+      "expected": [
+        "payment"
+      ],
+      "unit": null,
+      "tool": "get_service_map",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "callee",
+        "where": {
+          "caller": "checkout"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "payment-error-rate",
+      "text": "What share of payment's requests failed in the last hour?",
+      "kind": "number",
+      "category": "rates",
+      "expected": [
+        "0.3"
+      ],
+      "unit": "fraction",
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "payment"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "error_rate",
+        "where": {
+          "service_name": "payment"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "disk-db-1",
+      "text": "Is the disk full on db-1? How full is it?",
+      "kind": "number",
+      "category": "disk",
+      "expected": [
+        "0.97"
+      ],
+      "unit": "fraction",
+      "tool": "list_hosts",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_hosts"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "filesystem_utilization",
+        "where": {
+          "host": "db-1"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "disk-web-1",
+      "text": "Is the disk full on web-1? How full is it?",
+      "kind": "number",
+      "category": "disk",
+      "expected": [
+        "0.4"
+      ],
+      "unit": "fraction",
+      "tool": "list_hosts",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_hosts"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "filesystem_utilization",
+        "where": {
+          "host": "web-1"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "fullest-disk",
+      "text": "Which host's disk is fullest?",
+      "kind": "name",
+      "category": "disk",
+      "expected": [
+        "db-1"
+      ],
+      "unit": null,
+      "tool": "list_hosts",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_hosts"
+      ],
+      "pick": {
+        "how": "top",
+        "field": "filesystem_utilization",
+        "where": {},
+        "name": "host",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "custom-metric",
+      "text": "Which metric reports the order queue's depth?",
+      "kind": "name",
+      "category": "custom_metric",
+      "expected": [
+        "orders.queue.depth"
+      ],
+      "unit": null,
+      "tool": "list_metrics",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00"
+      },
+      "tools": [
+        "list_metrics"
+      ],
+      "pick": {
+        "how": "field",
+        "field": "metric_name",
+        "where": {
+          "metric_name": "orders.queue.depth"
+        },
+        "name": "",
+        "word": ""
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "who-complained",
+      "text": "Which customer reported the checkout problem first?",
+      "kind": "abstain",
+      "category": "not_enough_evidence",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "pool-exhausted",
+      "text": "Did the Postgres connection pool run out of connections in the last hour?",
+      "kind": "abstain",
+      "category": "not_enough_evidence",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "next-monday",
+      "text": "What will checkout's traffic be next Monday?",
+      "kind": "abstain",
+      "category": "not_enough_evidence",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "status-page",
+      "text": "Is the card network's own status page reporting an outage?",
+      "kind": "abstain",
+      "category": "not_enough_evidence",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "long-ago",
+      "text": "How many requests did checkout serve on 1 January 2020?",
+      "kind": "abstain",
+      "category": "not_enough_evidence",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "why-slow",
+      "text": "Who changed the checkout code that made it slow?",
+      "kind": "abstain",
+      "category": "not_enough_evidence",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "empty-project",
+      "text": "How many requests did this project serve in the last hour?",
+      "kind": "abstain",
+      "category": "no_telemetry",
+      "expected": [],
+      "unit": null,
+      "tool": null,
+      "arguments": {},
+      "tools": [],
+      "pick": null,
+      "window_from": null,
+      "window_to": null,
+      "zone": null,
+      "project": "empty"
+    },
+    {
+      "id": "other-tenant-count",
+      "text": "How many requests did tenant-b-only-service serve in the last hour?",
+      "kind": "tenant",
+      "category": "across_tenants",
+      "expected": [
+        "none"
+      ],
+      "unit": null,
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "tenant-b-only-service"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "none",
+        "field": "",
+        "where": {
+          "service_name": "tenant-b-only-service"
+        },
+        "name": "",
+        "word": "none"
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    },
+    {
+      "id": "other-tenant-errors",
+      "text": "Did tenant-b-only-service have any failures in the last hour?",
+      "kind": "tenant",
+      "category": "across_tenants",
+      "expected": [
+        "none"
+      ],
+      "unit": null,
+      "tool": "get_service",
+      "arguments": {
+        "from": "2026-11-22T09:37:00+00:00",
+        "to": "2026-11-22T10:37:00+00:00",
+        "service": "tenant-b-only-service"
+      },
+      "tools": [
+        "list_services",
+        "get_service",
+        "list_service_endpoints",
+        "get_service_trend",
+        "get_service_map"
+      ],
+      "pick": {
+        "how": "none",
+        "field": "",
+        "where": {
+          "service_name": "tenant-b-only-service"
+        },
+        "name": "",
+        "word": "none"
+      },
+      "window_from": "2026-11-22T09:37:00+00:00",
+      "window_to": "2026-11-22T10:37:00+00:00",
+      "zone": null,
+      "project": "main"
+    }
+  ]
+}

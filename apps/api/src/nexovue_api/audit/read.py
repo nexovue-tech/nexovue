@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import queries
+from nexovue_api.audit import service as audit_service
 from nexovue_api.audit.cursor import AuditPageCursor, decode_cursor
 from nexovue_api.audit.schemas import AuditActor, AuditEntry, AuditPage, EventKind
 from nexovue_api.data.postgres.models import AuditLogEntry
@@ -29,6 +30,7 @@ async def read_page(
     until: datetime | None = None,
     cursor: str | None = None,
     limit: int = DEFAULT_PAGE,
+    support_view: bool = False,
 ) -> AuditPage:
     rows = await queries.page(
         session,
@@ -47,14 +49,16 @@ async def read_page(
     names = await queries.names_of(session, org_id=org_id, user_ids=people)
     last = rows[-1] if rows else None
     return AuditPage(
-        entries=[_entry(row, names) for row in rows],
+        entries=[_entry(row, names, support_view=support_view) for row in rows],
         next_cursor=AuditPageCursor(at=last.at, entry_id=last.id).encode()
         if more and last is not None
         else None,
     )
 
 
-def _entry(row: AuditLogEntry, names: dict[uuid.UUID, str]) -> AuditEntry:
+def _entry(
+    row: AuditLogEntry, names: dict[uuid.UUID, str], *, support_view: bool = False
+) -> AuditEntry:
     target = _person_target(row)
     return AuditEntry(
         id=row.id,
@@ -63,9 +67,20 @@ def _entry(row: AuditLogEntry, names: dict[uuid.UUID, str]) -> AuditEntry:
         action=row.action,
         target=row.target,
         target_name=names.get(target) if target is not None else None,
-        detail=row.detail,
+        detail=_without_paths(row) if support_view else row.detail,
         impersonation_context=row.impersonation_context,
     )
+
+
+def _without_paths(row: AuditLogEntry) -> dict[str, Any] | None:
+    """F5 (AC11): a support view reads that a repository was read, never which paths."""
+    if row.detail is None or not (
+        row.action == audit_service.REPOSITORY_READ or row.action.startswith("fix.")
+    ):
+        return row.detail
+    return {
+        key: value for key, value in row.detail.items() if key not in audit_service.PATH_DETAIL_KEYS
+    }
 
 
 def _actor(row: AuditLogEntry, names: dict[uuid.UUID, str]) -> AuditActor:

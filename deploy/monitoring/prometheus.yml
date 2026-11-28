@@ -47,3 +47,17 @@ scrape_configs:
       - names: [scheduler-deliveries]
         type: A
         port: 8081
+  # F22. Optional: a name that does not resolve is no target, and NexovueConnectionsMissing,
+  # not `up`, says whether its absence matters.
+  - job_name: scheduler-connections
+    dns_sd_configs:
+      - names: [scheduler-connections]
+        type: A
+        port: 8081
+  # F3. Optional too (`SCHEDULER_INSIGHT_REPLICAS=0`); NexovueInsightMissing says whether its
+  # absence matters. Prometheus sits on the `ai` network beside it (compose.infra.yaml).
+  - job_name: scheduler-insight
+    dns_sd_configs:
+      - names: [scheduler-insight]
+        type: A
+        port: 8081

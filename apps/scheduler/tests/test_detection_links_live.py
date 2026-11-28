@@ -143,3 +143,79 @@ async def test_a_check_incident_names_no_service_and_is_never_linked(
     await _fire(engine, rule, check_subject(uuid.uuid4()), "checkout")
 
     assert await _links(engine, tenant) == []
+
+
+# ------------------------------------------------------------------ F19 (T5.2, FR20)
+
+BURN = {"kind": "slo_burn", "slo_ids": None, "minimum_severity": "warning"}
+
+
+def _burn_subject(service: str | None, *, check_id: uuid.UUID | None = None) -> incidents.Subject:
+    """A burn's subject as the job writes it: keyed by its target, about its service."""
+    return incidents.Subject(
+        key=f"slo:{uuid.uuid4()}",
+        label=f"{service} availability, 99.9% over 28 days",
+        about_key=service_subject(service) if service else check_subject(check_id or uuid.uuid4()),
+        about_signal="availability",
+        about_check_id=check_id,
+    )
+
+
+async def _fire_subject(engine: AsyncEngine, rule: Rule, subject: incidents.Subject) -> None:
+    async with engine.begin() as connection:
+        await incidents.fire(connection, rule, subject, severity="critical", at=future(), detail={})
+
+
+async def test_a_burn_on_a_service_with_an_open_finding_is_linked_to_it(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """FR20, the finding first: the burn's key is its target, its `about_key` the service."""
+    async with engine.begin() as connection:
+        finding = await add_finding(connection, tenant, started_at=future() - timedelta(minutes=5))
+    rule = await _rule(engine, tenant, BURN)
+    subject = _burn_subject("checkout")
+
+    await _fire_subject(engine, rule, subject)
+
+    assert await _links(engine, tenant) == [(finding, subject.key)]
+    [written] = await rows(
+        engine,
+        "SELECT about_key, about_signal, about_endpoint, about_check_id FROM incidents "
+        "WHERE org_id = :org_id",
+        org_id=tenant.org_id,
+    )
+    assert tuple(written) == ("service:checkout", "availability", None, None)
+
+
+async def test_a_finding_opening_after_a_burn_on_its_service_is_linked_to_it(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """FR20, the burn first: the project job's link matches a burn by its `about_key`."""
+    from nexovue_scheduler.detection.project_job import _link_incidents
+
+    rule = await _rule(engine, tenant, BURN)
+    subject = _burn_subject("checkout")
+    await _fire_subject(engine, rule, subject)
+    other = _burn_subject("cart")
+    await _fire_subject(engine, rule, other)
+    async with engine.begin() as connection:
+        finding = await add_finding(connection, tenant, started_at=future())
+        await _link_incidents(
+            connection,
+            {"org_id": tenant.org_id, "project_id": tenant.project_id, "service_name": "checkout"},
+            finding,
+        )
+
+    assert await _links(engine, tenant) == [(finding, subject.key)]
+
+
+async def test_a_check_burn_naming_no_service_is_never_linked(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    async with engine.begin() as connection:
+        await add_finding(connection, tenant, started_at=future() - timedelta(minutes=5))
+    rule = await _rule(engine, tenant, BURN)
+
+    await _fire_subject(engine, rule, _burn_subject(None, check_id=uuid.uuid4()))
+
+    assert await _links(engine, tenant) == []

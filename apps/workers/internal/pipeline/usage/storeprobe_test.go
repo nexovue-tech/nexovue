@@ -109,7 +109,7 @@ func TestServiceLastSeenOnlyMovesForward(t *testing.T) {
 	for offset, received := range []time.Time{later, earlier} {
 		rows := []Row{{
 			OrgID: orgID, ProjectID: projectID, Day: day,
-			Counts: Counts{Spans: 1}, Services: []string{"checkout"},
+			Counts: Counts{Spans: 1}, Services: []string{"checkout"}, Heard: []string{"checkout"},
 		}}
 		progress := map[int32]Progress{0: {Offset: int64(offset + 1), ReceivedThrough: received}}
 		if _, err := store.Apply(ctx, rows, progress); err != nil {
@@ -126,6 +126,92 @@ func TestServiceLastSeenOnlyMovesForward(t *testing.T) {
 	}
 	if !lastSeen.Equal(later) {
 		t.Errorf("last_seen_at = %v, want %v: an older flush moved it back", lastSeen, later)
+	}
+}
+
+// A flush that heard a service only through the browser door bills it and
+// counts its usage, but neither creates nor refreshes its `service_last_seen`
+// row (docs/changes/browser-door-last-seen). Proved at the table, because the
+// statement, not the meter, is what the alert reads.
+func TestABrowserDoorFlushLeavesServiceLastSeenAlone(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("PROBE_PG_DSN")
+	if dsn == "" {
+		t.Fatal("PROBE_PG_DSN is not set; this probe needs a live control plane")
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	orgID, projectID := seedProbeTenant(ctx, t, pool)
+	store := NewPostgresStore(pool, "spans-"+probeSlug)
+	day := time.Date(2026, time.November, 8, 0, 0, 0, 0, time.UTC)
+	heard := time.Date(2026, time.November, 8, 10, 0, 0, 0, time.UTC)
+	forged := heard.Add(10 * time.Minute)
+
+	flushes := []struct {
+		received time.Time
+		row      Row
+	}{
+		// The server door: billed and heard.
+		{heard, Row{
+			OrgID: orgID, ProjectID: projectID, Day: day,
+			Counts: Counts{Spans: 1}, Services: []string{"checkout"}, Heard: []string{"checkout"},
+		}},
+		// The browser door, later: billed, never heard.
+		{forged, Row{
+			OrgID: orgID, ProjectID: projectID, Day: day,
+			Counts: Counts{Spans: 1}, Services: []string{"checkout", "minted"},
+		}},
+	}
+	for offset, flush := range flushes {
+		progress := map[int32]Progress{0: {Offset: int64(offset + 1), ReceivedThrough: flush.received}}
+		if _, err := store.Apply(ctx, []Row{flush.row}, progress); err != nil {
+			t.Fatalf("applying flush %d: %v", offset, err)
+		}
+	}
+
+	lastSeen := map[string]time.Time{}
+	rows, err := pool.Query(ctx,
+		`SELECT service_name, last_seen_at FROM service_last_seen WHERE project_id = $1::uuid`,
+		projectID)
+	if err != nil {
+		t.Fatalf("reading last seen back: %v", err)
+	}
+	for rows.Next() {
+		var (
+			name string
+			at   time.Time
+		)
+		if err := rows.Scan(&name, &at); err != nil {
+			t.Fatalf("reading a last-seen row: %v", err)
+		}
+		lastSeen[name] = at
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading last seen back: %v", err)
+	}
+	if at := lastSeen["checkout"]; !at.Equal(heard) {
+		t.Errorf("checkout last seen %v, want %v: the browser-door flush refreshed it", at, heard)
+	}
+	if at, held := lastSeen["minted"]; held {
+		t.Errorf("minted has a last-seen row at %v; the browser door created it", at)
+	}
+
+	var spans, billed int64
+	err = pool.QueryRow(ctx,
+		`SELECT spans, (SELECT count(*) FROM usage_daily_services
+		                WHERE project_id = $1::uuid AND day = $2)
+		 FROM usage_daily WHERE project_id = $1::uuid AND day = $2`,
+		projectID, day).Scan(&spans, &billed)
+	if err != nil {
+		t.Fatalf("reading usage back: %v", err)
+	}
+	if spans != 2 || billed != 2 {
+		t.Errorf("spans = %d, billed services = %d; want 2 and 2: usage and billing are unchanged",
+			spans, billed)
 	}
 }
 

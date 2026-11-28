@@ -77,7 +77,7 @@ export function ProfilesScreen({ search }: { search: ProfilesSearch }) {
     <div className="relative flex h-full min-h-0 flex-col gap-5 overflow-y-auto px-4 pt-5 pb-10">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Profiles</h1>
+          <h1 className="heading-page">Profiles</h1>
           <p className="mt-1 text-ink-dim text-sm">
             Which code each service spends its time and memory in, {phrase}.
           </p>
@@ -556,7 +556,7 @@ function GraphSection({
     <section aria-labelledby="flame-graph" className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         {/* The sentence is the answer; the graph and the table are its evidence (rule 1). */}
-        <h2 id="flame-graph" className="font-medium font-serif text-base text-ink">
+        <h2 id="flame-graph" className="heading-section">
           {readingOf(
             graph.spanId ? "this span" : graph.service,
             data.sample_type,

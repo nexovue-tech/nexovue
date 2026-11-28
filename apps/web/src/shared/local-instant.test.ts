@@ -53,3 +53,34 @@ describe("whether a pair can be used as a window", () => {
     expect(isUsableRange(null, to)).toBe(false);
   });
 });
+
+describe("a dashboard's picker on the project's clock (F20, FR46, AC64)", () => {
+  // 02:00 UTC is 07:30 in Kolkata, and a person reading 07:30 off a chart must get that hour.
+  const KOLKATA = "Asia/Kolkata";
+
+  it("shows an instant as the project's wall clock, whatever the browser's zone is", () => {
+    expect(toLocalInput("2026-11-10T02:00:00.000Z", KOLKATA)).toBe("2026-11-10T07:30");
+    expect(toLocalInput("2026-11-10T02:00:00.000Z", "America/New_York")).toBe("2026-11-09T21:00");
+  });
+
+  it("reads what a person types as that zone's clock", () => {
+    expect(fromLocalInput("2026-11-10T07:30", KOLKATA)).toBe("2026-11-10T02:00:00.000Z");
+    expect(fromLocalInput("2026-11-09T21:00", "America/New_York")).toBe("2026-11-10T02:00:00.000Z");
+  });
+
+  it("lands on the right side of a clock change", () => {
+    // London leaves summer time at 02:00 on 25 Oct 2026: 00:30 that day is still BST (+1).
+    expect(fromLocalInput("2026-10-25T00:30", "Europe/London")).toBe("2026-10-24T23:30:00.000Z");
+    expect(fromLocalInput("2026-10-25T03:30", "Europe/London")).toBe("2026-10-25T03:30:00.000Z");
+  });
+
+  it("round-trips an instant through the picker", () => {
+    const instant = "2026-03-29T10:15:00.000Z";
+    expect(fromLocalInput(toLocalInput(instant, "Europe/London"), "Europe/London")).toBe(instant);
+  });
+
+  it("returns null for half-typed text in a zone too", () => {
+    expect(fromLocalInput("2026-13-45T99:99", KOLKATA)).toBeNull();
+    expect(fromLocalInput("", KOLKATA)).toBeNull();
+  });
+});

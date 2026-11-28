@@ -483,7 +483,7 @@ web /slos, /slos/new, /slos/$sloId, /slos/$sloId/edit
 | `PATCH /slos/{id}` | `CONFIGURE_SLOS` | Postgres |
 | `DELETE /slos/{id}` | `CONFIGURE_SLOS` | Postgres. A soft delete |
 | `POST /slos/{id}/restore` | `CONFIGURE_SLOS` | Postgres, and queues a recount |
-| `GET /slos/{id}/budget?window=` | Any reader | **Postgres only.** Status. The `slo_budget` panel's source |
+| `GET /slos/{id}/budget?window=` | Any reader | **Postgres only.** Status. The `slo_budget` panel's source. *Built 2026-11-21 (plan Step 5b) with no `window`: the target's own window, the recommendation of open decision 4 in `status.md`* |
 | `GET /slo-readings/{id}/burn` | Any reader | ClickHouse: the rate over the last 24 hours, for the chart. Telemetry tier |
 | `GET /slos/{id}/months` | Any reader | Postgres |
 | `GET /slos/months?project_id=&month=` | Any reader | Postgres. *Last month*, in one read rather than up to 200 |
@@ -547,6 +547,8 @@ slo_exclusions                    (Step 4)
   id, org_id, project_id, slo_id, starts_at, ends_at CHECK > starts_at
   reason (10..500), created_by, created_at, removed_at, removed_by
   removal_not_recounted bool
+  counted_at timestamptz           (2026-11-09) the recount queue: null after a creation or
+                                   removal, set by the counts run that recounted its days
 
 slo_target_changes                one per change, for FR30. The one update it allows is members.scrub
   id, org_id, project_id, slo_id (no FK to the target), at, actor_user_id, what, before jsonb, after jsonb
@@ -558,6 +560,7 @@ slo_deleted_months                (Step 3) written at purge, so a report stays t
 - `definition_key` is the kind, source, endpoint, check, boundary, objective and window, as one text value, so nulls cause no trouble in the unique index.
 - `name` uniqueness applies to live targets, so a name is free again during the 30 days. **Restoring a target whose name was taken asks for a new one** (AC116).
 - `quiet_since` is not stored, because `last_event_minute` says it.
+- **`slo_exclusions.counted_at`** (2026-11-09, accepted by the founder as built in Step 4; `status.md`, decision 5) is how a route "queues a recount of the days touched": the scheduler's counts hand-out picks up a project holding an exclusion with it null, recounts those days back to the recount limit, and sets it.
 
 **Changes to what exists:**
 
@@ -696,9 +699,9 @@ Model words cannot enter messages, since there is no model. No `dangerouslySetIn
 
 ## Observability and operations
 
-- **Metrics** (`metrics.py`, no label names a tenant, `metrics.py:15`): `nexovue_scheduler_slo_jobs_late_total`, `nexovue_scheduler_slo_oldest_status_age_seconds` (by maximum), `nexovue_scheduler_notifications_withheld_total`, `nexovue_scheduler_notifications_released_total`.
-- **Alert** (`deploy/monitoring/rules/nexovue.yml`, with its test): SLO status older than 15 minutes for 10 minutes, while detection is running, since otherwise *detection stalled* has already fired.
-- **Logs:** project and target ids at warning on a failed read, never an SLO's name.
+- **Metrics** (`metrics.py`, no label names a tenant, `metrics.py:15`). **Built 2026-11-22 as three gauges beat's leader reads from Postgres,** not the four counters first written here, because the jobs and the claim run in a worker's child process whose counters no scrape sees (`metrics.py`, the module's own reason): `nexovue_scheduler_slo_oldest_status_age_seconds` (by maximum), `nexovue_scheduler_slo_targets_late` (past the 15 minutes the screens call *Not up to date*) and `nexovue_scheduler_notifications_withheld_held` (held back and not yet released). *Released lately* is not read: no index serves `released_at`, so it would scan the whole delivery log every 15 seconds (`status.md`, open decision 5).
+- **Alert** (`deploy/monitoring/rules/nexovue.yml`, with its test): `NexovueSloStatusStale`, SLO status older than 15 minutes for 10 minutes, while detection is running, since otherwise *detection stalled* has already fired. A ticket, not a page (built 2026-11-22; the design did not say which).
+- **Logs:** project and target ids at warning on a failed read, never an SLO's name. *Not built: a failed read raises, and the worker's own record of a failed job is what a log shows (`status.md`, Step 6, drill).*
 - **Runbook:** a section in `docs/operations/detection.md`, or its own file if it grows: "SLO status not updating", "a message I expected did not arrive", which leads to the delivery log's reason.
 - **Readiness:** run by `/readiness-check` in Step 6.
 - **Docs:** `docs/product/setup/` gets a page on targets, with what they do not measure, what leaves the server, the default routing, and the outside heartbeat. `webhooks.md`, `current-system-reference.md`, `database.md`, `security-and-tenancy.md` and `observability.md` change as the code does. `docs/self-hosting/sizing.md` gains the role. `feature-catalog.md` F19 is narrowed.

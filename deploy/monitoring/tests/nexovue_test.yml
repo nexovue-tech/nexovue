@@ -277,3 +277,272 @@ tests:
       - eval_time: 5m
         alertname: NexovueDetectionStalled
         exp_alerts: []
+
+  # F22 AC123. `scheduler-connections` is optional, so its absence alone says nothing: beat's
+  # `connections_active` says whether one is expected. Absent and expected pages; absent and not
+  # expected stays quiet; present stays quiet.
+  - name: the connections role absent with no connection is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="leader"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueConnectionsMissing
+        exp_alerts: []
+
+  - name: the connections role absent with a connection live pages
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="leader"}'
+        values: "1x10"
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="follower"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NexovueConnectionsMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NexovueConnectionsMissing
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "a tracker connection is live and no scheduler-connections is running"
+
+  - name: the connections role present with a connection live is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_connections_active{job="scheduler-beat", instance="leader"}'
+        values: "1x10"
+      - series: 'up{job="scheduler-connections", instance="g"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueConnectionsMissing
+        exp_alerts: []
+
+  # F3 (plan T5.10).
+  - name: facts waiting past ten minutes and findings with none open a ticket
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_oldest_ready_job_seconds{job="scheduler-beat", queue="evidence"}'
+        values: "60+60x15"
+      - series: 'nexovue_scheduler_findings_unexplained{job="scheduler-beat"}'
+        values: "0 0 1x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NexovueEvidenceBehind
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueEvidenceBehind
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "finding facts have waited 960s to be read"
+      - eval_time: 3m
+        alertname: NexovueFindingsUnexplained
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: NexovueFindingsUnexplained
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "1 findings over 15 minutes old have no facts read"
+
+  - name: AI on with no scheduler-insight opens a ticket; AI off is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x15"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NexovueInsightMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueInsightMissing
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "AI wording is on and no scheduler-insight is running"
+
+  - name: a suggested fix refused again on the same files opens a ticket at once
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_fix_checks_refused_recent{job="scheduler-beat"}'
+        values: "0 0 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NexovueSuggestionRefusedAgain
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: NexovueSuggestionRefusedAgain
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "1 suggested fixes failed Nexovue's rules again on the same files in the last hour"
+
+  - name: the suggested fix sweep not finishing for fifteen minutes opens a ticket
+    interval: 1m
+    input_series:
+      # Finished 5 minutes before the series starts, then never again: past 900 s from 11m,
+      # held 5 minutes, so the ticket opens at 16m.
+      - series: 'nexovue_scheduler_fix_sweep_age_seconds{job="scheduler-beat"}'
+        values: "300+60x25"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: NexovueSuggestionSweepStalled
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: NexovueSuggestionSweepStalled
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "the suggested fix sweep last finished 21m 0s ago; stored code is not being deleted on time (docs/operations/ai.md)"
+
+  - name: a sweep finishing every minute, or connections off, is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_fix_sweep_age_seconds{job="scheduler-beat"}'
+        values: "30x30"
+      - series: 'nexovue_scheduler_fix_sweep_age_seconds{job="scheduler-beat-off"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: NexovueSuggestionSweepStalled
+        exp_alerts: []
+
+  - name: no AI connection on and no scheduler-insight is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "0x15"
+      - series: 'nexovue_scheduler_oldest_ready_job_seconds{job="scheduler-beat", queue="insight"}'
+        values: "3600x15"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NexovueInsightMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueInsightBehind
+        exp_alerts: []
+
+  - name: AI wording jobs waiting past thirty minutes open a ticket while AI is on
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x15"
+      - series: 'up{job="scheduler-insight", instance="i"}'
+        values: "1x15"
+      - series: 'nexovue_scheduler_oldest_ready_job_seconds{job="scheduler-beat", queue="insight"}'
+        values: "1900x15"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueInsightMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NexovueInsightBehind
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "AI wording jobs have waited 1900s for scheduler-insight"
+
+  # F19 (design, *Observability and operations*): reliability targets judged over 15 minutes ago
+  # for 10 minutes, while detection is settling minutes. Its sweep shares the clock, so a stopped
+  # detection is already NexovueDetectionStalled and this stays quiet.
+  - name: reliability targets not judged for 15 minutes open a ticket while detection runs
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_slo_oldest_status_age_seconds{job="scheduler-beat"}'
+        values: "60x5 1200x20"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat"}'
+        values: "120x25"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NexovueSloStatusStale
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "the stalest reliability target was last judged 1200s ago, and detection is running (docs/operations/slo-tracking.md)"
+
+  - name: stale reliability targets are quiet while detection has stopped, which pages by itself
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_slo_oldest_status_age_seconds{job="scheduler-beat"}'
+        values: "1200x25"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat"}'
+        values: "1200x25"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NexovueDetectionStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "the newest minute detection settled is 20m 0s old; nothing newer is judged (docs/operations/detection.md)"
+
+  - name: a target judged late for a short while is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_slo_oldest_status_age_seconds{job="scheduler-beat"}'
+        values: "60x5 1200x5 60x15"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat"}'
+        values: "120x25"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NexovueSloStatusStale
+        exp_alerts: []
+
+  # F4 (design, *Observability and operations*): a chat question nobody has taken for over two
+  # minutes while AI is on. The question's own row is read, not the job's: an `assistant` job
+  # leaves the ready count when its queue clock (at least 2 minutes) runs out, and chat's sweep,
+  # which settles it, runs in scheduler-insight too, so a stopped role leaves the row `queued`.
+  - name: a chat question unclaimed past two minutes opens a ticket while AI is on
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x10"
+      # Asked at 0m and never taken: 60 s old at 1m, past 120 s from 3m, held 2 minutes.
+      - series: 'nexovue_scheduler_assistant_oldest_unclaimed_seconds{job="scheduler-beat"}'
+        values: "0+60x10"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "a chat question has waited 300s for scheduler-insight to take it (docs/operations/ai.md)"
+
+  - name: chat questions taken within two minutes are quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "1x15"
+      - series: 'nexovue_scheduler_assistant_oldest_unclaimed_seconds{job="scheduler-beat"}'
+        values: "0 40 90 0 110 0x10"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts: []
+
+  - name: with AI on nowhere, an old queued question is quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_ai_connections_enabled{job="scheduler-beat"}'
+        values: "0x15"
+      - series: 'nexovue_scheduler_assistant_oldest_unclaimed_seconds{job="scheduler-beat"}'
+        values: "3600x15"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NexovueChatQuestionsUnclaimed
+        exp_alerts: []

@@ -47,7 +47,7 @@ const ROW_HEIGHT = 40;
 const MEAN_COLUMN = "w-20 shrink-0 text-right";
 const WORST_COLUMN = "w-20 shrink-0 text-right";
 const CALLS_COLUMN = "w-24 shrink-0 text-right";
-const TOTAL_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
+const TOTAL_COLUMN = "hidden w-24 shrink-0 text-right @3xl:block";
 const SEEN_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 
 export function DatabasesView() {
@@ -185,7 +185,7 @@ function ConnectionHealth({ servers }: { servers: readonly ServerConnections[] }
 
   return (
     <section className="shrink-0 border-line border-b px-4 pb-4">
-      <h2 className="pb-2 font-mono text-2xs text-ink-dim uppercase tracking-caps">Connections</h2>
+      <h2 className="pb-2 heading-section">Connections</h2>
       <div className="flex flex-wrap gap-3">
         {servers.map((server) => (
           <ServerCard key={server.label} server={server} />

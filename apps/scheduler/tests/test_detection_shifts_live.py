@@ -40,10 +40,11 @@ from detection_history import (
 )
 from live import require_stack
 from nexovue_platform.detection import ADOPTED_AUDIT_ACTION, SHIFT_READINGS_NEEDED
+from nexovue_platform.slo import LOG_EDGES
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from nexovue_scheduler.detection.method import LOG_EDGES, RECOVERY_MINUTES
+from nexovue_scheduler.detection.method import RECOVERY_MINUTES
 from nexovue_scheduler.detection.project_job import judge_project
 from nexovue_scheduler.detection.store import DetectionStore
 

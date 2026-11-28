@@ -66,9 +66,7 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
 
   return (
     <section className="border-line-subtle border-t px-4 py-5">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
-        Where the time goes
-      </h2>
+      <h2 className="heading-section">Where the time goes</h2>
       <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
         {describeBreakdown(plot.legend, plot.meanTotalMs, {
           runs: check.runs,
@@ -82,7 +80,7 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
           running.
         </p>
       ) : (
-        <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-start">
+        <div className="mt-4 flex flex-col gap-5 @3xl:flex-row @3xl:items-start">
           <div className="min-w-0 flex-1">
             <PhaseChart
               plot={plot}
@@ -96,7 +94,7 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
       )}
 
       <div className="mt-6">
-        <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Recent probes</h3>
+        <h3 className="heading-sub">Recent probes</h3>
         {runs.isPending ? (
           <div className="mt-2">
             <SkeletonRows rows={1} label="Loading probes" />
@@ -143,7 +141,7 @@ function PhaseLegend({
   const total = bucket ? bucket.total_ms : meanTotalMs;
 
   return (
-    <div className="w-full shrink-0 lg:w-64">
+    <div className="w-full shrink-0 @3xl:w-64">
       <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
         {bucket ? formatClockTime(bucket.timestamp) : "Window mean"}
       </p>

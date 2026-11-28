@@ -5,7 +5,15 @@ A due job, an alert waiting to be delivered, an erasure owed past three days, a
 project detection has stopped judging, the detection sweep's own record and
 detection's events are written in one transaction, read there, and rolled back —
 so the dev stack's own workers never see them, and the readings move by exactly
-what was written.
+what was written. The readings count every organization's rows, which the stack and the
+other suites commit all the time, so each transaction reads one snapshot (`_one_snapshot`).
+
+Two readings are yes-or-no for the whole install: whether any tracker connection is live, and
+whether any organization has AI switched on. On the stack's database another suite's row can
+make either "yes" at any moment, and switching every organization's rows off for the test
+touches other suites' rows in flight (a full local gate, 2026-11-22: another suite's Fix App,
+holding its client secret, refused the blanket disconnect). Those two run on a database of this
+suite's own (`private_database`), where every row is the test's.
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -14,13 +22,21 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from alert_fixtures import AlertTenant, postgres_reachable
+import pytest
+from alert_fixtures import POSTGRES_DSN, AlertTenant, postgres_reachable
 from live import require_stack
+from private_database import private_database
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncTransaction,
+    create_async_engine,
+)
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.detection import coordinator, holds
@@ -54,13 +70,61 @@ _RUN: Final = text(
 )
 
 
+@pytest.fixture(scope="module")
+def own_install() -> Iterator[str]:
+    """A database of this suite's own on the stack's server, for the install-wide yes/no
+    readings: only the tests' rows are in it, so "none" means none."""
+    with private_database(POSTGRES_DSN, prefix="nexovue_metrics") as dsn:
+        yield dsn
+
+
+@pytest.fixture
+async def own_engine(own_install: str) -> AsyncIterator[AsyncEngine]:
+    created = create_async_engine(own_install, pool_size=2)
+    try:
+        yield created
+    finally:
+        await created.dispose()
+
+
+async def _organization(connection: AsyncConnection) -> uuid.UUID:
+    org_id = uuid.uuid4()
+    await connection.execute(
+        text("INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'M')"),
+        {"id": org_id, "slug": f"metrics-{org_id.hex[:12]}"},
+    )
+    return org_id
+
+
+async def _ai_switched_on(connection: AsyncConnection, org_id: uuid.UUID) -> None:
+    await connection.execute(
+        text(
+            """
+            INSERT INTO ai_connections (org_id, wire_format, base_url, model,
+                monthly_token_limit, enabled, consented_at, consented_base_url,
+                consented_fingerprint, consented_schema)
+            VALUES (:org, 'openai_chat', 'https://p.example/v1', 'm', 10, true, now(),
+                'https://p.example/v1', repeat('a', 64), 1)
+            """
+        ),
+        {"org": org_id},
+    )
+
+
+async def _one_snapshot(connection: AsyncConnection) -> AsyncTransaction:
+    """The test's transaction, in which every reading sees one snapshot: read afresh, a reading
+    would also count what another writer committed between `before` and `after`."""
+    await connection.execution_options(isolation_level="REPEATABLE READ")
+    return await connection.begin()
+
+
 async def test_a_due_job_and_a_waiting_alert_and_an_overdue_erasure_are_counted(
     engine: AsyncEngine, tenant: AlertTenant
 ) -> None:
     queue = f"metrics-test-{uuid.uuid4().hex[:8]}"
     now = datetime.now(UTC)
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=now)
             await connection.execute(
@@ -128,7 +192,7 @@ async def test_a_project_detection_has_not_judged_for_three_minutes_is_counted_b
     a_day = timedelta(days=1)
     now = datetime.now(UTC)
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             await connection.execute(
                 text("DELETE FROM detection_project_runs WHERE project_id = :project"), keys
@@ -200,7 +264,7 @@ async def test_detection_events_of_the_last_fifteen_minutes_are_counted_by_kind(
     """*Detection held by intake*'s reading. Beat reads the rows: the sweep that
     writes them runs in a worker's child process, whose metrics no scrape sees."""
     async with engine.connect() as connection:
-        transaction = await connection.begin()
+        transaction = await _one_snapshot(connection)
         try:
             before = await metrics.read_queues(connection, now=datetime.now(UTC))
             for kind, ago in (
@@ -222,3 +286,473 @@ async def test_detection_events_of_the_last_fifteen_minutes_are_counted_by_kind(
     expired, guarded = holds.HOLD_EXPIRED, holds.GUARD_ENGAGED
     assert after.detection_events_recent[expired] == before.detection_events_recent[expired] + 1
     assert after.detection_events_recent[guarded] == before.detection_events_recent[guarded]
+
+
+async def test_beat_says_whether_any_tracker_connection_is_live(
+    own_engine: AsyncEngine,
+) -> None:
+    """F22 AC118, AC123: `connections_active` is what lets the monitor tell a role left out on
+    purpose from one that died. It reads the rows, so it is beat's to say, and it is 0 while
+    connections are turned off, or when only F5's own App is connected."""
+    async with own_engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            none = await metrics.read_queues(connection, now=datetime.now(UTC))
+            org_id = await _organization(connection)
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state) "
+                    "VALUES (:org, 'github_fix', 'working')"
+                ),
+                {"org": org_id},
+            )
+            fix_only = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(
+                text(
+                    "INSERT INTO connections (org_id, kind, state) "
+                    "VALUES (:org, 'github', 'setting_up')"
+                ),
+                {"org": org_id},
+            )
+            one = await metrics.read_queues(connection, now=datetime.now(UTC))
+            turned_off = await metrics.read_queues(
+                connection, now=datetime.now(UTC), connections_enabled=False
+            )
+        finally:
+            await transaction.rollback()
+
+    assert (none.connections_active, fix_only.connections_active) == (0, 0)
+    assert (one.connections_active, turned_off.connections_active) == (1, 0)
+    metrics.publish(one)
+    assert metrics.CONNECTIONS_ACTIVE._value.get() == 1
+
+
+async def test_f3_s_readings_move_by_exactly_what_was_written(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F3 T5.10: an open finding 20 minutes old with no explanation, a version with a failed
+    read and a cut, an AI connection switched on, runs and the month's tokens; all counted
+    across organizations, with no tenant label."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await _one_snapshot(connection)
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await add_finding(
+                connection, tenant, started_at=datetime.now(UTC) - timedelta(minutes=20)
+            )
+            explained = await add_finding(
+                connection, tenant, service="payments", started_at=datetime.now(UTC)
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO finding_explanations (org_id, project_id, finding_id, version,
+                        fingerprint, reads_failed, evidence, aliases, summary)
+                    VALUES (:org, :project, :finding, 1, repeat('a', 64), 2,
+                        '{"items": [{"kind": "absence", "values": {"reason": "truncated"}}]}',
+                        '{}', '{}')
+                    """
+                ),
+                {"org": tenant.org_id, "project": tenant.project_id, "finding": explained},
+            )
+            await _ai_switched_on(connection, tenant.org_id)
+            for outcome in ("done", "done", "invalid"):
+                await connection.execute(
+                    text(
+                        "INSERT INTO ai_runs (org_id, purpose, wire_format, model, "
+                        "provider_host, outcome) VALUES (:org, 'explain', 'openai_chat', 'm', "
+                        "'https://p.example', :outcome)"
+                    ),
+                    {"org": tenant.org_id, "outcome": outcome},
+                )
+            await connection.execute(
+                text(
+                    "INSERT INTO ai_usage_monthly (org_id, month, used_tokens) VALUES "
+                    "(:org, date_trunc('month', now() AT TIME ZONE 'UTC')::date, 700)"
+                ),
+                {"org": tenant.org_id},
+            )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.findings_unexplained - before.findings_unexplained == 1
+    assert after.evidence_reads_failed - before.evidence_reads_failed == 2
+    assert after.evidence_truncated - before.evidence_truncated == 1
+    assert after.ai_connections_enabled - before.ai_connections_enabled == 1
+    done = ("explain", "done")
+    assert after.ai_runs_recent[done] - before.ai_runs_recent.get(done, 0) == 2
+    assert after.ai_tokens_month - before.ai_tokens_month == 700
+
+
+async def test_beat_s_switch_for_the_ai_sweep_is_whether_any_organization_has_ai_on(
+    own_engine: AsyncEngine,
+) -> None:
+    """F3 T5.10: beat schedules the AI role's sweep only while some organization has AI on,
+    and publishes how many do."""
+    async with own_engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            was_on = await metrics.ai_connections_on(connection)
+            await _ai_switched_on(connection, await _organization(connection))
+            is_on = await metrics.ai_connections_on(connection)
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert (was_on, is_on) == (False, True)
+    metrics.publish(after)
+    assert metrics.AI_CONNECTIONS_ENABLED._value.get() == 1
+
+
+async def test_f5_s_tamper_signal_counts_refusals_again_in_the_last_hour_only(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F5 T5.1 (D18, ADR-096): a suggestion the rules refused again on the same files in the
+    last hour counts; an older one, and one merely out of date, do not."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await _one_snapshot(connection)
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            for minutes, state, reason in (
+                (10, "failed", "checks_refused_at_click"),
+                (90, "failed", "checks_refused_at_click"),
+                (5, "stale", "rules_changed"),
+            ):
+                finding = await add_finding(
+                    connection,
+                    tenant,
+                    service=f"svc-{minutes}",
+                    started_at=datetime.now(UTC) - timedelta(hours=3),
+                )
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state,
+                            reason, state_changed_at)
+                        VALUES (:org, :project, :finding, 'source', :state, :reason,
+                            now() - make_interval(mins => :minutes))
+                        """
+                    ),
+                    {
+                        "org": tenant.org_id,
+                        "project": tenant.project_id,
+                        "finding": finding,
+                        "state": state,
+                        "reason": reason,
+                        "minutes": minutes,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.fix_checks_refused - before.fix_checks_refused == 1
+    metrics.publish(after)
+    assert metrics.FIX_CHECKS_REFUSED._value.get() == after.fix_checks_refused
+
+
+_SWEEP_FINISHED: Final = text(
+    """
+    INSERT INTO fix_sweep_status (sweep, finished_at)
+    VALUES ('sweep_fixes', now() - make_interval(mins => :minutes))
+    ON CONFLICT (sweep) DO UPDATE SET finished_at = EXCLUDED.finished_at
+    """
+)
+SWEEP_AGE_MINUTES: Final = 20
+
+
+async def test_f5_s_sweep_age_is_read_while_connections_are_on(engine: AsyncEngine) -> None:
+    """F5 T9.1 (open decision 70): how long since `sweep_fixes` last finished a whole pass;
+    never finished reads +Inf; with connections off nothing is expected, so 0."""
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        try:
+            await connection.execute(text("DELETE FROM fix_sweep_status"))
+            never = await metrics.read_queues(connection, now=datetime.now(UTC))
+            await connection.execute(_SWEEP_FINISHED, {"minutes": SWEEP_AGE_MINUTES})
+            on = await metrics.read_queues(connection, now=datetime.now(UTC))
+            off = await metrics.read_queues(
+                connection, now=datetime.now(UTC), connections_enabled=False
+            )
+        finally:
+            await transaction.rollback()
+
+    assert never.fix_sweep_age_seconds == math.inf
+    expected = SWEEP_AGE_MINUTES * 60
+    assert abs(on.fix_sweep_age_seconds - expected) < CLOCKS_APART.total_seconds()
+    assert off.fix_sweep_age_seconds == 0
+    metrics.publish(on)
+    assert metrics.FIX_SWEEP_AGE._value.get() == on.fix_sweep_age_seconds
+
+
+async def test_f5_s_rows_by_state_and_reason_and_the_oldest_in_flight(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F5 T9.1 (design, *Observability*: "rows by state and reason in the last hour, the oldest
+    row in flight"): a row counts once under its kind, state and reason when its state moved
+    in the last hour; an older move does not; the oldest working row's age is read."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await _one_snapshot(connection)
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            for minutes, kind, state, reason in (
+                (10, "source", "refused", "withheld_K7"),
+                (20, "source", "failed", "timed_out"),
+                (90, "source", "refused", "withheld_K7"),
+                (45, "source", "proposing", None),
+            ):
+                finding = await add_finding(
+                    connection,
+                    tenant,
+                    service=f"svc-{minutes}-{kind}",
+                    started_at=datetime.now(UTC) - timedelta(hours=3),
+                )
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO finding_fixes (org_id, project_id, finding_id, kind, state,
+                            reason, state_changed_at)
+                        VALUES (:org, :project, :finding, :kind, :state, :reason,
+                            now() - make_interval(mins => :minutes))
+                        """
+                    ),
+                    {
+                        "org": tenant.org_id,
+                        "project": tenant.project_id,
+                        "finding": finding,
+                        "kind": kind,
+                        "state": state,
+                        "reason": reason,
+                        "minutes": minutes,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    def moved(key: tuple[str, str, str]) -> int:
+        return after.fix_rows_recent.get(key, 0) - before.fix_rows_recent.get(key, 0)
+
+    assert moved(("source", "refused", "withheld_K7")) == 1
+    assert moved(("source", "failed", "timed_out")) == 1
+    assert moved(("source", "proposing", metrics.NO_REASON)) == 1
+    assert after.fix_oldest_in_flight_seconds >= 45 * 60 - CLOCKS_APART.total_seconds()
+    metrics.publish(after)
+    assert (
+        metrics.FIX_ROWS_RECENT.labels(
+            kind="source", state="refused", reason="withheld_K7"
+        )._value.get()
+        == after.fix_rows_recent[("source", "refused", "withheld_K7")]
+    )
+
+
+_TARGET: Final = text(
+    """
+    INSERT INTO slo_targets (org_id, project_id, name, kind, service_name, objective_percent,
+        window_days, upstream_sampling, definition_key, created_at, deleted_at)
+    VALUES (:org, :project, :name, 'service_availability', 'checkout', 99.9, 28, 'no',
+            :name, now() - make_interval(mins => :created), CASE WHEN :deleted THEN now() END)
+    RETURNING id
+    """
+)
+_STATUS: Final = text(
+    """
+    INSERT INTO slo_status (slo_id, org_id, project_id, evaluated_minute)
+    VALUES (:id, :org, :project, now() - make_interval(mins => :judged))
+    """
+)
+
+
+async def test_slo_status_age_counts_a_target_that_is_late_and_never_a_deleted_one(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F19 T6.1: the oldest answer across every live target, and how many are past the 15
+    minutes the screens call Not up to date. A target never judged ages from its creation;
+    a deleted one is not read; no label names a tenant."""
+    async with engine.connect() as connection:
+        transaction = await _one_snapshot(connection)
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            scope = {"org": tenant.org_id, "project": tenant.project_id}
+            for name, created, judged, deleted in (
+                ("fresh", 600, 3, False),
+                ("late", 600, 20, False),
+                ("never judged", 30, None, False),
+                ("deleted and old", 600, 300, True),
+            ):
+                made = await connection.scalar(
+                    _TARGET, scope | {"name": name, "created": created, "deleted": deleted}
+                )
+                if judged is not None:
+                    await connection.execute(_STATUS, scope | {"id": made, "judged": judged})
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.slo_targets_late - before.slo_targets_late == 2
+    assert after.slo_oldest_status_age_seconds >= 20 * 60 - CLOCKS_APART.total_seconds()
+    assert after.slo_oldest_status_age_seconds >= before.slo_oldest_status_age_seconds
+    metrics.publish(after)
+    assert metrics.SLO_TARGETS_LATE._value.get() == after.slo_targets_late
+    assert metrics.SLO_OLDEST_STATUS_AGE._value.get() == after.slo_oldest_status_age_seconds
+
+
+async def test_a_withheld_notification_counts_as_held_until_it_is_released(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F19 T6.1: a row held back and not yet released is counted as held; a released one is
+    not."""
+    from alert_fixtures import add_finding
+
+    async with engine.connect() as connection:
+        transaction = await _one_snapshot(connection)
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            finding = await add_finding(
+                connection, tenant, started_at=datetime.now(UTC) - timedelta(hours=1)
+            )
+            for sequence, released_minutes_ago in enumerate((None, 5, 90)):
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO notifications (org_id, project_id, finding_id, channel_id,
+                            kind, sequence, severity, state, withheld_why, released_at)
+                        VALUES (:org, :project, :finding, :channel, 'opened', :sequence,
+                            'warning', 'dropped', 'same_news',
+                            CASE WHEN CAST(:ago AS integer) IS NULL THEN NULL
+                                 ELSE now() - make_interval(mins => CAST(:ago AS integer)) END)
+                        """
+                    ),
+                    {
+                        "org": tenant.org_id,
+                        "project": tenant.project_id,
+                        "finding": finding,
+                        "channel": tenant.owners_channel_id,
+                        "sequence": sequence,
+                        "ago": released_minutes_ago,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    assert after.notifications_withheld_held - before.notifications_withheld_held == 1
+    metrics.publish(after)
+    assert metrics.NOTIFICATIONS_WITHHELD_HELD._value.get() == after.notifications_withheld_held
+
+
+_CHAT_MESSAGE: Final = text(
+    """
+    INSERT INTO assistant_messages (org_id, project_id, conversation_id, user_id, question,
+        context, data_level, state, call_seconds, queue_expires_at, deadline_at, hard_ends_at,
+        created_at)
+    VALUES (:org, :project, :conversation, :user, 'What is failing?', '{}', 'facts', :state, 30,
+        now(), now(), now(), now() - make_interval(mins => :ago))
+    """
+)
+_CHAT_COUNT: Final = text(
+    """
+    INSERT INTO assistant_monthly_counts (org_id, month, kind, count)
+    VALUES (:org, date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                  - make_interval(months => :months_back), :kind, :count)
+    """
+)
+# Older than any question another suite leaves queued, so the unclaimed age below is ours.
+RUNNING_FOR_MINUTES = 90
+QUEUED_FOR_MINUTES = 5
+
+
+async def test_chat_s_readings_count_this_month_s_outcomes_and_what_is_in_flight(
+    engine: AsyncEngine, tenant: AlertTenant
+) -> None:
+    """F4 T8.2 (design, *Observability and operations*): this month's outcomes and the
+    validator's rejections by reason, from `assistant_monthly_counts`; a person's wrong marks
+    and last month's are not counted; questions in flight, the oldest of them, and the oldest
+    nobody has taken (`queued`), which a running question is not. No label names a tenant."""
+    async with engine.connect() as connection:
+        transaction = await _one_snapshot(connection)
+        try:
+            before = await metrics.read_queues(connection, now=datetime.now(UTC))
+            scope = {"org": tenant.org_id, "project": tenant.project_id}
+            owner = await connection.scalar(
+                text("SELECT id FROM users WHERE org_id = :org AND email = :email"),
+                {"org": tenant.org_id, "email": tenant.owner_email},
+            )
+            colleague = await connection.scalar(
+                text(
+                    "INSERT INTO users (org_id, email, role, password_hash) "
+                    "VALUES (:org, :email, 'member', 'x') RETURNING id"
+                ),
+                {"org": tenant.org_id, "email": f"chat-{uuid.uuid4().hex[:10]}@example.test"},
+            )
+            for user, state, ago in (
+                (owner, "running", RUNNING_FOR_MINUTES),
+                (colleague, "queued", QUEUED_FOR_MINUTES),
+                (owner, "answered", 3 * RUNNING_FOR_MINUTES),
+            ):
+                conversation = await connection.scalar(
+                    text(
+                        "INSERT INTO assistant_conversations (org_id, user_id, project_id, "
+                        "title) VALUES (:org, :user, :project, 'q') RETURNING id"
+                    ),
+                    scope | {"user": user},
+                )
+                await connection.execute(
+                    _CHAT_MESSAGE,
+                    scope
+                    | {"conversation": conversation, "user": user, "state": state, "ago": ago},
+                )
+            for kind, count, months_back in (
+                ("answered", 3, 0),
+                ("withheld", 2, 0),
+                ("rejected_way_out", 2, 0),
+                ("rejected_shape", 1, 0),
+                ("wrong_numbers", 4, 0),
+                ("answered", 7, 1),
+            ):
+                await connection.execute(
+                    _CHAT_COUNT,
+                    {
+                        "org": tenant.org_id,
+                        "kind": kind,
+                        "count": count,
+                        "months_back": months_back,
+                    },
+                )
+            after = await metrics.read_queues(connection, now=datetime.now(UTC))
+        finally:
+            await transaction.rollback()
+
+    def outcome(name: str) -> int:
+        return after.assistant_questions_month[name] - before.assistant_questions_month[name]
+
+    def rejected(reason: str) -> int:
+        return after.assistant_rejections_month[reason] - before.assistant_rejections_month[reason]
+
+    assert (outcome("answered"), outcome("withheld"), outcome("failed")) == (3, 2, 0)
+    assert (rejected("way_out"), rejected("shape"), rejected("command")) == (2, 1, 0)
+    assert "wrong_numbers" not in after.assistant_questions_month
+    assert after.assistant_questions_in_flight - before.assistant_questions_in_flight == 2
+    slack = CLOCKS_APART.total_seconds()
+    assert after.assistant_oldest_in_flight_seconds >= RUNNING_FOR_MINUTES * 60 - slack
+    assert after.assistant_oldest_unclaimed_seconds >= QUEUED_FOR_MINUTES * 60 - slack
+    assert after.assistant_oldest_unclaimed_seconds < RUNNING_FOR_MINUTES * 60 - slack
+    metrics.publish(after)
+    assert (
+        metrics.ASSISTANT_QUESTIONS_MONTH.labels(outcome="answered")._value.get()
+        == after.assistant_questions_month["answered"]
+    )
+    assert (
+        metrics.ASSISTANT_REJECTIONS_MONTH.labels(reason="way_out")._value.get()
+        == after.assistant_rejections_month["way_out"]
+    )
+    assert metrics.ASSISTANT_OLDEST_UNCLAIMED._value.get() == (
+        after.assistant_oldest_unclaimed_seconds
+    )

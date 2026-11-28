@@ -119,6 +119,8 @@ export interface ZonedOptions {
   zone?: string;
   /** The reader's now, which decides whether the day needs saying. */
   now?: number;
+  /** Name the day even when it is today: a record, such as an agreement, outlives the day. */
+  withDate?: boolean;
 }
 
 /**
@@ -128,7 +130,7 @@ export interface ZonedOptions {
  */
 export function formatZonedTime(
   iso: string,
-  { zone, now = Date.now() }: ZonedOptions = {},
+  { zone, now = Date.now(), withDate = false }: ZonedOptions = {},
 ): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return UNKNOWN;
@@ -138,7 +140,12 @@ export function formatZonedTime(
   const today = partsIn(known, new Date(now));
   const label = zoneLabel(known, at);
 
-  if (then.day === today.day && then.month === today.month && then.year === today.year) {
+  if (
+    !withDate &&
+    then.day === today.day &&
+    then.month === today.month &&
+    then.year === today.year
+  ) {
     return `${then.time} ${label}`;
   }
   const year = then.year === today.year ? "" : ` ${then.year}`;

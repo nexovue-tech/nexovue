@@ -31,6 +31,14 @@ platform operator, who has no customer data of their own here.
 - Deletion of a person's own account.
 - On removal by an admin, the same scrubbing a self-deletion does.
 
+## Dashboards (F20)
+
+A dashboard belongs to the organization, not a person, so **a person's export does not include dashboards** and a
+person's deletion does not remove them. *Unverified:* what a removed person's dashboards show as their owner was not read from the code for this note. A dashboard's **notes and titles are free text that people may paste personal data
+into**, and nothing masks them. The way to remove such text is the owner-or-admin **purge** of a dashboard or one
+version (hard delete; the title becomes `[removed]` in its audit entries). Purge does not reach backups. Service,
+endpoint and metric labels a dashboard shows are the customer's own telemetry and are not copied into it.
+
 ## Out of scope
 
 - Exporting the organization's telemetry — that is the organization's data, not the person's, and the
@@ -48,7 +56,16 @@ platform operator, who has no customer data of their own here.
 
 - **Export holds the person's data only**: their profile; their sessions (device and network, when and
   where); the audit entries they caused; the API tokens they created; the invitations they sent and
-  received. Never another person's data, never the organization's telemetry.
+  received; the case notes they wrote, in their own words (F22 AC25), bounded on their own with a
+  `notes_truncated` flag; the questions they asked chat (F4 AC34), each with its outcome, its
+  checked answer as stored, its steps' arguments as stored (free-text search phrases included) and
+  their "this was wrong" mark, bounded on their own with a `chat_questions_truncated` flag; and the
+  runbooks they wrote, in their own words, with their project, bounded on their own with a
+  `runbooks_truncated` flag (F4 AC34, Step 5); their linked GitHub account (F5 AC31) and their
+  answers to "Was this suggestion useful?" (F5 FR29), bounded with a `fix_verdicts_truncated`
+  flag. A runbook stays the organization's after its author
+  leaves, its author shown as *Former member*. Never another person's data, never the
+  organization's telemetry.
 - **Deleting an account is the member removal that already exists** (sessions ended, email freed,
   set-password state cleared), plus: their **name becomes "Former member"**, and **their email is
   replaced by their user id in every audit entry**. The audit entries stay: they are the
@@ -57,6 +74,9 @@ platform operator, who has no customer data of their own here.
   or delete the organization.
 - **An admin removing someone scrubs the same way**, so removal is never kinder to history than
   self-deletion.
+- **Case notes stay after a person leaves** (F22 BR16): they are the organization's working record,
+  in the person's own words, with the author read as *Former member*. A person may delete their own
+  notes first; afterwards, an owner or admin can.
 - API tokens a person created stay the organization's (ADR-017, BR9); the export lists them.
 
 ## Functional requirements
@@ -98,8 +118,14 @@ sessions, what you did, and the tokens you made.
 
 Delete your account                       [ Delete account… ]
 Removes you from <Organization>. What you did stays in the
-audit log, without your name or address.
+audit log, without your name or address. Notes you wrote stay,
+in your own words, as your organization's record. Delete any you
+want gone before you leave.
 ```
+
+The members screen's **Leave** confirmation carries the same last two sentences (F22 BR16, FR54). An
+owner or admin removing someone else reads, instead, *"Notes {name} wrote stay, in their own words, as
+your organization's record."*
 
 **Delete account…** opens a confirmation: the password field (and a code when two-factor is on), the
 sentence *"This cannot be undone."*, and a red **Delete my account** button. On success the person is

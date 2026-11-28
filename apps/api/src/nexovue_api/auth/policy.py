@@ -21,7 +21,7 @@ quietly widens is a failed build, not a review comment.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends
 
@@ -69,8 +69,20 @@ MayAdministerThePlatform = Annotated[Identity, Depends(_the_platform)]
 
 MayOperateChecks = Annotated[Identity, Depends(require(Action.OPERATE_CHECKS))]
 MayOperateAlerts = Annotated[Identity, Depends(require(Action.OPERATE_ALERTS))]
+MayOperateCases = Annotated[Identity, Depends(require(Action.OPERATE_CASES))]
 MayUploadSourceMaps = Annotated[Identity, Depends(require(Action.UPLOAD_SOURCE_MAPS))]
+MayConfigureSlos = Annotated[Identity, Depends(require(Action.CONFIGURE_SLOS))]
+MayEditDashboards = Annotated[Identity, Depends(require(Action.EDIT_DASHBOARDS))]
+MayRequestExplanation = Annotated[Identity, Depends(require(Action.REQUEST_EXPLANATION))]
+MayAskAssistant = Annotated[Identity, Depends(require(Action.ASK_ASSISTANT))]
+MayManageKnowledge = Annotated[Identity, Depends(require(Action.MANAGE_KNOWLEDGE))]
+MayRequestFix = Annotated[Identity, Depends(require(Action.REQUEST_FIX))]
+MayOpenFixPullRequest = Annotated[Identity, Depends(require(Action.OPEN_FIX_PULL_REQUEST))]
+MayPurgeDashboards = Annotated[Identity, Depends(require(Action.PURGE_DASHBOARDS))]
 MayManageChannels = Annotated[Identity, Depends(require(Action.MANAGE_CHANNELS))]
+MayManageConnections = Annotated[Identity, Depends(require(Action.MANAGE_CONNECTIONS))]
+MayManageAI = Annotated[Identity, Depends(require(Action.MANAGE_AI))]
+MayConsentAIDisclosure = Annotated[Identity, Depends(require(Action.CONSENT_AI_DISCLOSURE))]
 MayManageCheckSecrets = Annotated[Identity, Depends(require(Action.MANAGE_CHECK_SECRETS))]
 MayConfigureProjects = Annotated[Identity, Depends(require(Action.CONFIGURE_PROJECTS))]
 MayConfigureDetection = Annotated[Identity, Depends(require(Action.CONFIGURE_DETECTION))]
@@ -81,3 +93,17 @@ MayReadAudit = Annotated[Identity, Depends(require(Action.READ_AUDIT))]
 MayCommitSpend = Annotated[Identity, Depends(require(Action.COMMIT_SPEND))]
 MayGrantSupport = Annotated[Identity, Depends(require(Action.GRANT_SUPPORT))]
 MayEndTheOrganization = Annotated[Identity, Depends(require(Action.END_ORGANIZATION))]
+
+SUPPORT_VIEW_READS_NO_CODE: Final = "A support view does not show customer code."
+
+
+def _may_read_fix_code(identity: CurrentIdentity) -> Identity:
+    """F5's quoted code as a file (design, *Routes*, `MayReadFixCode`): a person who may ask
+    for a suggested fix, and never a support view, which a read would otherwise let through
+    (`_hold_support_view` refuses only writes). `CurrentIdentity` already refuses a token."""
+    if identity.impersonation is not None:
+        raise PermissionDeniedError(SUPPORT_VIEW_READS_NO_CODE)
+    return require(Action.REQUEST_FIX)(identity)
+
+
+MayReadFixCode = Annotated[Identity, Depends(_may_read_fix_code)]

@@ -12,7 +12,7 @@
  * from `values` is not applied; `""` never reaches the caller.
  */
 
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 
 export interface FilterOption {
   value: string;
@@ -92,7 +92,7 @@ export function FilterBar({
 
   return (
     <div className="shrink-0 px-4 pb-3">
-      <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         {definitions.map((definition) =>
           definition.control.kind === "toggle" ? (
             <FilterToggle
@@ -152,21 +152,31 @@ function FilterSelect({
   onChange: (key: string, value: string | undefined) => void;
 }) {
   return (
-    <label className="flex items-baseline gap-2">
+    <label className="flex items-center gap-2">
       <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
         {definition.label}
       </span>
-      <select
-        value={value}
-        onChange={(event) => onChange(definition.key, event.target.value || undefined)}
-        className="max-w-44 cursor-pointer appearance-none truncate rounded-sm border-none bg-transparent py-0.5 pr-1 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
-      >
-        {withSelected(options, value).map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      {/* Sized to the chosen value, not the longest option (UX review, 2026-11-28): a native
+          select is as wide as its widest option, which spread the row apart. The chevron
+          says it opens. */}
+      <span className="relative inline-flex items-center">
+        <select
+          value={value}
+          onChange={(event) => onChange(definition.key, event.target.value || undefined)}
+          className="field-sizing-content max-w-44 cursor-pointer appearance-none truncate rounded-sm border-none bg-transparent py-0.5 pr-5 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        >
+          {withSelected(options, value).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={12}
+          aria-hidden="true"
+          className="pointer-events-none absolute right-1 text-ink-dim"
+        />
+      </span>
     </label>
   );
 }
@@ -183,16 +193,15 @@ function FilterToggle({
   onChange: (key: string, value: string | undefined) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-baseline gap-2">
+    // A checkbox reads as a choice in words, not as a column label (UX review, 2026-11-28).
+    <label className="flex min-h-11 cursor-pointer items-center gap-2 md:min-h-0">
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(definition.key, event.target.checked ? on : undefined)}
         className="cursor-pointer accent-brand focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       />
-      <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-        {definition.label}
-      </span>
+      <span className="text-ink text-sm">{definition.label}</span>
     </label>
   );
 }

@@ -5,7 +5,12 @@ import (
 	"testing"
 	"time"
 
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
+	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
+
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 )
 
@@ -119,6 +124,41 @@ func TestARecoveredWatermarkSkipsOnlyWhatWasWritten(t *testing.T) {
 	for offset := int64(5); offset < 10; offset++ {
 		if !decision.Stores(offset) {
 			t.Errorf("offset %d was skipped although nothing had written it", offset)
+		}
+	}
+}
+
+// A restart re-derives the same offsets into fresh counters. The version rows it
+// drains must be identical to the first run's, or their deduplication token
+// cannot recognise the retry and the replay is summed in twice (AC16).
+func TestAReplayDrainsTheSameVersionRows(t *testing.T) {
+	drain := func() []derive.VersionStat {
+		stages := stagesFor(t, 100)
+		for index := range 40 {
+			door := nexovuev1.Door_DOOR_OTLP
+			if index%5 == 0 {
+				door = nexovuev1.Door_DOOR_RUM
+			}
+			message := marshalEnvelope(t, "1.27.0", spanOptions{kind: tracepb.Span_SPAN_KIND_SERVER, door: door})
+			if _, err := stages.absorbMessage(invariantStart, message,
+				handling{count: true, store: false, partition: int32(index % 3)}); err != nil {
+				t.Fatalf("absorbMessage: %v", err)
+			}
+		}
+		return stages.counters.DrainAll().Versions
+	}
+
+	first, replay := drain(), drain()
+	if len(first) != 1 || first[0].RequestCount != 32 {
+		t.Fatalf("drained %+v, want one row of the 32 secret-key spans: browser-door spans count nowhere",
+			first)
+	}
+	if len(replay) != len(first) {
+		t.Fatalf("the replay drained %d version rows, want %d", len(replay), len(first))
+	}
+	for i := range first {
+		if replay[i] != first[i] {
+			t.Errorf("row %d differs across the restart:\n  first:  %+v\n  replay: %+v", i, first[i], replay[i])
 		}
 	}
 }

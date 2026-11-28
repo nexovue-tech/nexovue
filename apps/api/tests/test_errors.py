@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from nexovue_platform.telemetry.context import CORRELATION_ID_HEADER
 from nexovue_platform.telemetry.logging import FORMAT_JSON, configure_logging
 from pydantic import BaseModel
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from starlette.types import Receive, Scope, Send
 
 from nexovue_api.errors import problems
 from nexovue_api.errors.exceptions import (
@@ -20,7 +22,7 @@ from nexovue_api.errors.exceptions import (
     NotFoundError,
     RateLimitExceededError,
 )
-from nexovue_api.errors.handlers import install_error_handlers
+from nexovue_api.errors.handlers import BUSY_RETRY_AFTER_SECONDS, install_error_handlers
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 
@@ -130,6 +132,21 @@ def test_a_rate_limit_carries_retry_after(client: TestClient) -> None:
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "42"
+
+
+def test_a_full_pool_met_in_middleware_answers_busy() -> None:
+    """The rate limiter reads sessions before any route, so a full Postgres pool can be met
+    outside FastAPI's handlers. The boundary answers it as a handler would: 503, Retry-After."""
+
+    async def pool_full(scope: Scope, receive: Receive, send: Send) -> None:
+        raise PoolTimeoutError("QueuePool limit of size 1 overflow 0 reached", None, Exception())
+
+    response = TestClient(ExceptionBoundaryMiddleware(pool_full)).get("/anything")
+
+    assert response.status_code == 503
+    assert response.json()["type"] == problems.SERVICE_BUSY.uri
+    assert response.headers["retry-after"] == str(BUSY_RETRY_AFTER_SECONDS)
+    assert "QueuePool" not in response.text
 
 
 def test_validation_failures_report_the_field_but_not_the_value(client: TestClient) -> None:

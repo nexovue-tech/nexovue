@@ -87,7 +87,7 @@ export function ChannelDetailScreen() {
         // measure because each is prose and a form; what changed is that they no
         // longer queue single file to keep it.
         <div className="flex flex-col gap-8">
-          <div className="flex flex-col gap-8 xl:flex-row xl:items-start xl:gap-10">
+          <div className="flex flex-col gap-8 @5xl:flex-row @5xl:items-start @5xl:gap-10">
             <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-8">
               <Overview channel={channel.data} />
               {canManage && channel.data.kind !== "owners" ? (
@@ -97,6 +97,9 @@ export function ChannelDetailScreen() {
             <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-8">
               {canManage ? <SendTest channel={channel.data} /> : null}
               {canManage ? <Mute channel={channel.data} /> : null}
+              {canManage && PEOPLE_READ.has(channel.data.kind) ? (
+                <FollowUp channel={channel.data} />
+              ) : null}
               {canManage && PEOPLE_READ.has(channel.data.kind) ? (
                 <Quiet channel={channel.data} />
               ) : null}
@@ -149,7 +152,7 @@ function SendTest({ channel }: { channel: ChannelSummary }) {
   const result = test.data;
   return (
     <section aria-labelledby="send-test" className="flex flex-col gap-2">
-      <h2 id="send-test" className="font-medium font-serif text-base text-ink">
+      <h2 id="send-test" className="heading-section">
         Send a test
       </h2>
       <p className="text-ink-dim text-sm">
@@ -215,7 +218,7 @@ function Settings({ channel }: { channel: ChannelSummary }) {
 
   return (
     <section aria-labelledby="channel-settings" className="flex flex-col gap-3">
-      <h2 id="channel-settings" className="font-medium font-serif text-base text-ink">
+      <h2 id="channel-settings" className="heading-section">
         Settings
       </h2>
       <form
@@ -288,7 +291,7 @@ function Settings({ channel }: { channel: ChannelSummary }) {
             label={`Replace the ${secretLabel.toLowerCase()}`}
             name="channel-secret"
             type="password"
-            autoComplete="off"
+            autoComplete="new-password"
             required={false}
             value={secret}
             onChange={(next) => {
@@ -356,7 +359,7 @@ function Mute({ channel }: { channel: ChannelSummary }) {
   const muted = isMuted(channel.muted_until);
   return (
     <section aria-labelledby="channel-mute" className="flex flex-col gap-2">
-      <h2 id="channel-mute" className="font-medium font-serif text-base text-ink">
+      <h2 id="channel-mute" className="heading-section">
         Mute
       </h2>
       {muted ? (
@@ -415,7 +418,7 @@ function Quiet({ channel }: { channel: ChannelSummary }) {
 
   return (
     <section aria-labelledby="quiet-hours" className="flex flex-col gap-2">
-      <h2 id="quiet-hours" className="font-medium font-serif text-base text-ink">
+      <h2 id="quiet-hours" className="heading-section">
         Quiet hours
       </h2>
       <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
@@ -480,6 +483,39 @@ function Quiet({ channel }: { channel: ChannelSummary }) {
   );
 }
 
+/**
+ * F3 FR48: whether this channel gets a finding's one follow-up naming a likely place to
+ * look, written from facts. On by default; the finding's page is the same either way.
+ * Only channels people read: PagerDuty and webhooks never receive it.
+ */
+function FollowUp({ channel }: { channel: ChannelSummary }) {
+  const save = useUpdateChannel(channel.id);
+  return (
+    <section aria-labelledby="follow-up" className="flex flex-col gap-2">
+      <h2 id="follow-up" className="heading-section">
+        Follow-up messages
+      </h2>
+      <label className="flex max-w-3xl items-start gap-2 text-ink text-sm">
+        <input
+          type="checkbox"
+          name="sends-explained"
+          className="mt-1"
+          checked={channel.sends_explained}
+          disabled={save.isPending}
+          onChange={(event) => save.mutate({ sends_explained: event.target.checked })}
+        />
+        <span>
+          After a finding was sent here, send one more message when a signed deploy is its likely
+          place to look, with how often that service deploys. At most one per finding.
+        </span>
+      </label>
+      {save.error ? (
+        <InlineFailure title="The follow-up setting was not saved" error={save.error} />
+      ) : null}
+    </section>
+  );
+}
+
 const OUTCOME_TEXT = {
   delivered: "text-ink",
   retrying: "text-warning-text",
@@ -490,7 +526,7 @@ function DeliveryLog({ channelId }: { channelId: string }) {
   const log = useDeliveryLog(channelId);
   return (
     <section aria-labelledby="delivery-log" className="flex flex-col gap-2">
-      <h2 id="delivery-log" className="font-medium font-serif text-base text-ink">
+      <h2 id="delivery-log" className="heading-section">
         Delivery log
       </h2>
       <p className="text-ink-dim text-sm">Every attempt of the last 30 days, newest first.</p>
@@ -547,7 +583,7 @@ function Remove({ channel }: { channel: ChannelSummary }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <section aria-labelledby="remove-channel" className="flex flex-col gap-2">
-      <h2 id="remove-channel" className="font-medium font-serif text-base text-ink">
+      <h2 id="remove-channel" className="heading-section">
         Remove
       </h2>
       {confirming ? (

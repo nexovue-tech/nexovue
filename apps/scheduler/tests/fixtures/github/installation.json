@@ -1,0 +1,19 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as summarised by web search on 2026-11-08 (docs.github.com could not be fetched from the build session). UNVERIFIED against real GitHub until the founder's run after Phase 2 (F22 T3.0, T4.8, foundation item 28); T4.8 replaces these with sanitized real responses. Values are made up. Page: 'List installations for the authenticated app', GET /app/installations; one element of the array.",
+  "id": 3000001,
+  "app_id": 1000001,
+  "app_slug": "nexovue-acme",
+  "target_type": "Organization",
+  "account": {
+    "login": "acme",
+    "id": 2000001,
+    "type": "Organization"
+  },
+  "repository_selection": "selected",
+  "permissions": {
+    "issues": "write",
+    "metadata": "read"
+  },
+  "events": ["issues"],
+  "suspended_at": null
+}

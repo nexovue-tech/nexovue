@@ -25,8 +25,11 @@ SECRETS: Final = (
     "POSTGRES_PASSWORD",
     "CLICKHOUSE_PASSWORD",
     "CLICKHOUSE_READER_PASSWORD",
+    "CLICKHOUSE_API_READER_PASSWORD",
     "CLICKHOUSE_ERASER_PASSWORD",
     "CLICKHOUSE_DETECTION_WRITER_PASSWORD",
+    "POSTGRES_INSIGHT_PASSWORD",
+    "POSTGRES_CONNECTIONS_PASSWORD",
     "KAFKA_CLUSTER_ID",
     "WORKERS_MASKING_HASH_SECRET",
     "CHECK_SECRET_KEY",
@@ -223,11 +226,14 @@ UPGRADE_RECORDS: Final = (
     "NEXOVUE_PRE_UPGRADE_SNAPSHOT",
     "NEXOVUE_ROLLBACK_SCHEMA",
 )
-NEW_ACCOUNT: Final = "CLICKHOUSE_DETECTION_WRITER_PASSWORD"
+# Accounts added after installs existed: the detection writer (F6), the API's reader (F20).
+NEW_ACCOUNTS: Final = ("CLICKHOUSE_DETECTION_WRITER_PASSWORD", "CLICKHOUSE_API_READER_PASSWORD")
 
 
+@pytest.mark.parametrize("new_account", NEW_ACCOUNTS)
 def test_an_upgrade_adds_a_missing_account_password_and_changes_nothing_else(
     machine: dict[str, str],
+    new_account: str,
 ) -> None:
     """C9, C25: an install from before an account existed gains its password, and no
     secret the stores were created with is regenerated."""
@@ -236,7 +242,7 @@ def test_an_upgrade_adds_a_missing_account_password_and_changes_nothing_else(
     older = [
         line
         for line in settings_file.read_bytes().splitlines(keepends=True)
-        if not line.startswith(f"{NEW_ACCOUNT}=".encode())
+        if not line.startswith(f"{new_account}=".encode())
     ]
     settings_file.write_bytes(b"".join(older))
     machine |= {"NEXOVUE_VERSION": "1.1.0"}
@@ -252,9 +258,9 @@ def test_an_upgrade_adds_a_missing_account_password_and_changes_nothing_else(
     ]
     assert [line for line in kept if line not in after] == [], "an existing value changed"
     settings = _settings(machine)
-    added = settings.get(NEW_ACCOUNT, "")
-    assert len(added) == 48, f"{NEW_ACCOUNT} was not added"
-    assert added not in {settings[name] for name in SECRETS if name != NEW_ACCOUNT}
+    added = settings.get(new_account, "")
+    assert len(added) == 48, f"{new_account} was not added"
+    assert added not in {settings[name] for name in SECRETS if name != new_account}
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600, "the settings hold every secret"
 
 

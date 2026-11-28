@@ -19,12 +19,18 @@ here, so a table added next month is guarded the day it is created.
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from nexovue_platform.tenant_statements import PROJECT_BINDING, binds_project
+import pytest
+from nexovue_platform.tenant_statements import (
+    PROJECT_BINDING,
+    binds_project,
+    executable_text,
+)
 
 from nexovue_api.data.clickhouse.base import TENANT_BINDING
 
@@ -77,10 +83,6 @@ class SourceModule:
         return self.dotted_name
 
 
-def _api_modules() -> list[SourceModule]:
-    return _modules_under(API_SOURCE)
-
-
 def _modules_under(source: Path) -> list[SourceModule]:
     modules: list[SourceModule] = []
     for path in sorted(source.rglob("*.py")):
@@ -96,13 +98,25 @@ def _modules_under(source: Path) -> list[SourceModule]:
     return modules
 
 
-API_MODULES: Final = _api_modules()
+# Fixtures, not module constants: every xdist worker imports every test module and keeps
+# it for the whole run, so trees parsed at import cost each worker 140 MB; a module-scoped
+# fixture parses them only where this file runs and releases them when it ends.
+@pytest.fixture(scope="module")
+def api_modules() -> list[SourceModule]:
+    return _modules_under(API_SOURCE)
+
 
 # F21, ADR-012: the scheduler reads the telemetry store too, for the service
 # conditions, and is held to the same three rules. Its chokepoint is
 # `alerts.telemetry`, the one module allowed the raw driver.
 SCHEDULER_SOURCE: Final = _REPOSITORY_ROOT / "apps" / "scheduler" / "src" / "nexovue_scheduler"
-SCHEDULER_MODULES: Final = _modules_under(SCHEDULER_SOURCE)
+
+
+@pytest.fixture(scope="module")
+def scheduler_modules() -> list[SourceModule]:
+    return _modules_under(SCHEDULER_SOURCE)
+
+
 # ADR-014: the nightly erasure's store is the second, and the only client in
 # nexovue that can delete telemetry. F6: `detection.store` is detection's reads
 # bound to one project and the one writer of `detection_readings` (ADR-023), and
@@ -112,8 +126,43 @@ SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
 )
 
 # F6, AC28: detection judges one project at a time, so its statements bind the
-# project as well as the tenant.
-PROJECT_BOUND_PACKAGE: Final = "detection"
+# project as well as the tenant. F28 (T1.11): so does the release sync, whose reads
+# go through `alerts.telemetry`'s reader and so need no driver of their own. F3 (T1.3):
+# so does the evidence job, through the same reader.
+PROJECT_BOUND_PACKAGES: Final = ("detection", "releases", "evidence")
+
+# F20, NFR2 and AC85: a dashboard is shown against one project, so every statement a
+# panel reads binds the project in **each** `SELECT` over a telemetry table, subqueries
+# included. Named here by module and constant, read as the text that runs. T5.2 adds the
+# reused statements its readers call.
+DASHBOARD_STATEMENTS: Final = (
+    ("nexovue_api.services.queries", "OVERVIEW_TREND_SQL"),
+    ("nexovue_api.services.queries", "TREND_SQL"),
+    ("nexovue_api.services.queries", "TOP_SERVICES_TREND_SQL"),
+    ("nexovue_api.infrastructure.queries", "NODE_TREND_SQL"),
+    # Step 5's own statements (T5.1a to T5.1d).
+    ("nexovue_api.services.queries", "ENDPOINT_TREND_SQL"),
+    ("nexovue_api.infrastructure.queries", "TOP_NODES_TREND_SQL"),
+    ("nexovue_api.synthetics.queries", "CHECK_TREND_SQL"),
+    ("nexovue_api.dbstats.queries", "STATEMENT_TREND_SQL"),
+    # The statements Step 5's readers reuse, each read for its predicates (T5.2): the
+    # templates are what every narrowed form is spliced from.
+    ("nexovue_api.services.queries", "OVERVIEW_SQL"),
+    ("nexovue_api.services.queries", "_SERVICES_TEMPLATE"),
+    ("nexovue_api.services.queries", "_ENDPOINTS_TEMPLATE"),
+    ("nexovue_api.servicemap.queries", "SERVICE_EDGES_SQL"),
+    ("nexovue_api.rum.queries", "VITAL_SUMMARY_SQL"),
+    ("nexovue_api.errorgroups.queries", "_ERROR_GROUPS_TEMPLATE"),
+    ("nexovue_api.dbstats.queries", "SLOW_STATEMENTS_SQL"),
+    # Step 8's metric series (T8.2): the line, its second read, and the builder's list
+    # of one service's attribute combinations (T8.3).
+    ("nexovue_api.metrics.queries", "METRIC_GAUGE_SERIES_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_SUM_SERIES_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_GAUGE_REPORTS_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_SUM_REPORTS_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_GAUGE_SERIES_LIST_SQL"),
+    ("nexovue_api.metrics.queries", "METRIC_SUM_SERIES_LIST_SQL"),
+)
 
 # ADR-023: the one module that may write telemetry. Every other module in either
 # service reads, or (the erasure) deletes.
@@ -252,11 +301,10 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _telemetry_sql(modules: list[SourceModule] | None = None) -> list[SqlLiteral]:
-    """Every string in the given source — the API's by default — that reads a
-    telemetry table."""
+def _telemetry_sql(modules: list[SourceModule]) -> list[SqlLiteral]:
+    """Every string in the given source that reads a telemetry table."""
     found: list[SqlLiteral] = []
-    for module in API_MODULES if modules is None else modules:
+    for module in modules:
         prose = _docstrings(module.tree)
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.Constant | ast.JoinedStr):
@@ -307,34 +355,40 @@ def test_the_tables_this_check_guards_are_the_ones_the_migrations_create() -> No
     assert "span_trace_lookup" in TELEMETRY_TABLES
 
 
-def test_the_api_source_this_check_walks_is_the_one_that_ships() -> None:
+def test_the_api_source_this_check_walks_is_the_one_that_ships(
+    api_modules: list[SourceModule],
+) -> None:
     """A check that walks nothing passes everything."""
     assert API_SOURCE.is_dir(), f"no API source at {API_SOURCE}"
-    assert _telemetry_sql(), "no telemetry SQL found — this suite would prove nothing"
+    assert _telemetry_sql(api_modules), "no telemetry SQL found — this suite would prove nothing"
 
 
-def test_no_statement_reading_a_telemetry_table_omits_the_tenant_binding() -> None:
+def test_no_statement_reading_a_telemetry_table_omits_the_tenant_binding(
+    api_modules: list[SourceModule],
+) -> None:
     """A new screen's query must carry the binding, wherever someone puts it."""
-    unscoped = [str(sql) for sql in _telemetry_sql() if TENANT_BINDING not in sql.text]
+    unscoped = [str(sql) for sql in _telemetry_sql(api_modules) if TENANT_BINDING not in sql.text]
 
     assert not unscoped, (
         f"these statements read a telemetry table without {TENANT_BINDING}: {unscoped}"
     )
 
 
-def test_no_statement_reading_a_telemetry_table_is_built_from_a_runtime_value() -> None:
+def test_no_statement_reading_a_telemetry_table_is_built_from_a_runtime_value(
+    api_modules: list[SourceModule],
+) -> None:
     """SQL may embed its own module's constants and nothing else.
 
     Interpolating anything a caller supplied is how a parameterised query stops
     being one, and the tenant filter is the first thing such a query loses.
     """
     constants_by_module = {
-        module.dotted_name: _module_level_names(module.tree) for module in API_MODULES
+        module.dotted_name: _module_level_names(module.tree) for module in api_modules
     }
 
     assembled = [
         f"{sql} embeds {ast.unparse(expression)}"
-        for sql in _telemetry_sql()
+        for sql in _telemetry_sql(api_modules)
         for expression in sql.interpolations
         if not (
             isinstance(expression, ast.Name) and expression.id in constants_by_module[sql.module]
@@ -344,10 +398,12 @@ def test_no_statement_reading_a_telemetry_table_is_built_from_a_runtime_value() 
     assert not assembled, f"SQL assembled from a runtime value: {assembled}"
 
 
-def test_nothing_outside_the_chokepoint_and_its_wiring_holds_the_raw_driver() -> None:
+def test_nothing_outside_the_chokepoint_and_its_wiring_holds_the_raw_driver(
+    api_modules: list[SourceModule],
+) -> None:
     """The repository is only a guarantee while it is the only way in."""
     offenders: list[str] = []
-    for module in API_MODULES:
+    for module in api_modules:
         if module.dotted_name in MODULES_ALLOWED_THE_RAW_CLIENT:
             continue
         for node in ast.walk(module.tree):
@@ -392,10 +448,12 @@ def _raw_client_reference(node: ast.AST) -> tuple[int, str] | None:
     return None
 
 
-def test_only_the_session_dependency_constructs_a_tenant_scoped_repository() -> None:
+def test_only_the_session_dependency_constructs_a_tenant_scoped_repository(
+    api_modules: list[SourceModule],
+) -> None:
     """A router that could build its own could build one for another tenant."""
     sites = set()
-    for module in API_MODULES:
+    for module in api_modules:
         owners = _enclosing_functions(module.tree)
         for node in ast.walk(module.tree):
             if isinstance(node, ast.Call) and _called_name(node.func) == REPOSITORY_CLASS:
@@ -417,9 +475,11 @@ def _called_name(func: ast.expr) -> str | None:
 # ------------------------------------------------------------ the scheduler (F21)
 
 
-def test_the_scheduler_source_this_check_walks_is_the_one_that_ships() -> None:
+def test_the_scheduler_source_this_check_walks_is_the_one_that_ships(
+    scheduler_modules: list[SourceModule],
+) -> None:
     assert SCHEDULER_SOURCE.is_dir(), f"no scheduler source at {SCHEDULER_SOURCE}"
-    assert _telemetry_sql(SCHEDULER_MODULES), "no scheduler telemetry SQL found"
+    assert _telemetry_sql(scheduler_modules), "no scheduler telemetry SQL found"
 
 
 def _reads_only_its_tenantless_tables(
@@ -435,10 +495,12 @@ def _reads_only_its_tenantless_tables(
     return bool(named) and named <= allowed
 
 
-def test_no_scheduler_statement_reading_a_telemetry_table_omits_the_tenant_binding() -> None:
+def test_no_scheduler_statement_reading_a_telemetry_table_omits_the_tenant_binding(
+    scheduler_modules: list[SourceModule],
+) -> None:
     unscoped = [
         str(sql)
-        for sql in _telemetry_sql(SCHEDULER_MODULES)
+        for sql in _telemetry_sql(scheduler_modules)
         if TENANT_BINDING not in sql.text
         and not (sql.module == MANY_TENANT_MODULE and OWED_TENANTS_BINDING in sql.text)
         and not _reads_only_its_tenantless_tables(sql)
@@ -448,11 +510,13 @@ def test_no_scheduler_statement_reading_a_telemetry_table_omits_the_tenant_bindi
     )
 
 
-def test_the_many_tenant_binding_lives_in_one_module() -> None:
+def test_the_many_tenant_binding_lives_in_one_module(
+    api_modules: list[SourceModule], scheduler_modules: list[SourceModule]
+) -> None:
     """A copy of the erasure's statement anywhere else could be fed any list."""
     elsewhere = [
         f"{module}:{node.lineno}"
-        for module in SCHEDULER_MODULES + API_MODULES
+        for module in scheduler_modules + api_modules
         if module.dotted_name != MANY_TENANT_MODULE
         for node in ast.walk(module.tree)
         if isinstance(node, ast.Constant | ast.JoinedStr)
@@ -464,11 +528,13 @@ def test_the_many_tenant_binding_lives_in_one_module() -> None:
     )
 
 
-def test_only_the_owed_query_makes_a_list_of_tenants_to_erase() -> None:
+def test_only_the_owed_query_makes_a_list_of_tenants_to_erase(
+    api_modules: list[SourceModule], scheduler_modules: list[SourceModule]
+) -> None:
     """The list is what decides whose telemetry goes. It may come from one
     query — organizations already marked deleted — and nowhere else."""
     sites = set()
-    for module in SCHEDULER_MODULES + API_MODULES:
+    for module in scheduler_modules + api_modules:
         owners = _enclosing_functions(module.tree)
         for node in ast.walk(module.tree):
             if isinstance(node, ast.Call) and _called_name(node.func) == OWED_TENANTS_TYPE:
@@ -479,13 +545,15 @@ def test_only_the_owed_query_makes_a_list_of_tenants_to_erase() -> None:
     )
 
 
-def test_no_scheduler_statement_reading_a_telemetry_table_is_built_from_a_runtime_value() -> None:
+def test_no_scheduler_statement_reading_a_telemetry_table_is_built_from_a_runtime_value(
+    scheduler_modules: list[SourceModule],
+) -> None:
     constants_by_module = {
-        module.dotted_name: _module_level_names(module.tree) for module in SCHEDULER_MODULES
+        module.dotted_name: _module_level_names(module.tree) for module in scheduler_modules
     }
     assembled = [
         f"{sql} embeds {ast.unparse(expression)}"
-        for sql in _telemetry_sql(SCHEDULER_MODULES)
+        for sql in _telemetry_sql(scheduler_modules)
         for expression in sql.interpolations
         if not (
             isinstance(expression, ast.Name) and expression.id in constants_by_module[sql.module]
@@ -494,9 +562,11 @@ def test_no_scheduler_statement_reading_a_telemetry_table_is_built_from_a_runtim
     assert not assembled, f"scheduler SQL assembled from a runtime value: {assembled}"
 
 
-def test_nothing_in_the_scheduler_outside_its_chokepoint_holds_the_raw_driver() -> None:
+def test_nothing_in_the_scheduler_outside_its_chokepoint_holds_the_raw_driver(
+    scheduler_modules: list[SourceModule],
+) -> None:
     offenders: list[str] = []
-    for module in SCHEDULER_MODULES:
+    for module in scheduler_modules:
         if module.dotted_name in SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT:
             continue
         for node in ast.walk(module.tree):
@@ -537,15 +607,19 @@ def test_a_tenantless_read_is_allowed_in_its_own_module_only() -> None:
 
 
 def _in_project_bound_package(module: str) -> bool:
-    return module == PROJECT_BOUND_PACKAGE or module.startswith(f"{PROJECT_BOUND_PACKAGE}.")
+    return any(
+        module == package or module.startswith(f"{package}.") for package in PROJECT_BOUND_PACKAGES
+    )
 
 
-def test_no_detection_statement_reading_a_telemetry_table_omits_the_project_binding() -> None:
-    """A detection statement bound to the tenant alone would judge a project on its
-    siblings' telemetry."""
+def test_no_detection_statement_reading_a_telemetry_table_omits_the_project_binding(
+    scheduler_modules: list[SourceModule],
+) -> None:
+    """A detection or release statement bound to the tenant alone would judge a project on
+    its siblings' telemetry."""
     unbound = [
         str(sql)
-        for sql in _telemetry_sql(SCHEDULER_MODULES)
+        for sql in _telemetry_sql(scheduler_modules)
         if _in_project_bound_package(sql.module)
         and not binds_project(sql.text)
         and not _reads_only_its_tenantless_tables(sql)
@@ -556,10 +630,12 @@ def test_no_detection_statement_reading_a_telemetry_table_omits_the_project_bind
     )
 
 
-def test_no_statement_writes_a_telemetry_table_outside_the_detection_writer() -> None:
+def test_no_statement_writes_a_telemetry_table_outside_the_detection_writer(
+    api_modules: list[SourceModule], scheduler_modules: list[SourceModule]
+) -> None:
     writes = [
         f"{module}:{node.lineno}"
-        for module in SCHEDULER_MODULES + API_MODULES
+        for module in scheduler_modules + api_modules
         if module.dotted_name != TELEMETRY_WRITER_MODULE
         for node in ast.walk(module.tree)
         if isinstance(node, ast.Constant | ast.JoinedStr)
@@ -579,22 +655,107 @@ def _insert_calls(module: SourceModule) -> list[str]:
     ]
 
 
-def test_only_the_detection_writer_calls_the_driver_s_insert() -> None:
+def test_only_the_detection_writer_calls_the_driver_s_insert(
+    api_modules: list[SourceModule], scheduler_modules: list[SourceModule]
+) -> None:
     """Every scheduler module, and every API module that holds the raw driver. The
     rest of the API cannot reach a client, and its `queries.insert` is Postgres."""
     candidates = [
-        module for module in SCHEDULER_MODULES if module.dotted_name != TELEMETRY_WRITER_MODULE
-    ] + [module for module in API_MODULES if module.dotted_name in MODULES_ALLOWED_THE_RAW_CLIENT]
+        module for module in scheduler_modules if module.dotted_name != TELEMETRY_WRITER_MODULE
+    ] + [module for module in api_modules if module.dotted_name in MODULES_ALLOWED_THE_RAW_CLIENT]
     calls = [call for module in candidates for call in _insert_calls(module)]
     assert not calls, f"an insert outside {TELEMETRY_WRITER_MODULE}: {calls}"
 
 
-def test_the_detection_writer_is_where_the_rules_say_it_is() -> None:
+def test_the_detection_writer_is_where_the_rules_say_it_is(
+    scheduler_modules: list[SourceModule],
+) -> None:
     """A renamed module must break these rules rather than leave them guarding nothing."""
-    names = {module.dotted_name for module in SCHEDULER_MODULES}
+    names = {module.dotted_name for module in scheduler_modules}
     assert TELEMETRY_WRITER_MODULE in names
     assert any(_in_project_bound_package(name) for name in names)
     writer = next(
-        module for module in SCHEDULER_MODULES if module.dotted_name == TELEMETRY_WRITER_MODULE
+        module for module in scheduler_modules if module.dotted_name == TELEMETRY_WRITER_MODULE
     )
     assert _insert_calls(writer), f"{TELEMETRY_WRITER_MODULE} no longer inserts; move this rule"
+
+
+# ------------------------------------------------------- dashboards (F20, NFR2, AC85)
+
+_UNION: Final = re.compile(r"\bUNION\s+(?:ALL|DISTINCT)\b", re.IGNORECASE)
+
+
+def _selects(sql: str) -> list[str]:
+    """Each `SELECT` of a statement, with the subqueries inside it cut out.
+
+    A bracket opens a scope; what a scope says at its own depth is its text, and a
+    `UNION` divides it into its `SELECT`s. So the project predicate in an outer `WHERE`
+    cannot vouch for a subquery that reads a telemetry table without one.
+    """
+    scopes: list[list[str]] = [[]]
+    finished: list[str] = []
+    for character in executable_text(sql):
+        if character == "(":
+            scopes[-1].append("()")
+            scopes.append([])
+        elif character == ")" and len(scopes) > 1:
+            finished.append("".join(scopes.pop()))
+        else:
+            scopes[-1].append(character)
+    finished.extend("".join(scope) for scope in scopes)
+    return [part for scope in finished for part in _UNION.split(scope)]
+
+
+def _unbound_selects(sql: str) -> list[str]:
+    """The `SELECT`s reading a telemetry table without `project_id = {project_id:String}`."""
+    return [
+        " ".join(select.split())[:120]
+        for select in _selects(sql)
+        if _READS_A_TELEMETRY_TABLE.search(select) and not binds_project(select)
+    ]
+
+
+def test_every_dashboard_statement_binds_the_project_in_each_select() -> None:
+    unbound = {
+        f"{module}.{name}": found
+        for module, name in DASHBOARD_STATEMENTS
+        if (found := _unbound_selects(getattr(importlib.import_module(module), name)))
+    }
+    assert not unbound, (
+        f"a dashboard statement reads a telemetry table without "
+        f"`project_id = {PROJECT_BINDING}` in a SELECT: {unbound}"
+    )
+
+
+def test_a_subquery_without_the_project_fails_the_dashboard_check() -> None:
+    """The control: an outer predicate cannot vouch for an inner `SELECT` (AC85)."""
+    bound = (
+        "SELECT a FROM endpoint_stats_1m WHERE tenant_id = {tenant_id:String} "
+        "AND project_id = {project_id:String}"
+    )
+    inner_unbound = (
+        f"{bound} AND service_name IN (SELECT service_name FROM endpoint_stats_1m "
+        "WHERE tenant_id = {tenant_id:String} ORDER BY count() DESC LIMIT 5)"
+    )
+    union_unbound = (
+        f"SELECT * FROM ({bound} UNION ALL SELECT a FROM metrics_sum "
+        "WHERE tenant_id = {tenant_id:String})"
+    )
+    commented = (
+        "SELECT a FROM endpoint_stats_1m WHERE tenant_id = {tenant_id:String} "
+        "-- AND project_id = {project_id:String}"
+    )
+    assert not _unbound_selects(bound)
+    assert _unbound_selects(inner_unbound)
+    assert _unbound_selects(union_unbound)
+    assert _unbound_selects(commented)
+
+
+def test_every_named_dashboard_statement_is_a_module_constant_that_reads_telemetry(
+    api_modules: list[SourceModule],
+) -> None:
+    """A renamed or emptied statement must break the list, not leave it guarding nothing."""
+    for module, name in DASHBOARD_STATEMENTS:
+        source = next(found for found in api_modules if found.dotted_name == module)
+        assert name in _module_level_names(source.tree), f"{module}.{name} is not a module constant"
+        assert _READS_A_TELEMETRY_TABLE.search(getattr(importlib.import_module(module), name))

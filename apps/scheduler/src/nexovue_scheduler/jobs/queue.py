@@ -9,6 +9,13 @@ Celery's late acknowledgement gave, without a visibility timeout to tune.
 **Every outcome is fenced by the lease.** Finishing, retrying and failing name
 the worker that claimed the job, so a worker that stalled past its lease cannot
 undo what the job's next holder did — the fence `alerts/outbox.py` uses.
+
+**The AI and tracker roles reach the queue only through functions** (F3, design *The
+Postgres account*; F22 T8.7). Their accounts hold no right on `jobs`, since a right to
+change a table is a right to lock it; migration 0070's functions do what the statements
+below do for the AI queues alone, and 0085's for the two tracker queues. A worker takes its
+statements from `STATEMENTS_OF_ROLE`; `test_insight_account_live.py` and
+`test_connections_account_live.py` hold each kind to the shared statements (AC44).
 """
 
 from __future__ import annotations
@@ -18,9 +25,13 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Final
 
-from nexovue_platform.jobs import ENQUEUE, WAKE, JobRequest
+from nexovue_platform.assistant_records import ASSISTANT_QUEUE
+from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE, CONNECTIONS_QUEUE
+from nexovue_platform.evidence import INSIGHT_QUEUE
+from nexovue_platform.fixes.records import FIX_QUEUE
+from nexovue_platform.jobs import ENQUEUE, ENQUEUE_UNLESS_ORGANIZATION_GONE, WAKE, JobRequest
 from nexovue_platform.telemetry.logging import get_logger
-from sqlalchemy import bindparam, text
+from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.types import Text
@@ -76,6 +87,72 @@ _RETRY: Final = text(
     """
 )
 
+# The same three for the AI role's account, through migration 0070's functions, which F4's
+# migration 0073 widened to the `assistant` queue and F5's 0077 to `insight-fix`; the claim
+# takes the lane's queues and matches no other name.
+_INSIGHT_CLAIM: Final = text(
+    "SELECT * FROM insight_claim_jobs(:worker, :queues, :limit, :grace)"
+).bindparams(bindparam("queues", type_=ARRAY(Text)))
+_INSIGHT_FINISH: Final = text("SELECT insight_finish_job(:id, :worker)")
+_INSIGHT_RETRY: Final = text(
+    "SELECT insight_retry_job(:id, :worker, CAST(:countdown AS double precision), :error)"
+)
+
+# The same three for the tracker role's account, through migration 0085's functions, and
+# `ENQUEUE_UNLESS_WAITING` through the one that refuses any queue but the two tracker queues;
+# its bound values are `JobRequest.parameters()`.
+_CONNECTIONS_CLAIM: Final = text(
+    "SELECT * FROM connections_claim_jobs(:worker, :queues, :limit, :grace)"
+).bindparams(bindparam("queues", type_=ARRAY(Text)))
+_CONNECTIONS_FINISH: Final = text("SELECT connections_finish_job(:id, :worker)")
+_CONNECTIONS_RETRY: Final = text(
+    "SELECT connections_retry_job(:id, :worker, CAST(:countdown AS double precision), :error)"
+)
+CONNECTIONS_ENQUEUE: Final = text(
+    """
+    SELECT connections_enqueue_job(
+        :queue, :task, CAST(:kwargs AS jsonb), CAST(:org_id AS uuid),
+        CAST(:countdown_seconds AS double precision), CAST(:expires_seconds AS double precision),
+        :max_attempts, :soft_limit_seconds, :hard_limit_seconds
+    )
+    """
+)
+
+
+@dataclass(frozen=True, slots=True)
+class QueueStatements:
+    """How one kind of worker claims, retries and finishes. `queues` is what its claim can
+    reach, or None for any queue it is given."""
+
+    claim: TextClause
+    retry: TextClause
+    finish: TextClause
+    queues: frozenset[str] | None
+
+    def claim_parameters(self, *, queues: list[str], worker: str, limit: int) -> dict[str, object]:
+        return {"worker": worker, "limit": limit, "grace": LEASE_GRACE_SECONDS, "queues": queues}
+
+
+SHARED_STATEMENTS: Final = QueueStatements(_CLAIM, _RETRY, _FINISH, queues=None)
+INSIGHT_STATEMENTS: Final = QueueStatements(
+    _INSIGHT_CLAIM,
+    _INSIGHT_RETRY,
+    _INSIGHT_FINISH,
+    queues=frozenset({INSIGHT_QUEUE, ASSISTANT_QUEUE, FIX_QUEUE}),
+)
+CONNECTIONS_STATEMENTS: Final = QueueStatements(
+    _CONNECTIONS_CLAIM,
+    _CONNECTIONS_RETRY,
+    _CONNECTIONS_FINISH,
+    queues=frozenset({CONNECTIONS_QUEUE, CONNECTIONS_INTERACTIVE_QUEUE}),
+)
+# By `Settings.scheduler_role`: only the install's own account holds rights on `jobs`.
+STATEMENTS_OF_ROLE: Final[dict[str, QueueStatements]] = {
+    "full": SHARED_STATEMENTS,
+    "connections": CONNECTIONS_STATEMENTS,
+    "insight": INSIGHT_STATEMENTS,
+}
+
 # Expired jobs, and jobs whose lease lapsed with no attempt left — what a dead
 # worker leaves when the job could not be run again.
 _SWEEP_SPENT: Final = text(
@@ -118,22 +195,29 @@ async def enqueue(connection: AsyncConnection, request: JobRequest, *, wake: boo
 
 
 async def enqueue_all(engine: AsyncEngine, requests: list[JobRequest]) -> None:
-    """Add jobs together, in one transaction."""
+    """Add a hand-out's jobs together, in one transaction, leaving out any whose
+    organization was deleted since the hand-out read it."""
     if not requests:
         return
+    statement = text(ENQUEUE_UNLESS_ORGANIZATION_GONE)
     async with engine.begin() as connection:
         for request in requests:
-            await enqueue(connection, request)
+            await connection.execute(statement, request.parameters())
 
 
 async def claim(
-    engine: AsyncEngine, *, queues: list[str], worker: str, limit: int
+    engine: AsyncEngine,
+    *,
+    queues: list[str],
+    worker: str,
+    limit: int,
+    statements: QueueStatements = SHARED_STATEMENTS,
 ) -> list[ClaimedJob]:
     """Up to `limit` due jobs from `queues`, leased to `worker`."""
     async with engine.begin() as connection:
         rows = await connection.execute(
-            _CLAIM,
-            {"queues": queues, "worker": worker, "limit": limit, "grace": LEASE_GRACE_SECONDS},
+            statements.claim,
+            statements.claim_parameters(queues=queues, worker=worker, limit=limit),
         )
         return [
             ClaimedJob(
@@ -149,19 +233,32 @@ async def claim(
         ]
 
 
-async def finish(engine: AsyncEngine, job: ClaimedJob, *, worker: str) -> None:
+async def finish(
+    engine: AsyncEngine,
+    job: ClaimedJob,
+    *,
+    worker: str,
+    statements: QueueStatements = SHARED_STATEMENTS,
+) -> None:
     """A job that ran to the end, or failed with no attempt left: gone."""
     async with engine.begin() as connection:
-        await connection.execute(_FINISH, {"id": job.id, "worker": worker})
+        await connection.execute(statements.finish, {"id": job.id, "worker": worker})
 
 
 async def retry_later(
-    engine: AsyncEngine, job: ClaimedJob, *, worker: str, countdown: float, error: str
+    engine: AsyncEngine,
+    job: ClaimedJob,
+    *,
+    worker: str,
+    countdown: float,
+    error: str,
+    statements: QueueStatements = SHARED_STATEMENTS,
 ) -> None:
     """Hand a job back to the queue to run again after `countdown` seconds."""
     async with engine.begin() as connection:
         await connection.execute(
-            _RETRY, {"id": job.id, "worker": worker, "countdown": countdown, "error": error}
+            statements.retry,
+            {"id": job.id, "worker": worker, "countdown": countdown, "error": error},
         )
 
 

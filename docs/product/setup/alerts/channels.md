@@ -5,9 +5,11 @@ project's rules can send to them. Connect them under **Settings → Alert channe
 or from a rule while you write it.
 
 Every organization starts with one channel, **Organization owners**, and every
-project with two rules sending to it: **Any check down**, and **Critical problems**,
-which sends every critical finding anomaly detection opens. So the first check that
-goes down, and the first critical finding, email you without any setup. Only an owner
+project with three rules sending to it: **Any check down**; **Critical problems**,
+which sends every critical finding anomaly detection opens; and **Reliability
+targets**, which sends the warnings and criticals of every reliability target's
+allowed failures running out too fast, and stays silent until you set a target. So the
+first check that goes down, and the first critical finding, email you without any setup. Only an owner
 or an admin can change or delete an anomaly-finding rule. Owners are emailed at their verified
 address only — verify yours from the link in your sign-up email.
 
@@ -42,6 +44,36 @@ its runs, the service, or the error — for as long as it exists: a message abou
 check you have since deleted still opens the incident. Never a request or response
 body, a header, a secret, or a stack trace: those stay behind the link.
 
+## The follow-up naming a likely place to look
+
+When a finding was sent to a channel people read (email, the owners, Slack, Teams,
+Discord), that channel may get one more message about it, about five minutes later:
+when nexovue's rules find a **signed deploy** of the service shortly before the finding
+started, and deploys at that hour are rare for that service. It says which deploy, how
+long before, and how many deploys the service had in the last 7 days, and points to the
+finding's page for the current reading. It is written from facts by fixed rules, never
+by AI.
+
+**Not yet switched on.** Until nexovue has measured how often these rules are right, no likely cause is named and no follow-up is sent; the facts, their base rates and *Look next* still show.
+
+- **At most one per finding per channel**, and at most five a channel in 10 minutes;
+  the fifth says more findings have a likely place to look, on the findings feed.
+- **Not for a muted, flapping, snoozed or closed finding**, and only to a channel that
+  was told the finding itself.
+- **Never to PagerDuty or a webhook.** Those receive the alert and its link; the
+  likely cause is on the page.
+- **Turn it off per channel** on the channel's page, under *Follow-up messages*. The
+  finding's page is the same either way.
+
+**If you deploy often.** "Likely" needs deploys at that hour to be rare for the service:
+a service deploying more than about once a working day gets at most "Possibly" on the
+page, and no follow-up. Deploy causes reach "likely" only once deploy notifications have
+run for 7 days ([Deploys](../deploys.md)).
+
+**Pages with no finding.** An incident from a threshold rule or a check has no
+explanation and no follow-up. Its page offers *Look next*: links to the service's (or
+the project's) traces, logs, errors, deploys and infrastructure for its window.
+
 ## Keeping it quiet
 
 - **Grouping.** When several checks fail within half a minute of each other, a
@@ -55,6 +87,33 @@ body, a header, a secret, or a stack trace: those stay behind the link.
   and arrive together when they end. Critical alerts are never held.
 - **Mute** a channel or a rule for an hour, four hours, or until 09:00 tomorrow.
   What fires during a mute is recorded on the Alerts screen and never sent.
+- **A reliability target and the problem beside it** (email, owners, Slack, Teams,
+  Discord). A target's allowed failures running out too fast is often the same news
+  as a finding or a threshold incident on its service. When a channel was told one of
+  them within the last hour, at the same or a higher severity, and it is still open,
+  the other is not sent there: it is in the channel's **Delivery log** as *not sent*,
+  with why. This only happens when a reliability target is one of the two; a finding
+  and a threshold incident with no target involved still send two messages. What
+  counts as the same news: a target and a finding linked to it that is failing (for
+  availability) or slower (for latency); a target and an error-rate or p95 incident on
+  its service; two targets of the same kind on one service, unless each watches a
+  different endpoint; one target under two rules; and a check's target beside that
+  check's own incident. A service going silent, a check going down, a finding about
+  traffic alone, and the *Nothing left* and exclusion notices are never the same news.
+  - A higher severity always goes. A channel told about a problem is always told it
+    ended, and is never told an ending of news it never heard.
+  - When the one that was told ends, or its message fails for good, or it is a target
+    that has not been judged for 15 minutes, while the other is still open, the other
+    is sent then, once, in the same message as the ending where there is one.
+  - Nothing waits to see whether another alert arrives: the decision is made as each
+    message is sent.
+- **Snooze or mute a service** (from its page or a finding). A snooze also holds back
+  its reliability targets' messages to people, and their new alerts in PagerDuty; the
+  target still counts its failures, and a PagerDuty alert already open is still
+  resolved. When the snooze ends and the target is still running out, one message
+  goes; if it ended during the snooze, a channel told it began is told it ended. A
+  mute stops findings only: reliability target alerts continue, because a mute can
+  last 30 days. To silence a target, mute its rule or turn the target off.
 
 PagerDuty and webhooks are read by machines, so they get one event per incident or
 finding, never grouped or held. In PagerDuty each incident and each finding is one
@@ -63,7 +122,11 @@ alert, keyed `incident:<id>` or `finding:<id>`.
 One problem pages once, whichever fires first. A finding and a threshold or *went
 silent* incident on the same service are linked. If one of them has already paged a
 PagerDuty integration, the other is added to that alert's log, under its key, instead
-of paging again. The alert is resolved when the last of them ends. When one ends
+of paging again. A reliability target's alert shares the same way: with a finding
+linked to it, with another target or an error-rate or p95 incident on its service,
+and, for a check's target, with that check's alert, as long as that alert was sent at
+the same or a higher severity, so a critical after a warning still pages. A service
+going silent and a check going down always page on their own. The alert is resolved when the last of them ends. When one ends
 while the other is still open, nothing is sent: a resolve would close the alert the
 open one is still on, and its next update would page again. The delivery log shows
 that message as not sent, with the reason.

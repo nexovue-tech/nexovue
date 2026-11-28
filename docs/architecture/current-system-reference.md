@@ -240,23 +240,23 @@ Where an insert statement can't rely on ClickHouse's own block-hash deduplicatio
 
 ### 5.3 trace-assembly pipeline
 
-Consumes `spans-raw`. Per batch: decode the envelope → **mask in place** (always first) → flatten to a row → if this span hasn't already been counted, fold it into the pre-sampling counters (`apps/workers/internal/pipeline/derive`) and the service-dependency-edge accumulator (`apps/workers/internal/pipeline/serviceedges`) → if this span hasn't already been stored, hand it to the tail-sampling buffer (`apps/workers/internal/pipeline/sample`).
+Consumes `spans-raw`. Per batch: decode the envelope → **mask in place** (always first) → flatten to a row → if this span hasn't already been counted, fold it into the pre-sampling counters (`apps/workers/internal/pipeline/derive`; never a browser-door span, whose site key anyone holding the page has — `docs/changes/browser-door`) and the service-dependency-edge accumulator (`apps/workers/internal/pipeline/serviceedges`) → if this span hasn't already been stored, hand it to the tail-sampling buffer (`apps/workers/internal/pipeline/sample`).
 
 **Tail sampling** (`sample/buffer.go`, `sample/policy.go`): a trace stays open for a configured window (default 10s) after its first span arrives, then a policy decides whether to keep it, checked in this order: an unconditional keep while the project is still inside its "first traces" carve-out (see [§13, Flow 6](#flow-6--sign-up-to-first-data)) → keep if the trace contains an error → keep if the trace's total duration exceeds a configured threshold → otherwise keep a healthy trace with a configured probability, decided by a deterministic function of the trace id (so every worker that ever sees that trace agrees on the same verdict without coordinating).
 
-**Pre-sampling counters and rollups**, written regardless of the sampling verdict: three per-minute `metrics_sum` series (span count, error count, duration sum), the `endpoint_stats_1m` rollup (request/error counts and latency quantiles per service+endpoint+minute), `service_stats_1m` (F6: exact request and error counts and a 64-bucket latency histogram per service+minute, from the same inbound SERVER and CONSUMER spans; at most 2,000 services per organization per minute in one drain, the rest not counted), and `service_edges_1m` (the caller→callee dependency graph). These write paths are the reason the platform's rate/error/latency dashboards and service map are accurate even though most healthy traces are never actually stored.
+**Pre-sampling counters and rollups**, written regardless of the sampling verdict: three per-minute `metrics_sum` series (span count, error count, duration sum), the `endpoint_stats_1m` rollup (request/error counts and latency quantiles per service+endpoint+minute), `service_stats_1m` (F6: exact request and error counts and a 64-bucket latency histogram per service+minute, from the same inbound SERVER and CONSUMER spans; at most 2,000 services per organization per minute in one drain, the busiest kept with name as the tie-break, and each tenant-minute that went over recorded in `services_over_cap_1m`), and `service_edges_1m` (the caller→callee dependency graph). These write paths are the reason the platform's rate/error/latency dashboards and service map are accurate even though most healthy traces are never actually stored.
 
 **Trace summaries**: a per-trace snapshot (`trace_summaries`) is written *after* the sampling verdict, unlike the three rollups above — it indexes only traces that were actually stored, since it exists so the trace list can page without scanning raw spans. Its sort key's `start_time` is fixed at the row's first write, so a revision (a root arriving after its children) merges into the same row; the true start is the `trace_start` column (migration `000034`). The worker holds a trace until the sampler's `DecisionTTL` after its *last* write, so a trace still arriving stays one row. A span replayed after a crash, once the trace is forgotten, still writes a second row; the list can then show that trace twice, and opening it shows each span once (`docs/changes/trace-list-split-traces`).
 
 ### 5.4 log-writing pipeline
 
-Consumes `logs-raw`. Nothing is buffered across messages — a log record has no trace to wait for and no sampling decision to make. Per batch: refresh the durable write watermark → decode → mask in place → flatten, extracting a `timestamp_source` (event time, falling back to observed time, falling back to the platform's own receive time — a timestamp is never left at zero, which would partition the row to 1970 and delete it on arrival) and promoted `exception_type`/`exception_message` columns → the same flatten call also extracts any web-vital readings riding as log records (see [§13, Flow 4](#flow-4--a-browser-page-view)) → insert vitals rows, then the vitals rollup, then the log rows, in that order → advance the watermark.
+Consumes `logs-raw`. Nothing is buffered across messages — a log record has no trace to wait for and no sampling decision to make. Per batch: refresh the durable write watermark → decode → mask in place → flatten, dropping and counting any record whose resource claims a synthetic check (`synthetic.check.*`) unless it came through the prober's door, and extracting a `timestamp_source` (event time, falling back to observed time, falling back to the platform's own receive time — a timestamp is never left at zero, which would partition the row to 1970 and delete it on arrival) and promoted `exception_type`/`exception_message` columns → the same flatten call also extracts any web-vital readings riding as log records (see [§13, Flow 4](#flow-4--a-browser-page-view)) → insert vitals rows, then the vitals rollup, then the log rows, in that order → advance the watermark.
 
 A permanent ClickHouse refusal (a row shape the store will never accept, as opposed to a transient failure) parks the *entire chunk* to `logs-dlq` and still advances the watermark, so one bad tenant's malformed row can't block every other tenant sharing the partition. A refused vitals insert does not park the chunk — the reading is re-derivable from the log row about to be written anyway.
 
 ### 5.5 metric-ingest pipeline
 
-Consumes `metrics-raw`. Decodes and masks the full OTLP metrics payload, then dispatches each data point by its OTLP shape into one of five row builders — gauge, sum, histogram, exponential histogram, summary. A metric whose shape isn't recognized rejects the *whole message* (no table exists to hold it), rather than writing the other four shapes and silently dropping the fifth. Inserts happen in a fixed order across all five target tables, and the write watermark advances only after every one of the five inserts has been acknowledged — there is no cross-table transaction (ClickHouse has none), a gap the code tolerates explicitly because a metric row is never unique on its own; a reader must already group by series and timestamp.
+Consumes `metrics-raw`. Decodes and masks the full OTLP metrics payload, then dispatches each data point by its OTLP shape into one of five row builders — gauge, sum, histogram, exponential histogram, summary. A metric whose shape isn't recognized rejects the *whole message* (no table exists to hold it), rather than writing the other four shapes and silently dropping the fifth. The one deliberate drop: a point named `synthetic.*`, or under a resource claiming a synthetic check, from any door but the prober's (`DOOR_SYNTHETIC`) is a forged check reading, so it is dropped, counted in a warning and the heartbeat's `synthetic_points_refused`, and the rest of the message is written (`internal/pipeline/proberdoor`). Inserts happen in a fixed order across all five target tables, and the write watermark advances only after every one of the five inserts has been acknowledged — there is no cross-table transaction (ClickHouse has none), a gap the code tolerates explicitly because a metric row is never unique on its own; a reader must already group by series and timestamp.
 
 ### 5.5a profile-ingest pipeline
 
@@ -296,6 +296,7 @@ Consumes `profiles-raw`, whose payload is `nexovue.v1.ProfileSamples` — the re
 | `internal/pipeline/dlq` | Dead-letter republishing with triage headers |
 | `internal/pipeline/storefailure` | Classifies which ClickHouse errors mean "this row will never insert" |
 | `internal/pipeline/clocktrust` | Decides whether to trust a client's own timestamp or fall back to receive time |
+| `internal/pipeline/proberdoor` | Decides which telemetry may claim to be a synthetic check's: only the prober's door |
 | `internal/projectconfig` | The per-project masking/sampling/retention cache |
 
 ---
@@ -359,6 +360,8 @@ Two entirely separate ingest credential kinds in two separate tables — secret 
 ### 6.7 Organizations, projects, and the ingest stop valve
 
 **Deleting an organization** is a two-phase, cross-store operation (ADR-014). The request is one Postgres transaction: it cancels every live payment arrangement at the processor (refusing if it cannot), deletes the rows of every directly-owned table (so the owner's email is free for a new signup at once), scrubs the organization row's identifying fields and stamps a deletion timestamp — the row itself is deliberately kept, because the receiver's allowance gate reads exactly this row to decide whether to refuse ingestion, and "no row" there would mean *admit* rather than *refuse*. The telemetry and uploaded files are erased by the scheduler once a night (`ERASURE_HOUR_UTC`, default 02:00): one `ALTER TABLE … DELETE WHERE tenant_id IN (…)` per table naming every owed organization, one table at a time so only one table's superseded parts are held in memory; then, per organization proved to have no rows left, its object-store prefixes are deleted and a tenant-less audit certificate is written. One with rows left (records that landed after the mutation) stays owed for the next night; one owed past three days is logged at ERROR. The API holds no ClickHouse credential that writes. The scheduler holds two, both in `scheduler-light` alone. `CLICKHOUSE_ERASER_DSN` connects as `nexovue_eraser` (`deploy/clickhouse/users.d/eraser.xml`), which holds `SELECT` and `ALTER DELETE` on the telemetry database and `SELECT` on `system.mutations`, nothing else. `CLICKHOUSE_DETECTION_WRITER_DSN` connects as `nexovue_detection_writer` (`users.d/detection-writer.xml`, ADR-023), which holds `INSERT` on `detection_readings` and nothing else, under its own profile whose time and memory bounds it cannot raise, an hourly quota on inserts and bytes written, and private networks only; it is written only from `nexovue_scheduler.detection.store`, which the tenant-structure test enforces. Without it, `detection.store.open_store` opens nothing and logs that at ERROR. An upgrade adds an account password the settings file lacks (`add_missing_secrets` in `deploy/nexovue`) and changes no other value.
+
+**Postgres has two narrow accounts: `nexovue_insight`, for the AI role alone** (F3, ADR-040), **and `nexovue_connections`, for `scheduler-connections` alone** (F22 T8.7, the same pattern: `nexovue_api/connections_account.py`, migration 0085's seven queue and result functions limited to the two tracker queues, column grants on the connection, link and case columns and F5's tables, two row-security policies admitting it to `finding_fixes` and its packs; the shared machinery is `nexovue_api/role_accounts.py`). Every other service signs in as the install account. `setup` creates it after each migration from `POSTGRES_INSIGHT_PASSWORD` (`nexovue_api/insight_account.py`), takes everything it held away, and grants exactly `INSIGHT_GRANTS`: column-level reads of `finding_explanations` (never `evidence` or `aliases`), `ai_connections` and `projects`, column-level updates of the wording and check columns, insert and read on `ai_runs` and `ai_usage_monthly`, and `EXECUTE` on four `SECURITY DEFINER` functions (migration 0070) that claim, retry and finish `insight` jobs and store an `ai_check` result. It holds no right on `jobs` or `job_results`, so it cannot `LOCK` them; a column-level `UPDATE` does not permit `LOCK TABLE` (measured on Postgres 18, `test_insight_account_live.py`). `setup` also takes the advisory-lock functions, `pg_notify` and `TEMP` from `PUBLIC` and gives them to the install account; where Postgres refuses, it says what is left. Not bounded by grants: the `NOTIFY` command, and the account's timeouts, which any session may change. `scheduler-insight` sits on the Compose network `ai` with Postgres alone (and Prometheus with monitoring on).
 
 **Deleting a project** revokes every live credential the project holds (API keys, site keys, webhook secrets) immediately, because the receiver resolves an ingest key without joining the `projects` table — a soft-deleted flag alone would not actually stop new data arriving under that project's key.
 
@@ -450,7 +453,65 @@ Results are encoded as OTLP protobuf — for a check, gauges carrying the run's 
 - **Retention** (`retention.py`, in the expiry sweep). A closed finding is purged at its project's derived retention, because it names services and endpoints. `intake_refusals`, `detection_events` and `baseline_shifts` are kept 30 days.
 - **What operators see.** Beat's leader publishes, with no project label, the settled minute's age, how many projects have had no completed run for 3 minutes and the longest wait, and recent `detection_events` by kind. A failing project job logs its `project_id`.
 
+### 7.7 Suggested fixes (F5)
+
+F5's scheduler half (design: `docs/features/ai-solution/design.md`; summary:
+`docs/architecture/system.md`, *Suggested fixes*). Rung 2b's job `insight.suggest_general_fix`
+and rung 3's `insight.propose_fix` run in `scheduler-insight` on `insight-fix`, as
+`nexovue_insight`. Everything that touches GitHub runs in `scheduler-connections`, on
+`connections-interactive` for a person's click (`build_source_pack`, `check_fix`, the draft and
+Run CI jobs, behind the write gate) and on `connections` for beat's `sweep:fixes` (every minute,
+`connections/fix_sweep.py`, which records each finished pass in `fix_sweep_status`) and
+`sweep:fix-pull-requests` (every 5 minutes, read only). `fixes.notify_requesters` and rung 2b's
+sweep run on `light`. Beat's leader publishes `nexovue_scheduler_fix_rows_recent`,
+`…_fix_oldest_in_flight_seconds`, `…_fix_checks_refused_recent` and `…_fix_sweep_age_seconds`
+(§7.6's install-wide gauges, no tenant label).
+
 ---
+
+### 7.7 Reliability targets (F19)
+
+`apps/scheduler/src/nexovue_scheduler/slos/`, with the arithmetic in `nexovue_platform.slo` and the screens in `apps/api/src/nexovue_api/slos/` and `apps/web/src/features/slos/`. A target is a Postgres row (`slo_targets`); everything a screen shows is read from Postgres alone, so the list renders with ClickHouse down and says how old its figures are.
+
+- **Three queues, all on `scheduler-light`, under the shared floor** (ADR-028): `slo` (cap 2) judges, `slo_counts` (cap 1) rewrites each target's daily counts, `slo_history` (cap 1) counts a new or changed target's past days. Together with `detection`, `evidence` and `releases` they hold at most 4 of the 8 slots, so probes and alert sweeps always keep 4. No new role or container.
+- **Judging** (`job.judge_slos`) is handed out once a minute with detection's settled minute, one job per project holding a live target, longest-waiting first. It reads the last 24 hours once per source (four statements in `slos/store.py`: a service's counts, a service's latency buckets, named endpoints, a check's runs), works each target's state with the platform's one function, saves `slo_status`, and judges each burn rule covering it. A failed read writes nothing, so a status ages into *Not up to date*.
+- **Counting** (`job.count_slos`) rewrites today, yesterday and any day not yet final into `slo_daily_counts`; **history** (`job.read_slo_history`) counts a target's past days, oldest first, and runs again if the definition moved during the read.
+- **Burns** are incidents about a target (`incidents.about_signal`), opened and closed through the alert path, three fixed tiers (fast: 1 hour and 5 minutes at 14.4 times, critical; medium: 6 hours and 30 minutes at 6 times, critical; slow: 24 hours and 2 hours at 3 times, a warning), each needing a minimum of events. **A burn does not repeat news** (ADR-038): the outbox claim holds a second message about the same news on a channel people read and releases it when its reason ends; a hold shows in the delivery log with its reason.
+- **Blind notice.** `scheduler-deliveries` (a different container) tells a project's rules' channels, or its owners, when its targets have not been judged for 15 minutes (`notices.report_blind`).
+- **API** (`/slos`, all on the default rate-limit tier except `/slo-readings`): list, read, create, change, delete and restore, months, history, burn, exclusions, and `GET /slos/{id}/budget` for other features. Writes need `CONFIGURE_SLOS`.
+- **What it does not do:** call a model or any provider (held by `test_detection_has_no_ai.py` and `test_slo_no_provider_calls.py`), define targets in code, or import or export them.
+- **Cost** has been measured only on a development machine (`docs/features/slo-tracking/status.md`, Step 6). The numbers for a deployed server are owed.
+
+### 7.8 Chat (F4)
+
+The model loop behind the console's **Ask** panel (design: `docs/features/ai-chatbot/design.md`;
+operations: `docs/operations/ai.md`, *Chat*; customer setup: `docs/product/setup/chat.md`).
+
+- **Asking** (`apps/api/src/nexovue_api/assistant/`). `POST /assistant/conversations` (or
+  `…/{id}/messages`) checks AI is on and consented, the person's daily limit, one question in
+  flight per person and the month's token share, then writes the question as `queued` with a
+  ticket (`tickets.py`, `nvat_`) and an `assistant` job, in one transaction. The panel then reads
+  `GET …/messages/{id}` every 1.5 s while it runs, and the conversation once it ends.
+- **The loop** (`nexovue_scheduler/insight/assistant.py`) runs in `scheduler-insight` as
+  `nexovue_insight`. Up to `MAX_STEPS` (8) times it asks the provider for a tool call or an
+  answer; each tool call is checked against the catalog (`nexovue_platform/assistant_tools.py`:
+  GETs only, windows at most 7 days) and read from the API at `INTERNAL_API_URL` with the ticket,
+  as the person (`assistant_reads.py`). Each step is stored as it runs, so the panel shows it
+  live; tool results are fenced in the next call and never stored. The answer must be JSON whose
+  sentences each cite a step that returned rows (`assistant_answer.py`): an uncited sentence,
+  a model-written link or command, or a copied result is removed or the answer sent back once,
+  then withheld. Abstaining is a closed list of reasons.
+- **Knowledge** (Steps 5 to 7): runbooks, case notes and resolved cases are chunked into
+  Postgres and searched by keyword, and by meaning where an embedding model is set (no vector
+  index). Only person-written text and code-composed facts are indexed.
+- **The sweep** (`assistant_sweep.py`, also in `scheduler-insight`) ends questions past their
+  clocks: a question no one claims within its queue clock (at least `MIN_QUEUE_SECONDS`, 120)
+  reads *unavailable*.
+- **What it stores:** the question, the checked answer, each step's checked arguments and row
+  count, and a read record for the admin section; no prompt and no tool result. Conversations
+  expire at the project's derived retention.
+- **Measured:** memory and the poll routes under 4 looping questions, on a development machine
+  only (`docs/features/ai-chatbot/status.md`, Step 8; `docs/self-hosting/sizing.md`).
 
 ## 8. apps/web — the console
 

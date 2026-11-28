@@ -1,0 +1,18 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Get a blob', GET /repos/{owner}/{repo}/git/blobs/{file_sha}: base64 content with line breaks.",
+  "request": {
+    "method": "GET",
+    "path": "/repos/acme/api/git/blobs/{blob}"
+  },
+  "status": 200,
+  "compared": ["sha", "size", "content", "encoding"],
+  "values": ["encoding"],
+  "body": {
+    "sha": "0000000000000000000000000000000000000000",
+    "node_id": "B_x",
+    "size": 10,
+    "url": "u",
+    "content": "cHJpbnQoMSkK\n",
+    "encoding": "base64"
+  }
+}

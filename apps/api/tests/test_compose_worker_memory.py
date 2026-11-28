@@ -129,3 +129,26 @@ def test_the_worker_declares_a_ceiling_at_all(file_name: str) -> None:
     assert any(service.service == "worker" for service in _go_services(file_name)), (
         f"{file_name}: `worker` declares no GOMEMLIMIT beside its memory limit"
     )
+
+
+_SIZING: Final = Path(nexovue_api.__file__).parents[4] / "docs" / "self-hosting" / "sizing.md"
+_SIZING_ROW: Final = re.compile(r"^\|[^|]*`([a-z-]+)`[^|]*\|\s*([\d.]+)\s*(MB|GB)\b", re.MULTILINE)
+
+
+def test_the_sizing_page_states_each_named_services_ceiling_as_compose_declares_it() -> None:
+    """F4 T8.1 (AC98): `sizing.md` read 384 MB for `scheduler-insight` after F5 Step 2b raised
+    its limit to 768M in `nexovue.yaml`, so the page an operator sizes a server from was wrong.
+    A row naming a service states that service's limit as the install file ships it."""
+    path = Path(nexovue_api.__file__).parents[4] / "deploy" / "compose" / "nexovue.yaml"
+    services: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))["services"]
+    rows = _SIZING_ROW.findall(_SIZING.read_text(encoding="utf-8"))
+    assert rows, "sizing.md: no row names a service"
+    for service, amount, unit in rows:
+        raw = ((services[service].get("deploy") or {}).get("resources") or {}).get("limits", {})
+        declared = _bytes(_default(str(raw.get("memory"))))
+        assert declared is not None, f"nexovue.yaml: {service} declares no memory limit"
+        stated = _bytes(f"{amount}{'M' if unit == 'MB' else 'G'}")
+        assert stated == declared, (
+            f"sizing.md says {service} has {amount} {unit}; nexovue.yaml gives it {declared:,} "
+            "bytes. An operator sizes a server from this page."
+        )

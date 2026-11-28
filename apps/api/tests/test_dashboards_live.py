@@ -1,0 +1,1675 @@
+"""Saved dashboards through `/dashboards`, against real Postgres (F20, T2.6, T2.7, T2.14, T2.15).
+
+AC6 (another organization's dashboard answers as an unknown id does), AC7 (every
+working role writes, a viewer is refused), AC8's write half (a support view reads and is
+refused every write), AC10 (two saves from one version: the second is a conflict naming
+who saved), AC11 (titles unique ignoring case; a deleted one's title is free), AC13 (each
+write's one audit entry: title, panel count, version and hash, a rename's old title, link
+hosts, and never the definition), AC38 (opening a template writes nothing), AC56's trim
+(past the newest 20 and older than 30 days only), AC61 (the context answers while
+ClickHouse is unreachable, and the batch says 503), AC75 (the two 404s, each its own
+type), AC96 (lists read columns, never a definition), AC125 (a save changing nothing
+makes no version; 20 quick saves keep the earlier one), FR9 (the caps), and T2.14's two
+findings reads past 200.
+
+Step 5 (T5.4): with ClickHouse unreachable, the context answers with F28's markers, each
+with its `basis` and `state` (a signed deploy `reported`, a version only seen in traffic
+`seen`, AC122), each service's deploy coverage (AC132), findings and alert incidents
+naming a service in the window, newest first, past their caps said so (AC32, AC33's data
+halves, AC61, AC117).
+
+Step 9 (T9.1, T9.3): every template saves as it is (AC80); `POST /dashboards/validate`
+passes an exported file back equal and holding no id (AC40), refuses a hostile file in
+words with nothing written (AC41, AC128, AC139), and refuses a viewer (AC128).
+
+ClickHouse is absent from every route here but the batch: the tenant repository is
+F22's stub, which fails if a read runs before the request's commit.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, Final
+
+import clickhouse_connect
+import httpx
+import pytest
+from environment import TEST_ENVIRONMENT
+from sqlalchemy import event, func, insert, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from test_findings_cases_live import Team, _call, _client, _team, db  # noqa: F401
+
+from nexovue_api.audit import service as audit
+from nexovue_api.dashboards import service as dashboards
+from nexovue_api.dashboards.templates import INFRASTRUCTURE, SERVICE_HEALTH, START_FROM_OVERVIEW
+from nexovue_api.data.postgres.models import (
+    AuditLogEntry,
+    Dashboard,
+    DashboardVersion,
+    DeployEvent,
+    Finding,
+    Incident,
+    Release,
+    ReleasePeriod,
+    ServiceLastSeen,
+)
+from nexovue_api.deps import get_app_settings, get_resources
+from nexovue_api.lifespan import ClickHouseConnection
+from nexovue_api.members import service as members
+from nexovue_api.settings import API_PREFIX, Settings
+
+SECRET_NOTE: Final = "paste: hunter2-not-a-real-secret"
+UNREACHABLE_CLICKHOUSE_PORT: Final = 1
+
+
+@pytest.fixture
+async def acme(db: AsyncSession) -> Team:  # noqa: F811
+    return await _team(db, "Acme")
+
+
+@pytest.fixture
+async def globex(db: AsyncSession) -> Team:  # noqa: F811
+    return await _team(db, "Globex")
+
+
+def _document(title: str = "Checkout on-call", **definition: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "schema_version": 1,
+        "refresh_seconds": 60,
+        "default_range": None,
+        "service_picker": False,
+        "links": [{"label": "Runbook", "url": "https://wiki.example/checkout"}],
+        "panels": [
+            {
+                "id": "p_rate",
+                "kind": "service_trend",
+                "title": None,
+                "width": 4,
+                "height": "medium",
+                "settings": {"service": "checkout", "signal": "rate"},
+            },
+            {
+                "id": "p_project",
+                "kind": "project_trend",
+                "title": "Errors",
+                "width": 4,
+                "height": "medium",
+                "settings": {"signal": "errors"},
+            },
+            {
+                "id": "p_note",
+                "kind": "note",
+                "title": None,
+                "width": 4,
+                "height": "small",
+                "settings": {"text": SECRET_NOTE},
+            },
+        ],
+    }
+    body.update(definition)
+    return {"title": title, "description": "What the checkout team watches.", "definition": body}
+
+
+async def _finding(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    *,
+    started_at: datetime,
+    closed_at: datetime | None = None,
+    scope: str = "service",
+    service: str | None = "checkout",
+) -> Finding:
+    row = Finding(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        scope=scope,
+        service_name=service,
+        severity="warning",
+        state="closed" if closed_at else "open",
+        closed_reason="recovered" if closed_at else None,
+        title=f"{service or 'this project'} is slower than normal",
+        signals=[],
+        started_at=started_at,
+        closed_at=closed_at,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def _create(db: AsyncSession, team: Team, **changes: Any) -> dict[str, Any]:  # noqa: F811
+    created = await _call(db, team, team.member, "POST", "/dashboards", _document(**changes))
+    assert created.status_code == 201, created.text
+    return dict(created.json())
+
+
+async def _save(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    saved: dict[str, Any],
+    **changes: Any,
+) -> httpx.Response:
+    body = {
+        "version": saved["version"],
+        "title": saved["title"],
+        "description": saved["description"],
+        "definition": saved["definition"],
+    } | changes
+    return await _call(db, team, team.member, "PUT", f"/dashboards/{saved['id']}", body)
+
+
+async def _entries(db: AsyncSession, team: Team, action: str) -> list[AuditLogEntry]:  # noqa: F811
+    statement = (
+        select(AuditLogEntry)
+        .where(AuditLogEntry.org_id == team.org_id, AuditLogEntry.action == action)
+        .order_by(AuditLogEntry.at, AuditLogEntry.id)
+    )
+    return list(await db.scalars(statement))
+
+
+async def _versions(db: AsyncSession, dashboard_id: str) -> list[int]:  # noqa: F811
+    statement = (
+        select(DashboardVersion.version)
+        .where(DashboardVersion.dashboard_id == uuid.UUID(dashboard_id))
+        .order_by(DashboardVersion.version)
+    )
+    return list(await db.scalars(statement))
+
+
+# ------------------------------------------------------------------ AC7, AC8
+
+
+@pytest.mark.parametrize("role", ["owner", "admin", "member"])
+async def test_ac7_every_working_role_writes(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    role: str,
+) -> None:
+    person = getattr(acme, role)
+    created = await _call(db, acme, person, "POST", "/dashboards", _document(title=role))
+
+    assert created.status_code == 201, created.text
+    assert created.json()["version"] == 1
+
+
+async def test_ac7_a_viewer_reads_and_is_refused_every_write(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    path = f"/dashboards/{saved['id']}"
+    body = {**_document(), "version": saved["version"]}
+
+    assert (await _call(db, acme, acme.viewer, "GET", path)).status_code == 200
+    assert (await _call(db, acme, acme.viewer, "GET", "/dashboards")).status_code == 200
+    preview = {
+        "project_id": str(acme.project_id),
+        "range": "1h",
+        "definition": _document()["definition"],
+    }
+    for method, target, payload in (
+        ("POST", "/dashboards", _document(title="v")),
+        ("PUT", path, body),
+        ("DELETE", path, None),
+        ("POST", "/dashboard-panels/preview", preview),
+    ):
+        refused = await _call(db, acme, acme.viewer, method, target, payload)
+        assert refused.status_code == 403, (method, refused.text)
+
+
+async def test_ac8_a_support_view_reads_every_dashboard_route(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+
+    for path in (
+        "/dashboards",
+        f"/dashboards/{saved['id']}",
+        "/dashboards/templates",
+        f"/dashboards/{saved['id']}/context?project_id={acme.project_id}",
+    ):
+        read = await _call(db, acme, acme.owner, "GET", path, support_view=True)
+        assert read.status_code == 200, (path, read.text)
+
+
+def test_ac8_every_dashboard_write_passes_the_support_views_method_gate() -> None:
+    """A support view's writes are refused below every route, in `get_current_identity`
+    (`_hold_support_view`), which this harness overrides; so this holds each write's gate
+    to that dependency rather than calling it."""
+    from fastapi.dependencies.utils import get_typed_signature
+
+    from nexovue_api.auth.dependencies import get_current_identity
+    from nexovue_api.dashboardpanels import router as panels_router
+    from nexovue_api.dashboards import router as dashboards_router
+
+    for handler in (
+        dashboards_router.create_dashboard,
+        dashboards_router.replace_dashboard,
+        dashboards_router.delete_dashboard,
+        # A file's check writes nothing, and is still refused (AC128).
+        dashboards_router.validate_dashboard,
+        # A draft's read is refused too, though it changes nothing (AC8).
+        panels_router.preview_panels,
+    ):
+        identity = get_typed_signature(handler).parameters["identity"]
+        [gate] = [item for item in identity.annotation.__metadata__ if hasattr(item, "dependency")]
+        [person] = [
+            parameter.annotation.__metadata__[0].dependency
+            for parameter in get_typed_signature(gate.dependency).parameters.values()
+        ]
+        assert person is get_current_identity, handler.__name__
+
+
+# ---------------------------------------------------------------- FR25, AC136
+
+
+async def test_one_dashboard_says_when_it_was_last_opened_for_the_delete_sentence(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """Delete states "last opened 2 hours ago" from the dashboard itself (FR25, AC136)."""
+    saved = await _create(db, acme)
+    path = f"/dashboards/{saved['id']}"
+    assert saved["last_viewed_at"] is None
+
+    opened = datetime.now(UTC) - timedelta(hours=2)
+    await db.execute(
+        update(Dashboard)
+        .where(Dashboard.id == uuid.UUID(saved["id"]))
+        .values(last_viewed_at=opened)
+    )
+    read = (await _call(db, acme, acme.member, "GET", path)).json()
+
+    assert datetime.fromisoformat(read["last_viewed_at"]) == opened
+
+
+# ----------------------------------------------------------------- AC6, AC75
+
+
+async def test_ac6_another_organizations_dashboard_answers_as_an_unknown_id_does(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    theirs = await _create(db, globex)
+    unknown = str(uuid.uuid4())
+
+    for method, body in (("GET", None), ("PUT", {**_document(), "version": 1}), ("DELETE", None)):
+        foreign = await _call(db, acme, acme.member, method, f"/dashboards/{theirs['id']}", body)
+        missing = await _call(db, acme, acme.member, method, f"/dashboards/{unknown}", body)
+        assert foreign.status_code == missing.status_code == 404
+        assert _without_instance(foreign.json()) == _without_instance(missing.json())
+    still = await _call(db, globex, globex.member, "GET", f"/dashboards/{theirs['id']}")
+    assert still.status_code == 200
+
+
+def _without_instance(problem: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in problem.items() if key not in ("instance", "correlation_id")
+    }
+
+
+async def test_ac75_the_dashboard_and_the_project_404s_each_have_their_own_type(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    saved = await _create(db, acme)
+    no_dashboard = await _call(
+        db,
+        acme,
+        acme.member,
+        "GET",
+        f"/dashboards/{uuid.uuid4()}/context?project_id={acme.project_id}",
+    )
+    no_project = await _call(
+        db, acme, acme.member, "GET", f"/dashboards/{saved['id']}/context?project_id={uuid.uuid4()}"
+    )
+    foreign_project = await _call(
+        db,
+        acme,
+        acme.member,
+        "GET",
+        f"/dashboards/{saved['id']}/context?project_id={globex.project_id}",
+    )
+
+    assert no_dashboard.status_code == no_project.status_code == foreign_project.status_code == 404
+    assert no_dashboard.json()["type"].endswith("/dashboard-not-found")
+    assert no_project.json()["type"].endswith("/project-not-found")
+    assert _without_instance(no_project.json()) == _without_instance(foreign_project.json())
+
+
+# ---------------------------------------------------------------- AC10, AC11
+
+
+async def test_ac10_the_second_save_from_one_version_is_a_conflict_naming_who_saved(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+
+    first = await _save(db, acme, saved, title="Checkout, renamed")
+    second = await _save(db, acme, saved, title="Checkout, mine")
+
+    assert first.status_code == 200 and first.json()["version"] == 2
+    assert second.status_code == 409
+    assert second.json()["saved_by"] == acme.member.name
+    assert second.json()["version"] == 2
+
+
+async def test_ac11_a_title_differing_only_in_case_is_refused_naming_the_holder(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    holder = await _create(db, acme, title="Checkout")
+
+    refused = await _call(db, acme, acme.member, "POST", "/dashboards", _document(title="checkout"))
+
+    assert refused.status_code == 409
+    assert refused.json()["existing_dashboard_id"] == holder["id"]
+
+
+async def test_ac11_a_deleted_dashboards_title_may_be_used_again(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    gone = await _create(db, acme, title="Checkout")
+    assert (
+        await _call(db, acme, acme.member, "DELETE", f"/dashboards/{gone['id']}")
+    ).status_code == 204
+
+    again = await _call(db, acme, acme.member, "POST", "/dashboards", _document(title="CHECKOUT"))
+
+    assert again.status_code == 201
+    after = await _call(db, acme, acme.member, "GET", f"/dashboards/{gone['id']}")
+    assert after.status_code == 404
+    assert after.json()["type"].endswith("/dashboard-not-found")
+
+
+async def test_two_organizations_may_use_one_title(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    await _create(db, acme, title="Checkout")
+
+    assert (await _create(db, globex, title="Checkout"))["title"] == "Checkout"
+
+
+# ----------------------------------------------------------------- AC4 over the wire
+
+
+async def test_ac4_ac5_ac77_the_route_refuses_what_the_validator_refuses(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    query_kind = _document()
+    query_kind["definition"]["panels"][0]["kind"] = "query"
+    sql = _document()
+    sql["definition"]["panels"][0]["settings"]["sql"] = "SELECT 1"
+    script = _document(links=[{"label": "x", "url": "javascript:alert(1)"}])
+
+    for body in (query_kind, sql, script):
+        refused = await _call(db, acme, acme.member, "POST", "/dashboards", body)
+        assert refused.status_code == 422, refused.text
+    assert await db.scalar(select(func.count()).where(Dashboard.org_id == acme.org_id)) == 0
+
+
+# ------------------------------------------------------------------- AC13
+
+
+async def test_ac13_each_write_records_one_entry_with_facts_and_never_the_definition(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    renamed = await _save(
+        db,
+        acme,
+        saved,
+        title="Checkout, renamed",
+        definition={
+            **saved["definition"],
+            "links": [{"label": "Board", "url": "https://boards.example/checkout"}],
+        },
+    )
+    assert renamed.status_code == 200
+    await _call(db, acme, acme.member, "DELETE", f"/dashboards/{saved['id']}")
+
+    [created] = await _entries(db, acme, audit.DASHBOARD_CREATED)
+    [updated] = await _entries(db, acme, audit.DASHBOARD_UPDATED)
+    [deleted] = await _entries(db, acme, audit.DASHBOARD_DELETED)
+    stored = await db.scalar(select(Dashboard).where(Dashboard.id == uuid.UUID(saved["id"])))
+    assert stored is not None
+
+    assert created.target == f"dashboard:{saved['id']}"
+    assert created.actor_user_id == acme.member.id
+    assert created.detail == {
+        "title": "Checkout on-call",
+        "panel_count": 3,
+        "version": 1,
+        "definition_sha256": _sha(saved["definition"]),
+        "link_hosts_added": ["wiki.example"],
+    }
+    assert updated.detail is not None and deleted.detail is not None
+    assert updated.detail["previous_title"] == "Checkout on-call"
+    assert updated.detail["title"] == "Checkout, renamed"
+    assert updated.detail["version"] == 2
+    assert updated.detail["link_hosts_added"] == ["boards.example"]
+    assert updated.detail["link_hosts_removed"] == ["wiki.example"]
+    assert updated.detail["definition_sha256"] == _sha(stored.definition)
+    assert "previous_title" not in deleted.detail
+    for entry in (created, updated, deleted):
+        assert SECRET_NOTE not in json.dumps(entry.detail)
+        assert "checkout/" not in json.dumps(entry.detail)
+
+
+def _sha(definition: dict[str, Any]) -> str:
+    canonical = json.dumps(definition, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+# ------------------------------------------------------------- AC125, AC56
+
+
+async def test_ac125_a_save_changing_nothing_makes_no_version_and_no_entry(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+
+    same = await _save(db, acme, saved)
+
+    assert same.status_code == 200 and same.json()["version"] == 1
+    assert await _versions(db, saved["id"]) == []
+    assert await _entries(db, acme, audit.DASHBOARD_UPDATED) == []
+
+
+async def test_ac125_twenty_quick_saves_leave_the_earlier_good_version_restorable(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    good = await _create(db, acme)
+    current = good
+    for index in range(20):
+        answer = await _save(db, acme, current, title=f"wrecked {index}")
+        assert answer.status_code == 200, answer.text
+        current = answer.json()
+
+    versions = await _versions(db, good["id"])
+    first = await db.scalar(
+        select(DashboardVersion).where(
+            DashboardVersion.dashboard_id == uuid.UUID(good["id"]), DashboardVersion.version == 1
+        )
+    )
+
+    assert versions == list(range(1, 21))
+    assert first is not None and first.title == "Checkout on-call"
+    assert first.definition == good["definition"]
+
+
+async def test_ac56_a_save_trims_versions_past_twenty_and_older_than_30_days_only(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    dashboard_id = uuid.UUID(saved["id"])
+    now = datetime.now(UTC)
+    # 22 old versions, then 5 recent ones: the row stands at version 28.
+    for version in range(1, 28):
+        db.add(
+            DashboardVersion(
+                dashboard_id=dashboard_id,
+                org_id=acme.org_id,
+                version=version,
+                title=f"v{version}",
+                definition=saved["definition"],
+                saved_at=now - timedelta(days=40 if version <= 22 else 1),
+            )
+        )
+    await db.execute(update(Dashboard).where(Dashboard.id == dashboard_id).values(version=28))
+    await db.flush()
+
+    answer = await _save(db, acme, {**saved, "version": 28}, title="Checkout, again")
+
+    assert answer.status_code == 200, answer.text
+    kept = await _versions(db, saved["id"])
+    # Version 28 joins; the newest 20 are 9..28. Of the older, all are past 30 days.
+    assert kept == list(range(9, 29))
+
+
+async def test_ac56_versions_newer_than_30_days_are_kept_past_twenty(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    dashboard_id = uuid.UUID(saved["id"])
+    for version in range(1, 26):
+        db.add(
+            DashboardVersion(
+                dashboard_id=dashboard_id,
+                org_id=acme.org_id,
+                version=version,
+                title=f"v{version}",
+                definition=saved["definition"],
+                saved_at=datetime.now(UTC) - timedelta(days=2),
+            )
+        )
+    await db.execute(update(Dashboard).where(Dashboard.id == dashboard_id).values(version=26))
+    await db.flush()
+
+    assert (await _save(db, acme, {**saved, "version": 26}, title="x")).status_code == 200
+
+    assert await _versions(db, saved["id"]) == list(range(1, 27))
+
+
+# ------------------------------------------------------------------- AC96
+
+
+async def test_ac96_the_list_reads_columns_and_never_a_definition(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(
+        db,
+        acme,
+        service_picker=True,
+        panels=[
+            *_document()["definition"]["panels"],
+            {
+                "id": "p_picked",
+                "kind": "service_trend",
+                "title": None,
+                "width": 4,
+                "height": "medium",
+                "settings": {"service": {"picker": True}, "signal": "latency"},
+            },
+        ],
+    )
+    stored = await db.scalar(select(Dashboard).where(Dashboard.id == uuid.UUID(saved["id"])))
+    assert stored is not None
+    assert (stored.panel_count, stored.service_names, stored.uses_picker) == (4, ["checkout"], True)
+    # A definition nothing could draw: the list still answers from its columns.
+    await db.execute(
+        text("UPDATE dashboards SET definition = '{\"broken\": true}' WHERE id = :id"),
+        {"id": stored.id},
+    )
+
+    listed = await _call(db, acme, acme.viewer, "GET", "/dashboards")
+
+    [row] = listed.json()["dashboards"]
+    assert row["panel_count"] == 4 and row["uses_picker"] is True
+    assert row["owner"] == acme.member.name
+    assert "definition" not in row
+
+
+# -------------------------------------------------------------------- FR9
+
+
+async def test_fr9_the_thousand_and_first_live_dashboard_is_refused_saying_why(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    await _fill(db, acme, live=dashboards.LIVE_DASHBOARDS_CAP)
+
+    refused = await _call(db, acme, acme.member, "POST", "/dashboards", _document(title="one more"))
+
+    assert refused.status_code == 409
+    assert "1,000 dashboards" in refused.json()["detail"]
+
+
+async def test_fr9_deleted_dashboards_count_towards_the_second_cap(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    await _fill(db, acme, live=10, deleted=dashboards.ALL_DASHBOARDS_CAP - 10)
+
+    refused = await _call(db, acme, acme.member, "POST", "/dashboards", _document(title="one more"))
+
+    assert refused.status_code == 409
+    assert "2,000 dashboards" in refused.json()["detail"]
+
+
+async def _fill(db: AsyncSession, team: Team, *, live: int, deleted: int = 0) -> None:  # noqa: F811
+    now = datetime.now(UTC)
+    await db.execute(
+        insert(Dashboard),
+        [
+            {
+                "org_id": team.org_id,
+                "title": f"filler {index}",
+                "description": "",
+                "definition": {"schema_version": 1, "panels": []},
+                "deleted_at": now if index >= live else None,
+            }
+            for index in range(live + deleted)
+        ],
+    )
+
+
+# ------------------------------------------------------------- AC38, AC80
+
+
+async def test_ac38_opening_a_template_writes_no_row(db: AsyncSession, acme: Team) -> None:  # noqa: F811
+    before = await db.scalar(select(func.count()).select_from(Dashboard))
+
+    answer = await _call(db, acme, acme.viewer, "GET", "/dashboards/templates")
+
+    assert answer.status_code == 200
+    assert [template["id"] for template in answer.json()["templates"]] == [
+        START_FROM_OVERVIEW,
+        SERVICE_HEALTH,
+        INFRASTRUCTURE,
+    ]
+    assert await db.scalar(select(func.count()).select_from(Dashboard)) == before
+
+
+async def test_ac80_every_template_saves_as_it_is(db: AsyncSession, acme: Team) -> None:  # noqa: F811
+    answer = (await _call(db, acme, acme.member, "GET", "/dashboards/templates")).json()
+
+    for template in answer["templates"]:
+        saved = await _call(db, acme, acme.member, "POST", "/dashboards", template["document"])
+        assert saved.status_code == 201, (template["id"], saved.text)
+        assert saved.json()["definition"] == template["document"]["definition"]
+
+
+# ------------------------------------------- T9.3: import's check (FR42, D53)
+
+
+def _exported(saved: dict[str, Any]) -> dict[str, Any]:
+    """What the console's export writes (`transfer.ts`): the document alone (FR42)."""
+    return {key: saved[key] for key in ("title", "description", "definition")}
+
+
+async def test_ac40_export_then_import_gives_an_equal_document_holding_no_ids(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    check = {
+        "id": "p_login",
+        "kind": "check_trend",
+        "title": None,
+        "width": 4,
+        "height": "medium",
+        "settings": {"check": "Login", "signal": "uptime"},
+    }
+    saved = await _create(db, acme, panels=[*_document()["definition"]["panels"], check])
+    read = (await _call(db, acme, acme.viewer, "GET", f"/dashboards/{saved['id']}")).json()
+    file = json.dumps(_exported(read))
+
+    checked = await _call(
+        db, globex, globex.member, "POST", "/dashboards/validate", json.loads(file)
+    )
+
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["document"] == json.loads(file)
+    assert checked.json()["panel_count"] == len(read["definition"]["panels"])
+    for identifier in (acme.org_id, acme.project_id, saved["id"], acme.member.id, acme.owner.id):
+        assert str(identifier) not in file
+    assert "version" not in json.loads(file)
+    assert "owner" not in json.loads(file)
+
+
+async def test_ac40_an_imported_document_saves_new_and_over_a_dashboard_with_the_version(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """The draft a file opens is saved as any draft is: new, or over one dashboard naming
+    the version it was read at (FR42)."""
+    existing = await _create(db, acme)
+    file = _document(title="Imported")
+    checked = (await _call(db, acme, acme.member, "POST", "/dashboards/validate", file)).json()
+
+    created = await _call(db, acme, acme.member, "POST", "/dashboards", checked["document"])
+    over = await _save(db, acme, existing, **checked["document"] | {"title": "Over it"})
+    stale = await _save(db, acme, existing, **checked["document"] | {"title": "Stale"})
+
+    assert created.status_code == 201, created.text
+    assert over.status_code == 200, over.text
+    assert over.json()["version"] == existing["version"] + 1
+    assert stale.status_code == 409
+
+
+def _too_many_reads() -> dict[str, Any]:
+    """21 compared numbers on 21 services: 42 reads, past the 40 one page may make."""
+    numbers = [
+        {
+            "id": f"p_{index}",
+            "kind": "service_number",
+            "title": None,
+            "width": 3,
+            "height": "small",
+            "settings": {"service": f"svc-{index}", "measure": "p95_ms", "compare": True},
+        }
+        for index in range(21)
+    ]
+    return _document(panels=numbers)
+
+
+def _note(panel_id: str, text: str) -> dict[str, Any]:
+    return {
+        "id": panel_id,
+        "kind": "note",
+        "title": None,
+        "width": 12,
+        "height": "small",
+        "settings": {"text": text},
+    }
+
+
+def _hostile_files() -> dict[str, dict[str, Any]]:
+    query_kind = _document()
+    query_kind["definition"]["panels"][0]["kind"] = "query"
+    sql = _document()
+    sql["definition"]["panels"][0]["settings"]["sql"] = "SELECT * FROM organizations"
+    another_org = _document()
+    another_org["definition"]["panels"][0]["settings"]["org_id"] = str(uuid.uuid4())
+    # Eleven notes of 2,000 three-byte characters: each note within its own bound, the
+    # whole about 66 KiB, so only the document's size refuses it (AC139).
+    oversized = _document(panels=[_note(f"p_note_{index}", "€" * 2_000) for index in range(11)])
+    return {
+        "a query kind": query_kind,
+        "sql": sql,
+        "an id of another organization": another_org,
+        "a javascript link": _document(links=[{"label": "x", "url": "javascript:alert(1)"}]),
+        "a link with a person in it": _document(
+            links=[{"label": "x", "url": "https://wiki.example@evil.test/"}]
+        ),
+        "too many reads": _too_many_reads(),
+        "a newer format": _document(schema_version=2),
+        "over 64 KiB": oversized,
+    }
+
+
+@pytest.mark.parametrize("hostile", list(_hostile_files()))
+async def test_ac128_ac139_a_hostile_file_is_refused_in_words_and_nothing_is_written(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    hostile: str,
+) -> None:
+    before_rows = await db.scalar(select(func.count()).where(Dashboard.org_id == acme.org_id))
+    before_entries = await db.scalar(
+        select(func.count()).where(AuditLogEntry.org_id == acme.org_id)
+    )
+
+    refused = await _call(
+        db, acme, acme.member, "POST", "/dashboards/validate", _hostile_files()[hostile]
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] or refused.json()["errors"]
+    assert await db.scalar(select(func.count()).where(Dashboard.org_id == acme.org_id)) == (
+        before_rows
+    )
+    assert await db.scalar(select(func.count()).where(AuditLogEntry.org_id == acme.org_id)) == (
+        before_entries
+    )
+
+
+async def test_ac139_ac41_the_refusals_say_what_is_wrong(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    files = _hostile_files()
+
+    newer = (
+        await _call(db, acme, acme.member, "POST", "/dashboards/validate", files["a newer format"])
+    ).json()
+    size = (
+        await _call(db, acme, acme.member, "POST", "/dashboards/validate", files["over 64 KiB"])
+    ).json()
+    reads = (
+        await _call(db, acme, acme.member, "POST", "/dashboards/validate", files["too many reads"])
+    ).json()
+
+    assert "made by a newer version of nexovue" in json.dumps(newer["errors"])
+    assert "A dashboard is at most 64 KiB" in size["detail"]
+    assert "would need 42 reads" in reads["detail"]
+
+
+async def test_ac128_a_viewer_and_a_support_view_cannot_check_a_file(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    viewer = await _call(db, acme, acme.viewer, "POST", "/dashboards/validate", _document())
+    member = await _call(db, acme, acme.member, "POST", "/dashboards/validate", _document())
+
+    assert viewer.status_code == 403
+    assert member.status_code == 200
+
+
+# ---------------------------------------------------------- T2.14, AC61
+
+
+async def test_the_context_names_project_clock_detection_and_what_has_reported(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    seen = datetime.now(UTC) - timedelta(hours=3)
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="checkout",
+            last_seen_at=seen,
+        )
+    )
+    open_one = await _finding(db, acme, started_at=datetime.now(UTC) - timedelta(minutes=20))
+    await _finding(
+        db,
+        acme,
+        scope="project",
+        service=None,
+        started_at=datetime.now(UTC) - timedelta(minutes=10),
+    )
+
+    context = await _call(
+        db,
+        acme,
+        acme.viewer,
+        "GET",
+        f"/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h",
+    )
+
+    assert context.status_code == 200, context.text
+    body = context.json()
+    assert body["project"]["id"] == str(acme.project_id)
+    assert body["project"]["timezone"]
+    assert body["project"]["retention"] == {"raw_days": 7, "derived_days": 30}
+    assert body["ever_reported"] is True
+    assert body["last_seen_at"] == seen.isoformat().replace("+00:00", "Z")
+    assert body["detection"]["state"] in {"not_running", "no_services", "learning", "judging"}
+    assert [finding["scope"] for finding in body["findings"]] == ["project", "service"]
+    assert body["findings"][1]["id"] == str(open_one.id)
+    assert body["open_findings"] == {"total": 2, "by_service": {"checkout": 1}}
+
+
+async def test_a_project_that_never_reported_says_so(db: AsyncSession, acme: Team) -> None:  # noqa: F811
+    saved = await _create(db, acme)
+
+    body = (
+        await _call(
+            db,
+            acme,
+            acme.viewer,
+            "GET",
+            f"/dashboards/{saved['id']}/context?project_id={acme.project_id}",
+        )
+    ).json()
+
+    assert (body["ever_reported"], body["last_seen_at"]) == (False, None)
+
+
+async def test_a_self_hosted_install_has_no_plan_retention(db: AsyncSession, acme: Team) -> None:  # noqa: F811
+    saved = await _create(db, acme)
+    client, _ = _client(db, acme, acme.viewer)
+    settings = Settings(**(TEST_ENVIRONMENT | {"NEXOVUE_DEPLOYMENT": "self-hosted"}))  # type: ignore[arg-type]
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.dependency_overrides[get_app_settings] = lambda: settings
+
+    async with client:
+        answer = await client.get(
+            f"{API_PREFIX}/dashboards/{saved['id']}/context?project_id={acme.project_id}"
+        )
+
+    assert answer.json()["project"]["retention"] is None
+
+
+async def test_ac61_with_clickhouse_unreachable_the_batch_says_503_and_the_context_answers(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    client, _ = _client(db, acme, acme.viewer)
+    app = client._transport.app  # type: ignore[attr-defined]
+
+    async def unreachable() -> Any:
+        return await clickhouse_connect.get_async_client(
+            host="127.0.0.1", port=UNREACHABLE_CLICKHOUSE_PORT, connect_timeout=1
+        )
+
+    from nexovue_api.auth.dependencies import get_tenant_repository
+
+    app.dependency_overrides.pop(get_tenant_repository)
+    app.dependency_overrides[get_resources] = lambda: SimpleNamespace(
+        clickhouse=ClickHouseConnection(unreachable)
+    )
+    query = f"dashboard_id={saved['id']}&project_id={acme.project_id}&range=1h"
+
+    async with client:
+        batch = await client.get(f"{API_PREFIX}/dashboard-panels/read?{query}")
+        context = await client.get(
+            f"{API_PREFIX}/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h"
+        )
+
+    assert batch.status_code == 503
+    assert batch.json()["type"].endswith("/dependency-unavailable")
+    assert context.status_code == 200
+
+
+async def test_both_findings_reads_hold_past_200(db: AsyncSession, acme: Team) -> None:  # noqa: F811
+    """T2.14: the dashboard's read keeps the newest 200 and says it cut; the service
+    timeline keeps its oldest 200 and says the same, unchanged (F6)."""
+    saved = await _create(db, acme)
+    start = datetime.now(UTC) - timedelta(minutes=50)
+    for index in range(205):
+        await _finding(
+            db,
+            acme,
+            started_at=start + timedelta(seconds=index * 10),
+            closed_at=start + timedelta(seconds=index * 10 + 5),
+        )
+
+    context = (
+        await _call(
+            db,
+            acme,
+            acme.viewer,
+            "GET",
+            f"/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h",
+        )
+    ).json()
+    timeline = (
+        await _call(
+            db,
+            acme,
+            acme.viewer,
+            "GET",
+            f"/services/checkout/detection?project_id={acme.project_id}",
+        )
+    ).json()
+
+    assert len(context["findings"]) == 200 and context["findings_truncated"] is True
+    newest = [finding["started_at"] for finding in context["findings"]]
+    assert newest == sorted(newest, reverse=True)
+    assert len(timeline["findings"]) == 200 and timeline["truncated"] is True
+    oldest = [finding["started_at"] for finding in timeline["findings"]]
+    assert oldest == sorted(oldest)
+    assert oldest[0] < newest[-1]
+
+
+# ------------------------------------------------------------------ T5.4
+
+
+async def _release(
+    db: AsyncSession,  # noqa: F811
+    team: Team,
+    *,
+    service: str,
+    version: str,
+    at: datetime,
+    reported: bool,
+) -> None:
+    release = Release(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        service_name=service,
+        version=version,
+        first_seen_at=None if reported else at,
+        last_seen_at=None if reported else at,
+        first_reported_at=at if reported else None,
+        last_reported_at=at if reported else None,
+        report_count=1 if reported else 0,
+        last_state="finished" if reported else None,
+    )
+    db.add(release)
+    await db.flush()
+    if reported:
+        db.add(
+            DeployEvent(
+                org_id=team.org_id,
+                project_id=team.project_id,
+                version=version,
+                service_name=service,
+                deployed_at=at,
+                source="ci",
+                delivery_id=f"{service}-{version}-{uuid.uuid4()}",
+                event_metadata={},
+                state="finished",
+                release_id=release.id,
+            )
+        )
+    db.add(
+        ReleasePeriod(
+            org_id=team.org_id,
+            release_id=release.id,
+            project_id=team.project_id,
+            service_name=service,
+            started_at=at,
+            start_basis="reported" if reported else "seen",
+            already_running=False,
+        )
+    )
+    await db.flush()
+
+
+def _incident(
+    team: Team, *, subject: str, opened_at: datetime, about: str | None = None
+) -> Incident:
+    return Incident(
+        org_id=team.org_id,
+        project_id=team.project_id,
+        rule_id=None,
+        rule_name=f"Rule on {subject}",
+        condition_kind="slo_burn" if about else "service_error_rate",
+        subject_key=subject,
+        subject_label=subject,
+        severity="critical",
+        opened_at=opened_at,
+        about_key=about,
+    )
+
+
+async def test_t5_4_the_context_answers_marks_coverage_and_incidents_with_clickhouse_away(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    now = datetime.now(UTC).replace(microsecond=0)
+    await _release(
+        db, acme, service="checkout", version="v2.1", at=now - timedelta(minutes=20), reported=True
+    )
+    await _release(
+        db, acme, service="checkout", version="v2.2", at=now - timedelta(minutes=10), reported=False
+    )
+    await _release(
+        db, acme, service="checkout", version="v1.0", at=now - timedelta(days=2), reported=True
+    )
+    db.add(
+        ServiceLastSeen(
+            org_id=acme.org_id,
+            project_id=acme.project_id,
+            service_name="cart",
+            last_seen_at=now,
+        )
+    )
+    await _finding(db, acme, started_at=now - timedelta(minutes=5))
+    db.add_all(
+        [
+            _incident(acme, subject="service:checkout", opened_at=now - timedelta(minutes=15)),
+            _incident(
+                acme,
+                subject="slo:1:checkout",
+                about="service:payment",
+                opened_at=now - timedelta(minutes=30),
+            ),
+            # Not about a service: a check's, and an error group's, are not listed.
+            _incident(acme, subject="check:1", opened_at=now - timedelta(minutes=5)),
+            _incident(acme, subject="error:abc", opened_at=now - timedelta(minutes=5)),
+            # Before the window, and resolved before it began.
+            _incident(acme, subject="service:old", opened_at=now - timedelta(days=2)),
+        ]
+    )
+    await db.flush()
+    await db.execute(
+        update(Incident)
+        .where(Incident.org_id == acme.org_id, Incident.subject_key == "service:old")
+        .values(resolved_at=now - timedelta(days=1))
+    )
+    client, _ = _client(db, acme, acme.viewer)
+    app = client._transport.app  # type: ignore[attr-defined]
+
+    async def unreachable() -> Any:
+        return await clickhouse_connect.get_async_client(
+            host="127.0.0.1", port=UNREACHABLE_CLICKHOUSE_PORT, connect_timeout=1
+        )
+
+    from nexovue_api.auth.dependencies import get_tenant_repository
+
+    app.dependency_overrides.pop(get_tenant_repository)
+    app.dependency_overrides[get_resources] = lambda: SimpleNamespace(
+        clickhouse=ClickHouseConnection(unreachable)
+    )
+    async with client:
+        answer = await client.get(
+            f"{API_PREFIX}/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h"
+        )
+
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    marks = [(mark["version"], mark["basis"], mark["state"]) for mark in body["markers"]]
+    assert marks == [("v2.2", "seen", None), ("v2.1", "reported", "finished")]
+    assert body["markers_truncated"] is False
+    assert body["markers_cap"] == 500
+    assert body["coverage"]["checkout"] == "deploys_and_versions"
+    assert body["coverage"]["cart"] == "none"
+    assert [
+        (incident["service_name"], incident["rule_name"]) for incident in body["incidents"]
+    ] == [
+        ("checkout", "Rule on service:checkout"),
+        ("payment", "Rule on slo:1:checkout"),
+    ]
+    assert body["incidents_truncated"] is False
+    assert [finding["service_name"] for finding in body["findings"]] == ["checkout"]
+
+
+async def test_fr67_past_fifty_incidents_the_newest_are_listed_and_the_cap_said(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    now = datetime.now(UTC).replace(microsecond=0)
+    db.add_all(
+        _incident(
+            acme, subject=f"service:svc-{index:02d}", opened_at=now - timedelta(minutes=index)
+        )
+        for index in range(1, 52)
+    )
+    await db.flush()
+
+    answer = await _call(
+        db,
+        acme,
+        acme.viewer,
+        "GET",
+        f"/dashboards/{saved['id']}/context?project_id={acme.project_id}&range=1h",
+    )
+
+    body = answer.json()
+    assert len(body["incidents"]) == dashboards.INCIDENTS_CAP == 50
+    assert body["incidents"][0]["service_name"] == "svc-01"
+    assert body["incidents_truncated"] is True
+
+
+# ============================================================ Step 7: staying few and recoverable
+
+PINNED_NOW: Final = datetime(2026, 11, 12, 10, 0, tzinfo=UTC)
+DAY: Final = timedelta(days=1)
+
+
+async def _delete(db: AsyncSession, team: Team, saved: dict[str, Any]) -> None:  # noqa: F811
+    gone = await _call(db, team, team.member, "DELETE", f"/dashboards/{saved['id']}")
+    assert gone.status_code == 204, gone.text
+
+
+async def _delete_at(db: AsyncSession, saved: dict[str, Any], when: datetime) -> None:  # noqa: F811
+    await db.execute(
+        update(Dashboard).where(Dashboard.id == uuid.UUID(saved["id"])).values(deleted_at=when)
+    )
+
+
+# ---------------------------------------------------------- AC96 (the statement), AC47
+
+
+async def test_ac96_no_list_statement_names_the_definition_column(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """Proved on the SQL itself: a list that happened to be fast would pass the test above."""
+    await _create(db, acme)
+    seen: list[str] = []
+
+    def record(_connection: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        seen.append(statement)
+
+    connection = db.sync_session.get_bind()
+    event.listen(connection, "before_cursor_execute", record)
+    try:
+        for path in ("/dashboards", "/dashboards?deleted=true", "/dashboards?service=checkout"):
+            assert (await _call(db, acme, acme.viewer, "GET", path)).status_code == 200
+    finally:
+        event.remove(connection, "before_cursor_execute", record)
+
+    listing = [statement for statement in seen if "FROM dashboards" in statement]
+    assert len(listing) == 3
+    assert [statement for statement in listing if "dashboards.definition" in statement] == []
+
+
+async def test_ac47_a_dashboard_outlives_its_owner_reads_former_member_and_stays_editable(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    assert (await _call(db, acme, acme.viewer, "GET", "/dashboards")).json()["dashboards"][0][
+        "owner"
+    ] == acme.member.name
+
+    await members.remove(
+        db,
+        actor=acme.owner,
+        organization=acme.tenant.organization,
+        member_id=acme.member.id,
+        now=PINNED_NOW,
+    )
+
+    [row] = (await _call(db, acme, acme.viewer, "GET", "/dashboards")).json()["dashboards"]
+    assert row["owner"] is None and row["title"] == saved["title"]
+    # Anyone with the permission may still change it (FR38).
+    changed = await _call(
+        db,
+        acme,
+        acme.second_member,
+        "PUT",
+        f"/dashboards/{saved['id']}",
+        {
+            "version": saved["version"],
+            "title": "Checkout, kept on",
+            "description": saved["description"],
+            "definition": saved["definition"],
+        },
+    )
+    assert changed.status_code == 200 and changed.json()["owner"] is None
+
+
+# ------------------------------------------------------------------ T7.4: versions
+
+
+async def test_ac56_the_history_lists_who_and_when_and_a_version_restores_as_a_new_one(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    good = await _create(db, acme)
+    bad = (
+        await _save(
+            db, acme, good, title="Wrecked", definition={**good["definition"], "panels": []}
+        )
+    ).json()
+
+    history = (
+        await _call(db, acme, acme.viewer, "GET", f"/dashboards/{good['id']}/versions")
+    ).json()
+
+    assert [(each["version"], each["title"], each["current"]) for each in history["versions"]] == [
+        (2, "Wrecked", True),
+        (1, "Checkout on-call", False),
+    ]
+    assert history["versions"][1]["saved_by"] == acme.member.name
+    kept = (
+        await _call(db, acme, acme.viewer, "GET", f"/dashboards/{good['id']}/versions/1")
+    ).json()
+    assert kept["definition"] == good["definition"] and kept["current"] is False
+    # Restoring is an ordinary save of the old text over the bad one: version 3, with the
+    # bad version kept in turn (AC56).
+    restored = await _save(
+        db,
+        acme,
+        bad,
+        title=kept["title"],
+        description=kept["description"],
+        definition=kept["definition"],
+    )
+    assert restored.status_code == 200 and restored.json()["version"] == 3
+    assert restored.json()["definition"] == good["definition"]
+    assert await _versions(db, good["id"]) == [1, 2]
+
+
+async def test_the_version_in_use_is_served_from_the_dashboard_and_an_unknown_one_is_a_404(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    saved = await _create(db, acme)
+    base = f"/dashboards/{saved['id']}/versions"
+
+    current = await _call(db, acme, acme.viewer, "GET", f"{base}/1")
+    missing = await _call(db, acme, acme.viewer, "GET", f"{base}/7")
+    other_org = await _call(db, globex, globex.owner, "GET", base)
+
+    assert current.status_code == 200 and current.json()["current"] is True
+    assert missing.status_code == 404
+    assert other_org.status_code == 404
+    assert other_org.json()["type"].endswith("dashboard-not-found")
+
+
+# --------------------------------------------------- T7.5: Recently deleted and restore
+
+
+async def test_ac57_a_deleted_dashboard_leaves_the_list_and_restores_whole(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    await _delete(db, acme, saved)
+
+    live = (await _call(db, acme, acme.viewer, "GET", "/dashboards")).json()["dashboards"]
+    deleted = (await _call(db, acme, acme.viewer, "GET", "/dashboards?deleted=true")).json()
+    link = await _call(db, acme, acme.viewer, "GET", f"/dashboards/{saved['id']}")
+    assert live == []
+    assert [each["title"] for each in deleted["dashboards"]] == [saved["title"]]
+    assert deleted["dashboards"][0]["deleted_at"] is not None
+    assert link.status_code == 404
+
+    back = await _call(db, acme, acme.member, "POST", f"/dashboards/{saved['id']}/restore")
+
+    assert back.status_code == 200, back.text
+    assert back.json()["definition"] == saved["definition"] and back.json()["version"] == 1
+    assert (await _call(db, acme, acme.viewer, "GET", "/dashboards?deleted=true")).json()[
+        "dashboards"
+    ] == []
+    assert len(await _entries(db, acme, audit.DASHBOARD_RESTORED)) == 1
+
+
+async def test_ac57_only_the_last_30_days_of_deletions_are_listed_or_restorable(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    """Pinned: the service takes `now`, so the 29 and 31 days are exact."""
+    recent = await _create(db, acme, title="Deleted 29 days ago")
+    lapsed = await _create(db, acme, title="Deleted 31 days ago")
+    await _delete_at(db, recent, PINNED_NOW - 29 * DAY)
+    await _delete_at(db, lapsed, PINNED_NOW - 31 * DAY)
+    identity = SimpleNamespace(org_id=acme.org_id, user=acme.member, impersonation=None)
+
+    listed = await dashboards.list_dashboards(db, org_id=acme.org_id, deleted=True, now=PINNED_NOW)
+    restored = await dashboards.restore_dashboard(
+        db,
+        identity=identity,  # type: ignore[arg-type]
+        dashboard_id=uuid.UUID(recent["id"]),
+        new_title=None,
+        now=PINNED_NOW,
+    )
+    with pytest.raises(dashboards.DashboardNotFoundError):
+        await dashboards.restore_dashboard(
+            db,
+            identity=identity,  # type: ignore[arg-type]
+            dashboard_id=uuid.UUID(lapsed["id"]),
+            new_title=None,
+            now=PINNED_NOW,
+        )
+
+    assert [row.title for row in listed.dashboards] == ["Deleted 29 days ago"]
+    assert restored.title == "Deleted 29 days ago"
+
+
+async def test_ac11_restoring_a_title_now_in_use_is_refused_and_asks_for_another(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    first = await _create(db, acme, title="Checkout")
+    await _delete(db, acme, first)
+    holder = await _create(db, acme, title="checkout")
+
+    refused = await _call(db, acme, acme.member, "POST", f"/dashboards/{first['id']}/restore")
+    assert refused.status_code == 409
+    assert refused.json()["existing_dashboard_id"] == holder["id"]
+    still_deleted = await _call(db, acme, acme.member, "GET", f"/dashboards/{first['id']}")
+    assert still_deleted.status_code == 404
+
+    renamed = await _call(
+        db, acme, acme.member, "POST", f"/dashboards/{first['id']}/restore", {"title": "Checkout 2"}
+    )
+
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "Checkout 2" and renamed.json()["version"] == 2
+    # The rename kept the title it replaced, and the entry says so (FR27).
+    assert await _versions(db, first["id"]) == [1]
+    [entry] = await _entries(db, acme, audit.DASHBOARD_RESTORED)
+    assert (entry.detail or {})["previous_title"] == "Checkout"
+
+
+async def test_ac78_a_restore_at_the_live_cap_is_refused_with_words(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    await _delete(db, acme, saved)
+    await _fill(db, acme, live=dashboards.LIVE_DASHBOARDS_CAP)
+
+    refused = await _call(db, acme, acme.member, "POST", f"/dashboards/{saved['id']}/restore")
+
+    assert refused.status_code == 409
+    assert "1,000 dashboards" in refused.json()["detail"]
+
+
+async def test_a_viewer_reads_the_deleted_list_and_may_not_restore(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    await _delete(db, acme, saved)
+
+    assert (
+        await _call(db, acme, acme.viewer, "GET", "/dashboards?deleted=true")
+    ).status_code == 200
+    refused = await _call(db, acme, acme.viewer, "POST", f"/dashboards/{saved['id']}/restore")
+    assert refused.status_code == 403
+
+
+async def test_a_live_dashboard_is_not_restorable_and_deleted_with_service_is_refused(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+
+    live = await _call(db, acme, acme.member, "POST", f"/dashboards/{saved['id']}/restore")
+    both = await _call(db, acme, acme.member, "GET", "/dashboards?deleted=true&service=checkout")
+
+    assert live.status_code == 404
+    assert both.status_code == 422
+
+
+# ------------------------------------------------------------- T7.7: purge (AC120)
+
+
+async def test_ac120_a_purge_removes_the_text_from_every_route_and_the_audit_log(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme, title="Has a secret")
+    renamed = (await _save(db, acme, saved, title="Has a secret, renamed")).json()
+    assert SECRET_NOTE in json.dumps(renamed["definition"])
+    other = await _create(db, acme, title="Another dashboard")
+    base = f"/dashboards/{saved['id']}"
+
+    purged = await _call(db, acme, acme.admin, "POST", f"{base}/purge")
+
+    assert purged.status_code == 204, purged.text
+    for path in (
+        base,
+        f"{base}/versions",
+        f"{base}/versions/1",
+        f"{base}/context?project_id={acme.project_id}&range=1h",
+    ):
+        gone = await _call(db, acme, acme.viewer, "GET", path)
+        assert gone.status_code == 404, path
+        assert SECRET_NOTE not in gone.text
+    overwritten = await _save(db, acme, renamed)  # a save over the purged dashboard
+    assert overwritten.status_code == 404
+    listed = (await _call(db, acme, acme.viewer, "GET", "/dashboards")).json()["dashboards"]
+    assert [row["id"] for row in listed] == [other["id"]]
+    stored = await db.scalar(
+        select(func.count()).select_from(Dashboard).where(Dashboard.id == uuid.UUID(saved["id"]))
+    )
+    kept_versions = await _versions(db, saved["id"])
+    assert (stored, kept_versions) == (0, [])
+    everything = [
+        entry
+        for action in (audit.DASHBOARD_CREATED, audit.DASHBOARD_UPDATED)
+        for entry in await _entries(db, acme, action)
+    ]
+    about_it = [e for e in everything if e.target == f"dashboard:{saved['id']}"]
+    assert about_it and all(
+        (e.detail or {}).get("title") == "[removed]"
+        and (e.detail or {}).get("previous_title", "[removed]") == "[removed]"
+        for e in about_it
+    )
+    # The other dashboard's entry keeps its title: only this dashboard's are rewritten.
+    [elsewhere] = [e for e in everything if e.target == f"dashboard:{other['id']}"]
+    assert (elsewhere.detail or {})["title"] == "Another dashboard"
+    [entry] = await _entries(db, acme, audit.DASHBOARD_PURGED)
+    assert entry.target == f"dashboard:{saved['id']}"
+    assert entry.detail == {"removed": "dashboard"}
+    assert "Has a secret" not in json.dumps(entry.detail)
+
+
+async def test_ac120_a_deleted_dashboard_can_be_purged_too(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    await _delete(db, acme, saved)
+
+    purged = await _call(db, acme, acme.owner, "POST", f"/dashboards/{saved['id']}/purge")
+
+    assert purged.status_code == 204
+    assert (await _call(db, acme, acme.owner, "GET", "/dashboards?deleted=true")).json()[
+        "dashboards"
+    ] == []
+
+
+async def test_ac120_one_version_is_purged_and_the_dashboard_stays(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme, title="Pasted a token")
+    second = (await _save(db, acme, saved, title="Clean title")).json()
+    base = f"/dashboards/{saved['id']}"
+
+    in_use = await _call(
+        db, acme, acme.owner, "POST", f"{base}/purge", {"version": second["version"]}
+    )
+    unknown = await _call(db, acme, acme.owner, "POST", f"{base}/purge", {"version": 9})
+    purged = await _call(db, acme, acme.owner, "POST", f"{base}/purge", {"version": 1})
+
+    assert in_use.status_code == 409 and unknown.status_code == 404
+    assert purged.status_code == 204, purged.text
+    assert await _versions(db, saved["id"]) == []
+    assert (await _call(db, acme, acme.viewer, "GET", f"{base}/versions/1")).status_code == 404
+    assert (await _call(db, acme, acme.viewer, "GET", base)).json()["title"] == "Clean title"
+    titles = [
+        (e.detail or {}).get("title") for e in await _entries(db, acme, audit.DASHBOARD_CREATED)
+    ] + [
+        (e.detail or {}).get("previous_title")
+        for e in await _entries(db, acme, audit.DASHBOARD_UPDATED)
+    ]
+    # The purged version's title is gone from the log; the one still readable is not.
+    assert "Pasted a token" not in titles
+    updated = (await _entries(db, acme, audit.DASHBOARD_UPDATED))[0]
+    assert (updated.detail or {})["title"] == "Clean title"
+    [entry] = await _entries(db, acme, audit.DASHBOARD_PURGED)
+    assert entry.detail == {"removed": "version", "version": 1}
+
+
+async def test_ac120_a_member_and_a_viewer_are_refused_and_nothing_is_removed(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    saved = await _create(db, acme)
+    base = f"/dashboards/{saved['id']}"
+
+    for person in (acme.member, acme.viewer):
+        refused = await _call(db, acme, person, "POST", f"{base}/purge")
+        assert refused.status_code == 403
+    assert (await _call(db, acme, acme.viewer, "GET", base)).status_code == 200
+    assert await _entries(db, acme, audit.DASHBOARD_PURGED) == []
+
+
+async def test_ac120_another_organizations_dashboard_cannot_be_purged(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    saved = await _create(db, acme)
+
+    refused = await _call(db, globex, globex.owner, "POST", f"/dashboards/{saved['id']}/purge")
+
+    assert refused.status_code == 404
+    assert (
+        await _call(db, acme, acme.viewer, "GET", f"/dashboards/{saved['id']}")
+    ).status_code == 200
+
+
+# ------------------------------------------------------ T7.8: dashboards showing a service
+
+
+async def test_ac82_dashboards_naming_the_service_come_first_and_see_all_shows(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    picker = {
+        "service_picker": True,
+        "panels": [
+            {
+                "id": "p_picked",
+                "kind": "service_trend",
+                "title": None,
+                "width": 4,
+                "height": "medium",
+                "settings": {"service": {"picker": True}, "signal": "rate"},
+            }
+        ],
+    }
+    for index in range(6):
+        await _create(db, acme, title=f"Picker {index}", **picker)
+    naming = await _create(db, acme, title="Zzz checkout")
+    await _create(
+        db,
+        acme,
+        title="Names another service",
+        **{
+            "panels": [
+                {
+                    "id": "p_other",
+                    "kind": "service_trend",
+                    "title": None,
+                    "width": 4,
+                    "height": "medium",
+                    "settings": {"service": "payments", "signal": "rate"},
+                }
+            ]
+        },
+    )
+    await _create(db, acme, title="Project only", panels=[_document()["definition"]["panels"][1]])
+
+    answer = (await _call(db, acme, acme.viewer, "GET", "/dashboards?service=checkout")).json()
+
+    assert answer["dashboards"][0]["id"] == naming["id"]
+    assert len(answer["dashboards"]) == 5 and answer["more"] is True
+    assert all(row["id"] == naming["id"] or row["uses_picker"] for row in answer["dashboards"])
+
+
+async def test_ac82_with_few_matches_there_is_no_see_all_and_picker_ones_go_by_last_opened(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+) -> None:
+    picker = {
+        "service_picker": True,
+        "panels": [
+            {
+                "id": "p_picked",
+                "kind": "service_trend",
+                "title": None,
+                "width": 4,
+                "height": "medium",
+                "settings": {"service": {"picker": True}, "signal": "rate"},
+            }
+        ],
+    }
+    never = await _create(db, acme, title="A never opened", **picker)
+    old = await _create(db, acme, title="B opened long ago", **picker)
+    recent = await _create(db, acme, title="C opened lately", **picker)
+    for saved, when in ((old, PINNED_NOW - 40 * DAY), (recent, PINNED_NOW - DAY)):
+        await db.execute(
+            update(Dashboard)
+            .where(Dashboard.id == uuid.UUID(saved["id"]))
+            .values(last_viewed_at=when)
+        )
+
+    answer = (await _call(db, acme, acme.viewer, "GET", "/dashboards?service=checkout")).json()
+
+    assert [row["id"] for row in answer["dashboards"]] == [recent["id"], old["id"], never["id"]]
+    assert answer["more"] is False
+
+
+async def test_the_service_list_hides_deleted_dashboards_and_other_organizations(
+    db: AsyncSession,  # noqa: F811
+    acme: Team,
+    globex: Team,
+) -> None:
+    gone = await _create(db, acme, title="Deleted one")
+    await _delete(db, acme, gone)
+    foreign = (
+        await _call(db, globex, globex.member, "POST", "/dashboards", _document(title="Theirs"))
+    ).json()
+
+    answer = (await _call(db, acme, acme.viewer, "GET", "/dashboards?service=checkout")).json()
+
+    assert answer["dashboards"] == []
+    assert foreign["id"] not in json.dumps(answer)

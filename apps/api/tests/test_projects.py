@@ -33,6 +33,7 @@ from nexovue_api.data.postgres.models import (
     ApiKey,
     AuditLogEntry,
     Check,
+    FindingExplanation,
     Integration,
     NotificationChannel,
     Organization,
@@ -103,7 +104,10 @@ class Tenant:
         ]
         self.webhook_secrets = [
             ProjectWebhookSecret(
-                org_id=self.organization.id, project_id=self.project.id, secret="s" * 32
+                org_id=self.organization.id,
+                project_id=self.project.id,
+                sealed_secret=b"\x02sealed",
+                secret_hint="ssss",
             )
         ]
         for door in self.api_keys + self.site_keys + self.webhook_secrets:
@@ -116,16 +120,39 @@ class Tenant:
             org_id=self.organization.id, kind="owners", name="Organization owners", config={}
         )
         self.owners_channel.id = uuid.uuid4()
+        self.channels: list[NotificationChannel] = [self.owners_channel]
 
         # Empty by default: the ordinary project has no outbound work scheduled,
         # and a test that wants the refusal adds one.
         self.checks: list[Check] = []
         self.integrations: list[Integration] = []
+        # F3's explanations, reduced to what deleting a project changes: whose they are and
+        # whether wording waits for a run. Empty by default; a test that needs one adds it.
+        self.explanations: list[FindingExplanation] = []
 
         # The days the ingest meter recorded for each project — `usage_daily`
         # reduced to the one column the project list reads. Empty by default,
         # which is a project nothing has ever reported for.
         self.metered_days: dict[uuid.UUID, list[date]] = {}
+
+    def add_channel(self, kind: str) -> NotificationChannel:
+        channel = NotificationChannel(
+            org_id=self.organization.id, kind=kind, name=f"{kind} channel", config={}
+        )
+        channel.id = uuid.uuid4()
+        self.channels.append(channel)
+        return channel
+
+    def add_explanation(self, project: Project, wording_state: str) -> FindingExplanation:
+        explanation = FindingExplanation(
+            org_id=self.organization.id,
+            project_id=project.id,
+            finding_id=uuid.uuid4(),
+            wording_state=wording_state,
+        )
+        explanation.wording_changed_at = None
+        self.explanations.append(explanation)
+        return explanation
 
     def record_arrival(self, project: Project, day: date) -> None:
         """One day the meter counted something for this project."""
@@ -139,6 +166,7 @@ class Tenant:
         project.retention_days = 30
         project.sampling_config = {}
         project.masking_config = {}
+        project.release_summary_channel_id = None
         return project
 
     def add_check(self) -> Check:
@@ -249,12 +277,26 @@ class FakeControlPlane:
             return None
         if selected == "NotificationChannel" and "owners" in values:
             return next((tenant.owners_channel for tenant in self._tenants_binding(values)), None)
+        if selected == "NotificationChannel":  # find_channel: by organization and id
+            return next(
+                (
+                    channel
+                    for tenant in self._tenants_binding(values)
+                    for channel in tenant.channels
+                    if channel.id in values
+                ),
+                None,
+            )
         raise AssertionError(f"the fake store has no answer for {selected!r}")
 
     async def scalars(self, statement: Any) -> _Rows:
         if statement.is_update:
             # Closing a deleted project's incidents: alert rows are not modelled here;
             # test_alert_defaults_live proves them.
+            return _Rows([])
+        if statement.column_descriptions[0]["name"] == "FindingFix":
+            # F5's suggestions are not modelled here; test_fix_takeback_live proves a deleted
+            # project's work stops and its code goes (ADR-094).
             return _Rows([])
         values = _bound_values(statement)
         selected = statement.column_descriptions[0]["name"]
@@ -275,6 +317,8 @@ class FakeControlPlane:
         if statement.entity_description["name"] in {"Incident", "AlertRule"}:
             # Alert rows are not modelled here; test_alert_defaults_live proves them.
             return _Changed(0)
+        if statement.entity_description["name"] == "FindingExplanation":
+            return _Changed(self._stop_queued_wording(statement, values))
         doors = {
             "ApiKey": "api_keys",
             "SiteKey": "site_keys",
@@ -290,6 +334,30 @@ class FakeControlPlane:
                     door.revoked_at = revoked_at
                     changed += 1
         return _Changed(changed)
+
+    def _stop_queued_wording(self, statement: Any, values: set[Any]) -> int:
+        """F3's `stop_queued_wording` without a service: the tenant's and project's rows whose
+        wording still waits move to the new state, stamped. The service form, a subquery
+        over findings, is not modelled, and is refused rather than answered wrongly."""
+        params = statement.compile().params
+        assert set(params) == {
+            "org_id_1",
+            "project_id_1",
+            "wording_state_1",
+            "wording_state",
+            "wording_changed_at",
+        }, f"the fake models only the project-wide form, not {sorted(params)}"
+        changed = 0
+        for tenant in self._tenants_binding(values):
+            for row in tenant.explanations:
+                if (
+                    row.project_id == params["project_id_1"]
+                    and row.wording_state == params["wording_state_1"]
+                ):
+                    row.wording_state = params["wording_state"]
+                    row.wording_changed_at = params["wording_changed_at"]
+                    changed += 1
+        return changed
 
     # -- what the tests read ------------------------------------------------
 
@@ -453,9 +521,9 @@ async def test_creating_a_project_records_who_created_it(
 
     entry, *default_rules = db.entries
     assert entry.action == audit.PROJECT_CREATED
-    # F21, F6 FR29: every project starts with two default alert rules, recorded in the
-    # same name.
-    assert [rule.action for rule in default_rules] == [audit.ALERT_RULE_CREATED] * 2
+    # F21, F6 FR29, F19 FR25: every project starts with three default alert rules,
+    # recorded in the same name.
+    assert [rule.action for rule in default_rules] == [audit.ALERT_RULE_CREATED] * 3
     assert {rule.actor_user_id for rule in default_rules} == {acme.user.id}
     assert entry.org_id == acme.organization.id
     assert entry.actor_user_id == acme.user.id
@@ -570,6 +638,30 @@ async def test_deleting_a_project_leaves_another_projects_keys_alone(
     )
 
     assert other_key.revoked_at is None
+
+
+async def test_deleting_a_project_turns_off_its_queued_wording_and_nothing_else(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant
+) -> None:
+    """F3 FR28, AC39: wording queued for a deleted project's findings is turned off in the
+    same transaction, so a queued run sends nothing. Wording already done, another project's
+    and another organization's are left as they are."""
+    queued = acme.add_explanation(acme.project, "pending")
+    done = acme.add_explanation(acme.project, "done")
+    other_project = acme.add_explanation(acme.second_project, "pending")
+    other_tenant = globex.add_explanation(globex.project, "pending")
+
+    closed = await service.delete(
+        _store(db),
+        org_id=acme.organization.id,
+        actor_user_id=acme.user.id,
+        project_id=acme.project.id,
+    )
+
+    assert (queued.wording_state, queued.wording_changed_at) == ("off", closed.deleted_at)
+    assert (done.wording_state, done.wording_changed_at) == ("done", None)
+    assert other_project.wording_state == "pending"
+    assert other_tenant.wording_state == "pending"
 
 
 async def test_deleting_says_plainly_that_the_telemetry_is_still_there(
@@ -1011,6 +1103,82 @@ async def test_writing_config_for_another_organizations_project_is_a_404(
     assert globex.project.masking_config == {}
 
 
+# ------------------------------------------------- F28 FR55: the release summary
+
+
+async def _summary_to(db: FakeControlPlane, acme: Tenant, channel_id: uuid.UUID | None) -> Any:
+    return await service.write_release_summary(
+        _store(db),
+        org_id=acme.organization.id,
+        actor_user_id=acme.user.id,
+        project_id=acme.project.id,
+        channel_id=channel_id,
+    )
+
+
+@pytest.mark.parametrize("kind", ["owners", "email", "slack", "teams", "discord"])
+async def test_a_project_s_release_summary_goes_to_a_channel_people_read_and_is_audited(
+    db: FakeControlPlane, acme: Tenant, kind: str
+) -> None:
+    """FR55, D53, AC83: one channel people read; one audit row."""
+    channel = acme.owners_channel if kind == "owners" else acme.add_channel(kind)
+
+    answer = await _summary_to(db, acme, channel.id)
+
+    assert answer.channel_id == channel.id
+    assert acme.project.release_summary_channel_id == channel.id
+    (entry,) = db.entries
+    assert entry.action == audit.PROJECT_RELEASE_SUMMARY_SET == "project.release_summary_set"
+    assert entry.actor_user_id == acme.user.id
+    assert entry.detail == {"channel_id": str(channel.id)}
+
+
+async def test_turning_the_summary_off_is_null_and_audited(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    acme.project.release_summary_channel_id = acme.owners_channel.id
+
+    answer = await _summary_to(db, acme, None)
+
+    assert answer.channel_id is None
+    assert _summary_channel(acme) is None
+    (entry,) = db.entries
+    assert entry.detail == {"channel_id": None}
+
+
+def _summary_channel(tenant: Tenant) -> uuid.UUID | None:
+    return tenant.project.release_summary_channel_id
+
+
+@pytest.mark.parametrize("whose", ["pagerduty", "webhook", "another organization's"])
+async def test_a_machine_channel_or_another_organization_s_is_refused(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant, whose: str
+) -> None:
+    """AC83: 422 for a PagerDuty or webhook channel, and for another organization's,
+    alike; nothing changes and nothing is audited."""
+    channel = (
+        globex.add_channel("slack")
+        if whose == "another organization's"
+        else acme.add_channel(whose)
+    )
+
+    with pytest.raises(InvalidRequestError):
+        await _summary_to(db, acme, channel.id)
+
+    assert acme.project.release_summary_channel_id is None
+    assert db.entries == []
+
+
+async def test_a_project_reads_where_its_summary_goes(db: FakeControlPlane, acme: Tenant) -> None:
+    """D53: `GET /projects/{project_id}` carries it, so no other read is needed."""
+    assert (
+        await service.get(_store(db), org_id=acme.organization.id, project_id=acme.project.id)
+    ).release_summary_channel_id is None
+    acme.project.release_summary_channel_id = acme.owners_channel.id
+    detail = await service.get(_store(db), org_id=acme.organization.id, project_id=acme.project.id)
+    assert detail.release_summary_channel_id == acme.owners_channel.id
+
+
 # ---------------------------------------------------------------- routes
 
 
@@ -1128,6 +1296,48 @@ async def test_a_bad_slug_is_refused_before_it_reaches_the_service(
         )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("role", ["member", "viewer"])
+async def test_the_release_summary_route_refuses_a_member_and_a_viewer(
+    db: FakeControlPlane, acme: Tenant, role: str
+) -> None:
+    """AC83: under `CONFIGURE_PROJECTS`, which owners and admins hold."""
+    acme.user.role = role
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        response = await client.put(
+            f"{API_PREFIX}/projects/{acme.project.id}/release-summary",
+            json={"channel_id": str(acme.owners_channel.id)},
+        )
+
+    assert response.status_code == 403
+    assert acme.project.release_summary_channel_id is None
+
+
+async def test_the_release_summary_route_answers_422_for_a_machine_channel(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    pagerduty = acme.add_channel("pagerduty")
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        refused = await client.put(
+            f"{API_PREFIX}/projects/{acme.project.id}/release-summary",
+            json={"channel_id": str(pagerduty.id)},
+        )
+        chosen = await client.put(
+            f"{API_PREFIX}/projects/{acme.project.id}/release-summary",
+            json={"channel_id": str(acme.owners_channel.id)},
+        )
+
+    assert refused.status_code == 422
+    assert chosen.status_code == 200
+    assert chosen.json() == {
+        "project_id": str(acme.project.id),
+        "channel_id": str(acme.owners_channel.id),
+    }
 
 
 def test_the_policy_that_guards_these_routes_refuses_a_member() -> None:

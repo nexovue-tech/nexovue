@@ -1,0 +1,48 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Get a pull request', GET /repos/{owner}/{repo}/pulls/{pull_number}, once merged: `merged_at` and `merge_commit_sha` (the squashed commit on the base) are from the same page as remembered, the poller's FR30 facts (F5 Step 8).",
+  "request": {
+    "method": "GET",
+    "path": "/repos/acme/api/pulls/1"
+  },
+  "status": 200,
+  "compared": [
+    "number",
+    "state",
+    "draft",
+    "merged",
+    "merged_at",
+    "closed_at",
+    "merge_commit_sha",
+    "head.sha"
+  ],
+  "values": ["state", "merged"],
+  "body": {
+    "id": 7000001,
+    "node_id": "PR_x",
+    "number": 1,
+    "state": "closed",
+    "draft": true,
+    "locked": false,
+    "merged": true,
+    "merged_at": "2026-11-22T10:00:00Z",
+    "closed_at": "2026-11-22T10:00:00Z",
+    "title": "t",
+    "body": "b",
+    "user": {
+      "login": "nexovue-acme[bot]",
+      "type": "Bot"
+    },
+    "head": {
+      "ref": "nexovue/suggestion-1",
+      "sha": "0000000000000000000000000000000000000000",
+      "label": "acme:nexovue/suggestion-1"
+    },
+    "base": {
+      "ref": "main",
+      "label": "acme:main"
+    },
+    "url": "u",
+    "html_url": "u",
+    "merge_commit_sha": "1111111111111111111111111111111111111111"
+  }
+}

@@ -9,6 +9,7 @@ construct its own would be a router that could read another tenant.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Final
@@ -22,8 +23,11 @@ from nexovue_api.apitokens import service as api_tokens
 from nexovue_api.apitokens.tokens import (
     INGEST_KEY_SCHEMES,
     INGEST_KEYS_CANNOT_READ,
+    TICKETS_ARE_NOT_PEOPLE,
+    TICKETS_NOT_ACCEPTED,
     TOKENS_ARE_READ_ONLY,
     looks_like_api_token,
+    looks_like_assistant_ticket,
 )
 from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.audit import service as audit
@@ -104,7 +108,21 @@ async def get_current_identity(
         raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
     if session.impersonation is not None:
         await _hold_support_view(connection, session.impersonation, user, organization, db)
+    await _release_connection(db)
     return Identity(user=user, organization=organization, impersonation=session.impersonation)
+
+
+async def _release_connection(db: AsyncSession) -> None:
+    """End the caller lookup's transaction, so the request holds no pooled connection.
+
+    Otherwise it stayed `idle in transaction` to the request's end, and a route needing a
+    second connection (the reader's session lookup) deadlocked a full pool (ADR-102).
+
+    A commit, not a rollback (which expires the person and organization just loaded) nor a
+    close (which detaches them, losing a route's change to `identity.user`). Nothing here
+    writes but the support view's audit line, committed already.
+    """
+    await db.commit()
 
 
 async def _hold_support_view(
@@ -175,10 +193,25 @@ class Reader:
     token_id: uuid.UUID | None = None
     # The person, when it is one. None for a token — there is no user behind it.
     identity: Identity | None = None
+    # F4: the question a chat ticket reads for. Neither a person nor a token (design,
+    # trap 2): it gets no person fields, and its project is its question's.
+    message_id: uuid.UUID | None = None
 
     @property
     def is_token(self) -> bool:
         return self.token_id is not None
+
+    @property
+    def is_person(self) -> bool:
+        """F3 (A68, BR10): a signed-in person, not a token. A token reads an explanation's
+        facts and never a model's words; F22 and F4 build on this one helper."""
+        return self.identity is not None
+
+    @property
+    def is_real_person(self) -> bool:
+        """F22 FR20: only a reader with a real session and no support view counts
+        as a person — the one gate for notes, event detail and the copy source."""
+        return self.is_person and self.identity is not None and self.identity.impersonation is None
 
     def may_read_project(self, project_id: uuid.UUID) -> bool:
         """Whether this caller's scope covers a project. A person's covers all."""
@@ -198,6 +231,8 @@ def _refuse_a_token_here(connection: HTTPConnection) -> None:
     presented = _presented_bearer(connection)
     if presented is not None and looks_like_api_token(presented):
         raise PermissionDeniedError(TOKENS_ARE_READ_ONLY)
+    if presented is not None and looks_like_assistant_ticket(presented):
+        raise PermissionDeniedError(TICKETS_ARE_NOT_PEOPLE)
 
 
 def _usage_for(connection: HTTPConnection) -> TokenUsage | None:
@@ -210,6 +245,29 @@ def _usage_for(connection: HTTPConnection) -> TokenUsage | None:
     resources = getattr(getattr(connection.scope.get("app"), "state", None), "resources", None)
     usage: TokenUsage | None = getattr(resources, "token_usage", None)
     return usage
+
+
+@dataclass(frozen=True, slots=True)
+class TicketScope:
+    """What a valid question ticket reads as: one organization, one project, one question."""
+
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    message_id: uuid.UUID
+
+
+ONLY_A_TICKET_READS_HERE: Final = "Only chat reads this, on a question's ticket."
+
+# F4: the ticket check is registered on the app (`main.py`), not imported here, so the
+# dependency every route reads through, reliability targets' among them, reaches no AI
+# code (`test_detection_has_no_ai.py`), as `_usage_for` reads the token counter.
+TicketCheck = Callable[[AsyncSession, str, HTTPConnection], Awaitable[TicketScope]]
+
+
+def _ticket_check_for(connection: HTTPConnection) -> TicketCheck | None:
+    state = getattr(connection.scope.get("app"), "state", None)
+    check: TicketCheck | None = getattr(state, "ticket_check", None)
+    return check
 
 
 async def get_current_reader(
@@ -227,13 +285,40 @@ async def get_current_reader(
     if presented is not None and looks_like_api_token(presented):
         now = datetime.now(UTC)
         token = await api_tokens.token_for(db, presented, now=now)
+        await _release_connection(db)
         usage = _usage_for(connection)
         if usage is not None:
             usage.count(token.id, now)
         return _reader_for_token(token)
+    if presented is not None and looks_like_assistant_ticket(presented):
+        return await _reader_for_ticket(connection, db, presented)
     session = await get_current_session(connection, sessions)
     identity = await get_current_identity(connection, session, db)
     return Reader(org_id=identity.org_id, identity=identity)
+
+
+async def _reader_for_ticket(
+    connection: HTTPConnection, db: AsyncSession, presented: str
+) -> Reader:
+    # Rechecked on every read: the person, the scope, and whether chat is still on.
+    check = _ticket_check_for(connection)
+    if check is None:
+        raise UnauthenticatedError(TICKETS_NOT_ACCEPTED)
+    ticket = await check(db, presented, connection)
+    await _release_connection(db)
+    return Reader(
+        org_id=ticket.org_id, project_scope=ticket.project_id, message_id=ticket.message_id
+    )
+
+
+async def get_ticket_reader(connection: HTTPConnection, db: DbSession) -> Reader:
+    """F4: the caller of a route only chat's loop may read, knowledge search alone (design,
+    section 6; D31). A person or an API token is refused: knowledge is not offered to tokens
+    (FR37), and a person reads runbooks on their own screen."""
+    presented = _presented_bearer(connection)
+    if presented is None or not looks_like_assistant_ticket(presented):
+        raise PermissionDeniedError(ONLY_A_TICKET_READS_HERE)
+    return await _reader_for_ticket(connection, db, presented)
 
 
 def _reader_for_token(token: ApiToken) -> Reader:

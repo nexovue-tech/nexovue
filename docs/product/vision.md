@@ -130,14 +130,14 @@ Special cases:
 |---|---------|---|-------|
 | 1 | **Anomaly detection** | F6 | Automatic detection of unusual patterns in metrics/traces — no manual threshold setup. This is the trigger for everything below. |
 | 2 | **Alerts & notifications — multiple connectors** | F21 | Email, Slack, Teams, Discord, PagerDuty and webhooks. WhatsApp and SMS were dropped (F21, D6). Flap guard and burst cap against alert fatigue. |
-| 3 | **Case management** | F22 | When an error/issue happens → automatically create a case/incident. Case dashboard with lifecycle (open → investigating → resolved). Connectors: GitHub Issues, Jira, etc. — push cases to the tools teams already use. |
-| 4 | **AI chatbot (with RAG)** | F4 | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. |
-| 5 | **AI insights** | F3 | Proactive plain-language findings: "Latency on /checkout jumped 4x at 14:32, correlated with deploy a41f2c9 and DB connection errors." Cross-signal correlation (metric → trace → log). |
-| 6 | **AI solution** | F5 | Beyond diagnosis → suggested fix: "Probable cause: unindexed query in deploy a41f2c9. Suggested fix: add index on orders.user_id." Possibly draft the PR via GitHub connector. |
+| 3 | **Case management** | F22 | When a finding is detected, one click makes it someone's case, with its evidence already attached; no case starts by itself (FD12, ADR-022). Two states, investigating and resolved, on top of the finding's signal state. A GitHub issue created by a person's click, whose status follows. *Amended by F22, 2026-11-22: was "automatically create a case/incident".* |
+| 4 | **AI chatbot (with RAG)** | F4 | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. *Amended by F4, 2026-11-22: "docs" are the team's own runbooks and case notes, typed or uploaded into nexovue (no sync from a wiki or repository); telemetry is read through the API's own reads, as the person asking; each sentence cites the read it came from.* |
+| 5 | **AI insights** | F3 | Proactive plain-language findings: "checkout is 4x slower than normal since 14:32." Beside it, the facts that line up, each linked to its data: a signed deploy 4 minutes before, and a slower call to `payments`, with how often deploys here are followed by a finding. Facts first, optional plain-language wording after; never a stated cause the data cannot back (F3). |
+| 6 | **AI solution** | F5 | Beyond diagnosis → a suggested fix: a change to the service's own files, which a person lists and agrees to send to the AI they chose, checked by Nexovue's published rules and downloadable as a patch; a draft pull request only on a second click (switched off in code until the safety evaluation is done). Where Nexovue cannot read the code, a labelled general example. See [`features/ai-solution/spec.md`](../features/ai-solution/spec.md). |
 
 **How the features chain together (the incident pipeline):**
 
-Anomaly detection → AI insight (what + why) → Case created automatically → Alert sent via connectors → AI solution suggested → Developer chats with AI bot for more detail → Case closed, learned for future RAG.
+Anomaly detection → AI insight (what + why) → Alert sent via connectors → a person takes the case in one click (*amended by F22: not created automatically, FD12*) → AI solution suggested → Developer chats with AI bot for more detail → Case closed, learned for future RAG.
 
 This pipeline is what the product sells. **"Competitors have pieces, not the chain" no longer holds as written:** by 2026 several vendors describe root cause through to a fix pull request, and the selling reason is now the chain on the customer's own server ([`phase-2-plan.md`](phase-2-plan.md), which says how far that is unique). An alert does not wait for the AI step.
 
@@ -241,7 +241,7 @@ Key design points:
 
 *(Resolved — recommendations accepted:)*
 - ✅ First slice of categories: **synthetic + error tracking + APM basics** (synthetic = zero-instrumentation value; error tracking = most-loved dev feature; APM nearly free once traces flow)
-- ✅ Case management: **thin layer first** — cases as Postgres rows + simple list/detail UI; connectors push to GitHub Issues/Jira. Our value = auto-creating the case with the finding attached, not lifecycle management.
+- ✅ Case management: **thin layer first** — cases as Postgres rows + simple list/detail UI; connectors push to GitHub Issues/Jira. Our value = auto-creating the case with the finding attached, not lifecycle management. *Superseded by F22 (founder's FD12, ADR-022; recorded 2026-11-22): no case starts by itself; the value is that every finding is one click from a case with its evidence already attached.*
 - ✅ RAG chatbot index: **knowledge, not telemetry** — embed resolved findings + resolution notes, customer runbooks/docs, service descriptions. Raw telemetry queried LIVE via tool-calling against ClickHouse. RAG for knowledge, tools for data.
 - ✅ Anomaly detection: statistical first (seasonality-aware baselines, sustained deviation) — see architecture doc decisions.
 - ✅ Onboarding: Pattern A env vars → live first-span celebration → then AUTO-CREATE everything (default service overview, suggested synthetic check from their domain, alert presets). Zero required config before first value.

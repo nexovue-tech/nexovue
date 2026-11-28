@@ -90,19 +90,25 @@ async def client() -> AsyncIterator[AsyncClient]:
 async def tenant_with_metrics(client: AsyncClient) -> tuple[str, str]:
     """The tenant with the most *database* readings, so emptiness means one thing.
 
-    Database readings, not any gauge: the busiest project by every gauge is the demo
-    shop on a developer's machine, which has these too, and on CI's fresh machine
-    whichever project sent most — which may have none (CI, 2026-10-28). Raw client on
-    purpose: asking "who has data" is a question no tenant-scoped query can ask, and
-    it is setup rather than a claim about the API.
+    A reading counts only if it is a database reading in full: a duration that names its
+    engine, a connection count that names its state. Other suites leave duration rows
+    without either (and tenants nothing cleans up), and counting those picked a tenant with
+    no connection readings and no `db.system`, so these tests failed on whichever tenant
+    happened to hold the most rows. The tenant must hold both metrics. Raw client on
+    purpose: asking "who has data" is a question no tenant-scoped query can ask, and it is
+    setup rather than a claim about the API.
     """
     result = await client.query(
-        """
+        f"""
         SELECT tenant_id, project_id, count() AS readings
         FROM metrics_gauge
         WHERE timestamp >= %(since)s
-          AND metric_name IN (%(duration)s, %(connections)s)
+          AND (
+            (metric_name = %(duration)s AND {queries.DB_SYSTEM} != '')
+            OR (metric_name = %(connections)s AND {queries.CONNECTION_STATE} != '')
+          )
         GROUP BY tenant_id, project_id
+        HAVING uniqExact(metric_name) = 2
         ORDER BY readings DESC
         LIMIT 1
         """,
@@ -315,6 +321,10 @@ async def partly_redelivered_statement(client: AsyncClient) -> AsyncIterator[tup
     The four readings are 0.7s, 0.3s, 0.5s and 0.5s, whose mean is 0.5. Rewriting
     only the 0.7 pulls a duplicate-weighted mean to 0.54.
 
+    **The first reading opens a trend bucket**, so the four share one whatever the second
+    of the minute the run starts at. Taken at "a minute ago", the readings straddled a
+    bucket edge three runs in sixty and the bucket then held fewer than the four.
+
     **Each reading gets its own instant**, a second apart and well inside one
     bucket. Four readings of one statement at the same instant with the same
     attributes are not four readings — they are one stored four times, and
@@ -322,7 +332,7 @@ async def partly_redelivered_statement(client: AsyncClient) -> AsyncIterator[tup
     redelivered copy from a second measurement.
     """
     tenant_id = str(uuid.uuid4())
-    base = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=1)
+    base = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=1)
     measured = [
         (base + timedelta(seconds=offset), value)
         for offset, value in enumerate((0.7, 0.3, 0.5, 0.5))

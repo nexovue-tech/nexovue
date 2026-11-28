@@ -36,6 +36,7 @@ const PROJECT: ProjectDetail = {
   retention_days: 30,
   sampling_config: {},
   masking_config: {},
+  release_summary_channel_id: null,
   created_at: "2026-09-01T09:00:00Z",
 };
 const STATS: FindingStats = {
@@ -48,6 +49,20 @@ const STATS: FindingStats = {
     { service_name: "checkout", opened: 3, false_alarms: 1, false_alarms_per_week: 1 },
     { service_name: "search", opened: 1, false_alarms: 0, false_alarms_per_week: 0 },
   ],
+};
+
+// The Deploys section's reading (F28), empty.
+const NO_DEPLOY_INTAKE = {
+  project_id: PROJECT_ID,
+  webhook_path: `/api/v1/deploys/webhook/${PROJECT_ID}`,
+  signature_header: "X-Hub-Signature-256",
+  secrets: [],
+  last_deploy_at: null,
+  last_check_at: null,
+  last_refusal: null,
+  current_versions: [],
+  over_release_cap: false,
+  mixed_environment_services: [],
 };
 
 const mounted: Root[] = [];
@@ -91,6 +106,7 @@ function stubApi({
       if (url.pathname === SETTINGS_PATH) return json({ sensitivity: "normal", timezone: "UTC" });
       if (url.pathname === STATS_PATH) return typeof stats === "function" ? stats() : json(stats);
       // The other sections' lists, all empty: this suite is about one section.
+      if (url.pathname === "/api/v1/deploys/webhook-secrets") return json(NO_DEPLOY_INTAKE);
       if (method === "GET") return json({ secrets: [], variables: [], windows: [], checks: [] });
       throw new Error(`no stub for ${method} ${url.pathname}`);
     }),

@@ -1,12 +1,16 @@
 package metricwriting
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
 
+	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
+
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/proberdoor"
 )
 
 func discardLogger(t *testing.T) *slog.Logger {
@@ -35,5 +39,31 @@ func TestRetentionFallsBackToTheDeploymentDefault(t *testing.T) {
 	_, derived := retentionSource(cfg, Options{}).Retention("a-project-nobody-configured")
 	if derived != 395 {
 		t.Errorf("derived retention = %d, want the deployment default of 395", derived)
+	}
+}
+
+// A forged synthetic reading is dropped, never silently: the batch's drops are
+// counted for the heartbeat and named in one warning, with the tenant and door
+// that sent them (browser-door decision 4).
+func TestDroppedSyntheticReadingsAreCountedInALogLine(t *testing.T) {
+	var captured bytes.Buffer
+	pipeline := &Pipeline{log: slog.New(slog.NewJSONHandler(&captured, nil))}
+
+	pipeline.reportSyntheticRefused(t.Context(), proberdoor.Refusals{
+		Count: 3, TenantID: testTenant, ProjectID: testProject, Door: nexovuev1.Door_DOOR_RUM,
+	})
+	pipeline.reportSyntheticRefused(t.Context(), proberdoor.Refusals{})
+
+	if pipeline.syntheticRefused != 3 {
+		t.Errorf("synthetic_points_refused = %d, want 3", pipeline.syntheticRefused)
+	}
+	lines := strings.Split(strings.TrimSpace(captured.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("logged %d lines, want one warning for the batch that dropped points: %q", len(lines), lines)
+	}
+	for _, want := range []string{`"level":"WARN"`, `"refused":3`, `"tenant_id":"` + testTenant + `"`, `"door":"DOOR_RUM"`} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("the warning %s does not carry %s", lines[0], want)
+		}
 	}
 }

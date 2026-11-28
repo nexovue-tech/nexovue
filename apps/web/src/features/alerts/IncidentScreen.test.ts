@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { CASE_IS_NOT_AN_ALERT } from "@/shared/case-words";
 
 import {
   alertReads,
@@ -20,7 +22,15 @@ import {
  * check, so a message about a check deleted since led to "No such check".
  */
 
-afterEach(unmountAll);
+// Pinned: the incident's window is counted from this clock, never the day the test runs.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2026-11-12T10:00:00Z"));
+});
+afterEach(() => {
+  unmountAll();
+  vi.useRealTimers();
+});
 
 const heading = (container: HTMLElement) =>
   waitFor(() => container.querySelector("h1"), "the incident's heading");
@@ -93,6 +103,162 @@ describe("the incident page", () => {
     );
   });
 
+  it("shows a burn's current figures, as of when, with its target (F19 AC104)", async () => {
+    const burning = incident({
+      rule_name: "Reliability targets",
+      condition_kind: "slo_burn",
+      subject_key: "slo:t-1",
+      subject_label: "checkout latency under 487.2 ms, 99.9% over 28 days",
+      detail: {
+        slo_id: "t-1",
+        kind: "service_latency",
+        service: "checkout",
+        objective_percent: "99.9",
+        window_days: 28,
+        holding: true,
+        rate: 4.6,
+        hours_left: 60,
+        allowed: 672,
+        left: 312,
+        as_of: minutesAgo(1),
+      },
+    });
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(burning) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+
+    expect((await heading(container)).textContent).toBe(
+      "checkout latency under 487.2 ms, 99.9% over 28 days is using its allowed slow requests 4 times faster than allowed",
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("4 times faster than allowed.");
+    expect(text).toContain("At this rate, what is left lasts about 2 days.");
+    expect(text).toContain("Slow requests still allowed: 312 of 672.");
+    expect(text).toContain("As of");
+    expect(text).not.toContain("failures");
+    expect(container.querySelector('a[href="/slos/t-1"]')?.textContent).toBe("Open the target");
+  });
+
+  it("states a burn's finding, last deploy and links to act from, in the project's zone (AC85, AC108)", async () => {
+    const opened = new Date(Date.now() - 26 * 3_600_000);
+    opened.setUTCSeconds(0, 0);
+    const deployed = new Date(opened.getTime() - 11 * 60_000).toISOString();
+    const burning = incident({
+      rule_name: "Reliability targets",
+      condition_kind: "slo_burn",
+      subject_key: "slo:t-1",
+      subject_label: "checkout availability, 99.9% over 28 days",
+      opened_at: opened.toISOString(),
+      zone: "Asia/Kolkata",
+      detail: { slo_id: "t-1", kind: "service_availability", service: "checkout", rate: 14 },
+      burn: {
+        findings: [{ id: "f-1", title: "checkout is failing more than normal" }],
+        last_deploy_at: deployed,
+        deploys_connected: true,
+        target_deleted: false,
+      },
+    });
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(burning) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+    const text = container.textContent ?? "";
+
+    const clock = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Kolkata",
+    });
+    expect(text).toContain(`${clock.format(new Date(deployed))} Kolkata time, 11 minutes before`);
+    // Not today in the project's zone, so the start carries its date (AC108).
+    expect(text).toMatch(
+      new RegExp(`Started: \\d{1,2} [A-Z][a-z]{2}, ${clock.format(opened)} Kolkata time`),
+    );
+    expect(container.querySelector('a[href="/findings/f-1"]')?.textContent).toBe(
+      "checkout is failing more than normal",
+    );
+    expect(container.querySelector('a[href="/services/checkout"]')).not.toBeNull();
+    expect(container.querySelector('a[href^="/errors"]')?.textContent).toBe(
+      "Errors in checkout since this started",
+    );
+    expect(container.querySelector('a[href="/slos/t-1"]')).not.toBeNull();
+    expect(container.querySelector(".max-w-3xl")).toBeNull();
+  });
+
+  it("tells no deploy recorded from deploys not connected, and a deleted target (AC85)", async () => {
+    const base = {
+      rule_name: "Reliability targets",
+      condition_kind: "slo_burn" as const,
+      subject_key: "slo:t-1",
+      subject_label: "checkout availability, 99.9% over 28 days",
+      detail: { slo_id: "t-1", kind: "service_availability", service: "checkout" },
+    };
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(
+        incident({
+          ...base,
+          burn: {
+            findings: [],
+            last_deploy_at: null,
+            deploys_connected: false,
+            target_deleted: true,
+          },
+        }),
+      ),
+    });
+    const unconnected = await mountAt("/alerts/incidents/inc-1");
+    await heading(unconnected.container);
+    expect(unconnected.container.textContent).toContain("Deploys are not connected.");
+    expect(unconnected.container.textContent).toContain(
+      "This target has since been deleted. What it recorded is above.",
+    );
+    expect(unconnected.container.querySelector('a[href="/slos/t-1"]')).toBeNull();
+    unmountAll();
+
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(
+        incident({
+          ...base,
+          burn: {
+            findings: [],
+            last_deploy_at: null,
+            deploys_connected: true,
+            target_deleted: false,
+          },
+        }),
+      ),
+    });
+    const none = await mountAt("/alerts/incidents/inc-1");
+    await heading(none.container);
+    expect(none.container.textContent).toContain("No deploy recorded.");
+  });
+
+  it("links a check target's burn to its check (AC85)", async () => {
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(
+        incident({
+          rule_name: "Reliability targets",
+          condition_kind: "slo_burn",
+          subject_key: "slo:t-2",
+          subject_label: "Payment check availability, 99% over 7 days",
+          detail: { slo_id: "t-2", kind: "check_availability", check_id: "chk-9" },
+          burn: {
+            findings: [],
+            last_deploy_at: null,
+            deploys_connected: false,
+            target_deleted: false,
+          },
+        }),
+      ),
+    });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+    expect(container.querySelector('a[href="/synthetics/chk-9"]')?.textContent).toBe(
+      "Open the check and its runs",
+    );
+  });
+
   it("says it could not load rather than showing an empty incident", async () => {
     stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": problem(404, "No such incident.") });
     const { container } = await mountAt("/alerts/incidents/inc-1");
@@ -130,5 +296,131 @@ describe("the incident page", () => {
       "the row's link to its incident",
     );
     expect(details.textContent).toBe("Details");
+  });
+});
+
+describe("Look next on an incident with no finding (F3 FR53, AC101)", () => {
+  const lookNext = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLAnchorElement>('[aria-labelledby="incident-look-next"] a'),
+  ];
+
+  it("opens its service's data for its window", async () => {
+    const slow = incident({
+      condition_kind: "service_latency_p95",
+      subject_key: "service:checkout",
+      subject_label: "checkout",
+      opened_at: "2026-11-09T14:02:00.000Z",
+      resolved_at: "2026-11-09T14:30:00.000Z",
+      detail: { service: "checkout", reading: "p95 latency", value: 720, threshold: 500 },
+    });
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(slow) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+
+    const links = await waitFor(
+      () => lookNext(container).length > 0 && lookNext(container),
+      "Look next",
+    );
+    expect(links.map((link) => link.textContent)).toEqual([
+      "Traces",
+      "Logs",
+      "Errors",
+      "Deploys",
+      "Infrastructure (whole project)",
+    ]);
+    const traces = new URL(links[0].getAttribute("href") ?? "", "http://x");
+    expect(traces.searchParams.get("service")).toBe("checkout");
+    expect(traces.searchParams.get("from")).toBe("2026-11-09T13:47:00.000Z");
+    expect(traces.searchParams.get("to")).toBe("2026-11-09T14:35:00.000Z");
+    expect(traces.searchParams.get("finding")).toBeNull();
+  });
+
+  it("opens the project's data for a check's incident, which has no service", async () => {
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+
+    const [traces] = await waitFor(
+      () => lookNext(container).length > 0 && lookNext(container),
+      "Look next",
+    );
+    expect(
+      new URL(traces.getAttribute("href") ?? "", "http://x").searchParams.get("service"),
+    ).toBeNull();
+  });
+});
+
+describe("a case is not an alert (F22 FR53, AC121)", () => {
+  it("says a linked alert is a rule's own record and cannot become a case", async () => {
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await heading(container);
+
+    expect(readable(container)).toContain(CASE_IS_NOT_AN_ALERT);
+  });
+});
+
+describe("dashboards showing this service (F20, FR57, AC117)", () => {
+  const forService = json({
+    dashboards: [{ id: "dash-1", title: "Checkout on-call", uses_picker: false }],
+    more: true,
+  });
+  const serviceIncident = (changes = {}) =>
+    incident({
+      condition_kind: "service_errors" as never,
+      subject_key: "service:checkout",
+      subject_label: "checkout",
+      detail: {},
+      ...changes,
+    });
+
+  it("offers them for a rule that names a service, opened on a live window covering an open incident", async () => {
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(serviceIncident()),
+      "GET /dashboards": forService,
+    });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await waitFor(() => container.querySelector("#dashboards-for-service"), "the section");
+    await waitFor(() => container.querySelector('a[href^="/dashboards/dash-1"]'), "the link");
+
+    const link = container.querySelector('a[href^="/dashboards/dash-1"]');
+    const search = new URLSearchParams(link?.getAttribute("href")?.split("?")[1]);
+    expect(search.get("service")).toBe("checkout");
+    expect(search.get("project")).toBe(incident().project_id);
+    // Opened 7 minutes ago: the shortest range that starts before it, 15 minutes, is too short
+    // once the lead is added, so the hour.
+    expect(search.get("range")).toBe("1h");
+    expect(search.get("from")).toBeNull();
+    expect(readable(container)).toContain("See all");
+  });
+
+  it("opens a closed incident on fixed times with a margin on each side", async () => {
+    const over = serviceIncident({
+      opened_at: minutesAgo(120),
+      resolved_at: minutesAgo(60),
+    });
+    stubApi({
+      ...alertReads(),
+      "GET /alerts/incidents/inc-1": json(over),
+      "GET /dashboards": forService,
+    });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+    await waitFor(() => container.querySelector('a[href^="/dashboards/dash-1"]'), "the link");
+
+    const href = container.querySelector('a[href^="/dashboards/dash-1"]')?.getAttribute("href");
+    const search = new URLSearchParams(href?.split("?")[1]);
+    expect(search.get("range")).toBeNull();
+    // 60 minutes long: 15 minutes of margin each side.
+    expect(search.get("from")).toBe("2026-11-12T07:45:00.000Z");
+    expect(search.get("to")).toBe("2026-11-12T09:15:00.000Z");
+  });
+
+  it("is not offered for an incident about a check, which names no service", async () => {
+    stubApi({ ...alertReads(), "GET /alerts/incidents/inc-1": json(incident()) });
+    const { container } = await mountAt("/alerts/incidents/inc-1");
+
+    await heading(container);
+    expect(container.querySelector("#dashboards-for-service")).toBeNull();
   });
 });

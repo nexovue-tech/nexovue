@@ -145,9 +145,7 @@ export function ConnectAnAssistant() {
 
   return (
     <section aria-label="Connect an AI assistant" className="mt-8 border-line border-t pt-6">
-      <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
-        Connect an AI assistant
-      </h2>
+      <h2 className="heading-section">Connect an AI assistant</h2>
       <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         Any MCP client that reaches a remote server with a header can read this organization&rsquo;s
         services, errors, incidents and checks — with a token you create above, and nothing more. It

@@ -16,6 +16,10 @@ export type SettingsPath =
   | "/settings/audit"
   | "/settings/support"
   | "/settings/channels"
+  | "/settings/ai"
+  | "/settings/runbooks"
+  | "/settings/explanations"
+  | "/settings/connections"
   | "/settings/projects"
   | "/settings/billing"
   | "/settings/usage";
@@ -33,6 +37,11 @@ export interface SettingsItem {
    * no billing and no nexovue staff to grant support access to.
    */
   hostedOnly?: true;
+  /**
+   * Only where AI may be offered, a customer's own install (F4 `ai_available`): runbooks,
+   * which chat quotes. The hosted service offers no chat yet.
+   */
+  selfHostedOnly?: true;
   /**
    * What somebody might type looking for it, in the words they would use rather
    * than the ones on the tab. "Sessions" and "two-factor" both live under
@@ -75,7 +84,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     ],
   },
   {
-    label: "This organization",
+    label: "Organization",
     items: [
       {
         path: "/settings/members",
@@ -93,6 +102,11 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         keywords: ["api", "token", "read", "ci", "script", "mcp", "assistant", "curl", "export"],
       },
       {
+        path: "/settings/projects",
+        title: "Projects",
+        keywords: ["project", "environment", "staging", "production", "delete"],
+      },
+      {
         path: "/settings/audit",
         title: "Audit log",
         requires: "read_audit",
@@ -104,6 +118,68 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         requires: "grant_support",
         hostedOnly: true,
         keywords: ["support", "help", "view as", "impersonate", "access", "nexovue"],
+      },
+      {
+        // F3 FR54: rating and rule counts, and stopping a rule naming causes. Not an AI
+        // screen: it stands with AI off.
+        path: "/settings/explanations",
+        title: "Explanations",
+        requires: "configure_detection",
+        keywords: ["explanation", "likely cause", "rule", "rating", "useful", "evidence"],
+      },
+      {
+        path: "/settings/usage",
+        title: "Usage",
+        keywords: ["ingestion", "bytes", "allowance", "quota", "spend"],
+      },
+      {
+        path: "/settings/billing",
+        title: "Billing",
+        hostedOnly: true,
+        keywords: ["plan", "payment", "card", "invoice", "charge", "subscription", "cancel"],
+      },
+    ],
+  },
+  {
+    // UX review 2026-11-28 (drawing D): what this organization connects nexovue to.
+    label: "Connected",
+    items: [
+      {
+        // F3: open to everyone, since its first sentence answers "is AI on here?"; owners
+        // and admins set it up there (design, *AI settings*).
+        path: "/settings/ai",
+        title: "AI",
+        keywords: [
+          "ai",
+          "model",
+          "provider",
+          "ollama",
+          "claude",
+          "openai",
+          "bedrock",
+          "limit",
+          "tokens",
+          "wording",
+          "chat",
+          "suggested fix",
+          "pull request",
+        ],
+      },
+      {
+        path: "/settings/connections",
+        title: "GitHub",
+        // F22: GitHub (and, once Atlassian answers, Jira, which nothing names until then).
+        requires: "manage_connections",
+        keywords: [
+          "github",
+          "issues",
+          "tracker",
+          "app",
+          "repository",
+          "integration",
+          "connections",
+          "code location",
+        ],
       },
       {
         path: "/settings/channels",
@@ -121,21 +197,41 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         ],
       },
       {
-        path: "/settings/projects",
-        title: "Projects",
-        keywords: ["project", "environment", "staging", "production", "delete"],
-      },
-      {
-        path: "/settings/billing",
-        title: "Billing",
-        hostedOnly: true,
-        keywords: ["plan", "payment", "card", "invoice", "charge", "subscription", "cancel"],
-      },
-      {
-        path: "/settings/usage",
-        title: "Usage",
-        keywords: ["ingestion", "bytes", "allowance", "quota", "spend"],
+        // F4 T5.3 (D40): its own screen, not inside AI settings, since members write
+        // runbooks and AI settings are for those who manage AI. Everyone signed in reads.
+        path: "/settings/runbooks",
+        title: "Runbooks",
+        selfHostedOnly: true,
+        keywords: ["runbook", "playbook", "procedure", "instructions", "chat", "knowledge"],
       },
     ],
   },
 ];
+
+/**
+ * What the rail offers this reader: what they may open, on this kind of install, matching
+ * what they typed (lower-cased). Groups left empty are dropped.
+ */
+export function offeredSettings(
+  groups: readonly SettingsGroup[],
+  {
+    permissions,
+    hosted,
+    needle,
+  }: { permissions: readonly Action[] | undefined; hosted: boolean; needle: string },
+): SettingsGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (item) =>
+          (item.requires === undefined || permissions?.includes(item.requires) === true) &&
+          (item.hostedOnly === undefined || hosted) &&
+          (item.selfHostedOnly === undefined || !hosted) &&
+          (needle === "" ||
+            item.title.toLowerCase().includes(needle) ||
+            item.keywords.some((word) => word.includes(needle))),
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
+}

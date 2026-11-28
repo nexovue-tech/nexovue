@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -377,3 +378,39 @@ async def test_a_finding_reaches_pagerduty_under_its_own_prefixed_key(
     [event] = [request for request in recording_site.requests if request.path == "/v2/enqueue"]
     body = json.loads(event.body)
     assert (body["event_action"], body["dedup_key"]) == ("trigger", f"finding:{finding}")
+
+
+@pytest.mark.parametrize(
+    ("first_reply", "outcome", "events"),
+    [(Reply(), "delivered", 2), (Reply(status=503, body=b"busy"), "retry", 1)],
+)
+async def test_an_ending_on_two_alerts_resolves_each_and_stops_at_a_failure(
+    engine: AsyncEngine,
+    recording_site: RecordingSite,
+    monkeypatch: pytest.MonkeyPatch,
+    first_reply: Reply,
+    outcome: str,
+    events: int,
+) -> None:
+    """Decision 3/6: a burn that escalated past its host is on two alerts, and its ending
+    resolves both. A failed resolve is retried with the rest; a repeat is harmless."""
+    monkeypatch.setitem(PAGERDUTY_ENDPOINTS, "us", recording_site.url("/v2/enqueue"))
+    recording_site.replies["/v2/enqueue"] = lambda request: (
+        first_reply if len(recording_site.requests) == 1 else Reply()
+    )
+    ending = replace(
+        OUTGOING,
+        message=replace(MESSAGE, kind="resolved"),
+        resolves=("finding:finding-1", "incident:incident-1"),
+    )
+
+    result = await send(
+        engine, _outbound(), _channel("pagerduty", "r" * 32), ending, now=datetime.now(UTC)
+    )
+
+    sent = [json.loads(request.body) for request in recording_site.requests]
+    assert result.outcome == outcome
+    assert [(body["event_action"], body["dedup_key"]) for body in sent] == [
+        ("resolve", "finding:finding-1"),
+        ("resolve", "incident:incident-1"),
+    ][:events]

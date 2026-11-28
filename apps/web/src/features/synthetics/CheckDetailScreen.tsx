@@ -159,9 +159,7 @@ function CheckHeader({ check }: { check: CheckDefinition }) {
         / {KIND_DESCRIPTIONS[check.type].title}
       </p>
       <div className="mt-1 flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="min-w-0 break-words font-semibold font-serif text-ink text-xl tracking-tight">
-          {check.name}
-        </h1>
+        <h1 className="min-w-0 break-words heading-page">{check.name}</h1>
         {canOperate ? (
           <div className="flex gap-2">
             <Button
@@ -429,7 +427,7 @@ function RunsAndEvidence({
 
   return (
     <section aria-label="Runs" className="flex min-w-0 flex-col gap-3">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">Runs</h2>
+      <h2 className="heading-section">Runs</h2>
       {runs.isPending ? (
         <SkeletonRows rows={4} label="Loading runs" />
       ) : runs.isError ? (
@@ -441,7 +439,7 @@ function RunsAndEvidence({
       ) : list.length === 0 ? (
         <p className="text-ink-dim text-sm">{noRunsSentence(check)}</p>
       ) : (
-        <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+        <div className="grid min-w-0 grid-cols-1 gap-4 @5xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <ol className="flex max-h-[28rem] flex-col overflow-y-auto border-line-subtle border-t">
             {list.map((run) => (
               <RunRow
@@ -528,7 +526,7 @@ function StateTimeline({ check }: { check: CheckDefinition }) {
   const changes = useStateChanges(check.id);
   return (
     <section aria-label="State changes" className="flex flex-col gap-2">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">State changes</h2>
+      <h2 className="heading-section">State changes</h2>
       {changes.isPending ? (
         <SkeletonRows rows={2} label="Loading state changes" />
       ) : changes.isError ? (
@@ -579,7 +577,7 @@ function HeartbeatUrl({ check }: { check: CheckDefinition }) {
   const canOperate = useCan("operate_checks");
   return (
     <section aria-label="Heartbeat URL" className="flex max-w-2xl flex-col gap-2">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">Heartbeat URL</h2>
+      <h2 className="heading-section">Heartbeat URL</h2>
       {url ? (
         <>
           <p className="text-ink text-sm">

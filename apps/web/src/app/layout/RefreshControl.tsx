@@ -2,13 +2,17 @@ import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { ASSISTANT_QUERY_ROOT } from "@/shared/assistant-context";
 import { SelectField } from "@/shared/components/SelectField";
-import type { LiveStream } from "@/shared/refresh";
+import { formatZonedTime } from "@/shared/format/zoned";
+import type { FixedIntervalRefresh, LiveStream } from "@/shared/refresh";
 import {
+  isFixedInterval,
   NOTHING_LIVE,
   REFRESH_INTERVALS,
   setPaused,
   setRefreshIntervalId,
+  TAB_INTERVALS,
   useLiveStream,
   useRefreshPreference,
 } from "@/shared/refresh";
@@ -25,6 +29,14 @@ import { useLiveWindow } from "@/shared/selection";
  * pause buttons is not twelve times the control.
  */
 
+/**
+ * F4 AC75: chat's panel polls a question every 1.5 s, and its answers say nothing about how
+ * fresh the screen's readings are, so they move neither the age nor the fetching state.
+ */
+function isAssistantQuery(key: readonly unknown[]): boolean {
+  return key[0] === ASSISTANT_QUERY_ROOT;
+}
+
 /** How often the "updated N ago" line re-reads the clock. */
 const CLOCK_MS = 1_000;
 
@@ -32,8 +44,12 @@ export function RefreshControl() {
   const preference = useRefreshPreference();
   const live = useLiveWindow();
   const updatedAt = useNewestData();
-  const fetching = useIsFetching() > 0;
+  const fetching = useIsFetching({ predicate: (query) => !isAssistantQuery(query.queryKey) }) > 0;
   const stream = useLiveStream();
+
+  // A dashboard says what its refresh is, and the control shows that and not the
+  // console's own (F20, design *The refresh control*).
+  if (isFixedInterval(stream)) return <DashboardRefreshControl refresh={stream} />;
 
   // A screen with nothing live on it shows nothing. An interval over a list of
   // API keys is a control that governs nothing, and reads as a promise that the
@@ -103,6 +119,121 @@ export function RefreshControl() {
   );
 }
 
+/** The 44 px touch target below `md`, and the control's own size above it (FR50). */
+const TOUCH_TARGET = "min-h-11 min-w-11 md:min-h-0 md:min-w-0";
+
+/** The dashboard's own setting shown as the one saved choice, when it is not one a tab may pick. */
+const OFF_ID = "off";
+
+/**
+ * The control while a dashboard is mounted. **The kind is checked in this order: a fixed
+ * window first**, or "Every minute" would sit over a page that never refreshes
+ * (design, *The refresh control's states*).
+ *
+ * | State | Shows | Pause? |
+ * |---|---|---|
+ * | Fixed window | "Fixed time" | no |
+ * | Refresh off | "Refresh off · showing 02:14", "Read now" | no |
+ * | Paused | "Paused · showing 02:14" | Resume |
+ * | Live | the tab's interval, "Read now", the age | yes |
+ */
+function DashboardRefreshControl({ refresh }: { refresh: FixedIntervalRefresh }) {
+  const preference = useRefreshPreference();
+  const showing = refresh.lastGoodAt
+    ? formatZonedTime(refresh.lastGoodAt, { zone: refresh.zone })
+    : "—";
+
+  if (refresh.fixedWindow) {
+    return (
+      <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Fixed time</span>
+    );
+  }
+
+  const readNow = (
+    <button
+      type="button"
+      onClick={refresh.readNow}
+      className={`flex items-center justify-center rounded px-1 text-ink-dim text-xs underline-offset-2 hover:text-ink hover:underline ${TOUCH_TARGET}`}
+    >
+      Read now
+    </button>
+  );
+
+  const interval = (
+    <SelectField
+      compactLabel
+      label="Every"
+      value={intervalChoiceOf(refresh)}
+      options={intervalChoices(refresh)}
+      onChange={(id) =>
+        refresh.chooseInterval(TAB_INTERVALS.find((option) => option.id === id)?.ms)
+      }
+      optionLabel={(option) => option.label}
+    />
+  );
+
+  if (refresh.intervalMs === false) {
+    return (
+      <span className="flex items-center gap-3">
+        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+          Refresh off · showing {showing}
+        </span>
+        {readNow}
+        {interval}
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-3">
+      {preference.paused ? (
+        <span className="rounded-sm border border-warning-border bg-warning-subtle px-2 py-0.5 font-mono text-2xs text-warning-text uppercase tracking-caps">
+          Paused · showing {showing}
+        </span>
+      ) : (
+        <span className="hidden font-mono text-2xs text-ink-dim tabular-nums sm:inline">
+          {refresh.reading
+            ? "reading…"
+            : describeAge(refresh.lastGoodAt ? new Date(refresh.lastGoodAt) : undefined)}
+        </span>
+      )}
+      {preference.paused ? null : readNow}
+      <button
+        type="button"
+        onClick={() => setPaused(!preference.paused)}
+        aria-pressed={preference.paused}
+        aria-label={preference.paused ? "Resume refreshing" : "Pause refreshing"}
+        className={`flex items-center justify-center rounded p-1 text-ink-dim hover:text-ink ${TOUCH_TARGET}`}
+      >
+        {preference.paused ? (
+          <Play size={14} aria-hidden="true" />
+        ) : (
+          <Pause size={14} aria-hidden="true" />
+        )}
+      </button>
+      {interval}
+    </span>
+  );
+}
+
+interface IntervalChoice {
+  id: string;
+  label: string;
+  ms: number;
+}
+
+/** What this tab may pick: 30 s, 1 minute, 5 minutes, and "Off" where the page's own is off. */
+function intervalChoices(refresh: FixedIntervalRefresh): IntervalChoice[] {
+  return refresh.savedIntervalMs === false
+    ? [{ id: OFF_ID, label: "Off", ms: 0 }, ...TAB_INTERVALS]
+    : [...TAB_INTERVALS];
+}
+
+function intervalChoiceOf(refresh: FixedIntervalRefresh): string {
+  if (refresh.intervalMs === false) return OFF_ID;
+  return TAB_INTERVALS.find((option) => option.ms === refresh.intervalMs)?.id ?? OFF_ID;
+}
+
 /** The word for each connection state, in the reader's terms rather than the socket's. */
 const STREAM_WORD: Record<LiveStream["state"], string> = {
   idle: "Tail off",
@@ -163,6 +294,7 @@ function useNewestData(): Date | undefined {
       const times = client
         .getQueryCache()
         .getAll()
+        .filter((query) => !isAssistantQuery(query.queryKey))
         .map((query) => query.state.dataUpdatedAt)
         .filter((at) => at > 0);
       setNewest(times.length > 0 ? Math.max(...times) : undefined);

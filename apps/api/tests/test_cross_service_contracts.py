@@ -409,6 +409,7 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
 
     from nexovue_platform.alerts import tasks as alert_tasks
     from nexovue_platform.checks import task as check_tasks
+    from nexovue_platform.releases import SUMMARIZE_PERIOD_TASK
 
     from nexovue_scheduler import beat
     from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
@@ -431,7 +432,210 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
         SWEEP_EXPIRED_TASK,
         END_LAPSED_GRACE_TASK,
         ERASE_OWED_TASK,
+        # F28 FR55: the deploy webhook adds a period's summary job.
+        SUMMARIZE_PERIOD_TASK,
         *beat.POLL_TASKS.values(),
     }
 
     assert added <= set(registered())
+
+
+def test_the_api_s_connection_jobs_are_exactly_what_the_connections_worker_runs() -> None:
+    """F22: the API adds connection jobs by name with ids only (AC74); a renamed keyword
+    or task would leave a setup waiting on a job that fails every time it is claimed."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform import connections
+
+    from nexovue_scheduler.jobs.registry import TASK_SETS, registered
+
+    tasks = registered(TASK_SETS["connections"])
+    assert set(connections.CONNECTION_TASKS) <= set(tasks)
+    sent = {
+        connections.CONVERT_MANIFEST_TASK: connections.connection_job_arguments(
+            org_id="o", connection_id="c"
+        ),
+        connections.REFRESH_CONNECTION_TASK: connections.connection_job_arguments(
+            org_id="o", connection_id="c"
+        ),
+        connections.CHECK_CONNECTION_TASK: connections.connection_test_arguments(
+            org_id="o", connection_id="c", request_id="r"
+        ),
+    }
+    for task_name, kwargs in sent.items():
+        parameters = inspect.signature(tasks[task_name]).parameters.values()
+        accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+        assert required <= set(kwargs) <= accepted, task_name
+
+
+def test_f5s_rung_2b_jobs_are_exactly_what_their_workers_run() -> None:
+    """F5 T2b.9: the API adds `suggest_general_fix` by name with ids only, on `insight-fix`,
+    which only the insight set registers; beat adds `sweep_general_fixes` on `light`, which
+    every full worker registers (`TASK_MODULES`), and the insight set never loads it. A task
+    in the wrong set is claimed and fails, every interval, for ever."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.fixes import records
+
+    from nexovue_scheduler.jobs.registry import TASK_MODULES, TASK_SETS, registered
+
+    request = records.suggest_general_fix_request(
+        fix_id="f", org_id="o", requested_by="u", call_seconds=60
+    )
+    insight = registered(TASK_SETS["insight"])
+    suggest = insight[records.SUGGEST_GENERAL_FIX_TASK]
+    parameters = inspect.signature(suggest).parameters.values()
+    accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+    required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+
+    assert request.queue == records.FIX_QUEUE
+    assert required <= set(request.kwargs) <= accepted
+    assert "nexovue_scheduler.insight.suggest_general_fix" not in TASK_MODULES
+    assert records.SWEEP_GENERAL_FIXES_TASK in registered(TASK_MODULES)
+    assert "nexovue_scheduler.fixes.sweep" not in TASK_SETS["insight"]
+
+
+def test_f5s_rung_3_jobs_are_exactly_what_the_connections_worker_runs() -> None:
+    """F5 T3.10, T3.13, T3.17: the API adds the pack job, the brief's paths and the account
+    link by name with ids only, on `connections-interactive`, which only
+    `scheduler-connections` consumes; their modules and rung 3's sweep are in the
+    connections set and never in `TASK_MODULES`, so no worker holding other secrets loads
+    repository-reading code (AC6b). The migration's `fix_request_more_files` names the same
+    task and queue it hard-codes (D75)."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE
+    from nexovue_platform.fixes import records
+
+    from nexovue_scheduler import beat
+    from nexovue_scheduler.jobs.registry import TASK_MODULES, TASK_SETS, registered
+
+    connections = registered(TASK_SETS["connections"])
+    requests = (
+        records.build_source_pack_request(fix_id="f", org_id="o"),
+        records.match_brief_paths_request(request_id="r", finding_id="f", org_id="o"),
+        records.complete_github_user_link_request(attempt_id="a", org_id="o"),
+    )
+    for request in requests:
+        parameters = inspect.signature(connections[request.task]).parameters.values()
+        accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+        assert request.queue == CONNECTIONS_INTERACTIVE_QUEUE, request.task
+        assert required <= set(request.kwargs) <= accepted, request.task
+    for module in (
+        "nexovue_scheduler.connections.source_pack",
+        "nexovue_scheduler.connections.fix_app",
+        "nexovue_scheduler.connections.fix_link",
+        "nexovue_scheduler.connections.fix_sweep",
+    ):
+        assert module in TASK_SETS["connections"]
+        assert module not in TASK_MODULES
+        assert module not in TASK_SETS["insight"]
+    assert records.INTERACTIVE_QUEUE == CONNECTIONS_INTERACTIVE_QUEUE
+    assert records.SWEEP_FIXES_TASK in connections
+    assert beat.FIX_SWEEP_ENTRY
+    migration = (
+        Path(__file__).parents[1] / "migrations/versions/0079_ai_solution_source.py"
+    ).read_text(encoding="utf-8")
+    assert f"'{records.INTERACTIVE_QUEUE}', '{records.BUILD_SOURCE_PACK_TASK}'" in migration
+    assert "jsonb_build_object('fix_id', for_fix::text, 'org_id', for_org::text)" in migration
+    beat_source = Path(beat.__file__).read_text(encoding="utf-8")
+    assert "(SWEEP_FIXES_TASK, FIX_SWEEP_SECONDS, CONNECTIONS_QUEUE)" in beat_source
+
+
+def test_f5s_step_4_jobs_are_exactly_what_their_workers_run() -> None:
+    """F5 T4.4, T4.8, T4.12: the API adds `propose_fix` by name with ids only, on
+    `insight-fix`, which only the insight set registers, and the check run on
+    `connections-interactive`, which only the connections set registers; the requester's
+    emails run on `light` from `TASK_MODULES`, and `fixes/notify.py` imports nothing from
+    `connections` (design, *Where tasks live*). A task in the wrong set is claimed and
+    fails, every interval, for ever."""
+    import ast
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.connections import CONNECTIONS_INTERACTIVE_QUEUE
+    from nexovue_platform.fixes import records
+
+    from nexovue_scheduler.fixes import notify
+    from nexovue_scheduler.jobs.registry import TASK_MODULES, TASK_SETS, registered
+
+    for request, task_set, queue in (
+        (
+            records.propose_fix_request(fix_id="f", org_id="o", sent_by="u", call_seconds=60),
+            "insight",
+            records.FIX_QUEUE,
+        ),
+        (
+            records.check_fix_request(check_id="c", org_id="o"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
+        # F5 Step 7: the draft job and Delete this branch (plan T7.5, T7.10).
+        (
+            records.open_fix_pull_request_request(fix_id="f", org_id="o"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
+        (
+            records.delete_fix_branch_request(fix_id="f", org_id="o", requested_by="u"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
+        # F5 Step 8: Run CI (plan T8.1).
+        (
+            records.run_fix_ci_request(fix_id="f", org_id="o"),
+            "connections",
+            CONNECTIONS_INTERACTIVE_QUEUE,
+        ),
+    ):
+        tasks = registered(TASK_SETS[task_set])
+        parameters = inspect.signature(tasks[request.task]).parameters.values()
+        accepted = {p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        required = {p.name for p in parameters if p.default is inspect.Parameter.empty}
+        assert request.queue == queue, request.task
+        assert required <= set(request.kwargs) <= accepted, request.task
+    assert "nexovue_scheduler.insight.propose_fix" not in TASK_MODULES
+    assert "nexovue_scheduler.connections.fix_check" not in TASK_MODULES
+    assert "nexovue_scheduler.connections.fix_writer" not in TASK_MODULES
+    assert "nexovue_scheduler.connections.fix_poller" not in TASK_MODULES
+    assert records.NOTIFY_REQUESTERS_TASK in registered(TASK_MODULES)
+    tree = ast.parse(Path(notify.__file__).read_text(encoding="utf-8"))
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert not {module for module in imported if ".connections" in module}

@@ -55,7 +55,7 @@ export function AlertsScreen() {
           (`docs/quality/console-review-2026-09-20.md`). */}
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Alerts</h1>
+          <h1 className="heading-page">Alerts</h1>
           <p className="mt-1 text-ink-dim text-sm">
             What is breaking now, the rules that watch this project, and where they send.
           </p>
@@ -82,7 +82,7 @@ export function AlertsScreen() {
       <EvaluationBehind status={evaluation.data} />
 
       <section aria-labelledby="open-incidents" className="flex flex-col gap-3">
-        <h2 id="open-incidents" className="font-medium font-serif text-base text-ink">
+        <h2 id="open-incidents" className="heading-section">
           Open now
         </h2>
         {incidents.isPending ? (
@@ -101,7 +101,7 @@ export function AlertsScreen() {
       </section>
 
       <section aria-labelledby="alert-rules" className="flex flex-col gap-3">
-        <h2 id="alert-rules" className="font-medium font-serif text-base text-ink">
+        <h2 id="alert-rules" className="heading-section">
           Rules
         </h2>
         {rules.isPending ? (
@@ -135,7 +135,7 @@ export function AlertsScreen() {
       </section>
 
       <section aria-labelledby="recent-incidents" className="flex flex-col gap-3">
-        <h2 id="recent-incidents" className="font-medium font-serif text-base text-ink">
+        <h2 id="recent-incidents" className="heading-section">
           Last 30 days
         </h2>
         {incidents.isPending ? (

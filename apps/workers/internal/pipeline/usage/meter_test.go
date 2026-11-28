@@ -233,3 +233,27 @@ func TestDrainOrdersServiceNames(t *testing.T) {
 		t.Errorf("services = %v, want them sorted", got)
 	}
 }
+
+// A service heard through any door but the browser's in a flush is heard for
+// the flush, even if the browser door also carried it; one carried only by the
+// browser door is billed and not heard (docs/changes/browser-door-last-seen).
+func TestHeardIsTheUnionOfTheServicesAnyOtherDoorCarried(t *testing.T) {
+	meter := NewMeter()
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{
+		Counts: Counts{Spans: 1}, Services: []string{"checkout", "web"},
+	})
+	meter.Observe(onePartition+1, testOrg, testProject, testReceivedAt, Metered{
+		Counts: Counts{Spans: 1}, Services: []string{"checkout"}, Heard: []string{"checkout"},
+	})
+
+	rows := meter.Drain()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if !slices.Equal(rows[0].Services, []string{"checkout", "web"}) {
+		t.Errorf("services = %v, want checkout and web: both are billed", rows[0].Services)
+	}
+	if !slices.Equal(rows[0].Heard, []string{"checkout"}) {
+		t.Errorf("heard = %v, want checkout alone", rows[0].Heard)
+	}
+}

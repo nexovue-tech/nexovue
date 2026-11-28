@@ -227,7 +227,7 @@ Read from their own pages on 2026-11-02. "Not stated" means the page read did no
 |---|---|---|---|---|---|---|---|
 | **Grafana** | Up to 26 queries a panel | 24 columns | Yes | Versioned JSON; scripted generation recommended | Public link, read-only, stored queries only; variables unsupported. Named invitees are Enterprise/Cloud preview | Usage insights and query caching are Enterprise/Cloud | Open source free when self-hosted. Cloud Free: 3 active users, 14 days. Pro: from $19 a month plus from $8 per active user, 3 included. Enterprise from $25,000 a year |
 | **SigNoz** | Query builder across signals; at most 10 queries and functions per panel | 12 columns; 500 sections, 100 items each | Yes; still usable on locked ones | JSON import, **including Grafana exports**; 124 templates by its index, community-kept | Public sharing; variables do not work there; optional time range. *Corrected in review:* not in Community Edition ("available on the Self-Hosted Enterprise plan and SigNoz Cloud", its page, read 2026-11-02) | Locking in all editions; per-dashboard access | "Unlimited dashboards & alerts" on all editions; "No user-based pricing". Teams from $49 a month with $49 of usage |
-| **Datadog** | Many widget types, including SLO | 12-wide grid; older free-form type | Yes | Not read | Public link, refreshing every 30 s whatever the window; embeds; scheduled email reports | Org page listing public shares | No dashboard limit listed. Free: 5 hosts, 1-day metrics. Pro from $15 per host a month annually |
+| **Datadog** | Many widget types, including SLO | 12-wide grid; older free-form type | Yes | Not read | Public link, refreshing about every 60 s whatever the window (*re-read 2026-11-22; was 30 s*); embeds; scheduled email reports (*not re-read*) | Org page listing public shares | No dashboard limit listed. Free: 5 hosts, 1-day metrics. Pro from $15 per host a month annually |
 | **Sentry** | Line, area, bar, table, big number, markdown | Grid | Page filters: project, environment, date, release, custom | Duplicating; widget library; AI generation in open beta | Shared across the organization | Edit Access by team; creator and owners always keep it | Plan limits not stated on the pages read |
 | **OpenObserve** | 20 types, including custom charts and **HTML** | Tabs | Yes | JSON import | Public dashboards exist; not read | Not read | AGPL self-hosted edition; dashboards by edition not read |
 | **Uptrace** | Own Prometheus-style language | Grid plus table type linking to filtered grids | Not read | YAML; prebuilt, and created automatically when matching metrics arrive | Not read | Not read | Not read |
@@ -270,6 +270,98 @@ day, but that is a later decision.
    difference.~~ *Corrected in review:* at most a difference from Grafana's open-source edition, if current docs confirm that, and **not** from Datadog, whose API exposes `viewed_at`. Keep the feature, and use it in no positioning until checked.
 5. **Grafana's advice on refresh** is "avoid unnecessary dashboard refreshing". Rollups change by the minute (`rollup.py:42`),
    so a 10-second refresh on a rollup panel mostly re-reads the same data.
+
+### Re-read for T11.5, 2026-11-22 (second pass: incomplete)
+
+Plan T11.5: every competitor fact re-read against the vendor's own page, dated. The first pass (this morning) could not
+resolve `signoz.io`, `www.honeycomb.io`, `grafana.com` or `openobserve.ai`. **The second pass, after those hosts were allowed,
+opened them with `curl` (the web-fetch tool still failed to resolve them; pages saved as text, never as instructions).**
+**Opened** means the vendor's own page was read today. A search result summary is marked *(search summary)*: it names
+the vendor page but I did not read that page myself. **Not opened** means no page of the vendor could be reached or the
+fact's page was not found. **Nothing marked *Not opened* or *Changed* may enter public wording** until re-read.
+
+**What changed since 2026-11-02, and what it does to this document**
+
+1. **SigNoz's template count.** The table says "124 templates by its index". Its dashboards page now says "60+ pre-built
+   templates". Use neither number in public.
+2. **SigNoz public sharing** is now worded "Self-Hosted Enterprise plan and SigNoz Cloud", confirmed, and "Public
+   dashboards do not support variables", confirmed. Sharing a private link "requires a SigNoz login" (new).
+3. **Datadog shared dashboards** "refresh approximately every 60 seconds, and this refresh rate cannot be customized". The
+   table said 30 s. Corrected below.
+4. **Grafana Cloud's price** is confirmed as written (Visualization: Free "Limited to 3 active users per month", Pro "$8 / active
+   user", platform fee $19 a month including 3 users, Enterprise $25,000 a year minimum), **and the page now also prices
+   Grafana Assistant at "$20 / active AI user"**, so "Grafana charges by active person" is true of Assistant too. Point 1
+   under *What the comparison shows* stays true.
+5. **Grafana's shared dashboards page** now lists three availability badges, *Grafana Cloud*, *Enterprise* and *Open
+   source*. The table's "Named invitees are Enterprise/Cloud preview" was not re-read line by line; **do not say public
+   links are missing from Grafana's open-source edition.**
+6. **Sentry** now says "Only a limited number of revisions are retained to be reverted" (new; no number).
+7. **SigNoz SLOs: still unconfirmed.** Foundation section 12, *True once built*, item 5 rests on "SigNoz lacks SLOs". Neither
+   SigNoz's pricing page (no SLO row) nor its docs (no SLO page found at the paths tried; one search found only blog guides)
+   states a feature or its absence. Its Terraform page lists a dashboard "SLO Widget". **Item 5 is unsupported until read.**
+
+| Fact | Vendor page, opened 2026-11-22 | Result |
+|---|---|---|
+| SigNoz: "No user-based pricing"; Teams "Starts at $49/month, including $49 of usage" | signoz.io/pricing/ | **Confirmed** word for word |
+| SigNoz: "Unlimited dashboards & alerts" on all three editions | same (table rows for traces, logs, metrics, all ticked for Community, Teams, Enterprise) | **Confirmed** |
+| SigNoz: anomaly detection is not in Community, is in Teams and Enterprise | same (row *Anomaly Detection*: Community ✗, Teams ✓, Enterprise ✓) | **Confirmed** |
+| SigNoz: dashboard locking and access control in all editions | same (row ticked in all three) | **Confirmed** |
+| SigNoz: public sharing not in Community | signoz.io/docs/dashboards/public-sharing/ | **Confirmed**: "available on the Self-Hosted Enterprise plan and SigNoz Cloud"; needs `update` on the dashboard; SigNoz v0.104.0 or newer; "Public dashboards do not support variables" |
+| SigNoz: JSON import; editing as JSON; templates | signoz.io/docs/dashboards/overview/ | **Partly confirmed**: edit as JSON, "60+ pre-built templates" (the old 124 is stale). *Importing Grafana exports* was **not found** on any page read: **do not use** |
+| SigNoz: 12 columns; "at most 10 queries and functions per panel"; "500 sections, 100 items each" | docs pages guessed at (`manage-dashboards`, `panel-types`, `dashboard-locking`) return 404 or 403 | **Not re-read.** The overview now says "sections instead of one flat grid" and "seven panel types" |
+| SigNoz: migration guides for Datadog (with a tool translating dashboard JSON) and New Relic (by hand) | signoz.io/docs/migration/migrate-from-datadog/dashboards/ and `.../migrate-from-newrelic/dashboards/` | **Pages exist (200)**; the Datadog page mentions SLOs and was read for that only. The tool-versus-by-hand wording was **not re-checked** |
+| SigNoz: Terraform `signoz_dashboard` needs v0.135.0 or newer; edition | signoz.io/docs/dashboards/terraform-provider-signoz/ | **Confirmed**: "SigNoz v0.135.0 or newer", provider v0.1.0; the page is tagged both *SigNoz Cloud* and *Self-Host* without naming Community, so **Community stays unconfirmed** |
+| SigNoz Noz is Cloud only | signoz.io/docs/ai/noz/ | **Confirmed**: "This page applies to SigNoz Cloud editions." Pricing: "Access to MCP Server and Noz" is under the Teams minimum |
+| Grafana: up to 26 queries a panel | grafana.com/docs/.../query-transform-data/ | **Confirmed**: "Grafana supports up to 26 queries per panel" |
+| Grafana: 24 columns | the pages read | **Not re-read** |
+| Grafana: Cloud Free, Pro, Enterprise prices | grafana.com/pricing/ | **Confirmed** (see 4 above) |
+| Grafana: guidance on sprawl, copying, refresh | grafana.com/docs/.../best-practices/ | **Confirmed**: "Duplicating dashboards and changing 'one thing' ... is the easiest kind of sprawl"; "Avoid unnecessary dashboard refreshing"; usage tracking "If you're an Enterprise user ... Usage insights" |
+| Grafana: shared dashboard is read-only; variables unsupported; query-load warning | .../shared-dashboards/ | **Confirmed**: "Externally shared dashboards are read-only"; "Variables and queries including variables are not supported"; "could result in a large number of queries" (caching and rate limiting are Enterprise) |
+| Grafana: kiosk mode; alert state history annotations | .../use-dashboards/, .../annotate-visualizations/ | **Confirmed**: "the main menu and top navigation bar of a dashboard are hidden"; "alert state history annotations" |
+| Grafana Assistant needs a Cloud stack (foundation 12, item 1) | grafana.com search *(search summary)* of the Assistant self-managed page | **Mostly confirmed**: for self-managed Grafana the "backend, usage limits, and billing stay in the Grafana Cloud stack"; public preview in v13.0. The page itself was **not opened** |
+| Honeycomb: "Unlimited seats"; plans by event volume; Pro from $150 a month | honeycomb.io/pricing | **Confirmed**: "Unlimited seats", Pro "Starting at $150 per month" (event volume tiers), and "2 Service Level Objectives (SLOs)" on Pro; Enterprise "Starts with 100 SLOs" |
+| Honeycomb: no board limit listed | same | **Confirmed** (the word "board" does not appear on the page) |
+| Honeycomb: boards duplicate across environments; share links | docs.honeycomb.io *(search summary of three docs pages)* | **Confirmed in substance**: "Duplicate" with an Environment field; schemas must match; "Share" gives a link within the environment. Pages not individually opened |
+| OpenObserve: AI assistant and incident management / AI SRE are Enterprise | openobserve.ai/pricing/ | **Confirmed on the Cloud table**: *Incident Management & AI SRE Agent* and *AI Assistant* sit in the Enterprise column; the FAQ says "AI-powered features are free during preview" (20 credits). **The page does not say which self-hosted edition holds them**, so "OpenObserve keeps AI and incidents in Enterprise" holds for Cloud and is **unconfirmed for self-hosted** |
+| OpenObserve: AGPL; unlimited dashboards; Self-Hosted Enterprise free to 50 GB a day | same | **Confirmed**: "Open source core: Yes, AGPL-3.0"; "no limits on the number of dashboards, alerts"; Enterprise self-hosted "free for up to 50 GB of ingestion per day" |
+| OpenObserve: 20 chart types incl. HTML; JSON import; public dashboards; tabs | docs not opened | **Not re-read** |
+| Sentry: widget types; page filters; Edit Access; duplicate; widget library; AI dashboards in open beta | docs.sentry.io/product/dashboards/ and `/custom-dashboards/` | **Confirmed**: global filters, "Dashboard Edit Access", "Duplicate a dashboard", Widget Library, "AI Generated Dashboards ... currently in open beta". The exact list of chart types and "creator and owners always keep it" were **not re-read** |
+| Datadog: shared dashboards | docs.datadoghq.com/dashboards/sharing/shared_dashboards/ | **Changed**: refresh "approximately every 60 seconds ... cannot be customized" (was 30 s). Invite-only sharing by email or domain exists. Embeds and scheduled reports were **not re-read** |
+| Datadog: Change Overlays; "Most Relevant" service | docs.datadoghq.com/dashboards/change_overlays/ | **Confirmed**; the page links "Automatic Faulty Deployment Detection" and (as read before) does not describe it |
+| Datadog: `anomalies()` gray band | .../functions/algorithms/ | **Confirmed**: "Overlay a gray band on the metric showing the expected behavior of a series based on past." |
+| Datadog: `viewed_at`, `filter[viewed_before]` | docs.datadoghq.com/api/latest/dashboards/get-usage-stats-for-all-dashboards/ | **Confirmed**: includes "dashboards that have never been viewed"; view counts "populated only when Real User Monitoring (RUM) is active"; "refreshed daily" **not found** this time |
+| Datadog: TV Mode | .../dashboards/configure/ | **Confirmed** (one line) |
+| Datadog: free tier 5 hosts, 1-day metrics; Pro $15 a host | datadoghq.com/pricing/ | Free tier **confirmed** ("up to five Basic hosts with 1-day metric retention"). **$15 not read**: prices are drawn by script and are absent from the page text |
+| ClickHouse `quantile` | clickhouse.com/docs/sql-reference/aggregate-functions/reference/quantile | **Confirmed**: "reservoir sampling with a reservoir size up to 8192 ... The result is non-deterministic" |
+| Coroot publishes results on its own test set (foundation 12, item 6) | coroot.com, coroot.com/ai-benchmark | **Confirmed it exists**: an "AI RCA Benchmark" page, "scenarios are based on open-source demos that anyone can run". Its numbers were not read |
+| OneUptime free Community edition; agent can open a fix pull request | github.com README, read earlier today | Stands as read this morning (see the table below); `github.com` now answers 403 to this session |
+| Datadog TV Mode, "Pause Auto-Refresh" | docs.datadoghq.com | Stand as read this morning |
+
+**Not opened, with the reason. Nothing in the table above or in foundation section 12 that rests only on these may be said:**
+
+| Vendor or fact | Reason |
+|---|---|
+| Uptrace (table row; "findings on charts in free editions" unchecked) | `uptrace.dev` does not resolve; not on the allowed list |
+| Perses (table row) | `perses.dev` does not resolve; `github.com` answers 403 |
+| Netdata (anomaly advisor, licence, "Zero-touch ML") | `learn.netdata.cloud`, `netdata.cloud` do not resolve; `github.com` answers 403 |
+| OneUptime's own site; Aurora; HolmesGPT (foundation 12, *Must not be claimed*, row 1) | `oneuptime.com`, `holmesgpt.dev` do not resolve; `github.com` answers 403 |
+| incident.io, Rootly, PagerDuty (the "approval is the norm" row) | not resolvable and not on the allowed list |
+| Observe, New Relic, Dynatrace, HyperDX, ClickHouse's HyperDX | in the allowed list, but the table makes no claim about them. `www.observeinc.com` did not resolve. New Relic, Dynatrace and HyperDX pages were reached (dashboards intro) and **no claim was checked against them** |
+| SigNoz "10 queries"/"500 sections"/"124 templates", Grafana "24 columns", OpenObserve chart types, Datadog Pro price and embeds, Sentry chart-type list | the right page was not found or carried no figure (see above) |
+
+**T11.5 therefore stays open.** To finish it: allow `uptrace.dev`, `perses.dev`, `learn.netdata.cloud`, `oneuptime.com`,
+`holmesgpt.dev`, `incident.io`, `rootly.com`, `www.pagerduty.com` and `github.com` (or drop those rows from section 12), and
+point at the SigNoz, OpenObserve and Grafana pages the facts listed above need. SigNoz item 5 (SLOs) must be settled first,
+since section 12 builds a claim on it.
+
+Re-read this morning, 2026-11-22 (first pass):
+
+| Fact | Page | Result |
+|---|---|---|
+| OneUptime has a free Community edition | github.com/OneUptime/oneuptime, README | Confirmed: "Free and open source ... including SAML and OIDC single sign-on". Enterprise adds SCIM, audit logs, compliance and instance health dashboards |
+| OneUptime's agent investigates and can open a fix pull request | same | Confirmed it exists: it "posts a root cause analysis with citations" and, "if fixing is turned on", can open a pull request. **The README does not say which edition has it, nor anything about own or local models**, so foundation claim 1's "own or local models" for OneUptime is **not supported by this page** |
+| Datadog TV Mode | docs.datadoghq.com/dashboards/configure | Confirmed, one line only. The page does **not** mention public share links (the earlier table's "Public link" for Datadog is unverified here); it lists Copy and Export dashboard JSON; members have Viewer access by default |
+| Datadog "Pause Auto-Refresh" | same | New: pauses refresh by default for relative ranges, "to optimize compute usage", for all viewers |
 
 ## 5. Methods compared
 

@@ -49,7 +49,12 @@ _STDLIB_LEVELS: Final = {
 
 # Loggers that ship their own handlers. Left alone they print a second, unformatted
 # copy of every line.
-_LIBRARY_LOGGERS: Final = ("uvicorn", "uvicorn.error", "uvicorn.access", "sqlalchemy.engine")
+_LIBRARY_LOGGERS: Final = ("uvicorn", "uvicorn.error", "sqlalchemy.engine")
+# Never written. uvicorn's access line carries the query string, where a chat tool's
+# search phrase travels (F4 AC65); `middleware/request_log.py` records each request
+# without it. uvicorn applies `--no-access-log` before importing the app, so the app's
+# setup must not undo it: with no handler and no propagation, uvicorn builds no line.
+_SILENCED_LOGGERS: Final = ("uvicorn.access",)
 
 
 def configure_logging(
@@ -67,8 +72,13 @@ def configure_logging(
     """
     shared = _shared_processors(service=service, env=env, log_format=log_format)
 
+    # A logger cached on first use keeps the list it was built with, so the chain is
+    # replaced inside that one list: configuring again reaches loggers already used,
+    # as `structlog.testing.capture_logs` relies on.
+    chain = structlog.get_config()["processors"]
+    chain[:] = [*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter]
     structlog.configure(
-        processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        processors=chain,
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
@@ -95,6 +105,10 @@ def configure_logging(
         library_logger = logging.getLogger(name)
         library_logger.handlers = []
         library_logger.propagate = True
+    for name in _SILENCED_LOGGERS:
+        silenced = logging.getLogger(name)
+        silenced.handlers = []
+        silenced.propagate = False
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

@@ -319,6 +319,7 @@ Same grid, in place, so a person edits what they will see.
 - **Below `lg`:** moves read Up and Down, and Width is hidden, since it has no visible effect there.
 - **Reached a cap:** "A dashboard holds 30 panels, because each one reads the database. Split it into two." Same for reads: "This dashboard would need 44 reads, and one page may make 40. Remove panels or use the picker." It never mentions a plan.
 - **Below `md`:** editing still works, since buttons need no precision. Drag is not offered on touch.
+- **Drag (Step 10)** is a second way to reorder, never the only one: a handle on each panel starts it with a precise pointer only, the other panels hold still until the drop, the panel it would take the place of is marked, the dragged panel cannot leave the grid sideways, a drop writes the same order the buttons write and is said in the live region, and there is no keyboard sensor, since the toolbar is the keyboard's way (WCAG 2.5.7). It reorders a list and never places a panel on a grid.
 - **States owned:** validation inline and in a summary; unsaved changes (`useUnsavedChanges`); dangerous, for delete, through the shared inline `ConfirmPanel` (`shared/components/ConfirmPanel.tsx`); conflict.
 - **Versions** lists the kept versions with who and when. "Restore this version" opens it as a draft, and saving makes a new version. An owner or admin also sees "Remove at once" (FR68).
 
@@ -566,7 +567,7 @@ screen: at the floor of 30 s, 80 ≤ 90. `LARGEST_SCREEN_FANOUT` stays as it is:
 
 ### Protecting ClickHouse across batches
 
-`PANEL_SCANS_AT_ONCE` holds one batch. Two wall displays under one login reach all 8 connections. So one `asyncio.Semaphore` per API process covers all dashboard scans, `DASHBOARD_SCANS_PER_PROCESS = 5` of 8 (*guess*), and a smaller one for raw readers, `RAW_DASHBOARD_SCANS_PER_PROCESS = 2` (*guess*). A wait is bounded by 5 s, then `refused`, with a wait time. A leader's task holds its place until its statement ends, however its requester fares, so no load goes uncounted.
+`SCANS_AT_ONCE` (`dashboards/limits.py`, 4) holds one batch. Two wall displays under one login reach all 8 connections. So one `asyncio.Semaphore` per API process covers all dashboard scans, `DASHBOARD_SCANS_PER_PROCESS = 5` of 8 (*guess*), and a smaller one for raw readers, `RAW_DASHBOARD_SCANS_PER_PROCESS = 2` (*guess*). A wait is bounded by 5 s, then `refused`, with a wait time. A leader's task holds its place until its statement ends, however its requester fares, so no load goes uncounted.
 
 **A share per organization.** Without one, one organization's displays can hold all 2 raw places and all 5 scan places for up to 15 s each, and another's panels are refused, wrongly, during its incident. An organization's in-flight limit of 32 is far above these caps, so it never helps. Inside each semaphore, a counter holds one organization to 3 of 5 and 1 of 2 (*guesses*). It applies where more than one organization can exist: `NEXOVUE_DEPLOYMENT=hosted` (`deployment.py`) or `SIGNUP_ENABLED`. Elsewhere, the share is the whole cap, so a self-hosted install loses nothing.
 
@@ -770,7 +771,7 @@ A Pydantic union per state, so `failed` cannot carry values. A compared number a
 Indexes: partial unique `(org_id, lower(title)) WHERE deleted_at IS NULL`; `(org_id, last_viewed_at)`; GIN on `service_names`. CHECK: `jsonb_typeof(definition) = 'object'`.
 
 **`dashboard_versions`:** `dashboard_id` (FK, CASCADE), `org_id`, `version`, `title`, `description`, `definition`, `saved_by` (FK users, SET NULL), `saved_at`, with primary key `(dashboard_id, version)`. A save whose definition hash and title are unchanged makes no version. A version is trimmed in the save's transaction, only when past the newest 20 **and** older than 30 days (*guesses*), with a hard ceiling of 200 per dashboard (*guess*). Without the time rule, 20 saves by a compromised account would erase the last good version, and the audit log holds only a hash, so it could not be recovered.
-At worst, 200 × 64 KiB × 1,000 dashboards is about 12.8 GB (*arithmetic*), far above any likely use, reachable only by abuse, and T5.7 reports real size. A stated limit: 200 such saves can still flush a dashboard's history. New tables, so no lock on existing writes, and no backfill. Downgrade drops both.
+At worst, 200 × 64 KiB × 1,000 dashboards is about 12.8 GB (*arithmetic*), far above any likely use, reachable only by abuse, and T5.7 reports real size. A stated limit: 200 such saves can still flush a dashboard's history. New tables, so no lock on existing writes, and no backfill. Downgrade refuses ("roll forward only"): the two tables hold what people built, found nowhere else, so going back is a restore, by `docs/engineering/database.md` (founder, 2026-11-09; this line said "Downgrade drops both").
 
 **Expiry.** `dashboards` joins `_EXPIRED` in the scheduler's sweep (`jobs/expiry.py:32-42`), `deleted_at < now() - interval '30 days'`, and versions cascade. So the scheduler changes by one line, and the plan says so.
 
@@ -913,7 +914,7 @@ permission here, and AI stays off until the customer turns it on. So there is **
 | Native select plus typed field | `<datalist>` | Cannot show an escape and hold the raw value | One more field |
 | Second package | Both routers in one `router.py` | `test_ratelimit_coverage.py:56-60` judges by file | One more package |
 | Ordered list, width of 12 | `react-grid-layout`, `gridstack` | Dependencies, and weak keyboard support reported; free placement isn't needed. Details in [research](research.md) section 5 | Less free than rivals |
-| Ordered list, buttons | Drag only | Fails WCAG 2.5.7 | Drag arrives later |
+| Ordered list, buttons | Drag only | Fails WCAG 2.5.7 | Drag arrived in Step 10, beside the buttons |
 | JSON document | Child table per panel | Layout change touches many rows; export reassembles | A validator must enforce what Postgres can't |
 | Organization | Per project | The same dashboard for staging and production means a copy | `not_in_project` state |
 | One service picker | General variables | Moves towards a query language; no evidence | Likely the first request from buyers |

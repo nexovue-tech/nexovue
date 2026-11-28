@@ -41,6 +41,13 @@ export const REFRESH_INTERVALS: readonly RefreshInterval[] = [
 
 const DEFAULT_INTERVAL_ID = "10s";
 
+/**
+ * The fastest a dashboard refreshes (the API's `REFRESH_FLOOR_SECONDS`, 30 s). The console
+ * does not yet learn an install's tuned floor, which a self-hosted operator may raise
+ * (status, open decision 9).
+ */
+export const DASHBOARD_REFRESH_FLOOR_MS = 30_000;
+
 export interface RefreshPreference {
   paused: boolean;
   intervalId: string;
@@ -167,7 +174,56 @@ export interface LiveStream {
   resume: () => void;
 }
 
-let stream: LiveStream | typeof NOTHING_LIVE | undefined;
+/**
+ * A screen that polls, on its own interval rather than the console's (F20, FR30, FR71).
+ *
+ * The console-wide control offers 5 and 10 seconds and remembers its choice, and a
+ * dashboard refreshes at its own setting, 1 minute unless it says otherwise: shown
+ * beside it, "10 seconds" would sit over a page that refreshes each minute, the defect
+ * the comments above forbid. So the dashboard declares what its refresh is while it is
+ * mounted, and the one control in the top bar shows that instead.
+ *
+ * **Its age is `lastGoodAt`, not the newest answer of any query.** A batch with ClickHouse
+ * down still answers 200, and an age taken from that would say "updated just now" over a
+ * page of failures (design, *The refresh control*).
+ */
+export interface FixedIntervalRefresh {
+  kind: "fixed-interval";
+  /** A fixed window never refreshes: no Pause, no interval, "Fixed time" (FR53). */
+  fixedWindow: boolean;
+  /** What the dashboard itself says: 30 s, 1 minute, 5 minutes, or `false` for off. */
+  savedIntervalMs: number | false;
+  /** What the page refreshes at now: this tab's choice over the saved one; `false` for off. */
+  intervalMs: number | false;
+  /** This tab's own choice, never saved (AC118); `undefined` follows the dashboard. */
+  tabIntervalMs: number | undefined;
+  chooseInterval: (intervalMs: number | undefined) => void;
+  /** The newest panel reading, when at least one scan panel was read; none until then. */
+  lastGoodAt: string | undefined;
+  /** The project's clock, which every time in the control is written on (FR46). */
+  zone: string;
+  /** A read is in flight. */
+  reading: boolean;
+  /** Reads the page at once, through the shared read, so a second press costs nothing (FR71). */
+  readNow: () => void;
+  /** The 30-day range lives only here, so choosing it goes through the screen (FR52). */
+  chooseRange: (rangeId: string) => void;
+}
+
+/** What a dashboard may offer one tab, within the floor: 30 s, 1 minute, 5 minutes (FR71). */
+export const TAB_INTERVALS: readonly RefreshInterval[] = REFRESH_INTERVALS.filter(
+  (option) => option.ms >= DASHBOARD_REFRESH_FLOOR_MS,
+);
+
+export type Declaration = LiveStream | FixedIntervalRefresh | typeof NOTHING_LIVE;
+
+export function isFixedInterval(
+  declared: Declaration | undefined,
+): declared is FixedIntervalRefresh {
+  return typeof declared === "object" && "kind" in declared && declared.kind === "fixed-interval";
+}
+
+let stream: Declaration | undefined;
 const streamListeners = new Set<() => void>();
 
 function subscribeStream(listener: () => void): () => void {
@@ -176,17 +232,17 @@ function subscribeStream(listener: () => void): () => void {
 }
 
 /** Declared by the screen while it is mounted, and withdrawn when it leaves. */
-export function declareStream(next: LiveStream | typeof NOTHING_LIVE | undefined): void {
+export function declareStream(next: Declaration | undefined): void {
   stream = next;
   for (const listener of streamListeners) listener();
 }
 
 /** What is declared right now. Separate from the hook so a test needs no tree. */
-export function readLiveStream(): LiveStream | typeof NOTHING_LIVE | undefined {
+export function readLiveStream(): Declaration | undefined {
   return stream;
 }
 
-export function useLiveStream(): LiveStream | typeof NOTHING_LIVE | undefined {
+export function useLiveStream(): Declaration | undefined {
   return useSyncExternalStore(subscribeStream, readLiveStream);
 }
 
@@ -201,6 +257,15 @@ export function useDeclaredStream(state: StreamState, pause: () => void, resume:
     declareStream({ state, pause, resume });
     return () => declareStream(undefined);
   }, [state, pause, resume]);
+}
+
+/** Declare a dashboard's refresh for as long as it is on screen, and re-declare as it changes. */
+export function useDeclaredRefresh(declaration: FixedIntervalRefresh): void {
+  useEffect(() => {
+    declareStream(declaration);
+  }, [declaration]);
+  // Withdrawn once, on leaving: a re-declaration is never a gap the control would flicker in.
+  useEffect(() => () => declareStream(undefined), []);
 }
 
 /** Declared by a screen that polls nothing, for as long as it is on screen. */

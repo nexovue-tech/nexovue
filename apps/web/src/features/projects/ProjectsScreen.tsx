@@ -1,15 +1,18 @@
+import { useLocation } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { useCan } from "@/shared/identity";
+import { useSelection } from "@/shared/selection";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import type { ProjectDeleted } from "./api";
 import { useCreateProject, useProject, useProjects } from "./api";
+import { DEPLOYS_ANCHOR } from "./DeploysSection";
 import { ProjectSettings } from "./ProjectSettings";
 
 /**
@@ -32,6 +35,7 @@ export function ProjectsScreen() {
   const [deleted, setDeleted] = useState<ProjectDeleted>();
 
   const selected = useProject(selectedId);
+  useOpenDeploysWhenLinked(selected.data?.id, setSelectedId);
 
   const onDeleted = (result: ProjectDeleted) => {
     setDeleted(result);
@@ -68,7 +72,7 @@ export function ProjectsScreen() {
             {/* The list said nothing about being a list: no count, no heading, and a
               row whose only affordance was a hover class that does not exist. A
               reader could not tell there was anything to click. */}
-            <h2 className="border-line border-b pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+            <h2 className="border-line border-b pb-1.5 heading-section">
               {projects.data.length} {projects.data.length === 1 ? "project" : "projects"} — open
               one to change what it keeps
             </h2>
@@ -185,4 +189,28 @@ function DeletionReceipt({ result, onDismiss }: { result: ProjectDeleted; onDism
       </div>
     </div>
   );
+}
+
+/**
+ * A link to `#deploys` (the releases list's coverage strip, a finding's deploy note) names a
+ * section inside a project that is closed until someone opens it. Open the selected project,
+ * once, and bring the section into view when it has drawn.
+ */
+function useOpenDeploysWhenLinked(
+  openedId: string | undefined,
+  open: (projectId: string) => void,
+): void {
+  const linked = useLocation({ select: (location) => location.hash === DEPLOYS_ANCHOR });
+  const { projectId } = useSelection();
+  const [opened, setOpened] = useState(false);
+
+  useEffect(() => {
+    if (!linked || opened || projectId === undefined) return;
+    setOpened(true);
+    open(projectId);
+  }, [linked, opened, projectId, open]);
+
+  useEffect(() => {
+    if (linked && openedId !== undefined) document.getElementById(DEPLOYS_ANCHOR)?.scrollIntoView();
+  }, [linked, openedId]);
 }

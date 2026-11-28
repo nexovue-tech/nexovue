@@ -26,18 +26,25 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX
+from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX, ASSISTANT_TICKET_PREFIX
 from nexovue_api.auth.sessions import Session, SessionStore
 from nexovue_api.middleware import ratelimit as ratelimit_middleware
 from nexovue_api.middleware.ratelimit import TOO_MANY_CONCURRENT_DETAIL, RateLimitMiddleware
 from nexovue_api.ratelimit.headers import POLICY_HEADER, RETRY_AFTER_HEADER, STATE_HEADER
 from nexovue_api.ratelimit.limiter import RateLimiter
-from nexovue_api.ratelimit.policy import TELEMETRY_TIER, TOKEN_TIER, FixedPlanLimits
+from nexovue_api.ratelimit.policy import (
+    CONNECTION_WEBHOOK_PREFIX,
+    TELEMETRY_TIER,
+    TOKEN_TIER,
+    FixedPlanLimits,
+)
+from nexovue_api.ratelimit.ticket_owners import TicketOwner, TicketOwners
 from nexovue_api.ratelimit.token_owners import TokenOwners
 from nexovue_api.settings import API_PREFIX
 
 READ: Final = f"{API_PREFIX}/traces"
 SLOW_READ: Final = f"{API_PREFIX}/traces/slow"
+WEBHOOK: Final = f"{CONNECTION_WEBHOOK_PREFIX}0b8f5a52-6c55-4a1e-9f0e-6f1d3f0a7c11"
 PER_PERSON: Final = TELEMETRY_TIER.quota.limit
 
 
@@ -61,12 +68,23 @@ class _Owners:
         return self.by_token.get(presented)
 
 
+class _TicketOwners:
+    """Whose person each question ticket belongs to (F4)."""
+
+    def __init__(self) -> None:
+        self.by_ticket: dict[str, TicketOwner] = {}
+
+    async def owner_of(self, presented: str) -> TicketOwner | None:
+        return self.by_ticket.get(presented)
+
+
 class _World:
     """One app under test, its people and tokens, and a gate slow reads wait at."""
 
     def __init__(self) -> None:
         self.sessions = _Sessions()
         self.owners = _Owners()
+        self.ticket_owners = _TicketOwners()
         self.released = asyncio.Event()
 
         async def read(_: Request) -> PlainTextResponse:
@@ -76,7 +94,13 @@ class _World:
             await self.released.wait()
             return PlainTextResponse("ok")
 
-        inner = Starlette(routes=[Route(READ, read), Route(SLOW_READ, slow_read)])
+        inner = Starlette(
+            routes=[
+                Route(READ, read),
+                Route(SLOW_READ, slow_read),
+                Route(WEBHOOK, read, methods=["POST"]),
+            ]
+        )
         # No exact quota is spent on these tiers, so the factory is never opened.
         unused = cast(async_sessionmaker[AsyncSession], None)
         self.app = RateLimitMiddleware(
@@ -85,6 +109,7 @@ class _World:
             plan_limits=FixedPlanLimits(),
             sessions=cast(SessionStore, self.sessions),
             token_owners=cast(TokenOwners, self.owners),
+            ticket_owners=cast(TicketOwners, self.ticket_owners),
         )
 
     def person(self, org_id: str) -> str:
@@ -93,6 +118,13 @@ class _World:
             user_id=str(uuid.uuid4()), org_id=org_id, created_at=datetime.now(UTC)
         )
         return token
+
+    def ticket_for(self, person: str) -> str:
+        """A question ticket asked by the person holding session `person`."""
+        session = self.sessions.by_token[person]
+        ticket = f"{ASSISTANT_TICKET_PREFIX}{uuid.uuid4().hex}"
+        self.ticket_owners.by_ticket[ticket] = TicketOwner(session.user_id, session.org_id)
+        return ticket
 
     def token(self, org_id: str | None = None) -> str:
         """A token-shaped value, owned by `org_id` when one is given."""
@@ -184,6 +216,18 @@ async def test_signed_out_reads_are_counted_against_their_address() -> None:
     async with _client(world) as anonymous:
         assert set(await _reads(anonymous, None, PER_PERSON)) == {200}
         assert await _reads(anonymous, None, 1) == [429]
+
+
+async def test_a_connection_webhook_is_counted_against_its_address_on_its_own_tier() -> None:
+    """F22 T5.1: a tracker's deliveries carry no session, so they are counted per address
+    before any signature is checked, at 120 a minute, and spend nothing a person's reads
+    from the same address need."""
+    world = _World()
+    async with _client(world) as tracker:
+        delivered = [(await tracker.post(WEBHOOK)).status_code for _ in range(121)]
+        assert delivered[:120] == [200] * 120
+        assert delivered[120] == 429
+        assert await _reads(tracker, None, 1) == [200]
 
 
 async def test_a_token_spends_its_own_budget_and_not_the_address_it_dialled_from() -> None:
@@ -321,3 +365,24 @@ async def test_an_organizations_in_flight_slots_come_back() -> None:
         answered = await _reads(runner, token, 2 * ceiling)
 
     assert set(answered) == {200}
+
+
+async def test_a_question_ticket_spends_its_person_s_own_allowance() -> None:
+    """F4 AC13: chat is no way round a person's limit, and pays nothing from the address."""
+    world = _World()
+    person = world.person(str(uuid.uuid4()))
+    ticket = world.ticket_for(person)
+    async with _client(world) as desk:
+        assert set(await _reads(desk, ticket, TELEMETRY_TIER.quota.limit)) == {200}
+        # The person's own screen is spent by their questions' reads, and the reverse.
+        assert await _reads(desk, person, 1) == [429]
+    async with _client(world) as elsewhere:
+        assert await _reads(elsewhere, world.person(str(uuid.uuid4())), 1) == [200]
+
+
+async def test_an_invented_ticket_is_counted_against_its_address() -> None:
+    world = _World()
+    invented = f"{ASSISTANT_TICKET_PREFIX}{uuid.uuid4().hex}"
+    async with _client(world) as caller:
+        assert set(await _reads(caller, invented, TELEMETRY_TIER.quota.limit)) == {200}
+        assert await _reads(caller, None, 1) == [429]

@@ -1,28 +1,29 @@
 import { Link } from "@tanstack/react-router";
 
+import type { ReleaseRead } from "@/shared/components/ChartReleases";
+import { ChartReleases } from "@/shared/components/ChartReleases";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import type { DeployMarker } from "@/shared/deploy-markers";
-import { deployMarkers } from "@/shared/deploy-markers";
+import { releaseMarkers } from "@/shared/deploy-markers";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
+import type { OverviewPlot } from "@/shared/overview-plots";
+import { buildOverviewPlots } from "@/shared/overview-plots";
+import { useReleaseMarkers } from "@/shared/releases/api";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
-
 import type { OverviewService, ProjectTotals } from "./api";
 import {
   useChecksSummary,
   useNodesSummary,
-  useProjectDeploys,
   useProjectOverview,
   useVitalsSummary,
   useWorstServices,
 } from "./api";
-import type { OverviewPlot } from "./overview-plots";
-import { buildOverviewPlots } from "./overview-plots";
 
 /**
  * How the whole system is running, in one screen.
@@ -44,30 +45,37 @@ export function OverviewScreen() {
 
   const overview = useProjectOverview(projectId, timeWindow);
   const worst = useWorstServices(projectId, timeWindow);
-  const deploys = useProjectDeploys(projectId);
-  // The strip waits for the panels. Five telemetry reads at once is one more
-  // than the tier allows in flight, and the fifth is refused rather than
-  // queued — so firing them together made one read of this screen fail every
-  // time it was opened.
+  const marks = useReleaseMarkers(projectId, timeWindow);
+  // The strip waits for the panels. The telemetry tier's in-flight cap is 8
+  // per API process and a read past it waits in the limiter rather than being
+  // refused — and at two API processes each holds a cap of 4, so five reads at
+  // once still leave one waiting out the queue on every cold load. The gating
+  // stays while that arithmetic holds (F20 plan, T1.8).
   const panelsLanded = overview.data !== undefined;
   const nodes = useNodesSummary(projectId, timeWindow, panelsLanded);
   const checks = useChecksSummary(projectId, timeWindow, panelsLanded);
   const vitals = useVitalsSummary(projectId, timeWindow, panelsLanded);
 
-  // Every deploy in the window, whichever service shipped it: a deploy that
-  // moved rate, errors and latency together is the reading this screen exists
-  // to make legible, and on a project-wide chart no one service owns it.
-  const markers = deployMarkers(deploys.data ?? [], {
-    from: timeWindow.from,
-    to: timeWindow.to,
-  });
+  // Every release in the window, whichever service shipped it: one that moved rate,
+  // errors and latency together is the reading this screen exists to make legible,
+  // and on a project-wide chart no one service owns it. Each names its service (FR36).
+  const releases: ReleaseRead = {
+    markers: releaseMarkers(marks.data?.markers ?? [], {
+      from: timeWindow.from,
+      to: timeWindow.to,
+    }),
+    isError: marks.isError,
+    onRetry: () => void marks.refetch(),
+    truncated: marks.data?.truncated ?? false,
+    cap: marks.data?.cap ?? 0,
+  };
 
   return (
     <OverviewView
       windowLabel={windowPhrase}
       totals={overview.data?.totals}
       plots={buildOverviewPlots(overview.data?.points ?? [])}
-      markers={markers}
+      releases={releases}
       worstServices={worst.data ?? []}
       isPending={overview.isPending}
       isError={overview.isError}
@@ -102,7 +110,8 @@ export interface OverviewViewProps {
   windowLabel: string;
   totals?: ProjectTotals;
   plots: readonly OverviewPlot[];
-  markers: readonly DeployMarker[];
+  /** The window's release marks, read on their own: they fail without the panels. */
+  releases: ReleaseRead;
   worstServices: readonly OverviewService[];
   isPending: boolean;
   isError: boolean;
@@ -116,7 +125,7 @@ export function OverviewView({
   windowLabel,
   totals,
   plots,
-  markers,
+  releases,
   worstServices,
   isPending,
   isError,
@@ -131,7 +140,7 @@ export function OverviewView({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Overview</h1>
+        <h1 className="heading-page">Overview</h1>
         <p className="mt-1 text-ink-dim text-sm">
           Every service you send traces from, over {windowLabel}.
         </p>
@@ -154,20 +163,22 @@ export function OverviewView({
         <>
           <Totals totals={totals} />
 
-          <div className="grid gap-4 px-4 pb-4 lg:grid-cols-3">
+          <div className="grid gap-4 px-4 pb-4 @3xl:grid-cols-3">
             {plots.map((plot) => (
-              <Panel key={plot.metric} plot={plot} markers={markers} windowLabel={windowLabel} />
+              <Panel
+                key={plot.metric}
+                plot={plot}
+                markers={releases.markers}
+                windowLabel={windowLabel}
+              />
             ))}
           </div>
 
-          {markers.length > 0 ? (
-            <p className="shrink-0 px-4 pb-3 text-ink-dim text-xs">
-              {/* One sentence for all three panels: the rule is the same instant
-                  on each, and saying it once is what makes that legible. */}
-              Dashed rules are the {formatCount(markers.length)}{" "}
-              {markers.length === 1 ? "deploy" : "deploys"} in this window.
-            </p>
-          ) : null}
+          {/* Once for all three panels: the mark is the same instant on each, and
+              saying it once is what makes that legible (FR36). */}
+          <div className="shrink-0 px-4 pb-3">
+            <ChartReleases read={releases} />
+          </div>
 
           <WorstServices services={worstServices} />
           <SurfaceStrip surfaces={surfaces} />
@@ -225,7 +236,7 @@ function Panel({
 }) {
   return (
     <section className="rounded-sm border border-line p-3">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{plot.label}</h2>
+      <h2 className="heading-section">{plot.label}</h2>
       {plot.flatAtZero ? (
         // Held at the chart's own height so the row of three stays level.
         <p className="flex items-center text-ink-dim text-sm" style={{ height: CHART_HEIGHT }}>
@@ -272,7 +283,7 @@ function WorstServices({ services }: { services: readonly OverviewService[] }) {
   return (
     <section className="shrink-0 border-line border-t">
       <div className="flex items-baseline justify-between px-4 py-2">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Worst services</h2>
+        <h2 className="heading-section">Worst services</h2>
         <Link to="/services" className="text-brand-text text-sm underline-offset-2 hover:underline">
           All services
         </Link>

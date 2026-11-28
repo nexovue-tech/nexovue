@@ -17,7 +17,7 @@
 
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, type ReactNode, useState } from "react";
-
+import { NOTES_STAY } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
 import { DataTable } from "@/shared/components/DataTable";
@@ -640,7 +640,7 @@ export function YourDataSection() {
       />
       <SettingRow
         label="Delete your account"
-        description={`Removes you from ${organization}. What you did stays in the audit log, without your name or address.`}
+        description={`Removes you from ${organization}. What you did stays in the audit log, without your name or address. ${NOTES_STAY}`}
         control={deleteControl}
       >
         {/* Null unless there is something to say: an empty fragment would still draw

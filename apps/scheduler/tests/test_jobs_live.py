@@ -17,21 +17,30 @@ import os
 import signal
 import socket
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
+import assistant_fakes
+import assistant_rows
 import job_fixtures
 import pytest
+from assistant_rows import as_insight, install, made
 from live import require_stack
+from nexovue_platform.ai.testing import FAKE_INPUT_TOKENS, FAKE_OUTPUT_TOKENS
+from nexovue_platform.assistant_records import QUESTION_RESERVATION_TOKENS
 from nexovue_platform.jobs import JobRequest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from structlog.testing import capture_logs
 
-from nexovue_scheduler import metrics
+from nexovue_api.roles import ROLES
+from nexovue_scheduler import metrics, slos
+from nexovue_scheduler.insight import assistant_sweep
 from nexovue_scheduler.jobs import child, queue, worker
 from nexovue_scheduler.jobs.queue import ClaimedJob, enqueue
 from nexovue_scheduler.jobs.worker import Worker
@@ -43,6 +52,11 @@ ASYNC_DSN: Final = DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 MODULES: Final = ("job_fixtures",)
 # Long enough for the forkserver to import every task module and a child to run a job.
 PATIENCE_SECONDS: Final = 20.0
+# F4's chat fixtures, shared with its other live suites.
+__all__ = ["as_insight", "install", "made"]
+_INSIGHT_COMMAND: Final = ROLES["scheduler-insight"]
+# `scheduler-insight`'s real slot count, read from its start command.
+INSIGHT_SLOTS: Final = int(_INSIGHT_COMMAND[_INSIGHT_COMMAND.index("--concurrency") + 1])
 
 
 def _reachable() -> bool:
@@ -111,6 +125,7 @@ async def _work_until(
     concurrency: int = 1,
     queues: list[str] | None = None,
     caps: dict[str, int] | None = None,
+    uncapped_floor: int = 0,
     child_memory_limit: int = worker.MAX_CHILD_PRIVATE_BYTES,
 ) -> None:
     """Run workers on `lane` until `done()` holds, or fail when patience runs out."""
@@ -124,6 +139,7 @@ async def _work_until(
                 concurrency=concurrency,
                 task_modules=MODULES,
                 caps=caps or {},
+                uncapped_floor=uncapped_floor,
                 child_memory_limit=child_memory_limit,
             ).run(stop)
         )
@@ -166,6 +182,93 @@ async def test_each_job_runs_once_however_many_workers_claim(
 
     assert sorted(_lines(notes), key=int) == [str(number) for number in range(20)]
     assert await _jobs_left(engine, lane) == 0
+
+
+# ------------------------------------------------- a hand-out across organizations
+#
+# A hand-out (beat, the detection and SLO sweeps, baselines, release syncs) reads every
+# organization's work, then adds it in a transaction of its own. An organization deleted
+# in between once failed the whole hand-out for everyone: the stack's beat logged "could
+# not add due jobs" while test tenants were dropped, and F19's suite failed the same way.
+
+
+@pytest.fixture
+async def two_organizations(engine: AsyncEngine) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
+    """Two bare organizations; deleting them takes their jobs."""
+    made = (uuid.uuid4(), uuid.uuid4())
+    async with engine.begin() as connection:
+        for org_id in made:
+            await connection.execute(
+                text("INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, 'Hand-out')"),
+                {"id": org_id, "slug": f"hand-out-{org_id.hex[:12]}"},
+            )
+    yield made
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM organizations WHERE id = ANY(:ids)"), {"ids": list(made)}
+        )
+
+
+def _hand_out(lane: str, *org_ids: uuid.UUID) -> list[JobRequest]:
+    """A job for each organization, then one for none (install-wide work)."""
+    return [
+        *(JobRequest(task=job_fixtures.NOTE, queue=lane, org_id=str(org)) for org in org_ids),
+        JobRequest(task=job_fixtures.NOTE, queue=lane),
+    ]
+
+
+async def _queued_for(engine: AsyncEngine, lane: str) -> Counter[uuid.UUID | None]:
+    """Whom `lane`'s jobs are for, in no order: one hand-out adds its jobs in one statement,
+    so their `run_after` and `created_at` tie and Postgres returns them in any order."""
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text("SELECT org_id FROM jobs WHERE queue = :q"), {"q": lane}
+        )
+        return Counter(row.org_id for row in rows)
+
+
+async def _delete_organization(connection: AsyncConnection, org_id: uuid.UUID) -> None:
+    await connection.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})
+
+
+async def test_an_organization_deleted_before_its_job_is_added_is_left_out_alone(
+    engine: AsyncEngine, lane: str, two_organizations: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    gone, live = two_organizations
+    async with engine.begin() as connection:
+        await _delete_organization(connection, gone)
+
+    await queue.enqueue_all(engine, _hand_out(lane, gone, live))
+
+    assert await _queued_for(engine, lane) == Counter([live, None])
+
+
+async def test_a_hand_out_waits_out_an_organization_deletion_in_flight(
+    engine: AsyncEngine, lane: str, two_organizations: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """The deletion has begun, not committed, when the hand-out adds its jobs: the
+    hand-out waits for it and leaves out what it deleted."""
+    gone, live = two_organizations
+    async with engine.connect() as deleter:
+        await _delete_organization(deleter, gone)
+        deleter_pid = await deleter.scalar(text("SELECT pg_backend_pid()"))
+        adding = asyncio.create_task(queue.enqueue_all(engine, _hand_out(lane, gone, live)))
+        await _until_blocked_by(engine, deleter_pid)
+        await deleter.commit()
+        await asyncio.wait_for(adding, PATIENCE_SECONDS)
+
+    assert await _queued_for(engine, lane) == Counter([live, None])
+
+
+async def _until_blocked_by(engine: AsyncEngine, pid: int) -> None:
+    """Until some session waits on `pid`'s locks, within `PATIENCE_SECONDS`."""
+    waiting = text("SELECT count(*) FROM pg_stat_activity WHERE :pid = ANY(pg_blocking_pids(pid))")
+    deadline = asyncio.get_running_loop().time() + PATIENCE_SECONDS
+    async with engine.connect() as watcher:
+        while not await watcher.scalar(waiting, {"pid": pid}):
+            await watcher.rollback()
+            assert asyncio.get_running_loop().time() < deadline, "the hand-out never waited"
+            await asyncio.sleep(0.05)
 
 
 async def test_a_job_nobody_started_in_time_is_dropped_unrun(
@@ -420,6 +523,71 @@ async def test_a_capped_queue_never_holds_more_than_its_slots(
             await connection.execute(text("DELETE FROM jobs WHERE queue = :q"), {"q": others})
 
 
+async def test_capped_queues_together_stay_above_the_floor_and_take_turns(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """F3 A56, AC47, F19 D66, AC68: on `scheduler-light` the capped queues (detection, F3's
+    evidence, F28's releases and F19's three, at their real caps) ask for more seats than
+    the floor leaves them. Together they hold at most 8 - 4, every one of them gets its
+    turn, and the uncapped lane, the probes' and alert sweeps', keeps its 4."""
+    capped = {
+        f"{lane}.{name}": cap
+        for name, cap in worker.QUEUE_CAPS.items()
+        if name in {"detection", "evidence", "releases", *slos.QUEUES}
+    }
+    assert sum(capped.values()) > 4, "the real caps no longer ask for more than the floor"
+    probes = f"{lane}.probes"
+    notes = tmp_path / "notes"
+    jobs = 0
+    try:
+        for queue_name in capped:
+            for number in range(3):
+                await _add(
+                    engine,
+                    JobRequest(
+                        task=job_fixtures.SPAN,
+                        queue=queue_name,
+                        kwargs={
+                            "path": str(notes),
+                            "marker": f"capped {queue_name} {number}",
+                            "pause": 0.6,
+                        },
+                    ),
+                )
+                jobs += 1
+        for number in range(8):
+            await _add(
+                engine,
+                JobRequest(
+                    task=job_fixtures.SPAN,
+                    queue=probes,
+                    kwargs={"path": str(notes), "marker": f"probe {number}", "pause": 0.6},
+                ),
+            )
+            jobs += 1
+
+        await _work_until(
+            engine,
+            lane,
+            lambda: sum(line.startswith("end") for line in _lines(notes)) >= jobs,
+            concurrency=8,
+            queues=[*capped, probes],
+            caps=capped,
+            uncapped_floor=4,
+        )
+
+        lines = _lines(notes)
+        assert _most_at_once(lines, "capped") <= 4
+        assert _most_at_once(lines, "probe") >= 4
+        for queue_name, cap in capped.items():
+            assert 1 <= _most_at_once(lines, f"capped {queue_name} ") <= cap
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM jobs WHERE queue = ANY(:q)"), {"q": [*capped, probes]}
+            )
+
+
 def _pids(path: Path) -> list[str]:
     return [line.split()[1] for line in _lines(path)]
 
@@ -515,3 +683,165 @@ async def test_a_slot_whose_new_child_fails_to_start_rebuilds_before_its_next_jo
         )
     finally:
         slot.stop()
+
+
+# --------------------------------------------------------------------- F4: chat's questions
+
+
+async def _chat_usage(install: AsyncEngine, org_id: str) -> tuple[int, int]:
+    row = await assistant_rows.run(
+        install,
+        "SELECT used_tokens, reserved_tokens FROM ai_usage_monthly "
+        "WHERE org_id = :o AND month = date_trunc('month', now())::date",
+        o=org_id,
+    )
+    return (0, 0) if row is None else (int(row.used_tokens), int(row.reserved_tokens))
+
+
+@pytest.mark.parametrize("end", ["between", "blocked"])
+async def test_a_question_whose_child_is_really_killed_ends_unavailable_and_is_charged(
+    engine: AsyncEngine,
+    lane: str,
+    tmp_path: Path,
+    install: AsyncEngine,
+    as_insight: AsyncEngine,
+    made: list[str],
+    end: str,
+) -> None:
+    """F4 AC27: a child killed between two calls, or at the hard limit inside one, leaves
+    its question running with a reservation; once its clock passes, chat's sweep (as the AI
+    account) ends it `unavailable`, moves what it still held to used, flagged estimated,
+    returns the month's reserved tokens to their earlier value, and the person can ask
+    again."""
+    asked = await assistant_rows.ask(install, made)
+    before = await _chat_usage(install, asked.org_id)
+    notes = tmp_path / "notes"
+    await _add(
+        engine,
+        JobRequest(
+            task=job_fixtures.CHAT,
+            queue=lane,
+            kwargs={
+                "path": str(notes),
+                "org_id": asked.org_id,
+                "message_id": asked.message_id,
+                "key": assistant_fakes.TEST_KEY,
+                "end": end,
+            },
+            soft_limit_seconds=1,
+            hard_limit_seconds=3,
+        ),
+    )
+
+    ended = {
+        "between": "a job's process died",
+        "blocked": "a job was killed at its hard time limit",
+    }
+    with capture_logs() as logs:
+        await _work_until(engine, lane, lambda: any(line["event"] == ended[end] for line in logs))
+    assert _lines(notes) == [
+        {"between": "killed between calls", "blocked": "blocked in a call"}[end]
+    ]
+
+    held = await assistant_rows.message(install, asked.message_id)
+    assert held.state == "running" and held.reserved_tokens > 0
+    spent_before_the_kill = int(held.used_tokens)
+    # The question's clock passes; nothing else would end it.
+    await assistant_rows.run(
+        install,
+        "UPDATE assistant_messages SET hard_ends_at = now() - interval '1 second' WHERE id = :id",
+        id=asked.message_id,
+    )
+    assert await assistant_sweep.sweep(as_insight) >= 1
+
+    after = await assistant_rows.message(install, asked.message_id)
+    assert (after.state, after.failure_reason) == ("unavailable", "died")
+    assert after.reserved_tokens == 0 and after.tokens_estimated
+    assert after.used_tokens == QUESTION_RESERVATION_TOKENS
+    assert spent_before_the_kill == (FAKE_INPUT_TOKENS + FAKE_OUTPUT_TOKENS) * (end == "between")
+    used, reserved = await _chat_usage(install, asked.org_id)
+    assert reserved == before[1]
+    assert used == before[0] + QUESTION_RESERVATION_TOKENS
+    again = await assistant_rows.ask_again(install, asked)
+    assert (await assistant_rows.message(install, again.message_id)).state == "queued"
+
+
+async def test_with_no_worker_a_queued_question_ends_unavailable_by_its_queue_clock(
+    install: AsyncEngine, as_insight: AsyncEngine, made: list[str]
+) -> None:
+    """F4 AC54: nobody claims it. By `queue_expires_at` the sweep ends it `unavailable`, which
+    frees the one-in-flight index, though its hard clock has not passed."""
+    asked = await assistant_rows.ask(install, made)
+    await assistant_rows.run(
+        install,
+        "UPDATE assistant_messages SET queue_expires_at = now() - interval '1 second' "
+        "WHERE id = :id",
+        id=asked.message_id,
+    )
+
+    assert await assistant_sweep.sweep(as_insight) >= 1
+
+    after = await assistant_rows.message(install, asked.message_id)
+    assert after.state == "unavailable"
+    assert after.hard_ends_at > datetime.now(UTC)
+    again = await assistant_rows.ask_again(install, asked)
+    assert (await assistant_rows.message(install, again.message_id)).state == "queued"
+
+
+@pytest.mark.parametrize(
+    "other", ["insight", "assistant", "insight-fix"], ids=lambda name: f"{name} still claimed"
+)
+async def test_two_full_ai_queues_never_keep_the_third_from_being_claimed_in_time(
+    engine: AsyncEngine, lane: str, tmp_path: Path, other: str
+) -> None:
+    """F4 AC29, with F5's D56: `scheduler-insight` at its real slots and caps. A burst fills
+    two of its three queues with slow jobs; a job on the third, which expires in a few
+    seconds, must still be claimed and run before it expires."""
+    names = ("assistant", "insight", "insight-fix")
+    queues = {name: f"{lane}.{name}" for name in names}
+    caps = {queues[name]: worker.QUEUE_CAPS[name] for name in queues}
+    full = [name for name in names if name != other]
+    notes = tmp_path / "notes"
+    try:
+        # Enough slow jobs to take every slot if the caps did not hold, each outliving the
+        # other queue's job's expiry.
+        for name in full:
+            for number in range(INSIGHT_SLOTS + 2):
+                await _add(
+                    engine,
+                    JobRequest(
+                        task=job_fixtures.SPAN,
+                        queue=queues[name],
+                        kwargs={
+                            "path": str(notes),
+                            "marker": f"burst {name} {number}",
+                            "pause": 8.0,
+                        },
+                    ),
+                )
+        await _add(
+            engine,
+            JobRequest(
+                task=job_fixtures.NOTE,
+                queue=queues[other],
+                kwargs={"path": str(notes), "marker": "the other ran"},
+                expires_seconds=3,
+            ),
+        )
+
+        await _work_until(
+            engine,
+            lane,
+            lambda: "the other ran" in _lines(notes),
+            concurrency=INSIGHT_SLOTS,
+            queues=[queues[name] for name in names],
+            caps=caps,
+        )
+
+        for name in full:
+            assert _most_at_once(_lines(notes), f"burst {name} ") <= worker.QUEUE_CAPS[name]
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM jobs WHERE queue = ANY(:q)"), {"q": list(queues.values())}
+            )

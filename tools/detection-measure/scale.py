@@ -103,7 +103,14 @@ POSTGRES_TABLES: Final = (
     "service_detection_settings",
     "intake_refusals",
 )
-CLICKHOUSE_TABLES: Final = ("service_stats_1m", "detection_readings", "endpoint_stats_1m")
+# `service_versions_1m` is F28's, filled from the same spans as `service_stats_1m`, so its size at
+# this volume is read beside it (F28 plan T1.6).
+CLICKHOUSE_TABLES: Final = (
+    "service_stats_1m",
+    "service_versions_1m",
+    "detection_readings",
+    "endpoint_stats_1m",
+)
 # The accounts detection reads and writes ClickHouse with (ADR-023).
 DETECTION_USERS: Final = ("nexovue_reader", "nexovue_detection_writer")
 
@@ -347,7 +354,7 @@ def _proc_children() -> dict[int, list[int]]:
     return children
 
 
-def _cmdline(pid: int) -> str:
+def cmdline(pid: int) -> str:
     try:
         return (
             Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
@@ -367,7 +374,7 @@ def _tree(roots: Iterable[int], children: Mapping[int, list[int]]) -> set[int]:
     return found
 
 
-def _memory(pid: int) -> tuple[int, int]:
+def process_memory(pid: int) -> tuple[int, int]:
     """RSS and PSS in bytes; PSS shares each page among the processes using it."""
     rss = pss = 0
     try:
@@ -398,12 +405,12 @@ def sample(groups: Sequence[ProcessGroup]) -> None:
     tick = os.sysconf("SC_CLK_TCK")
     me = os.getpid()
     for group in groups:
-        roots = [pid for pid in pids if pid != me and group.pattern.search(_cmdline(pid))]
+        roots = [pid for pid in pids if pid != me and group.pattern.search(cmdline(pid))]
         members = _tree(roots, children)
         rss = pss = 0
         ticks: dict[int, int] = {}
         for pid in members:
-            r, p = _memory(pid)
+            r, p = process_memory(pid)
             rss, pss = rss + r, pss + p
             ticks[pid] = _ticks(pid)
         used = sum(
@@ -520,6 +527,12 @@ async def _tenants(postgres: str) -> list[Tenant]:
     finally:
         await connection.close()
     return [Tenant(int(s.removeprefix(SLUG_PREFIX)), o, p, z) for s, o, p, z in rows]
+
+
+def limited(tenants: Sequence[Tenant], count: int) -> list[Tenant]:
+    """The first `count` tenants, or all of them when `count` is 0: a load for a short run
+    does not need two hundred projects."""
+    return list(tenants[:count] if count else tenants)
 
 
 def tenants_or_exit(postgres: str) -> list[Tenant]:
@@ -676,7 +689,7 @@ def cmd_load(args: argparse.Namespace) -> int:
     import httpx
 
     require_local(args.receiver, "receiver")
-    tenants = tenants_or_exit(args.postgres)
+    tenants = limited(tenants_or_exit(args.postgres), args.projects)
     services = {tenant.number: live_services(tenant) for tenant in tenants}
     rng = random.Random(args.seed)
     stop_at = time.monotonic() + args.minutes * 60 if args.minutes else math.inf
@@ -851,7 +864,8 @@ def _storage(client: Any, postgres: str, tenants: Sequence[Tenant]) -> dict[str,
 
     parts = client.query(
         """
-        SELECT table, sum(rows), sum(bytes_on_disk), sum(data_uncompressed_bytes), count()
+        SELECT table, sum(rows), sum(bytes_on_disk), sum(data_uncompressed_bytes), count(),
+               sum(primary_key_bytes_in_memory)
         FROM system.parts
         WHERE database = currentDatabase() AND active AND table IN {tables:Array(String)}
         GROUP BY table
@@ -892,9 +906,10 @@ def _storage(client: Any, postgres: str, tenants: Sequence[Tenant]) -> dict[str,
                 "bytes_on_disk": int(disk),
                 "bytes_uncompressed": int(raw),
                 "active_parts": int(active),
+                "primary_key_bytes_in_memory": int(index),
                 "bytes_per_row_on_disk": disk / rows if rows else None,
             }
-            for table, rows, disk, raw, active in parts
+            for table, rows, disk, raw, active, index in parts
         ],
         "postgres": [
             {"table": table, "bytes": size, "rows": rows}
@@ -1154,6 +1169,53 @@ def cmd_profile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_slo_checks(args: argparse.Namespace) -> int:
+    """F19: each project's checks, before `seed`, so the seeder writes their readings."""
+    import slo_scale
+
+    made = slo_scale.run(slo_scale.add_checks(args.postgres, tenants_or_exit(args.postgres)))
+    print(f"{made} checks made.")
+    return 0
+
+
+def cmd_slo_targets(args: argparse.Namespace) -> int:
+    """F19: each project's targets, all four kinds; the 200-target limit in project 1."""
+    import slo_scale
+
+    tenants = tenants_or_exit(args.postgres)
+    made = slo_scale.run(slo_scale.add_targets(args.postgres, tenants, SERVICES))
+    print(f"{made} targets made across {len(tenants)} projects.")
+    return 0
+
+
+def cmd_slo_measure(args: argparse.Namespace) -> int:
+    """F19 (AC50, AC86): run the SLO jobs for the projects here, in this process, and write what
+    each statement and job cost, with the size and machine it ran at."""
+    import slo_scale
+
+    tenants = tenants_or_exit(args.postgres)
+    if args.projects:
+        tenants = [t for t in tenants if t.number <= args.projects or t.number == 1]
+    measured = slo_scale.Measured(machine=slo_scale.machine_facts())
+    try:
+        slo_scale.run(
+            slo_scale.measure(
+                postgres=args.postgres,
+                clickhouse=_clickhouse(args.clickhouse),
+                reader_dsn=args.reader,
+                tenants=tenants,
+                services=SERVICES,
+                out=measured,
+                settled_at=args.settled,
+            )
+        )
+    finally:
+        measured.write(str(args.out))  # What a run measured before it failed is still evidence.
+    print(json.dumps({"size": measured.size, "machine": measured.machine}, indent=2, default=str))
+    print(f"Wrote {args.out}")
+    return 0
+
+
 def cmd_remove(args: argparse.Namespace) -> int:
     """Close every AC29 organization as its owner would; the nightly erasure (ADR-014) then
     removes their ClickHouse rows."""
@@ -1204,6 +1266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     load.add_argument("--minutes", type=float, default=0, help="0 runs until stopped")
     load.add_argument("--parallel", type=int, default=SEND_PARALLEL)
     load.add_argument("--seed", type=int, default=29)
+    load.add_argument("--projects", type=int, default=0, help="0 sends for every project")
     load.set_defaults(run=cmd_load)
 
     watch = commands.add_parser("watch", help="measure while the scheduler runs")
@@ -1246,6 +1309,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     profile.set_defaults(run=cmd_profile)
+
+    slo_checks = commands.add_parser("slo-checks", help="F19: give each project its checks")
+    slo_checks.set_defaults(run=cmd_slo_checks)
+
+    slo_targets = commands.add_parser("slo-targets", help="F19: write each project's targets")
+    slo_targets.set_defaults(run=cmd_slo_targets)
+
+    slo_measure = commands.add_parser("slo-measure", help="F19: time the SLO jobs and statements")
+    slo_measure.add_argument("--projects", type=int, default=0, help="0 measures every project")
+    slo_measure.add_argument(
+        "--reader", default="clickhouse://nexovue_reader:nexovue_reader_dev@localhost:18123/nexovue"
+    )
+    slo_measure.add_argument(
+        "--settled",
+        type=lambda text: datetime.fromisoformat(text).astimezone(UTC),
+        help="the minute to judge up to; one every measured project holds a day before",
+    )
+    slo_measure.add_argument("--out", type=Path, default=Path("slo-scale.json"))
+    slo_measure.set_defaults(run=cmd_slo_measure)
 
     remove = commands.add_parser("remove", help="close every AC29 organization")
     remove.add_argument("--yes", action="store_true", help="really close them")

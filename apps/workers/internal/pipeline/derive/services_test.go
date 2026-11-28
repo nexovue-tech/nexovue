@@ -168,6 +168,119 @@ func TestTheServiceDrainIsByteReproducible(t *testing.T) {
 	}
 }
 
+// Anyone holding a key can mint service names that sort first. The cap keeps
+// the busiest, so 2,001 one-request `aaa-*` names cannot push a busy real
+// service out of its minute (browser-door T2.1).
+func TestTheCapKeepsTheBusiestServicesNotTheFirstNames(t *testing.T) {
+	counters := NewCounters(0)
+	for index := range MaxServicesPerTenant + 1 {
+		counters.Observe(serviceMinute,
+			inboundSpan(int32(index%3), "tenant-1", fmt.Sprintf("aaa-%05d", index), 5, false))
+	}
+	for range 50 {
+		counters.Observe(serviceMinute, inboundSpan(0, "tenant-1", "checkout", 5, false))
+	}
+
+	kept := make(map[string]uint64)
+	for _, stat := range drainedServices(t, counters) {
+		kept[stat.ServiceName] = stat.RequestCount
+	}
+	if kept["checkout"] != 50 {
+		t.Errorf("checkout kept %d requests, want all 50: minted names evicted the busiest service",
+			kept["checkout"])
+	}
+	if len(kept) != MaxServicesPerTenant {
+		t.Errorf("kept %d services, want the cap of %d", len(kept), MaxServicesPerTenant)
+	}
+	// Among equals the tie goes to name order, so the two last minted names are
+	// the ones left out.
+	for _, leftOut := range []string{
+		fmt.Sprintf("aaa-%05d", MaxServicesPerTenant-1), fmt.Sprintf("aaa-%05d", MaxServicesPerTenant),
+	} {
+		if _, ok := kept[leftOut]; ok {
+			t.Errorf("%s was kept; a tie must leave out the last in name order", leftOut)
+		}
+	}
+}
+
+// A tie must keep the same services however the records interleaved, or a
+// replay drains a different block and its deduplication token double-counts.
+func TestTheCapBreaksTiesTheSameWayEveryRun(t *testing.T) {
+	type observation struct {
+		partition int32
+		service   string
+	}
+	var observations []observation
+	for index := range MaxServicesPerTenant + 40 {
+		requests := 1 + index%3
+		for range requests {
+			observations = append(observations,
+				observation{int32(index % 4), fmt.Sprintf("svc-%05d", (index*7919)%(MaxServicesPerTenant+40))})
+		}
+	}
+	build := func(seed uint64) []ServiceStat {
+		shuffled := append([]observation(nil), observations...)
+		rand.New(rand.NewPCG(seed, seed)).Shuffle(len(shuffled), func(i, j int) {
+			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+		})
+		counters := NewCounters(0)
+		for _, seen := range shuffled {
+			counters.Observe(serviceMinute, inboundSpan(seen.partition, "tenant-1", seen.service, 5, false))
+		}
+		return drainedServices(t, counters)
+	}
+
+	first := build(1)
+	if len(first) != MaxServicesPerTenant {
+		t.Fatalf("kept %d services, want the cap; the fixture is wrong", len(first))
+	}
+	for round := uint64(2); round < 8; round++ {
+		again := build(round)
+		if len(again) != len(first) {
+			t.Fatalf("round %d kept %d services, want %d", round, len(again), len(first))
+		}
+		for i := range first {
+			if again[i] != first[i] {
+				t.Fatalf("round %d differs at row %d:\n  first: %+v\n  again: %+v", round, i, first[i], again[i])
+			}
+		}
+	}
+}
+
+// Going over the cap is recorded per tenant and minute, so a screen can say
+// which minutes of which organization are missing services (browser-door
+// T3.1, decision 1). Two tenants over it in different minutes get an entry
+// each; a tenant under it gets none.
+func TestEachTenantMinuteOverTheCapIsRecorded(t *testing.T) {
+	nextMinute := serviceMinute.Add(time.Minute)
+	counters := NewCounters(0)
+	overCap := func(tenant string, minute time.Time, extra int, retentionDays uint16) {
+		for index := range MaxServicesPerTenant + extra {
+			span := inboundSpan(int32(index%3), tenant, fmt.Sprintf("svc-%05d", index), 5, false)
+			span.Timestamp, span.ReceivedAt = minute.Add(time.Second), minute.Add(time.Second)
+			span.RetentionDays = retentionDays
+			counters.Observe(serviceMinute, span)
+		}
+	}
+	overCap("tenant-a", serviceMinute, 3, 30)
+	overCap("tenant-b", nextMinute, 7, 90)
+	counters.Observe(serviceMinute, inboundSpan(0, "tenant-c", "checkout", 5, false))
+
+	got := counters.DrainAll().ServicesOverCap
+	want := []ServiceCap{
+		{Minute: serviceMinute, TenantID: "tenant-a", RetentionDays: 30, Services: 3},
+		{Minute: nextMinute, TenantID: "tenant-b", RetentionDays: 90, Services: 7},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ServicesOverCap = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 // One organization can have at most 2,000 services counted in a minute. Past
 // that, the rest of its services are left out and reported, and nobody else's
 // are affected.
@@ -192,7 +305,7 @@ func TestTheCapLeavesOutAnOrganizationsServicesPastTwoThousand(t *testing.T) {
 			kept[stat.TenantID]++
 		}
 		if stat.ServiceName >= fmt.Sprintf("svc-%05d", MaxServicesPerTenant) && stat.Minute.Equal(serviceMinute) {
-			t.Errorf("%s was counted past the cap; the ones left out are the last in name order",
+			t.Errorf("%s was counted past the cap; among equals the ones left out are the last in name order",
 				stat.ServiceName)
 		}
 	}
@@ -207,7 +320,11 @@ func TestTheCapLeavesOutAnOrganizationsServicesPastTwoThousand(t *testing.T) {
 		t.Errorf("drained %d rows, want the capped minute, the quiet tenant and the next minute",
 			len(drained.Services))
 	}
-	if want := (ServiceCap{Services: extra, TenantID: "tenant-noisy"}); drained.ServicesOverCap != want {
-		t.Errorf("ServicesOverCap = %+v, want %+v", drained.ServicesOverCap, want)
+	want := ServiceCap{Minute: serviceMinute, TenantID: "tenant-noisy", RetentionDays: 30, Services: extra}
+	if len(drained.ServicesOverCap) != 1 || drained.ServicesOverCap[0] != want {
+		t.Errorf("ServicesOverCap = %+v, want only %+v", drained.ServicesOverCap, want)
+	}
+	if report := CapReportOf(drained.ServicesOverCap); report != (CapReport{Services: extra, TenantID: "tenant-noisy"}) {
+		t.Errorf("CapReportOf = %+v, want %d services naming tenant-noisy", report, extra)
 	}
 }

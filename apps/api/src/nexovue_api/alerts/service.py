@@ -4,6 +4,10 @@ A rule is validated with the same models the scheduler evaluates it with
 (`nexovue_platform.alerts.model`), so a rule saved here is a rule the scheduler
 understands. Incidents are written only by the scheduler; here they are read.
 
+**A reliability target rule names targets, not services** (F19 FR25, design *Burn*):
+it never counts as watching a service, a target it names must be this project's, and
+narrowing it ends its incidents on the targets it dropped (AC70).
+
 **An *anomaly finding* rule is an admin's** (F6 FR23, D11, security M4). The
 routes admit every working member (`MayOperateAlerts`), so each change here also
 asks `CONFIGURE_DETECTION` when the rule is, or would become, of that kind:
@@ -17,18 +21,25 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform.alerts.model import (
+    SLO_PREFIX,
     CheckStateCondition,
     Condition,
+    SloBurnCondition,
     check_subject,
     parse_condition,
     service_subject,
+    slo_of_subject,
+    slo_subject,
 )
+from nexovue_platform.detection import DEFAULT_TIMEZONE
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.alerts import queries
 from nexovue_api.alerts.evaluation import EvaluationReader
 from nexovue_api.alerts.schemas import (
+    BurnFacts,
+    BurnFinding,
     CoverageResponse,
     EvaluationStatus,
     IncidentListResponse,
@@ -58,6 +69,7 @@ RECENT_INCIDENT_DAYS: Final = 30
 CANNOT_SAVE: Final = "This rule cannot be saved. Each problem is named with its field."
 ANOMALY_FINDING: Final = "anomaly_finding"
 NOT_FOUND: Final = "No such rule."
+SLO_BURN: Final = "slo_burn"
 
 
 async def list_rules(
@@ -208,9 +220,21 @@ async def delete_rule(
 async def close_incidents_of_check(
     session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID
 ) -> None:
-    """A deleted check is never evaluated again, so nothing else would close these."""
-    await queries.close_subject(
-        session, org_id=org_id, subject_key=check_subject(check_id), at=datetime.now(UTC)
+    """A deleted check is never evaluated again, so nothing else would close these: its
+    own incidents, and the burns of targets counting it (F19 AC70)."""
+    at = datetime.now(UTC)
+    await queries.close_subject(session, org_id=org_id, subject_key=check_subject(check_id), at=at)
+    for subject in await queries.burn_subjects_of_check(session, org_id=org_id, check_id=check_id):
+        await queries.stop_watching_subject(session, org_id=org_id, subject_key=subject, at=at)
+
+
+async def stop_burns_of_target(
+    session: AsyncSession, *, org_id: uuid.UUID, target_id: uuid.UUID, at: datetime
+) -> None:
+    """A target disabled, deleted or re-pointed is a different thing now, or nothing:
+    its open burns close and every rule forgets its position (F19 FR28, FR31, FR32)."""
+    await queries.stop_watching_subject(
+        session, org_id=org_id, subject_key=slo_subject(target_id), at=at
     )
 
 
@@ -234,13 +258,16 @@ async def _stop_watching_what_the_rule_no_longer_covers(
 
 
 def _covers_subject(condition: Condition, subject_key: str) -> bool:
+    if isinstance(condition, SloBurnCondition) and subject_key.startswith(SLO_PREFIX):
+        target = slo_of_subject(subject_key)
+        return target is not None and condition.covers_target(target)
     kind, _, name = subject_key.partition(":")
     if kind == "check" and isinstance(condition, CheckStateCondition):
         try:
             return condition.covers(uuid.UUID(name))
         except ValueError:
             return False
-    if kind == "service" and not isinstance(condition, CheckStateCondition):
+    if kind == "service" and not isinstance(condition, CheckStateCondition | SloBurnCondition):
         return condition.covers(name)
     # A new error is an event, closed as it opens; anything else is left alone.
     return True
@@ -326,7 +353,10 @@ async def coverage_of_service(
         if rule.condition_kind == "check_state":
             continue
         condition = parse_condition(rule.condition)
-        if not isinstance(condition, CheckStateCondition) and condition.covers(service):
+        # A target rule watches targets, never a service (F19 FR25).
+        if isinstance(condition, CheckStateCondition | SloBurnCondition):
+            continue
+        if condition.covers(service):
             covering.append(rule)
     open_now = await queries.incidents(
         session,
@@ -420,7 +450,32 @@ async def _validated_condition(
                 errors=[{"field": "condition.check_ids", "reason": "choose at least one check"}],
             )
         condition = condition.model_copy(update={"check_ids": kept})
+    if isinstance(condition, SloBurnCondition) and condition.slo_ids is not None:
+        await _require_targets(
+            session, org_id=org_id, project_id=project_id, slo_ids=condition.slo_ids
+        )
     return condition.model_dump(mode="json")
+
+
+async def _require_targets(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, slo_ids: list[uuid.UUID]
+) -> None:
+    """Every target a rule names is a live one of this project (design, *Tenancy path*):
+    another tenant's id, or another project's, is refused beside the field."""
+    found = await queries.live_target_ids(
+        session, org_id=org_id, project_id=project_id, target_ids=slo_ids
+    )
+    missing = [str(target) for target in slo_ids if target not in found]
+    if missing:
+        raise InvalidRequestError(
+            CANNOT_SAVE,
+            errors=[
+                {
+                    "field": "condition.slo_ids",
+                    "reason": f"no such reliability target in this project: {', '.join(missing)}",
+                }
+            ],
+        )
 
 
 async def _require_channels(
@@ -488,6 +543,14 @@ async def _incident_summaries(
         session, org_id=org_id, incident_ids=list({incident.id for incident in incidents})
     )
     checks = {incident.id: _check_of(incident) for incident in incidents}
+    zones = await queries.project_zones(
+        session, org_id=org_id, project_ids=list({incident.project_id for incident in incidents})
+    )
+    burns = {
+        incident.id: await _burn_facts(session, org_id=org_id, incident=incident)
+        for incident in incidents
+        if incident.condition_kind == SLO_BURN and slo_of_subject(incident.subject_key)
+    }
     existing: set[uuid.UUID] = set()
     for project_id in {incident.project_id for incident in incidents if checks[incident.id]}:
         existing |= await queries.existing_check_ids(
@@ -530,9 +593,44 @@ async def _incident_summaries(
                 )
                 for notification, channel in notifications.get(incident.id, [])
             ],
+            zone=zones.get(incident.project_id, DEFAULT_TIMEZONE),
+            burn=burns.get(incident.id),
         )
         for incident in incidents
     ]
+
+
+async def _burn_facts(session: AsyncSession, *, org_id: uuid.UUID, incident: Incident) -> BurnFacts:
+    """A burn page's facts (F19 AC85). The deploy is its service's last before the burn
+    began; a check target naming no service has none to read."""
+    service = incident.detail.get("service")
+    target_id = slo_of_subject(incident.subject_key)
+    assert target_id is not None
+    return BurnFacts(
+        findings=[
+            BurnFinding(id=finding_id, title=title)
+            for finding_id, title in await queries.findings_of_incident(
+                session, org_id=org_id, incident_id=incident.id
+            )
+        ],
+        last_deploy_at=(
+            await queries.last_deploy_before(
+                session,
+                org_id=org_id,
+                project_id=incident.project_id,
+                service=str(service),
+                before=incident.opened_at,
+            )
+            if service
+            else None
+        ),
+        deploys_connected=await queries.deploys_connected(
+            session, org_id=org_id, project_id=incident.project_id
+        ),
+        target_deleted=not await queries.target_is_live(
+            session, org_id=org_id, target_id=target_id
+        ),
+    )
 
 
 def _check_of(incident: Incident) -> uuid.UUID | None:

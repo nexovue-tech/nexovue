@@ -13,14 +13,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from nexovue_platform.releases import DeployFact, DeployHistory
 
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedRepository
-from nexovue_api.deploys.schemas import DeployEventSummary
-from nexovue_api.deploys.service import DeployHistory
 from nexovue_api.errorgroups import queries, service
 from nexovue_api.errorgroups.schemas import GROUPED_BY_SDK, GROUPED_BY_TEMPLATE
 from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.releases.service import CoverageBook
 from nexovue_api.window import RECEIVE_CLOCK_SLACK
 
 TENANT_A = "org-a"
@@ -504,15 +504,16 @@ async def test_the_query_is_bounded_on_our_receive_clock_as_well_as_the_customer
 FIRST_SEEN = values.nanos_to_datetime(_OCCURRED_NANOS)
 
 
-def _deploy(version: str, service_name: str, at: datetime) -> DeployEventSummary:
-    return DeployEventSummary(
-        id=uuid.uuid4(),
-        project_id=uuid.uuid4(),
-        version=version,
+def _deploy(version: str, service_name: str, at: datetime) -> DeployFact:
+    return DeployFact(
+        deploy_id=uuid.uuid4(),
+        release_id=None,
         service_name=service_name,
+        version=version,
         deployed_at=at,
-        source="webhook",
-        metadata={},
+        received_at=at,
+        state="finished",
+        commit_sha=None,
     )
 
 
@@ -576,3 +577,51 @@ async def test_a_project_that_records_no_deploys_reports_none_rather_than_guessi
     )
 
     assert page.groups[0].preceding_deploy is None
+
+
+# ------------------------------------------- what we hear about deploys, F28 AC73
+
+
+async def _covered_group(heard: dict[str, tuple[datetime | None, datetime | None]]) -> Any:
+    start, end = _window()
+    page = await service.list_error_groups(
+        _repository(TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
+        coverage=CoverageBook(heard),
+    )
+    return page.groups[0]
+
+
+@pytest.mark.parametrize(
+    ("heard", "value"),
+    [
+        ((FIRST_SEEN - timedelta(days=31), FIRST_SEEN - timedelta(days=2)), "deploys_and_versions"),
+        ((FIRST_SEEN - timedelta(days=29), None), "deploys_only"),
+        ((None, FIRST_SEEN - timedelta(days=2)), "versions_only"),
+        ((None, None), "none"),
+        # First heard of after the group appeared: nothing was known then.
+        ((FIRST_SEEN + timedelta(hours=1), None), "none"),
+    ],
+)
+async def test_a_group_carries_its_services_coverage_as_of_its_first_sighting(
+    heard: tuple[datetime | None, datetime | None], value: str
+) -> None:
+    """AC73, FR38: the cell's words come from this, so "not told" and "none before"
+    never read alike."""
+    group = await _covered_group({"checkout": heard})
+
+    assert group.deploy_coverage == value
+
+
+async def test_a_service_the_group_never_touched_gives_it_no_coverage() -> None:
+    group = await _covered_group({SILENT_SERVICE: (FIRST_SEEN - timedelta(days=1), None)})
+    assert group.deploy_coverage == "none"
+
+
+async def test_a_group_read_without_coverage_says_it_was_not_read() -> None:
+    """The unread value is the only one that shows the unknown mark."""
+    assert (await _one_group(DeployHistory([]))).deploy_coverage is None

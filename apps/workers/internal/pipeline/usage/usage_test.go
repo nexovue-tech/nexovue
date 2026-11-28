@@ -349,6 +349,56 @@ func TestTheFlushCarriesBrowserBytesInTheirOwnColumn(t *testing.T) {
 	}
 }
 
+// ------------------------------------------- which door may mark a service heard
+
+// A browser-door message is billed for its services but never marks one as
+// heard: its site key is printed in the customer's page, so anyone can send any
+// `service.name` through it, and `service_last_seen` is read as "this server is
+// up" (docs/changes/browser-door-last-seen). Every other door may.
+func TestOnlyTheBrowserDoorMarksNoServiceHeard(t *testing.T) {
+	cases := []struct {
+		door      nexovuev1.Door
+		wantHeard []string
+	}{
+		{nexovuev1.Door_DOOR_RUM, nil},
+		{nexovuev1.Door_DOOR_OTLP, []string{"checkout"}},
+		{nexovuev1.Door_DOOR_SYNTHETIC, []string{"checkout"}},
+		{nexovuev1.Door_DOOR_POLLER, []string{"checkout"}},
+		{nexovuev1.Door_DOOR_UNSPECIFIED, []string{"checkout"}},
+	}
+	signals := []struct {
+		signal  Signal
+		payload []byte
+	}{
+		{Spans, spansFrom(t, 2, "checkout")},
+		{Logs, logsFrom(t, 2, "checkout")},
+		{Metrics, metricsFrom(t, 2, "checkout")},
+	}
+	for _, sent := range signals {
+		for _, tc := range cases {
+			t.Run(sent.signal.Name+"/"+tc.door.String(), func(t *testing.T) {
+				message := envelopeThrough(t, tc.door, sent.signal.wire, sent.payload, testReceivedAt)
+
+				_, metered, err := sent.signal.meter(message)
+				if err != nil {
+					t.Fatalf("metering: %v", err)
+				}
+				if !equalNames(metered.Heard, tc.wantHeard) {
+					t.Errorf("heard = %v, want %v", metered.Heard, tc.wantHeard)
+				}
+				if !equalNames(metered.Services, []string{"checkout"}) {
+					t.Errorf("services = %v, want checkout: the door decides what is heard, "+
+						"never what is billed", metered.Services)
+				}
+				if metered.Bytes != int64(len(sent.payload)) {
+					t.Errorf("bytes = %d, want %d: usage is metered whatever the door",
+						metered.Bytes, len(sent.payload))
+				}
+			})
+		}
+	}
+}
+
 // ------------------------------------------------------ the billing unit
 
 // The unit the plan prices on. One export can carry several services, and each

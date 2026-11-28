@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
-from nexovue_platform.alerts.channels import PAGERDUTY_ENDPOINTS, webhook_signature
+from nexovue_platform.alerts.channels import (
+    PAGERDUTY_ENDPOINTS,
+    READ_BY_PEOPLE,
+    webhook_signature,
+)
+from nexovue_platform.alerts.model import ENDING_KINDS
 from nexovue_platform.checks.sealing import SealedBox, SealError, channel_secret_owner
 from nexovue_platform.email import EmailSender
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -60,19 +65,29 @@ class Outgoing:
     resolved_at: datetime | None
     # D29, D35: this trigger adds to an alert a linked finding or incident opened.
     noted: bool = False
+    # An ending's PagerDuty alerts to resolve, which may be more than `dedup_key`'s
+    # (decision 3/6).
+    resolves: tuple[str, ...] = ()
+
+
+def message_for(kind: str, message: AlertMessage) -> AlertMessage:
+    """What one kind of channel is sent: people read a finding's case line (F22
+    FR47); PagerDuty and webhooks receive the message unchanged, byte for byte."""
+    return message.for_people() if kind in READ_BY_PEOPLE else message
 
 
 async def send(
     engine: AsyncEngine, outbound: Outbound, channel: Channel, outgoing: Outgoing, *, now: datetime
 ) -> SendResult:
     kind = channel.kind
+    message = message_for(kind, outgoing.message)
     if kind in ("email", "owners"):
         async with engine.connect() as connection:
             addresses = await email.recipients(connection, channel)
         return await email.send(
             outbound.email_sender,
             addresses,
-            outgoing.message,
+            message,
             message_id=outgoing.message_id,
             fallback_manage_link=f"{outbound.app_base_url.rstrip('/')}/alerts",
             owners=kind == "owners",
@@ -83,7 +98,6 @@ async def send(
         return refusal
     assert secret is not None  # _open returns one or the other
     private = outbound.private_allowed
-    message = outgoing.message
 
     if kind == "slack":
         return http.post(secret, payloads.slack(message), private_allowed=private, secret=secret)
@@ -93,16 +107,22 @@ async def send(
         return http.post(secret, payloads.teams(message), private_allowed=private, secret=secret)
     if kind == "pagerduty":
         region = str(channel.config.get("region", "us"))
-        body = payloads.pagerduty(
-            message,
-            routing_key=secret,
-            dedup_key=outgoing.dedup_key,
-            subject=outgoing.subject,
-            app_base_url=outbound.app_base_url,
-            noted=outgoing.noted,
-        )
         endpoint = PAGERDUTY_ENDPOINTS.get(region, PAGERDUTY_ENDPOINTS["us"])
-        return http.post(endpoint, body, private_allowed=private, secret=secret)
+        resolves = outgoing.resolves if message.kind in ENDING_KINDS else ()
+        # A retry resends every resolve: PagerDuty ignores one for a resolved alert.
+        for dedup_key in resolves or (outgoing.dedup_key,):
+            body = payloads.pagerduty(
+                message,
+                routing_key=secret,
+                dedup_key=dedup_key,
+                subject=outgoing.subject,
+                app_base_url=outbound.app_base_url,
+                noted=outgoing.noted,
+            )
+            result = http.post(endpoint, body, private_allowed=private, secret=secret)
+            if result.outcome != "delivered":
+                return result
+        return result
     if kind == "webhook":
         url = str(channel.config.get("url", ""))
         body = payloads.webhook(

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { SETTINGS_GROUPS } from "@/shared/settings/settings-nav";
 import { createAppRouter } from "../router";
 
-import { NAV_SECTIONS } from "./route-manifest";
+import consoleRoutesRaw from "./console-routes.json?raw";
+import { NAV_SECTIONS, SETTINGS_DOOR } from "./route-manifest";
 
 /**
  * The defect this guards: the sidebar offered "Settings" at `/settings/project`, a
@@ -54,11 +55,8 @@ describe("the sidebar", () => {
   it("opens the settings area on the first screen its own rail lists", () => {
     // Otherwise the door lands somewhere the rail does not highlight, and the
     // reader's first impression of the area is that they are already lost in it.
-    const door = NAV_SECTIONS.flatMap((section) => section.items)
-      .map((item) => item.path)
-      .find((path) => path.startsWith("/settings/"));
-
-    expect(door).toBe(SETTINGS_GROUPS[0].items[0].path);
+    // The door is the account row's Settings since sketch G (2026-11-28).
+    expect(SETTINGS_DOOR).toBe(SETTINGS_GROUPS[0].items[0].path);
   });
 
   it("offers every screen a person is meant to reach from inside the app", () => {
@@ -87,7 +85,28 @@ describe("the sidebar", () => {
       "/alerts/incidents/$incidentId",
       // F6 (D12): reached from a finding's card, a service's timeline and its messages.
       "/findings/$findingId",
+      // F3 FR46: reached from the empty findings feed, and later from `/settings/ai`.
+      "/findings/sample",
+      // F19: reached from the targets list, a target's page and its actions.
+      "/slos/new",
+      "/slos/$sloId",
+      "/slos/$sloId/edit",
+      // F28: reached from the releases list's rows.
+      "/releases/$releaseId",
+      // F20: reached from the dashboard list, and the builder from the list and a dashboard.
+      "/dashboards/$dashboardId",
+      "/dashboards/new",
+      "/dashboards/$dashboardId/edit",
       "/settings/channels/$channelId",
+      // F4: one runbook, reached from the runbooks list and from a chat answer's quote.
+      "/settings/runbooks/$runbookId",
+      // F22: reached from the Connections screen and from GitHub's own redirects.
+      "/settings/connections/github/start",
+      "/settings/connections/github/return",
+      "/settings/connections/github/installed",
+      // F5: reached only from GitHub's own redirects (the suggestions App, an account link).
+      "/settings/connections/fix-app/return",
+      "/settings/github-link/return",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.
       "/admin/onboard",
@@ -115,6 +134,56 @@ describe("the sidebar", () => {
     );
 
     expect(unreachable).toEqual([]);
+  });
+});
+
+describe("the front door (F20 Step 1, FR1, FR2)", () => {
+  it("serves the Findings feed at /, Overview at /overview, and no /findings list (AC1)", () => {
+    const served = servedPaths();
+
+    expect(served.has("/")).toBe(true);
+    expect(served.has("/overview")).toBe(true);
+    // A finding's own page stays: alert messages link to it.
+    expect(served.has("/findings/$findingId")).toBe(true);
+    // The list address is removed, not redirected: nexovue is pre-deployment.
+    expect(served.has("/findings")).toBe(false);
+  });
+
+  it("offers Findings at /, then Alerts and targets, first in Respond (AC2, F19 D22, sketch G)", () => {
+    expect(NAV_SECTIONS[0]).toEqual({
+      label: "Respond",
+      items: [
+        { path: "/", title: "Findings" },
+        { path: "/alerts", title: "Alerts" },
+        { path: "/slos", title: "Reliability targets" },
+      ],
+    });
+  });
+
+  it("keeps Overview and Dashboards reachable, in Investigate and Watch (F20, sketch G)", () => {
+    const where = (path: string) =>
+      NAV_SECTIONS.find((section) => section.items.some((item) => item.path === path))?.label;
+    expect(where("/overview")).toBe("Investigate");
+    expect(where("/dashboards")).toBe("Watch");
+  });
+});
+
+describe("the checked-in route list (FR43, AC54)", () => {
+  it("offers Releases in Investigate, right after Errors (F28 design, `/releases`)", () => {
+    const signals = NAV_SECTIONS.find((section) => section.label === "Investigate");
+    const paths = signals?.items.map((item) => item.path) ?? [];
+    expect(paths.indexOf("/releases")).toBe(paths.indexOf("/errors") + 1);
+  });
+
+  it("matches the router exactly, so the scheduler's link test reads the truth", () => {
+    // `console-routes.json` exists because the scheduler cannot import the
+    // console: its own test (`test_alert_links.py`) holds every link a message
+    // composes against this list, and this test holds the list to the router.
+    // `?raw` rather than a JSON module: the file is data two repositories read,
+    // and the app's tsconfig has no reason to grow `resolveJsonModule` for it.
+    const listed = JSON.parse(consoleRoutesRaw) as string[];
+
+    expect([...listed].sort()).toEqual([...servedPaths()].sort());
   });
 });
 

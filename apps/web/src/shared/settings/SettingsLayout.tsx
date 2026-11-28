@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
+import { NAV_LABEL, NAV_ROW, NAV_ROW_ACTIVE, NAV_ROW_IDLE } from "@/shared/components/nav-row";
 import { useIsHosted } from "@/shared/deployment";
 import { useSession } from "@/shared/identity";
 import { useNothingLive } from "@/shared/refresh";
 
-import { SETTINGS_GROUPS, type SettingsPath } from "./settings-nav";
+import { offeredSettings, SETTINGS_GROUPS, type SettingsPath } from "./settings-nav";
 
 /**
  * One rail, one pane, for every preference screen.
@@ -40,12 +41,14 @@ export function SettingsLayout({
   return (
     // **The rail stays; the setting scrolls.** One scroll container held both, so
     // reading to the bottom of the audit log took the list of settings off screen
-    // with it and coming back meant scrolling up past a page of rows. At `md` and
+    // with it and coming back meant scrolling up past a page of rows. From `@lg`
     // up the row is the height of the pane and each column scrolls on its own,
-    // which is what a fixed rail means. Below `md` the rail is a collapsed
+    // which is what a fixed rail means. Below it the rail is a collapsed
     // disclosure rather than a column, so the page stays one scroller there —
     // two nested ones on a phone is how a list stops scrolling under a thumb.
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto md:overflow-hidden">
+    // `@lg` (32rem) is the width the pane is given, what a 768px window leaves it,
+    // not the window's own: chat's panel narrows the pane (F4 T2.10b).
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto @lg:flex-row @lg:overflow-hidden">
       {/* **The page uses the window; the prose inside it does not.**
           Left-aligned like the rest of the console — it used to be centred, which
           made the page's left edge jump every time somebody moved between Alerts
@@ -55,22 +58,22 @@ export function SettingsLayout({
           as it is a form. The cap that matters is inward, on the sentences: a line
           of explanation carries `max-w-3xl`, roughly 90 characters, past which a
           reader loses the start of the next line. A table does not have to. */}
-      <div className="flex w-full flex-col gap-8 px-4 py-6 md:h-full md:min-h-0 md:flex-row md:gap-10 md:py-0">
-        <SettingsNav />
+      {/* The settings menu is a second column beside the main one, with the same rows, and
+          the setting starts 16 px from it, as every screen starts 16 px from the main menu. */}
+      <SettingsNav />
 
-        {/* A column inside the shell's main landmark, not a second landmark. Two of
-            them is invalid HTML and gives a screen reader's landmark list a duplicate
-            to choose between; `AppShell` owns the page's one. */}
-        <div className="min-w-0 flex-1 pb-10 md:h-full md:min-h-0 md:overflow-y-auto md:pt-6">
-          <header>
-            <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
-            {description ? (
-              <p className="mt-1 max-w-3xl text-ink-dim text-sm leading-relaxed">{description}</p>
-            ) : null}
-          </header>
+      {/* A column inside the shell's main landmark, not a second landmark. Two of
+          them is invalid HTML and gives a screen reader's landmark list a duplicate
+          to choose between; `AppShell` owns the page's one. */}
+      <div className="min-w-0 flex-1 px-4 pt-5 pb-10 @lg:h-full @lg:min-h-0 @lg:overflow-y-auto">
+        <header>
+          <h1 className="heading-page">{title}</h1>
+          {description ? (
+            <p className="mt-1 max-w-3xl text-ink-dim text-sm leading-relaxed">{description}</p>
+          ) : null}
+        </header>
 
-          <div className="mt-6">{children}</div>
-        </div>
+        <div className="mt-6">{children}</div>
       </div>
     </div>
   );
@@ -95,33 +98,25 @@ function SettingsNav() {
   const hosted = useIsHosted();
 
   const groups = useMemo(
-    () =>
-      SETTINGS_GROUPS.map((group) => ({
-        ...group,
-        items: group.items.filter(
-          (item) =>
-            (item.requires === undefined || permissions?.includes(item.requires) === true) &&
-            (item.hostedOnly === undefined || hosted) &&
-            (needle === "" ||
-              item.title.toLowerCase().includes(needle) ||
-              item.keywords.some((word) => word.includes(needle))),
-        ),
-      })).filter((group) => group.items.length > 0),
+    () => offeredSettings(SETTINGS_GROUPS, { permissions, hosted, needle }),
     [needle, permissions, hosted],
   );
 
   return (
-    // Scrolls on its own at `md`, so a rail longer than the window is still
-    // reachable without moving the setting beside it.
+    // Scrolls on its own from `@lg`, so a rail longer than the window is still
+    // reachable without moving the setting beside it. A link's hover reaches 0.5rem
+    // past the text on each side, so the rail is that much wider with that much padding,
+    // pulled back by the same: the bleed stays inside the scroller, which would otherwise
+    // scroll sideways by it.
     <nav
       aria-label="Settings"
-      className="w-full shrink-0 md:h-full md:w-52 md:overflow-y-auto md:py-6"
+      className="w-full shrink-0 px-4 pt-5 @lg:h-full @lg:w-52 @lg:overflow-y-auto @lg:border-line @lg:border-r @lg:px-0 @lg:py-4"
     >
       <button
         type="button"
         onClick={() => setOpen((shown) => !shown)}
         aria-expanded={open}
-        className="-mx-2 flex min-h-11 w-[calc(100%+1rem)] items-center justify-between rounded px-2 text-ink text-sm hover:bg-hover md:hidden"
+        className="-mx-2 flex min-h-11 w-[calc(100%+1rem)] items-center justify-between rounded px-2 text-ink text-sm hover:bg-hover @lg:hidden"
       >
         <span className="font-medium">All settings</span>
         <span aria-hidden="true" className="text-ink-dim">
@@ -129,30 +124,28 @@ function SettingsNav() {
         </span>
       </button>
 
-      <div className={`${open ? "block" : "hidden"} md:block`}>
+      <div className={`${open ? "block" : "hidden"} @lg:block`}>
         <input
           type="search"
           value={typed}
           onChange={(event) => setTyped(event.target.value)}
           aria-label="Find a setting"
           placeholder="Find a setting"
-          className="w-full border border-line bg-surface px-2 py-1 text-ink text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none"
+          className="w-full border border-line bg-surface px-2 py-1 text-ink text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none @lg:mx-4 @lg:w-[calc(100%-2rem)]"
         />
 
         {groups.length === 0 ? (
           // Never a blank rail: a reader who mistyped would otherwise see a
           // settings screen with no way out of it.
-          <p className="mt-4 text-ink-dim text-xs leading-relaxed">
+          <p className="mt-4 text-ink-dim text-xs leading-relaxed @lg:px-4">
             Nothing here is called that. Clear the box to see everything.
           </p>
         ) : (
           <ul className="mt-4 flex flex-col gap-5">
             {groups.map((group) => (
               <li key={group.label}>
-                <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-                  {group.label}
-                </p>
-                <ul className="mt-1.5 flex flex-col">
+                <p className={`${NAV_LABEL} -mx-4 @lg:mx-0`}>{group.label}</p>
+                <ul className="-mx-4 flex flex-col @lg:mx-0">
                   {group.items.map((item) => (
                     <li key={item.path}>
                       <NavItem
@@ -185,10 +178,9 @@ function NavItem({
     <Link
       to={path}
       onClick={onNavigate}
-      // `min-h-11` rather than padding alone: on a phone these are the tap
-      // targets, and 28px is below what a finger reliably hits.
-      className="-mx-2 flex min-h-11 items-center rounded px-2 text-ink-dim text-sm hover:bg-hover hover:text-ink md:min-h-0 md:py-1"
-      activeProps={{ className: "bg-raised font-medium text-ink" }}
+      className={NAV_ROW}
+      activeProps={{ className: NAV_ROW_ACTIVE }}
+      inactiveProps={{ className: NAV_ROW_IDLE }}
     >
       {title}
     </Link>

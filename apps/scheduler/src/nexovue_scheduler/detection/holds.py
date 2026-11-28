@@ -3,8 +3,13 @@
 
 Every statement here is across every organization on purpose. A refusal minute
 and a guard describe nexovue's intake, not a tenant, and the guard counts
-organizations. Nothing read here is shown to a tenant: a hold reaches a project
-only as *data delayed*, and an event only an operator.
+organizations.
+
+**What a tenant may see of it (F19 D37).** A hold reaches a project as *data
+delayed*. Reliability targets also show a tenant **that** nexovue may have lost
+minutes, and **which** minutes (`lost_minutes`, counted per target as lost time). A
+tenant never sees why, the guard's vote, how many organizations, or anything else
+from `detection_events`' detail; an event's detail is an operator's alone.
 
 `detection_events` is the operator's record. It gets one row when the guard
 engages, whose `through` grows while the intake stays fallen, and one row for each
@@ -17,7 +22,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final
 
 from nexovue_platform.telemetry.logging import get_logger
@@ -71,6 +76,22 @@ _GROWN: Final = text(
 )
 
 
+# The minutes nexovue's intake lost in [start, end), across the install: what the
+# receiver refused, and what a guard held, or held until its limit (F19 D37).
+_REFUSED_BETWEEN: Final = text(
+    "SELECT DISTINCT minute FROM intake_refusals WHERE minute >= :start AND minute < :end"
+)
+_HELD_BETWEEN: Final = text(
+    """
+    SELECT detail ->> 'from' AS first, detail ->> 'through' AS last FROM detection_events
+    WHERE kind IN (:guarded, :expired)
+      AND CAST(detail ->> 'through' AS timestamptz) >= :start
+      AND CAST(detail ->> 'from' AS timestamptz) < :end
+    """
+)
+_MINUTE: Final = timedelta(minutes=1)
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     """The minute the coordinator hands out, and what the project jobs must know
@@ -107,6 +128,26 @@ async def decide(engine: AsyncEngine, found: Settled, intake: Intake | None) -> 
         trouble=IntakeTrouble(fell=tuple(settle.spans(fell)), guarded=in_force),
         holding=held.holding,
     )
+
+
+async def lost_minutes(
+    connection: AsyncConnection, *, start: datetime, end: datetime
+) -> frozenset[datetime]:
+    """Each minute in [start, end) nexovue may have lost for every tenant (F19 D37):
+    refused by the receiver, or inside a guard's or an expired hold's span. Only the
+    minutes leave here, never the reason or the vote."""
+    keys = {"start": start, "end": end}
+    lost = {row.minute for row in await connection.execute(_REFUSED_BETWEEN, keys)}
+    held = await connection.execute(
+        _HELD_BETWEEN, keys | {"guarded": GUARD_ENGAGED, "expired": HOLD_EXPIRED}
+    )
+    for row in held:
+        minute = max(datetime.fromisoformat(row.first), start)
+        last = min(datetime.fromisoformat(row.last), end - _MINUTE)
+        while minute <= last:
+            lost.add(minute)
+            minute += _MINUTE
+    return frozenset(lost)
 
 
 async def _recorded_guards(connection: AsyncConnection, since: datetime) -> list[Hold]:

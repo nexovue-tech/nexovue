@@ -67,6 +67,17 @@ console's address before touching anything. It then stops every service, restore
 bucket, checks the result against the manifest — every table's rows, the schema version, and that no
 ingest position points past what Kafka holds — and starts nexovue again.
 
+### Suggested fixes after a restore
+
+A backup taken while suggested fixes held source code holds that code too, until the backup
+ages out. **A restore deletes it again:** every stored file and suggested change is emptied, any
+suggestion still being prepared ends, the short-lived packs, checks and GitHub link attempts
+are not in the dump at all, and every owner's agreement to send code is withdrawn, so an owner
+agrees again before anything is sent. `deploy/backup/restore-postgres.sh` says `nexovue setup` comes
+next. This is checked per release by `apps/api/tests/test_fix_restore_docker.py` (F5 AC6a, AC32; last run
+2026-11-22). See [suggested fixes](../product/setup/ai-suggested-fixes.md), *How long code is
+kept*.
+
 ### On a new server
 
 When the server itself is lost:

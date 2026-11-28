@@ -37,7 +37,10 @@ dev = [
 target-version = "py313"
 line-length = 100
 src = ["apps/api/src", "apps/scheduler/src"]
-extend-exclude = ["packages/contracts/gen"]   # generated code is not ours to lint
+extend-exclude = [
+    "packages/contracts/gen",                 # generated code is not ours to lint
+    "tools/ai-eval/fix/repository",           # F5's made-up customer code, its bugs seeded on purpose
+]
 
 [tool.ruff.lint]
 select = [
@@ -86,6 +89,7 @@ exclude = [
     "packages/contracts/gen/",   # generated code is not ours to type
     "tools/otel-demo/upstream/", # P1-62 pins a clone of the OTel Demo; upstream code, not ours
     "tools/detection-sim/",      # its own uv project (numpy, scipy), typed by its own strict mypy
+    "tools/ai-eval/fix/repository/", # F5's made-up customer code, its bugs seeded on purpose
 ]
 # tests/helpers holds `live`, the shared "fail rather than skip" guard.
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
@@ -102,13 +106,31 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# A test still running after 5 minutes prints every thread's stack and carries on, so a hung
+# test names itself in the log (no test takes near this long; the slowest take seconds).
+faulthandler_timeout = 300
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
-pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed"]
+pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval", "tools/test-shard"]
 # Test tenants' ClickHouse rows are deleted once at the end of the run: a mutation
 # per test held thousands of superseded parts in memory (tests/helpers/clickhouse_cleanup.py).
-addopts = "-p clickhouse_cleanup"
-testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed"]
+# FastAPI's dependency caches are emptied after each test: they kept every test's overrides,
+# and with them its session and engine, alive (tests/helpers/fastapi_caches.py).
+# Logging is put back after each test: Alembic's `env.py`, run in-process by `setup` and the
+# migration suites, pointed the root handler at a closed capture stream and disabled every
+# existing logger for the tests after it (tests/helpers/logging_state.py).
+# `insight_fence` suites need an installed kit (F3 AC42, AC46); `just insight-fence` runs them with
+# `-m insight_fence`, which replaces this one, and `just check` never collects them. `release_check`
+# suites run the backup scripts against a stack's own containers, by hand per release (F5 T5.5).
+# `ai_off` suites need a Postgres with no AI account and no `scheduler-insight`, which the dev
+# stack `just check` runs against always has; CI's `ai-off` job runs them with `-m ai_off` (F22 AC56).
+addopts = "-p clickhouse_cleanup -p fastapi_caches -p logging_state -m 'not insight_fence and not release_check and not ai_off'"
+markers = [
+    "insight_fence: needs the installed kit `just insight-fence` builds (F3 plan T3.11)",
+    "release_check: run by hand per release against real volumes, never in the gate (F5 T5.5)",
+    "ai_off: needs a Postgres with AI never set up; CI's `ai-off` job runs it (F22 AC56)",
+]
+testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed", "tools/release-demo", "tools/ai-eval", "tools/test-shard"]
 
 [tool.uv.sources]
 nexovue-platform = { workspace = true }

@@ -1,0 +1,11 @@
+{
+  "_source": "Shaped from GitHub's REST documentation for issue comments ('Create an issue comment', POST /repos/{owner}/{repo}/issues/{issue_number}/comments, 201) as general knowledge. NOT verified against real GitHub: F22's T4.8 is not yet run (founder tests after Phase 2, foundation item 28). Values are made up.",
+  "id": 6000001,
+  "node_id": "IC_kwDOAAAAAA",
+  "body": "<replaced by the fake>",
+  "user": {
+    "login": "<replaced by the fake: the App's bot>",
+    "type": "Bot"
+  },
+  "created_at": "2026-11-09T12:00:00Z"
+}

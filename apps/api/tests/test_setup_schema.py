@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import nexovue_api
-from nexovue_api import setup
+from nexovue_api import connections_account, insight_account, setup
 
 VERSIONS = Path(nexovue_api.__file__).parents[2] / "migrations" / "versions"
 
@@ -31,3 +31,23 @@ def test_the_schema_is_the_newest_migration(capsys: pytest.CaptureFixture[str]) 
 def test_anything_else_after_setup_is_refused() -> None:
     with pytest.raises(SystemExit, match="usage: nexovue setup"):
         setup.main(["schemas"])
+
+
+def test_setup_grants_prepares_both_role_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`nexovue setup grants`, which a restore's `start` repeats: the AI account and the
+    tracker account (F22 T8.7), whose grants a restore drops alike."""
+    prepared: list[str] = []
+
+    async def insight() -> bool:
+        prepared.append("insight")
+        return True
+
+    async def connections() -> bool:
+        prepared.append("connections")
+        return True
+
+    monkeypatch.setattr(insight_account, "provision", insight)
+    monkeypatch.setattr(connections_account, "provision", connections)
+
+    assert setup.main(["grants"]) == 0
+    assert prepared == ["insight", "connections"]

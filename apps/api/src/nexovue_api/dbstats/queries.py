@@ -127,14 +127,7 @@ _BUCKET_NANOS: Final = (
 # rather than repeats — this metric held 64 duplicate rows out of 3,264 in one
 # hour of the development store — and a partial one drags the mean toward
 # whichever statements arrived twice.
-STATEMENT_TRENDS_SQL: Final = f"""
-SELECT
-    query_hash,
-    server_address,
-    server_port,
-    {_BUCKET_NANOS} AS bucket_nanos,
-    avg(value) AS mean_seconds
-FROM (
+_STATEMENT_READINGS: Final = f"""
     SELECT
         {QUERY_HASH} AS query_hash,
         {SERVER_ADDRESS} AS server_address,
@@ -146,7 +139,37 @@ FROM (
     WHERE tenant_id = {{tenant_id:String}}
       AND project_id = {{project_id:String}}
       AND metric_name = '{METRIC_OPERATION_DURATION}'
-    {_WINDOW_PREDICATE}
+    {_WINDOW_PREDICATE}"""
+
+STATEMENT_TRENDS_SQL: Final = f"""
+SELECT
+    query_hash,
+    server_address,
+    server_port,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    avg(value) AS mean_seconds
+FROM ({_STATEMENT_READINGS}
+    GROUP BY query_hash, server_address, server_port, series_hash, timestamp
+)
+GROUP BY query_hash, server_address, server_port, bucket_nanos
+ORDER BY query_hash, server_address, server_port, bucket_nanos
+LIMIT {{limit:UInt32}}
+"""
+
+# One statement's cost over time, for a dashboard's `statement_trend` panel (F20,
+# T5.1d): the same readings and mean per bucket, bound in the store to one hash on one
+# server, so a panel costs one statement's series and not every statement's.
+STATEMENT_TREND_SQL: Final = f"""
+SELECT
+    query_hash,
+    server_address,
+    server_port,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    avg(value) AS mean_seconds
+FROM ({_STATEMENT_READINGS}
+      AND {QUERY_HASH} = {{query_hash:String}}
+      AND {SERVER_ADDRESS} = {{server_address:String}}
+      AND {SERVER_PORT} = {{server_port:Int32}}
     GROUP BY query_hash, server_address, server_port, series_hash, timestamp
 )
 GROUP BY query_hash, server_address, server_port, bucket_nanos

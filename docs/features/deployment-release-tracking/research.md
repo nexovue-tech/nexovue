@@ -3,7 +3,7 @@
 > **Internal research, not a comparison or a claim.** Written 2026-11-02 from public sources read that day. Rivals are named here only to inform design; nothing in this file may be quoted in sales or marketing (Phase 2 foundation, *Founder decisions*).
 
 > **Status:** Proposed, 2026-11-02. Research input for F28's specification and design. It approves nothing, and no
-> code is written from it.
+> code is written from it. **Competitor rows refreshed 2026-11-22: see section 10**; section 3 is the 2026-11-02 reading.
 >
 > **How it was checked.** The code was read on branch `feature/anomaly-detection`, with uncommitted work present.
 > **Nothing was run:** no test, query, or request. Line numbers are for that working tree and will drift. "Expected"
@@ -308,10 +308,67 @@ before Step 1b.
   documentation matters more.
 - Whether customers want any of this on a screen rather than in the finding. No interview data.
 - Prices marked "not read", and all competitor facts beyond the pages named.
-- Which SigNoz screens show its markers, and which edition holds them. Which Coroot edition holds deployment tracking. Plan
-  T6.1 settles both by installing them.
+- Which SigNoz screens show its markers, and which edition holds them: **section 10 (2026-11-22)**: none released found; a
+  draft pull request adds an endpoint. Which Coroot edition holds deployment tracking: **section 10**: the Community Edition build
+  contains it; its run-time gating and a working screen are not seen.
 - A Datadog `PATCH` route marking a change failure, named in the marketing review. Neither DORA setup page read here
   describes one, so it is not stated in the table.
+
+## 10. Competitor refresh, 2026-11-22 (plan T6.1)
+
+> **Read on 2026-11-22, in two passes, from each vendor's own current page or repository, not from memory.** The first pass
+> (the Step 6 build) could open only Datadog and two GitHub files. The second (the `wt/f28fix` build, same day, after the
+> founder allowed the vendor hosts) opened every vendor below except Observe, with `curl` from the build's shell: the
+> reading tool the session offers for pages still refused those hosts, and the shell reached them.
+> Still internal: nothing here is for sales or marketing, and the foundation's rule against naming rivals in public stands.
+> **How each row was read is part of the row.** *Opened 2026-11-22* means the vendor's own page was fetched and read in full
+> text in this build. **One vendor could not be reached: Observe.**
+> `docs.observeinc.com` was refused by the proxy, and `www.observeinc.com` now redirects (HTTP 301) to
+> `www.snowflake.com/en/product/observe/`, which was refused too. **Its row was dropped on 2026-11-27** (founder,
+> foundation item 37h): no claim may rest on Observe until its own page is read.
+
+| Product | What was read, and how | What it says now | Changed since the first pass of 2026-11-22, or since 2026-11-02 |
+|---|---|---|---|
+| **Datadog** | *Opened 2026-11-22:* [deployment tracking](https://docs.datadoghq.com/tracing/services/deployment_tracking/), [automatic faulty deployment detection](https://docs.datadoghq.com/watchdog/faulty_deployment_detection/), [price list](https://www.datadoghq.com/pricing/list/), and [Rollback Detection](https://docs.datadoghq.com/continuous_delivery/features/rollbacks_detection) | The reserved `version` tag drives a version section on the service page and a comparison of any two versions of a service "within the past 30 days"; an Error Types indicator "doesn't mean that this version necessarily introduced these errors", and a rare error "might be listed as no longer appearing only because it has not been seen". Watchdog "compares the performance of the new code version with previous versions to spot new types of errors or increases in error rates", records an event, and a monitor on `tags:deployment_analysis` alerts. Rollback Detection is a separate feature of **CD Visibility, which the page says is "in Preview. Access is limited to organizations already enrolled"**: a rollback is a deployment whose version differs from the previous one and matches a version deployed before. The deployment tracking page does not name a tier. Price list: APM Pro $35 billed annually, $42 month-to-month and on demand, per APM host a month; APM Enterprise $40, $48, $48 | Prices as in the first pass ($35 and $42, was $31 and $36 on 2026-11-02). **Rollbacks detected is now confirmed to exist, in a Preview product with limited access**, not on the deployment tracking page. A claim about Datadog and rollbacks must say so |
+| **Sentry** | *Opened 2026-11-22:* [Releases](https://docs.sentry.io/product/releases/), [Notifications](https://docs.sentry.io/product/notifications/) and [pricing](https://sentry.io/pricing/) | "Sentry will automatically create a release entity in the system the first time it sees an event with that release identifier"; the Releases page shows adoption, authors, crash-free users and crash-free sessions; releases "determine the issues and regressions introduced in a new release"; "Sentry sends deploy notifications to users who have committed to the release that was deployed". Pricing: Developer $0 (one user), Team $26 a month, Business $80 a month ("when billed annually with default pre-paid data"); *Release Health* is a row of the plan comparison | Nothing in the documentation. **Prices now read from the vendor's own page**; the page does not say which plans hold which release features beyond listing Release Health in the comparison, so no tier claim |
+| **SigNoz** | *Opened 2026-11-22:* the [Node.js instrumentation guide](https://signoz.io/docs/instrumentation/opentelemetry-nodejs/), the [changelog](https://signoz.io/changelog/) (entries to 2026-11-18) and the [pricing page](https://signoz.io/pricing/). Not re-read: pull request #13340 (`github.com` returned 403 and the session has no GitHub API access to that repository) | The guide: "Set `service.version` to a per-build value, not a static string. SigNoz detects a deployment each time this value changes", under the heading "Deployment Markers". The changelog, read to its newest entry (2026-11-18), has no entry about deployment markers or annotations. Pricing: SigNoz Cloud from $49 a month, which includes $49 of usage. The first pass read the repository README and pull request #13340: an open, unmerged pull request adding `POST /api/v1/annotations`, a draft on 2026-11-03 with commits to 2026-11-11 | **The vendor's guide now tells users that SigNoz "detects a deployment each time this value changes" and calls the section "Deployment Markers"**, so a claim that SigNoz has no deployment markers cannot be made; the first pass's wording ("no released SigNoz found that draws deployment markers") rests on the changelog's silence and an unread-since pull request, and is **not safe to repeat**. Whether the markers are drawn on a chart, and in which edition, was not found |
+| **Coroot** | *Opened 2026-11-22:* [deployment tracking](https://docs.coroot.com/inspections/deployment-tracking/) and [pricing](https://coroot.com/pricing/). The first pass also read the README and the Community Edition image (version 1.29.4). `coroot.com/editions` returned 403 | "Coroot automatically discovers and monitors every application rollout in your Kubernetes cluster", from `kube-state-metrics`, "eliminates the need to integrate Coroot with CI/CD tools"; a rollout is "Stuck" after 3 minutes; "Coroot audits each application 30 minutes after its new version is deployed to evaluate its performance in comparison to the previous version" on SLOs, log errors, container restarts, CPU and memory; notifications go to Slack. Pricing: "$1 per monitored CPU core/month", with "Deployment tracking" in its feature list; an "Open Source Community Edition" is offered free | **The 30-minute and 3-minute figures, unreadable in the first pass, are re-read and stand.** The pricing page lists deployment tracking under the paid feature list; the first pass found it in the Community Edition binary. So **which edition has it is two readings that disagree**, and no edition claim is safe |
+| **ClickStack (ClickHouse)** | *Opened 2026-11-22:* [release markers](https://clickhouse.com/docs/clickstack/features/dashboards/release-markers). `www.hyperdx.io/docs` also opened, and mentions neither markers nor deployments. The HyperDX changelog was read in the first pass and not re-read | "Release markers are off by default", turned on from a dashboard's overflow menu; by default ClickStack reads `ResourceAttributes['service.version']`; "A marker records that a version value first appeared in the tile's data inside the visible window. That's close to a deployment but deliberately not the same claim, which is why these are release markers rather than deployment markers" | Nothing. The first pass's extract is now confirmed by the page |
+| **Honeycomb** | *Opened 2026-11-22:* [create a marker](https://docs.honeycomb.io/api/markers/create-a-marker) and [pricing](https://www.honeycomb.io/pricing) | `POST https://api.honeycomb.io/1/markers/{datasetSlug}` with `message`, `type` (the example is `"deploy"`), `url` and an optional `end_time`. Pricing: Free up to 20 million events a month; Pro "starting at $150 per month" for up to 750 million | **The "Manage Markers" permission from the first pass's extract was not found in the page text read**; the page links a *Permissions* section that was not opened. Prices now read from the vendor's page |
+| **New Relic** | *Opened 2026-11-22:* [change tracking CLI](https://docs.newrelic.com/docs/change-tracking/change-tracking-cli), [introduction](https://docs.newrelic.com/docs/change-tracking/change-tracking-introduction/) and [pricing](https://newrelic.com/pricing) | `--deploymentType` is "one of BASIC, BLUE_GREEN, CANARY, OTHER, ROLLING or SHADOW"; the introduction says change tracking "captures and visualizes system modifications" and asks "Did our deployment cause this regression?". Pricing: 100 GB a month of data ingest free, then $0.40 a GB | The first pass's note of two CLI commands that disagree between language versions was **not re-checked**. Change tracking has no per-plan price of its own on the pricing page read |
+| **Grafana** | *Opened 2026-11-22:* Application Observability [annotations](https://grafana.com/docs/grafana-cloud/observe-and-act/monitor-applications/application-observability/manual/annotations/) and [resource attributes](https://grafana.com/docs/grafana-cloud/observe-and-act/monitor-applications/application-observability/setup/resource-attributes/) | `service.version` is "the application version, to see if a new version has introduced a bug"; annotations are made through `POST /api/annotations` and matched to a service by the tags `service.name` and `service.namespace`, and show on the service overview duration panel. The page does not describe a version-against-version view | Nothing. Still unconfirmed whether a version comparison exists |
+| **Dynatrace** | *Opened 2026-11-22:* [version detection strategies](https://docs.dynatrace.com/docs/deliver/release-monitoring/version-detection-strategies-latest), updated 2026-08-04 | "Dynatrace can detect release version information for processes monitored by OneAgent using environment variables or Kubernetes labels"; "OpenTelemetry resource attributes enrich traces and logs, but are not propagated to process group instances. Processes instrumented this way don't appear in the release inventory." The routes are `DT_RELEASE_VERSION` and the pod label `app.kubernetes.io/version`; SDLC events can carry deployment activity | **The first pass's disagreement between two pages is settled by the current page: OpenTelemetry-only versions do not reach Dynatrace's release inventory.** The page is the vendor's own and dated |
+| **OpenObserve** | *Opened 2026-11-22:* the site's documentation sitemap, the [annotation sources](https://openobserve.ai/docs/user-guide/analytics/dashboards/annotation-sources/) page (updated 2026-10-28) and the home page | Annotation sources "draw markers from a query onto your dashboard's time-series panels"; each row of a query becomes a marker; the page's example title is "{service} deployed". The sitemap and home page name no release or deployment tracking feature | **New since the first pass: a generic dashboard-annotation feature that could mark deploys from a query**, which is not release tracking. The first pass's "nothing found" was a search extract; it is replaced by this reading |
+
+**What was not settled by installing.**
+
+- **SigNoz: not installed, and what would an install settle?** The plan asks for an install to settle where markers appear and in which edition. The pull
+  request shows the feature has not been merged, so an install of a released SigNoz could only show that nothing is
+  there, which the pull request already says; so it was not attempted. SigNoz Community also needs ClickHouse, a collector and its
+  own query service, several GB of images and memory, and the container's disk, shared with another build, was down to
+  under 1 GB free at times in this step (see *Step 6*, in `status.md`).
+  **What remains:** when the pull request merges or closes, read it again, and install the release that contains it, only if
+  a rival claim turns on it. The first pass's statement ("no released SigNoz found that draws deployment markers")
+  is **withdrawn** (see its row above): SigNoz's own guide now speaks of "Deployment Markers". An install of the current release
+  would settle where they appear and in which edition.
+- **Coroot: installed once, as asked, as far as this container allows.** The Community Edition image was pulled, started
+  and read (above). It could not be shown *working*: deployment tracking reads Kubernetes metadata through
+  kube-state-metrics into Prometheus, and this container has no Kubernetes cluster and no Prometheus (the container logged
+  "prometheus is not configured"). **What remains:** to see the screen and its run-time gating, run the Community Edition
+  against a cluster, or read its licence manager's source for what it gates; neither was done. The container and the
+  image were removed afterwards.
+
+**What this changes in the claims.**
+
+- Ten of eleven rows were opened on 2026-11-22; Observe was not, and its row was dropped on 2026-11-27 (above). Against them the design's account stands, with
+  five changes of wording: Datadog rollback detection exists but only in a Preview product with limited access; SigNoz's own
+  guide describes deployment detection, so "no markers" cannot be said of it; which Coroot edition holds deployment tracking
+  is two readings that disagree; Dynatrace does not list OpenTelemetry-only versions in its release inventory; OpenObserve
+  has generic annotation sources.
+- "Of the products checked, none was confirmed to do all of that in its open-source edition" (foundation, section 12) is
+  unaffected by this refresh. It is not tested here, and stays a statement about what was checked.
+- Every row stays internal. The foundation's rule stands: no rival is
+  named in public. A price is a reading of the day and drifts; read it again within two weeks before announcing.
 
 ## Sources
 

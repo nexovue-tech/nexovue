@@ -392,6 +392,9 @@ A page may show **two blocks**: *during the rollout* and *since the rollout fini
 - **FR25.** `version_before_after` and `time_before_after` must also show the same window one week earlier, while those
   numbers exist. Requests per minute show in these two methods only; in `side_by_side`, share of traffic shows instead,
   since share is what a rollout changes.
+  A side's requests per minute is its requests divided by the minutes in which it had any, never by the whole stretch, so
+  silent minutes cannot make a version read low; a side with no busy minute shows a dash. One rule for every side,
+  last week's included (founder, 2026-11-22, `phase-2-foundation.md` item 36b).
 - **FR26.** The page must show each version's share of the service's traffic over time, top four versions plus "Other
   versions", with a table of the same shares for touch and screen readers. The empty version reads "No version", and
   `__other__` "Combined versions".
@@ -417,6 +420,9 @@ A page may show **two blocks**: *during the rollout* and *since the rollout fini
   with the previous over the same durations, capped at 24 hours and 100 groups. It must state: "Not seen in the previous
   version during this window. That is not proof this version introduced it. A rare error can look gone only because it
   has not recurred yet." A release with server traffic reads only non-browser-door rows.
+  An empty list must read "No exceptions were recorded in either version during this window.", never "no errors": the
+  section counts exception groups, and failing spans can carry none, so "no errors" would sit beside a failure share
+  above zero and contradict it (founder, 2026-11-22, `phase-2-foundation.md` item 36a).
 - **FR30.** Where raw data has aged out, the section must say so with the date, and show no blanks or zeros.
 - **FR31.** If the project's sampling keeps errors off (`sample/policy.go:71`), the section must say the list may be
   incomplete.

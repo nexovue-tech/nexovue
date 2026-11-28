@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import type { OverviewPoint } from "@/shared/overview-plots";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
 
@@ -20,15 +21,6 @@ export interface ProjectTotals {
   error_count: number;
   requests_per_minute: number;
   /** A fraction, not a percentage: 0.05 is one call in twenty. */
-  error_rate: number;
-  p50_ms: number;
-  p95_ms: number;
-  p99_ms: number;
-}
-
-export interface OverviewPoint {
-  bucket: string;
-  requests_per_minute: number;
   error_rate: number;
   p50_ms: number;
   p95_ms: number;
@@ -141,10 +133,12 @@ export const surfacesQueryKey = (surface: string, projectId: string, timeWindow:
  * thing to narrow if this screen is ever slow.
  *
  * **They wait for the panels.** `/services`, `/infra`, `/synthetics` and `/rum`
- * are all in the telemetry tier, which allows four requests in flight per
- * session (`ratelimit/policy.py`); a fifth is refused outright rather than
- * queued. This screen wants five, so firing them together made one of them a
- * guaranteed 429 on every cold load — and which one lost was a race.
+ * are all in the telemetry tier, whose in-flight cap is 8 per API process, and
+ * a read past the cap waits in the limiter rather than being refused
+ * (`ratelimit/policy.py`, `middleware/ratelimit.py`). At two API processes each
+ * holds a cap of 4, so this screen's five reads fired together still leave one
+ * waiting out the queue on every cold load. The ordering stays while that
+ * arithmetic holds (F20 plan, T1.8).
  *
  * `ready` is what orders them: the panels are the screen, the strip is context
  * beneath it, and context can arrive a moment later. Two telemetry reads, then
@@ -198,33 +192,5 @@ export function useVitalsSummary(
         searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
         signal,
       }),
-  });
-}
-
-/* ------------------------------------------------------ deploys, for IA3 */
-
-export interface DeployEventSummary {
-  version: string;
-  service_name: string;
-  deployed_at: string;
-}
-
-interface DeployEventListResponse {
-  deploys: DeployEventSummary[];
-}
-
-export const overviewDeploysQueryKey = (projectId: string) =>
-  ["overview-deploys", projectId] as const;
-
-export function useProjectDeploys(projectId: string | undefined) {
-  return useQuery({
-    queryKey: overviewDeploysQueryKey(projectId ?? ""),
-    enabled: projectId !== undefined,
-    queryFn: ({ signal }) =>
-      apiClient.get<DeployEventListResponse>("deploys", {
-        searchParams: { project_id: projectId },
-        signal,
-      }),
-    select: (response) => response.deploys,
   });
 }

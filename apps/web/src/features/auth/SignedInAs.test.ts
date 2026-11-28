@@ -83,9 +83,12 @@ describe("the way out of the console", () => {
     const calls: string[] = [];
     stubApi(calls);
     const container = await mount();
-    const button = container.querySelector("button");
+    // In the account row's menu since sketch G (2026-11-28), after the ⋯ that opens it.
+    const button = [...container.querySelectorAll("button")].find(
+      (each) => each.textContent === "Sign out",
+    );
 
-    expect(button?.textContent).toBe("Sign out");
+    expect(button).toBeDefined();
     await act(async () => button?.click());
 
     expect(calls).toEqual(["POST /api/v1/auth/logout"]);

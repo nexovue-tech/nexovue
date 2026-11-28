@@ -4,8 +4,10 @@ from collections.abc import Iterator
 
 import pytest
 from alert_fixtures import engine, tenant  # noqa: F401  shared by the alert suites
+from connections_fixtures import connections_engine  # noqa: F401  the tracker account's
 from detection_history import administrator, project, store  # noqa: F401  the detection suites
 from recording_site import RecordingSite, serve_recording_site
+from wording_fixtures import ai_engine, ai_install, ai_tenant, now, provider_site  # noqa: F401  wording
 
 
 @pytest.fixture

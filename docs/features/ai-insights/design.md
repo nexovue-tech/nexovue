@@ -512,7 +512,7 @@ explanation_stopped_rules   org_id, rule, created_by SET NULL, created_at, PK (o
 notification_channels       adds sends_explained bool default true
 ```
 
-Plus: the `notifications` `kind_is_known` check widened with `explained`, by the safe pattern in 0050 (`postgresql_not_valid`); `JOB_RESULT_KINDS` (`models.py:2034`) and the `job_results` check (`:2190`) gain `ai_check`, without which `check` fails its insert; the four job functions below. **One ClickHouse migration,** after F28's `000039`: `service_edges_1m` gains `door`, carried through `edgeSpan` (`traceassembly/stages.go:64`) from the envelope (A63), and `server_peer_attr`, the attribute `calleeOf` took a told-only name from (`serviceedges.go:113`), empty for a callee that reported for itself or was named by technology (A76).
+Plus: the `notifications` `kind_is_known` check widened with `explained`, by the safe pattern in 0050 (`postgresql_not_valid`); `JOB_RESULT_KINDS` (`models.py:2034`) and the `job_results` check (`:2190`) gain `ai_check`, without which `check` fails its insert; the four job functions below. **One ClickHouse migration,** after F28's `000039`: `service_edges_1m` gains `door`, carried through `edgeSpan` (`traceassembly/stages.go:64`) from the envelope (A63), and `server_peer_attr`, the attribute `calleeOf` took a told-only name from (`serviceedges.go:113`), empty for a callee that reported for itself or was named by technology (A76). **Shape, as built (A84, 2026-11-09):** `000040`. `door` is `server` or `browser`, `browser` when either of the call's spans came through the browser door; it joins the sorting key at its end, so the two doors never merge into one row (ClickHouse adds a column to the key only in the ALTER that creates it, and the primary key is unchanged). `server_peer_attr` holds `service.peer.name`, `peer.service` or `server.address`, outside the key and read with `max`, like `server_peer_kind`. The down migration drops `server_peer_attr` and keeps `door`: a key column cannot be dropped in one statement.
 
 **The two fingerprints.** The test's: SHA-256 of wire format, base URL, model, region and `key_id`. Consent's: the same without the model. Neither reads the key.
 
@@ -571,6 +571,7 @@ WHERE org_id = :org_id AND month = :month
 
 - A finished run moves its actual tokens to `used`, and returns the rest. **If actual passes the reservation,** the actual is still counted, so usage can pass the limit by that one overshoot, bounded by `MAX_OUTPUT_TOKENS` and the input estimate's error, and the next run is refused. The figure is reported, not hidden (AC53 allows only this).
 - **A run that dies keeps its reservation** (the foundation's "return what it did not use" applies only to runs that finish). `insight.sweep`, on `insight`, every 5 minutes through `beat.py:412`, turns a `started` run older than its hard limit plus grace into `died`, and moves its reservation to `used`, flagged estimated. Overstating is the safe side.
+- **A run is settled once.** Its finish and the sweep each act only on a run still `started`, in the transaction that moves its tokens, so a finish arriving after the sweep called the run `died` changes nothing: the sweep's charge stands and its words never land ([wording settles once](../../changes/wording-settles-once/bug.md), 2026-11-21).
 - The month is the first of the month, UTC. The row is created by `INSERT ... ON CONFLICT DO NOTHING`, by the insight role.
 - A local model has limits too, since tokens bound its CPU time.
 
@@ -655,7 +656,7 @@ Compose's default network stays for all others. A new `ai` network, not `interna
 
 `POSTGRES_INSIGHT_PASSWORD` joins `ACCOUNT_PASSWORDS` (`deploy/nexovue:115`), so install writes it and `cmd_upgrade` adds it when missing (`:140`). `AI_SECRET_KEY` joins `write_secrets` (`:117`), and `add_missing_secrets` gains the keys list, so an upgraded install gets one.
 
-`nexovue_api/setup.py`, after `migrate_postgres()` (`:74`), calls `provision_insight_account()`: creates the role if absent with `LOGIN` and `CONNECTION LIMIT 20` (A58), sets the password, `statement_timeout` and `idle_in_transaction_session_timeout` on it, then runs `INSIGHT_GRANTS`, a constant. `nexovue setup grants` runs that step alone, which means `main`'s argument check (`setup.py:69-73`) changes too. The `setup` service in `nexovue.yaml:121-125` gains `POSTGRES_INSIGHT_PASSWORD`, and `just migrate-pg` (`justfile:334-335`) a dev value, or the role would not exist in the dev stack and CI. **Restore needs no step of its own:** `nexovue restore` ends in `start` (`deploy/nexovue:619`), and `start` runs `setup` first, which also migrates a snapshot older than the image before granting. `restore-postgres.sh`, run by hand, prints that `nexovue setup` is the next step. The migration holds only tables and functions, which the dump keeps. In a dev stack the same step runs.
+`nexovue_api/setup.py`, after `migrate_postgres()` (`:74`), calls `provision_insight_account()`: creates the role if absent with `LOGIN` and `CONNECTION LIMIT 20` (A58; 24 as built, from the role's children: spec A58), sets the password, `statement_timeout` and `idle_in_transaction_session_timeout` on it, then runs `INSIGHT_GRANTS`, a constant. `nexovue setup grants` runs that step alone, which means `main`'s argument check (`setup.py:69-73`) changes too. The `setup` service in `nexovue.yaml:121-125` gains `POSTGRES_INSIGHT_PASSWORD`, and `just migrate-pg` (`justfile:334-335`) a dev value, or the role would not exist in the dev stack and CI. **Restore needs no step of its own:** `nexovue restore` ends in `start` (`deploy/nexovue:619`), and `start` runs `setup` first, which also migrates a snapshot older than the image before granting. `restore-postgres.sh`, run by hand, prints that `nexovue setup` is the next step. The migration holds only tables and functions, which the dump keeps. In a dev stack the same step runs.
 
 | Table or function | Grant | Note |
 |---|---|---|
@@ -677,8 +678,10 @@ Compose's default network stays for all others. A new `ai` network, not `interna
 |---|---|---|
 | Advisory locks | Beat leadership is one fixed-key lock (`leader.py:26,55`). Taking it leaves every beat a follower, so nothing is scheduled. Detection's locks use derivable keys (`detection/projects.py:86-89`, `holds.py:53`) | `REVOKE EXECUTE` on the `pg_advisory*` and `pg_try_advisory*` functions `FROM PUBLIC`, `GRANT` to the install account. `word` uses a row lock instead |
 | `pg_notify` | It takes a lock every committing transaction in the cluster waits on (`nexovue_platform/jobs.py`, docstring) | The same |
-| Connections | One shared Postgres | `CONNECTION LIMIT 20` (A58) |
+| Connections | One shared Postgres | `CONNECTION LIMIT 20` (A58; 24 as built with eight children) |
 | `TEMP` | Disk on the shared server | `REVOKE TEMP ON DATABASE ... FROM PUBLIC`, `GRANT` to the install account |
+
+**Corrected by the Step 3 spike, 2026-11-11 (status, *Open decisions* 7).** A column-level `UPDATE` does not permit `LOCK TABLE` (measured), so the table above holds. Two rows of the table above do not: revoking `pg_notify` leaves the `NOTIFY` command, which needs no privilege; and the account's timeouts are defaults any session may `SET` to zero, so they do not bound a broken-into process. Every advisory overload must be revoked (the `_xact_` ones too), so `setup` reads them from the catalog. `setup` also cannot state `NOSUPERUSER` and the like without being a superuser, so it reads the role back instead. Migration numbers: the tables and functions are 0070.
 
 **What remains.** Revoking from `PUBLIC` needs rights a managed Postgres account may not have. There, `setup` warns, `/settings/ai` states it to owners and admins (*Beat lock exposed*), `docs/operations/ai.md` says what the operator can do, and a broken-into AI process could still take the beat lock. Heavy statements within its own tables are bounded only by the timeout. **Nothing here has been run;** T3.1 is the first task of plan Step 3, and a failure returns to the founder.
 
@@ -800,9 +803,34 @@ The rows on Phase 2 features and the foundation were applied on 2026-11-02 (`sta
 | `docs/decisions/` | The ADRs below, once accepted |
 | `docs/product/setup/alerts/webhooks.md` | Says `explained` is not sent |
 
+### State of each row, 2026-11-22 (plan T7.1)
+
+| Document | State |
+|---|---|
+| `phase-2-foundation.md` | **Applied.** The 33 rows and the shared floor on 2026-11-02 (*Reconciled*); on 2026-11-22 the provider HTTP sentence, the four *Must not be claimed* rows and a section, *F3 as built*, for what the build found after. Items 27 to 36 are the founder's own and are not restated. The Coroot, HolmesGPT and Grafana lines were already reworded |
+| `feature-catalog.md` | **Applied** 2026-11-22 (T0.1): F3's row and entry. F2's entry has nothing of F3's in it and is unchanged |
+| `vision.md:135`, `phase-2-plan.md:14` | **Applied** 2026-11-22 (T0.1): an example F3 can really produce, and the selling reason pointing to the foundation's approved wording. `vision.md:140`'s chain is the product's sentence and promises nothing F3 declined, so it stands. **The founder's own documents: read both edits** |
+| `deployment-release-tracking/design.md`, `plan.md` | **Applied for two things, read in its design (lines 166, 359):** *Release before this* is the first row of F3's section, and its queue sits inside the floor F3 adds. Whether it also names edges in its required F6 change was not checked. Its term stays "release" on its own screens |
+| `ai-chatbot/design.md`, `plan.md`, `ai-solution/design.md` | **Applied** (read in F4's design, lines 12, 283 and 330: it follows F3, drops row-level security on `jobs`, and lists its queues in the job functions, migration 0073; F5 widened them, 0077; F5's design keeps `fix_brief()` as F3's, line 700) |
+| `anomaly-detection/spec.md`, `design.md`, `status.md` | **Not applied.** Neither F6's spec, design nor status mentions that a browser key can open a finding, or F3's FR16 pointer. The change itself is built (`docs/changes/browser-door/`, F28 owns it, foundation item 22). **Recommendation:** one risk line in F6's `status.md` and the pointer in its FR16, by whoever next edits that folder; a document-only change |
+| `alerts/spec.md`, `docs/product/setup/alerts/webhooks.md` | **Applied** with Step 2 |
+| `team-and-api-access/spec.md` | **Applied** 2026-11-22: FR1's table gains `manage_ai` and `consent_ai_disclosure`; `request_explanation` was there |
+| `docs/decisions/` | **Applied**: see *Proposed ADRs* |
+| `docs/research/phase-2-competitors-2026-11.md` | Coroot's conflict was settled on 2026-11-02 in that document's section 4 |
+
+
 ## Proposed ADRs
 
 These are written here and not as files. Numbers are assigned when accepted, since other Phase 2 documents may propose some too.
+
+**Filed, 2026-11-22.** The four were accepted with this design and are all in `docs/decisions/` and its index: the role,
+account and network as [ADR-040](../../decisions/ADR-040-ai-runs-in-its-own-role-with-its-own-account-and-network.md) (Step 3);
+the frozen evidence record as [ADR-039](../../decisions/ADR-039-an-explanation-is-a-frozen-evidence-record-with-code-choosing-the-cause.md)
+(Step 1); the provider interface as [ADR-047](../../decisions/ADR-047-one-provider-interface-three-wire-formats-no-sdk.md) (Step 4); and the
+shared floor for capped queues inside [ADR-028](../../decisions/ADR-028-slo-judging-runs-on-scheduler-light-under-the-shared-floor.md),
+which F19 filed because its Step 1 built the floor first. Evidence each still owes is named in its own *Evidence* section
+(ADR-040: the fence's run on a real install, which passed in CI on 2026-11-22; ADR-047: one dated real call per format, the
+founder's after Phase 2). The text below is the proposal as approved and is kept as the record of it.
 
 ### Proposed ADR: AI runs in its own role, with its own account and network
 

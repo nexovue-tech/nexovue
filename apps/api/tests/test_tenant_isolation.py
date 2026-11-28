@@ -362,6 +362,9 @@ class FakeControlPlane:
         """Rows the request wrote — audit entries here. Kept so nothing is lost silently."""
         self.written.append(entity)
 
+    async def commit(self) -> None:
+        """The caller's lookup ends its transaction (ADR-102); a fake holds none to end."""
+
     async def execute(self, statement: Any) -> Any:
         """`load_identity` and `find_active_user_by_email`: a (user, org) pair.
 

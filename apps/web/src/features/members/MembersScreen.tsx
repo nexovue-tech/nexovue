@@ -1,5 +1,5 @@
 import { useState } from "react";
-
+import { NOTES_STAY, notesStayFor } from "@/shared/case-words";
 import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
@@ -236,7 +236,9 @@ function MemberRow({
           <InlineFailure title="That did not work" error={failure} />
         </div>
       ) : null}
-      {removing ? <RemoveConfirmation member={member} onDone={() => setRemoving(false)} /> : null}
+      {removing ? (
+        <RemoveConfirmation member={member} isSelf={isSelf} onDone={() => setRemoving(false)} />
+      ) : null}
     </li>
   );
 }
@@ -246,7 +248,15 @@ function MemberRow({
  * to be invited again — so it asks for their name typed out, the way deleting a project
  * does. What they made stays, and the confirmation says so.
  */
-function RemoveConfirmation({ member, onDone }: { member: Member; onDone: () => void }) {
+function RemoveConfirmation({
+  member,
+  isSelf,
+  onDone,
+}: {
+  member: Member;
+  isSelf: boolean;
+  onDone: () => void;
+}) {
   const remove = useRemoveMember();
   const [typed, setTyped] = useState("");
   const name = displayName(member);
@@ -257,6 +267,11 @@ function RemoveConfirmation({ member, onDone }: { member: Member; onDone: () => 
       <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         They are signed out everywhere on their next click and cannot sign in again unless someone
         invites them back. The checks, rules and channels they made stay and keep working.
+      </p>
+      {/* F22 BR16, FR54: to the person leaving, while they can still act on it; to
+          an admin removing someone else, as a fact about that person's notes. */}
+      <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
+        {isSelf ? NOTES_STAY : notesStayFor(name)}
       </p>
       <div className="mt-3 max-w-sm">
         <TextField

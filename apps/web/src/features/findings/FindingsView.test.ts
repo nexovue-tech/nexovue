@@ -12,7 +12,10 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { ClosedReason, DetectionStatus, Finding, ProjectTotals } from "./api";
+import { formatZonedTime } from "@/shared/format/zoned";
+import type { OverviewPoint } from "@/shared/overview-plots";
+
+import type { ClosedReason, DetectionStatus, FeedFinding, Finding, ProjectTotals } from "./api";
 import type { FindingsViewProps } from "./FindingsScreen";
 import { FindingsView } from "./FindingsScreen";
 
@@ -67,6 +70,15 @@ const FINDING: Finding = {
     },
   ],
   trend: [1, 2, 3, 5, 7, 8, 7],
+  case_state: null,
+  case_resolution: null,
+  case_opened_at: null,
+  case_resolved_at: null,
+  root_finding_id: null,
+  case_signal: "open",
+  case_severity: "warning",
+  open_joined_finding_id: null,
+  open_joined_since: null,
 };
 
 const closed = (reason: ClosedReason | null, id = "closed"): Finding => ({
@@ -260,6 +272,93 @@ describe("the feed leads when there is anything in it", () => {
     expect(await readable({ findings: [FINDING] })).not.toContain("Probably");
   });
 
+  describe("the empty feed's sample and dates (F3 FR46, FR55; AC84, AC104)", () => {
+    it("links to the labelled sample and says how deploy facts start", async () => {
+      const container = await render({ findings: [] });
+      const sample = [...container.querySelectorAll("a")].find(
+        (link) => link.textContent === "See a sample explanation",
+      );
+
+      expect(sample?.getAttribute("href")).toBe("/findings/sample");
+      expect(container.textContent).toContain("send deploys to get deploy facts");
+    });
+
+    it("gives the first findings' date from the project's own data", async () => {
+      const container = await render({
+        findings: [],
+        detection: {
+          state: "learning",
+          services_total: 2,
+          services_learning: 2,
+          services_judged: 0,
+          services_delayed: 0,
+          services_muted: 0,
+          earliest_judging_date: "2026-11-16",
+          not_running_since: null,
+          delayed_since: null,
+          open_findings: 0,
+          services_too_many: 0,
+          judged_service_limit: 50,
+        },
+      });
+
+      expect(container.textContent).toContain("First findings from 16 Nov");
+    });
+  });
+
+  describe("the card's likely cause (F3 FR18, AC67, AC75)", () => {
+    const deploy = [
+      { text: "Likely: deploy of " },
+      { name: "checkout" },
+      { text: " " },
+      { name: "v2.1" },
+      { text: " (3 in 7 days)" },
+    ];
+    const cardOf = async (finding: FeedFinding) =>
+      (await render({ findings: [finding] })).querySelector('[data-testid="card-cause"]');
+
+    it("states a deploy cause with its rate, and wraps rather than truncating", async () => {
+      const line = await cardOf({ ...FINDING, likely_cause_sentence: deploy });
+
+      expect(line?.textContent).toBe("Likely: deploy of checkout v2.1 (3 in 7 days)");
+      expect(line?.className).not.toContain("truncate");
+    });
+
+    it("says 'from telemetry only' and never 'Likely' for a possible cause", async () => {
+      const possible = await cardOf({
+        ...FINDING,
+        likely_cause_sentence: [
+          { text: "Possibly, from telemetry only: calls to " },
+          { name: "payments" },
+        ],
+      });
+
+      expect(possible?.textContent).toContain("from telemetry only");
+      expect(possible?.textContent).not.toContain("Likely");
+    });
+
+    it("has no line with no cause, or for a closed finding", async () => {
+      expect(await cardOf({ ...FINDING, likely_cause_sentence: null })).toBeNull();
+      expect(await cardOf({ ...closed("recovered"), likely_cause_sentence: deploy })).toBeNull();
+    });
+
+    it("shows a name as text, never a link, and carries no planted wording", async () => {
+      const container = await render({
+        findings: [
+          {
+            ...FINDING,
+            likely_cause_sentence: [{ text: "Likely: calls to " }, { name: "http://evil.example" }],
+            wording: "WORDING-MARKER",
+          } as FeedFinding,
+        ],
+      });
+      const line = container.querySelector('[data-testid="card-cause"]');
+
+      expect(line?.querySelector("a, img")).toBeNull();
+      expect(container.textContent).not.toContain("WORDING-MARKER");
+    });
+  });
+
   it("gives a closed finding one quiet line with no trend to read", async () => {
     const container = await render({ findings: [closed("recovered")] });
 
@@ -290,9 +389,16 @@ describe("a closed finding names how it closed", () => {
     could_not_be_judged: "Closed: too quiet to judge for 6 hours",
   };
 
+  // The row's words: the filter's option *Resolved cases* (F22 FR22) is about cases,
+  // which a person resolves, and is not a claim about this finding.
+  const rowText = async (finding: Finding) =>
+    ((await render({ findings: [finding] })).querySelector("ul")?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+
   for (const [reason, words] of Object.entries(WORDS) as [ClosedReason, string][]) {
     it(`says "${words}" for ${reason}, never "Resolved"`, async () => {
-      const text = await readable({ findings: [closed(reason)] });
+      const text = await rowText(closed(reason));
 
       expect(text).toContain(words);
       expect(text).not.toMatch(/resolved/i);
@@ -300,7 +406,7 @@ describe("a closed finding names how it closed", () => {
   }
 
   it("still says it closed when the reason is missing", async () => {
-    const text = await readable({ findings: [closed(null)] });
+    const text = await rowText(closed(null));
 
     expect(text).toContain("Closed");
     expect(text).not.toMatch(/resolved/i);
@@ -428,11 +534,269 @@ describe("detection's line leads the feed (C18)", () => {
   });
 });
 
+describe("FR3: the front door shows proof that telemetry arrived", () => {
+  const POINTS: OverviewPoint[] = [
+    {
+      bucket: "2026-09-13T10:00:00Z",
+      requests_per_minute: 8_000,
+      error_rate: 0.01,
+      p50_ms: 40,
+      p95_ms: 200,
+      p99_ms: 900,
+    },
+    {
+      bucket: "2026-09-13T10:01:00Z",
+      requests_per_minute: 8_800,
+      error_rate: 0.014,
+      p50_ms: 44,
+      p95_ms: 220,
+      p99_ms: 1_060,
+    },
+  ];
+
+  it("draws Overview's three charts under the summary when telemetry exists and the feed is empty (AC3)", async () => {
+    const text = await readable({ points: POINTS });
+
+    for (const panel of ["Rate", "Errors", "Duration"]) expect(text).toContain(panel);
+  });
+
+  it("links prominently to Overview (AC3)", async () => {
+    const container = await render({ points: POINTS });
+
+    expect(container.querySelector('a[href="/overview"]')).not.toBeNull();
+  });
+
+  it("keeps the charts out of the feed once a finding exists", async () => {
+    const text = await readable({ points: POINTS, findings: [FINDING] });
+
+    expect(text).not.toContain("Duration");
+  });
+
+  it("says nothing has reported in this window, with no readings and no charts (AC3)", async () => {
+    // `/services/overview` answers zeros with `service_count: 0`, the API's real
+    // shape. A screen of zeroes reads as an outage, so the readings and the
+    // charts go, and the words say how to start and to widen the window.
+    const container = await render({
+      totals: {
+        service_count: 0,
+        error_count: 0,
+        requests_per_minute: 0,
+        error_rate: 0,
+        p95_ms: 0,
+      },
+      checks: undefined,
+      points: [],
+    });
+    const text = (container.textContent ?? "").replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("Nothing has reported in this window");
+    expect(text).not.toContain("0 services reporting");
+    expect(text).not.toContain("Requests/min");
+    expect(text).not.toContain("Duration");
+    expect(text).toContain("widen");
+    expect(container.querySelector('a[href="/docs"]')).not.toBeNull();
+  });
+});
+
 describe("D12: a finding opens its own page", () => {
   it("links each card, open or closed, to its finding", async () => {
     const container = await render({ findings: [FINDING, closed("recovered", "f2")] });
 
     expect(container.querySelector('a[href="/findings/f1"]')?.textContent).toBe(FINDING.title);
     expect(container.querySelector('a[href="/findings/f2"]')?.textContent).toBe(FINDING.title);
+  });
+});
+
+// ------------------------------------------------------- the case filters (F22 T2.4)
+
+const ASHA = "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0009";
+
+// Today, so the sentence's times carry no day (FR50): each test reads them through
+// the same zoned formatter the screen uses.
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+const CLOSED_AT = hoursAgo(0.5);
+const BACK_AT = hoursAgo(0.25);
+const at = (iso: string) => formatZonedTime(iso, { zone: "UTC" });
+
+const caseRow = (overrides: Partial<FeedFinding> = {}): FeedFinding => ({
+  ...FINDING,
+  id: "case-1",
+  state: "closed",
+  closed_reason: "recovered",
+  closed_at: CLOSED_AT,
+  severity: "warning",
+  case_severity: "warning",
+  case_state: "investigating",
+  case_opened_at: "2026-09-13T15:10:00Z",
+  case_signal: "closed",
+  assignee_id: ASHA,
+  assignee_name: "Asha",
+  case_taken_at: "2026-09-13T15:10:00Z",
+  project_name: "Staging",
+  trend: [],
+  ...overrides,
+});
+
+describe("a case filter reads differently from the feed (AC109, AC128, FR22)", () => {
+  it("shows no detection line, no summary and no muted link, and says it reads every project", async () => {
+    const text = await readable({
+      caseFilter: "active",
+      findings: [caseRow()],
+      mutedCount: 4,
+      detection: {
+        state: "not_running",
+        services_total: 2,
+        services_learning: 0,
+        services_judged: 2,
+        services_delayed: 0,
+        services_muted: 0,
+        earliest_judging_date: null,
+        not_running_since: "2026-09-13T14:02:00Z",
+        delayed_since: null,
+        open_findings: 0,
+        services_too_many: 0,
+        judged_service_limit: 500,
+      },
+    });
+
+    expect(text).toContain("Across all your projects");
+    expect(text).not.toContain("Detection has not run");
+    expect(text).not.toContain("Muted (4)");
+    expect(text).not.toContain("8,400");
+  });
+
+  it.each([
+    ["active", "No active cases in your organization."],
+    ["mine", "Nothing is assigned to you."],
+    ["resolved", "No resolved cases are kept."],
+  ] as const)(
+    "names the %s filter when it is empty, offers Show all, and never the summary",
+    async (filter, words) => {
+      const container = await render({ caseFilter: filter, findings: [] });
+      const text = (container.textContent ?? "").replace(/\s+/g, " ");
+
+      expect(text).toContain(words);
+      expect(text).not.toContain("synthetic checks are passing");
+      expect(text).not.toContain("services reporting");
+      expect([...container.querySelectorAll("button")].map((each) => each.textContent)).toContain(
+        "Show all",
+      );
+    },
+  );
+
+  it("says when it shows only the newest 200", async () => {
+    expect(
+      await readable({ caseFilter: "resolved", findings: [caseRow()], truncated: true }),
+    ).toContain("Showing the newest 200.");
+  });
+});
+
+describe("a case row is the full statement (FR23, design *The feed*)", () => {
+  it("states both questions in one sentence, names the project, and draws no sparkline", async () => {
+    const container = await render({ caseFilter: "active", findings: [caseRow()], zone: "UTC" });
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain(`Recovered at ${at(CLOSED_AT)}, still being investigated by Asha`);
+    expect(text).toContain("Warning");
+    expect(text).toContain("Staging");
+    expect(container.querySelector('[role="img"]')).toBeNull();
+    expect(text).not.toContain("Acked");
+  });
+
+  it("never reads Recovered for a root whose finding came back, at the worse severity (AC59)", async () => {
+    const back = caseRow({
+      case_signal: "open",
+      case_severity: "critical",
+      open_joined_finding_id: "returning",
+      open_joined_since: BACK_AT,
+      assignee_acted_since_join: true,
+    });
+    for (const filter of ["active", null] as const) {
+      const text = await readable({ caseFilter: filter, findings: [back], zone: "UTC" });
+      expect(text).toContain(`Came back at ${at(BACK_AT)} and is still open`);
+      expect(text).not.toContain("Recovered at");
+      expect(text).toContain("Critical");
+    }
+  });
+
+  it("warns in the last 14 days before an idle case ends itself (FR26)", async () => {
+    const idle = caseRow({
+      case_activity_at: "2026-07-29T16:00:00Z",
+      case_ends_on: "2026-10-27T16:00:00Z",
+      case_ends_by: "idle",
+    });
+    expect(await readable({ caseFilter: "active", findings: [idle], zone: "UTC" })).toContain(
+      "Ends by itself on 27 Oct, 16:00 UTC. Add a note to keep it going, or resolve it.",
+    );
+  });
+
+  it("offers Resolve on Active cases and Assigned to me only, to someone who may (AC91, FR52)", async () => {
+    const offered = async (overrides: Partial<FindingsViewProps>) =>
+      [
+        ...(
+          await render({ findings: [caseRow()], canResolve: true, ...overrides })
+        ).querySelectorAll("button"),
+      ]
+        .map((each) => each.textContent)
+        .includes("Resolve");
+
+    expect(await offered({ caseFilter: "active" })).toBe(true);
+    expect(await offered({ caseFilter: "mine" })).toBe(true);
+    expect(
+      await offered({ caseFilter: "resolved", findings: [caseRow({ case_state: "resolved" })] }),
+    ).toBe(false);
+    expect(await offered({ caseFilter: null })).toBe(false);
+    expect(await offered({ caseFilter: "active", canResolve: false })).toBe(false);
+  });
+
+  it("resolves at one tap with the signal closed, and asks first while it is open (FR6)", async () => {
+    const resolved: string[] = [];
+    const closed = await render({
+      caseFilter: "active",
+      findings: [caseRow()],
+      canResolve: true,
+      onResolve: (id) => resolved.push(id),
+    });
+    await act(async () => {
+      [...closed.querySelectorAll("button")]
+        .find((each) => each.textContent === "Resolve")
+        ?.click();
+    });
+    expect(resolved).toEqual(["case-1"]);
+
+    const open = await render({
+      caseFilter: "active",
+      findings: [caseRow({ id: "case-2", case_signal: "open", state: "open", closed_at: null })],
+      canResolve: true,
+      onResolve: (id) => resolved.push(id),
+    });
+    await act(async () => {
+      [...open.querySelectorAll("button")].find((each) => each.textContent === "Resolve")?.click();
+    });
+    expect(resolved).toEqual(["case-1"]);
+    expect(open.textContent).toContain("The signal is still open");
+  });
+});
+
+describe("the feed keeps working cases in sight (FR21, FR23)", () => {
+  it("says what comes first, in the new order's words", async () => {
+    expect(await readable()).toContain(
+      "Anything still wrong or still being worked comes before anything finished.",
+    );
+  });
+
+  it("gives a closed finding with an active case the full statement, not one quiet line", async () => {
+    const text = await readable({ findings: [caseRow()], zone: "UTC" });
+    expect(text).toContain(`Recovered at ${at(CLOSED_AT)}, still being investigated by Asha`);
+  });
+
+  it("links a joined finding to the case it is part of", async () => {
+    const container = await render({
+      findings: [{ ...closed("recovered", "joined-1"), root_finding_id: "root-1" }],
+    });
+    const link = [...container.querySelectorAll("a")].find(
+      (each) => each.textContent === "Part of a case",
+    );
+    expect(link?.getAttribute("href")).toBe("/findings/root-1");
   });
 });

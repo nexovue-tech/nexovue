@@ -66,6 +66,90 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "If nothing is paid by {until}, {organization} moves to the free plan. "
         "Nothing you have already sent is deleted.",
     ),
+    Message.CASE_ASSIGNED: (
+        "A case on {service} was assigned to you",
+        "You were assigned a case on {service} ({severity}) in nexovue.\n\n"
+        "Open it:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence "
+        "and the notes.",
+    ),
+    Message.CASE_TRACKER_CLOSED: (
+        "The issue for a case on {service} was closed, so the case is resolved",
+        "The tracker issue linked to a case on {service} was closed, so nexovue resolved "
+        "the case.\n\nIf that was wrong, reopen it in nexovue:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence and "
+        "the notes.",
+    ),
+    Message.CASE_TRACKER_CLOSED_SIGNAL_OPEN: (
+        "The issue for a case on {service} was closed, and the problem is still measured",
+        "The tracker issue linked to a case on {service} was closed, but the signal has not "
+        "recovered, so the case stays open in nexovue. It resolves by itself once the signal "
+        "recovers, or you can resolve it now:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence and "
+        "the notes.",
+    ),
+    Message.CASE_IDLE_WARNING: (
+        "A case on {service} ends by itself on {ends_on}",
+        "Nobody has acted on a case on {service} in nexovue for a while. It ends by itself "
+        "on {ends_on} unless someone adds a note or resolves it:\n\n{link}\n\n"
+        "This email carries no details on purpose. The case page has the evidence and "
+        "the notes.",
+    ),
+    Message.CONNECTION_NEEDS_ATTENTION: (
+        "{tracker} needs attention in nexovue",
+        "nexovue cannot use its {tracker} connection: {what} Issues are not kept in step "
+        "until it is fixed. Cases still work.\n\nFix it here:\n\n{link}",
+    ),
+    Message.CONNECTION_FAILING: (
+        "nexovue has not reached {tracker} for a day",
+        "nexovue has not reached {tracker} since {failing_since} and keeps trying: {what} "
+        "Issues are not kept in step meanwhile. Cases still work.\n\n"
+        "See the connection:\n\n{link}",
+    ),
+    Message.CONNECTION_EXPIRING: (
+        "The {tracker} credential nexovue uses expires on {expires_on}",
+        "The {tracker} credential nexovue uses expires on {expires_on}. Replace it before "
+        "then, or issues stop being kept in step:\n\n{link}",
+    ),
+    Message.CONNECTION_REPOSITORY_PUBLIC: (
+        "{repository} is now public, so nexovue creates no issues there",
+        "nexovue saw that {repository} on {tracker} is now public. Anyone can read the "
+        "issues already there, including any nexovue created: they were exposed when it "
+        "turned public. nexovue refuses new issues there, and syncing an issue there, "
+        "unless an admin allows it:\n\n{link}",
+    ),
+    Message.AI_CONNECTION_CHANGED: (
+        "The AI connection for {organization} changed",
+        "{what}\n\nAddress before: {old_host}\nAddress now: {new_host}\n\n"
+        "AI wording is off until {until}. If you did not expect this, check who changed "
+        "it in the audit log:\n\n{link}",
+    ),
+    Message.FIX_FILES_READY: (
+        "The files for your suggested fix are ready to confirm",
+        "nexovue read the files for the suggested fix you asked for. Nothing is sent to the "
+        "AI provider until you confirm the list, and it waits 15 minutes:\n\n{link}\n\n"
+        "This email carries no code or file names on purpose.",
+    ),
+    Message.FIX_SUGGESTION_READY: (
+        "Your suggested fix is written",
+        "The suggested fix you asked for is written. It is not compiled and not run; read "
+        "it before using it:\n\n{link}\n\n"
+        "This email carries no code or file names on purpose.",
+    ),
+    Message.FIX_SUGGESTION_ENDED: (
+        "Your suggested fix ended without a change",
+        "The suggested fix you asked for ended without a change to show. The finding says "
+        "why, and what you can do next:\n\n{link}\n\n"
+        "This email carries no code or file names on purpose.",
+    ),
+    Message.FIX_CONSENT_ENDED: (
+        "Agreement to send code for suggested fixes ended",
+        "An agreement to send repository code to the AI provider for suggested fixes ended, "
+        "because {changed} changed. No more code is sent until an owner agrees again. "
+        "Suggestions already stored stay until an owner withdraws the agreement, which "
+        "deletes them:\n\n{link}\n\n"
+        "This email carries no code or repository names on purpose.",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

@@ -346,6 +346,51 @@ async def test_the_same_profile_twice_is_refused_as_a_comparison(client: AsyncCl
         )
 
 
+EXPIRES_IN: Final = timedelta(seconds=2)
+READ_AFTER: Final = timedelta(seconds=3)
+ROOM_BEFORE_MIDNIGHT: Final = timedelta(seconds=10)
+
+
+def _next_midnight(moment: datetime) -> datetime:
+    return moment.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+
+def _rows_sharing_a_part(now: datetime) -> tuple[datetime, datetime]:
+    """When the expiring and the staying row were received: one expires `EXPIRES_IN`
+    from `now`, the other outlives the read.
+
+    `profile_samples` is partitioned by the UTC day of `received_at` and ClickHouse
+    drops a part whole once all of it has expired. Rows a day apart from a midnight
+    would sit in two parts, and the expiring one would vanish before the read, so the
+    staying row is held to the expiring row's day. `ROOM_BEFORE_MIDNIGHT` is the least
+    the day must have left for that to leave the staying row alive past the read.
+    """
+    expiring = now - timedelta(days=1) + EXPIRES_IN
+    staying = min(expiring + timedelta(hours=1), _next_midnight(expiring) - timedelta(seconds=1))
+    return expiring, staying
+
+
+async def _now_with_room_before_midnight() -> datetime:
+    now = datetime.now(UTC)
+    expiring = now - timedelta(days=1) + EXPIRES_IN
+    room = _next_midnight(expiring) - expiring
+    if room >= ROOM_BEFORE_MIDNIGHT:
+        return now
+    await asyncio.sleep((room + timedelta(seconds=1)).total_seconds())
+    return datetime.now(UTC)
+
+
+@pytest.mark.parametrize("clock", ["00:00:05", "12:00:00", "23:49:58", "23:50:00", "23:59:40"])
+def test_the_two_rows_of_the_retention_test_share_a_day_partition(clock: str) -> None:
+    """The test's own premise, at the hours that broke it: `now + 1h` crossed midnight."""
+    now = datetime.fromisoformat(f"2026-11-11T{clock}+00:00")
+
+    expiring, staying = _rows_sharing_a_part(now)
+
+    assert expiring.date() == staying.date(), "two partitions: ClickHouse drops one whole"
+    assert staying > expiring + (READ_AFTER - EXPIRES_IN), "the staying row must outlive the read"
+
+
 async def test_a_profile_past_its_retention_is_not_read_before_the_ttl_removes_it(
     client: AsyncClient,
 ) -> None:
@@ -354,9 +399,8 @@ async def test_a_profile_past_its_retention_is_not_read_before_the_ttl_removes_i
     part the moment all of it has expired, which would prove nothing — and one of them
     expires two seconds after it is written."""
     tenant = _tenant()
-    now = datetime.now(UTC)
-    expiring = now - timedelta(days=1) + timedelta(seconds=2)
-    staying = now - timedelta(days=1) + timedelta(hours=1)
+    now = await _now_with_room_before_midnight()
+    expiring, staying = _rows_sharing_a_part(now)
     await _write(
         client,
         tenant,
@@ -365,7 +409,7 @@ async def test_a_profile_past_its_retention_is_not_read_before_the_ttl_removes_i
             {"value": 7, "frames": ["staying"], "at": staying, "received_at": staying},
         ],
     )
-    await asyncio.sleep(3)
+    await asyncio.sleep(READ_AFTER.total_seconds())
 
     graph = await service.flame_graph(
         _repository(client, tenant),

@@ -17,11 +17,11 @@ import pytest
 from alert_fixtures import AlertTenant, drop_tenant, make_tenant
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
+from nexovue_platform.slo import BUCKET_COUNT
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.detection import baselines as baseline_job
-from nexovue_scheduler.detection.method import BUCKET_COUNT
 from nexovue_scheduler.detection.project_job import Outcome, judge_project
 from nexovue_scheduler.detection.store import (
     READINGS_TABLE,

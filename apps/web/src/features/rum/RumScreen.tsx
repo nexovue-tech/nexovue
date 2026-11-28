@@ -138,9 +138,7 @@ export function RumView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-          Real user monitoring
-        </h1>
+        <h1 className="heading-page">Real user monitoring</h1>
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
             ? `What real browsers measured in ${windowLabel}.`
@@ -213,10 +211,10 @@ function VitalGroup({
 }) {
   return (
     <section className="mt-4 first:mt-2">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h2 className="heading-section">
         {heading} <span className="normal-case tracking-normal">— {note}</span>
       </h2>
-      <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-2 grid gap-3 sm:grid-cols-2 @3xl:grid-cols-3">
         {vitals.map((vital) => (
           <VitalCard key={vital.name} vital={vital} />
         ))}
@@ -310,7 +308,7 @@ function VitalBreakdown({ breakdowns }: { breakdowns: Breakdowns }) {
 
   return (
     <section className="mt-5">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h2 className="heading-section">
         Breakdown{" "}
         <span className="normal-case tracking-normal">
           — which {selected === "page" ? "pages" : "devices"} the numbers above came from.

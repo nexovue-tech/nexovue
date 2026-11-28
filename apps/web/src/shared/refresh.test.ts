@@ -2,10 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { RefreshPreference } from "./refresh";
+import type { FixedIntervalRefresh, RefreshPreference } from "./refresh";
 import {
   declareStream,
   intervalById,
+  isFixedInterval,
   NOTHING_LIVE,
   REFRESH_INTERVALS,
   REFRESH_STORAGE_KEY,
@@ -13,6 +14,7 @@ import {
   refetchIntervalFor,
   setPaused,
   setRefreshIntervalId,
+  TAB_INTERVALS,
 } from "./refresh";
 
 const LIVE: RefreshPreference = { paused: false, intervalId: "10s" };
@@ -115,5 +117,41 @@ describe("what a screen says about its own liveness", () => {
     expect(readLiveStream()).toBe(NOTHING_LIVE);
     declareStream(undefined);
     expect(readLiveStream()).toBeUndefined();
+  });
+});
+
+describe("what a dashboard declares about its refresh (F20, FR30, FR71)", () => {
+  const declaration = (over: Partial<FixedIntervalRefresh> = {}): FixedIntervalRefresh => ({
+    kind: "fixed-interval",
+    fixedWindow: false,
+    savedIntervalMs: 60_000,
+    intervalMs: 60_000,
+    tabIntervalMs: undefined,
+    chooseInterval: () => {},
+    lastGoodAt: undefined,
+    zone: "UTC",
+    reading: false,
+    readNow: () => {},
+    chooseRange: () => {},
+    ...over,
+  });
+
+  it("is told apart from a stream and from a screen with nothing live", () => {
+    expect(isFixedInterval(declaration())).toBe(true);
+    expect(isFixedInterval({ state: "live", pause: () => {}, resume: () => {} })).toBe(false);
+    expect(isFixedInterval(NOTHING_LIVE)).toBe(false);
+    expect(isFixedInterval(undefined)).toBe(false);
+  });
+
+  it("is carried to the control and withdrawn on leaving", () => {
+    const declared = declaration();
+    declareStream(declared);
+    expect(readLiveStream()).toBe(declared);
+    declareStream(undefined);
+    expect(readLiveStream()).toBeUndefined();
+  });
+
+  it("offers a tab 30 seconds, 1 minute and 5 minutes, never the console's 5 and 10 (FR30)", () => {
+    expect(TAB_INTERVALS.map((option) => option.ms)).toEqual([30_000, 60_000, 300_000]);
   });
 });

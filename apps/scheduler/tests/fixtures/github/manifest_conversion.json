@@ -1,0 +1,26 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as summarised by web search on 2026-11-08 (docs.github.com could not be fetched from the build session). UNVERIFIED against real GitHub until the founder's run after Phase 2 (F22 T3.0, T4.8, foundation item 28); T4.8 replaces these with sanitized real responses. Values are made up. Page: 'Create a GitHub App from a manifest', POST /app-manifests/{code}/conversions, answering 201.",
+  "id": 1000001,
+  "slug": "nexovue-acme",
+  "node_id": "A_kwHOAAAAAA",
+  "name": "nexovue-acme",
+  "owner": {
+    "login": "acme",
+    "id": 2000001,
+    "type": "Organization"
+  },
+  "description": "",
+  "external_url": "https://nexovue.acme.example",
+  "html_url": "https://github.com/apps/nexovue-acme",
+  "created_at": "2026-11-08T12:00:00Z",
+  "updated_at": "2026-11-08T12:00:00Z",
+  "permissions": {
+    "issues": "write",
+    "metadata": "read"
+  },
+  "events": ["issues"],
+  "client_id": "<replaced by the fake>",
+  "client_secret": "<replaced by the fake>",
+  "webhook_secret": "<replaced by the fake>",
+  "pem": "<replaced by the fake with its own key>"
+}

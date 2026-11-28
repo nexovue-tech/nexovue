@@ -66,14 +66,14 @@ export function TraceScreen({ traceId }: { traceId: string }) {
   const rootSpan = spans.find((span) => span.parent_span_id === "") ?? spans[0];
 
   return (
-    <div className="flex h-full min-h-0 flex-col lg:flex-row">
+    <div className="flex h-full min-h-0 flex-col @3xl:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 border-line border-b px-4 pt-5 pb-3">
           <Link to="/traces" className={BACK_LINK_CLASS}>
             ← All traces
           </Link>
 
-          <h1 className="mt-2 font-semibold font-serif text-ink text-xl tracking-tight">
+          <h1 className="mt-2 heading-page">
             {rootSpan ? (
               <>
                 <span className="text-ink-dim">{rootSpan.service_name}</span> {rootSpan.span_name}
@@ -122,7 +122,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           aria-label="Span detail"
           // A column beside the waterfall where there is width for one, a sheet over it
           // where there is not — at 375px a third column would leave no waterfall at all.
-          className="fixed inset-x-0 bottom-0 z-20 h-[55dvh] border-line border-t bg-page shadow-overlay lg:static lg:h-auto lg:w-96 lg:shrink-0 lg:border-t-0 lg:border-l lg:shadow-none"
+          className="fixed inset-x-0 bottom-0 z-20 h-[55dvh] border-line border-t bg-page shadow-overlay @3xl:static @3xl:h-auto @3xl:w-96 @3xl:shrink-0 @3xl:border-t-0 @3xl:border-l @3xl:shadow-none"
         >
           <SpanDetail
             traceId={detail.trace_id}

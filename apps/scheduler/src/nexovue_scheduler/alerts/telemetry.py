@@ -13,6 +13,7 @@ or whether an error group is new.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
 from urllib.parse import unquote, urlsplit
@@ -141,9 +142,18 @@ class TenantScopedReader:
             ERROR_GROUPS_SQL, {"received_from": received_from, "received_to": received_to}
         )
 
-    def _query(self, sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    def _query(
+        self,
+        sql: str,
+        parameters: dict[str, Any],
+        *,
+        settings: Mapping[str, Any] = READ_SETTINGS,
+    ) -> list[dict[str, Any]]:
+        """Run one of this service's tenant-binding statements. `settings` lowers the
+        shared bounds for a job with a short budget (`lowered_read_settings`); it may
+        not raise them, which the reader account's own limits also refuse."""
         if not binds_tenant(sql):
             raise TenantFilterMissingError(sql)
         bound = parameters | {"tenant_id": self._tenant_id, "project_id": self._project_id}
-        result = self._client.query(sql, parameters=bound, settings=READ_SETTINGS)
+        result = self._client.query(sql, parameters=bound, settings=dict(settings))
         return [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]

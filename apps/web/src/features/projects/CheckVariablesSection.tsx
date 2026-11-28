@@ -56,9 +56,7 @@ export function CheckVariablesSection({ projectId }: { projectId: string }) {
     <section className="flex flex-col gap-4">
       <UnsavedChangesPrompt guard={guard} what="this project's check variables" />
       <div className="max-w-2xl">
-        <h3 className="font-medium font-serif text-ink text-base tracking-tight">
-          Check variables
-        </h3>
+        <h3 className="heading-sub">Check variables</h3>
         <p className="mt-1 text-ink-dim text-sm leading-relaxed">
           Values your checks share, such as a base URL or an account id. Write{" "}
           <code className="font-mono text-ink text-xs">{variableReference("name")}</code> in a

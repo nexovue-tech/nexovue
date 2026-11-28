@@ -34,6 +34,7 @@ const DECLINED: ErrorGroupSummary = {
   sample_span_id: "c8f8acc1e53ceb86",
   sample_source: "log",
   preceding_deploy: null,
+  deploy_coverage: null,
 };
 
 /** Running since before the window opened: a long-standing bug, not an incident. */
@@ -354,7 +355,7 @@ describe("ErrorsView and the deploy before a group", () => {
     expect(rendered).toContain(DEPLOY_IS_NOT_A_CAUSE);
   });
 
-  it("says nothing about deploys on a group no deploy preceded", async () => {
+  it("names no deploy and adds no caveat on a group no deploy preceded", async () => {
     const rendered = readable(
       await render({ groups: [DECLINED], selected: DECLINED, detailIsPending: false }),
     );
@@ -363,5 +364,30 @@ describe("ErrorsView and the deploy before a group", () => {
     // absent is the claim, and the caveat that would come with it.
     expect(rendered).not.toContain("after deploy");
     expect(rendered).not.toContain(DEPLOY_IS_NOT_A_CAUSE);
+  });
+
+  it("reads each coverage value differently on the row, and states it in the panel (F28 AC73)", async () => {
+    const covered = (deploy_coverage: ErrorGroupSummary["deploy_coverage"]) => ({
+      ...DECLINED,
+      group_id: `group-${deploy_coverage}`,
+      deploy_coverage,
+    });
+    const rows = readable(
+      await render({
+        groups: [covered("deploys_only"), covered("versions_only"), covered("none")],
+      }),
+    );
+    expect(rows).toContain("none before");
+    expect(rows).toContain("none reported");
+    expect(rows).toContain("not told");
+
+    const panel = readable(
+      await render({
+        groups: [covered("none")],
+        selected: covered("none"),
+        detailIsPending: false,
+      }),
+    );
+    expect(panel).toContain("We receive no deploy information for these services.");
   });
 });

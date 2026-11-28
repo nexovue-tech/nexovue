@@ -1,0 +1,17 @@
+{
+  "_source": "Shaped from GitHub's REST documentation as remembered and as summarised by web search on 2026-11-11 (docs.github.com could not be fetched from the build session). NOT RECORDED: UNVERIFIED against real GitHub until the founder runs tools/ai-eval/fix/record_github.py after Phase 2 (F5 plan T2.10, foundation item 28), which replaces `status` and `body` with a sanitized real response and keeps `compared` and `values`. Values are made up. Page: 'Get a user using their ID', GET /user/{account_id}.",
+  "request": {
+    "method": "GET",
+    "path": "/user/9000001"
+  },
+  "status": 200,
+  "compared": ["login", "id"],
+  "values": ["login"],
+  "body": {
+    "login": "octo-dev",
+    "id": 9000001,
+    "node_id": "U_x",
+    "type": "User",
+    "site_admin": false
+  }
+}

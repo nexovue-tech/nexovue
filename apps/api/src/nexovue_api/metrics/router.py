@@ -9,12 +9,14 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Path, Query
 
 from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
+from nexovue_api.dashboardpanels.router import PanelReadsDep
 from nexovue_api.deps import DbSession
 from nexovue_api.metrics import service
 from nexovue_api.metrics.schemas import (
     DurationHeatmapResponse,
     HistogramResponse,
     MetricCatalogueResponse,
+    MetricSeriesListResponse,
 )
 from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.window import resolve_window
@@ -41,6 +43,8 @@ NameMatch = Annotated[
 ]
 Shape = Annotated[MetricShape | None, Query(description="Only names that arrived in this shape")]
 ReadableOnly = Annotated[bool, Query(description="Only names this console can draw")]
+# The two shapes a dashboard draws as a line (F20, FR6).
+SeriesShape = Annotated[Literal["gauge", "sum"], Query(description="The table the metric is in")]
 
 
 @router.get("", summary="Every metric this project reported, busiest first")
@@ -104,6 +108,37 @@ async def read_duration_heatmap(
     return await service.read_duration_heatmap(
         repository,
         project_id=str(project.id),
+        service_name=service_name,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/{metric_name}/series", summary="One service's attribute combinations of a metric")
+async def list_series(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    reads: PanelReadsDep,
+    metric_name: MetricName,
+    project_id: ProjectId,
+    service_name: ServiceName,
+    shape: SeriesShape,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> MetricSeriesListResponse:
+    """For a dashboard's builder (F20, AC83, AC121). The first read to return attribute
+    values, which may be personal data or attacker text, so `CurrentIdentity`: no API token
+    reaches it, and it is off the read surface (design section 8)."""
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.list_series_within_raw_limits(
+        repository,
+        reads.caps,
+        org_id=str(identity.org_id),
+        project_id=str(project.id),
+        metric_name=metric_name,
+        shape=shape,
         service_name=service_name,
         from_time=window_start,
         to_time=window_end,

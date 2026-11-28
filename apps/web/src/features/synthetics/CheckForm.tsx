@@ -176,7 +176,7 @@ export function CheckForm({
         ) : null}
 
         {draft.kind === "multistep" ? (
-          <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
+          <div className="grid min-w-0 grid-cols-1 gap-4 @3xl:grid-cols-[16rem_minmax(0,1fr)]">
             <div className="flex flex-col gap-3">
               <StepList
                 steps={draft.steps}
@@ -249,9 +249,7 @@ export function CheckForm({
           aria-label="Run now result"
           className="min-w-0 border-line border-t pt-4"
         >
-          <h3 className="mb-2 font-mono text-2xs text-ink-dim uppercase tracking-caps">
-            Run now — nothing was recorded
-          </h3>
+          <h3 className="mb-2 heading-sub">Run now — nothing was recorded</h3>
           {runNow.data ? (
             <EvidenceView key={runNow.data.run_id} evidence={runNow.data} />
           ) : (

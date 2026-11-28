@@ -1,6 +1,6 @@
 module github.com/nexovue-tech/nexovue/tools/loadgen
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen v0.163.0

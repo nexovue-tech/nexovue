@@ -63,7 +63,7 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
     <section className="mt-8 shrink-0 border-line border-t pt-5">
       <header className="pb-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Browser keys</h2>
+          <h2 className="heading-section">Browser keys</h2>
           <PublicBadge />
         </div>
         <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">{PUBLIC_NOTE}</p>

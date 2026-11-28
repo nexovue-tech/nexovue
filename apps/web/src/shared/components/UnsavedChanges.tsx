@@ -128,7 +128,7 @@ function BlockedPrompt({ guard, what }: { guard: BlockedGuard; what: string }) {
         aria-labelledby="unsaved-changes-title"
         className="w-full max-w-md rounded border border-line bg-raised p-5 shadow-overlay"
       >
-        <h2 id="unsaved-changes-title" className="font-medium font-serif text-base text-ink">
+        <h2 id="unsaved-changes-title" className="heading-section">
           Leave without saving?
         </h2>
         <p className="mt-2 text-ink-dim text-sm leading-relaxed">

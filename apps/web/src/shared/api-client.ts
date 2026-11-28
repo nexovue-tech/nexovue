@@ -54,8 +54,11 @@ export class ApiError extends Error {
   }
 }
 
+const HTTP_FORBIDDEN = 403;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
+const HTTP_UNPROCESSABLE = 422;
+const HTTP_TOO_MANY_REQUESTS = 429;
 
 /**
  * True when the API answered "no such resource in this organization".
@@ -69,6 +72,40 @@ export function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === HTTP_NOT_FOUND;
 }
 
+/** The problem types a dashboard's 404 carries, so its page can say which it was (F20, AC75). */
+const DASHBOARD_NOT_FOUND = "dashboard-not-found";
+const PROJECT_NOT_FOUND = "project-not-found";
+
+/** Whether the problem's type URI ends in the slug (`errors/problems.py`'s registry). */
+function hasProblemSlug(error: unknown, slug: string): boolean {
+  return error instanceof ApiError && error.problem?.type.endsWith(`/${slug}`) === true;
+}
+
+/** A 404 that names the dashboard: unknown, another organization's, or deleted. */
+export function isDashboardNotFound(error: unknown): boolean {
+  return isNotFound(error) && hasProblemSlug(error, DASHBOARD_NOT_FOUND);
+}
+
+/** A 404 that names the project: a link to one the reader cannot open. */
+export function isProjectNotFound(error: unknown): boolean {
+  return isNotFound(error) && hasProblemSlug(error, PROJECT_NOT_FOUND);
+}
+
+/**
+ * True when the API refused the caller this resource. The central handler renders a whole
+ * screen forbidden on a 403; chat's side panel says it inside itself instead (F4 AC73).
+ */
+export function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_FORBIDDEN;
+}
+
+/** The problem's own `code`, when the API names why it refused (F4's refusals, AC79). */
+export function problemCode(error: unknown): string | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  const code = error.problem?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 /**
  * True when the API refused a change because what it would change has moved on since
  * the screen read it: a finding closed or acknowledged meanwhile. The screen says so
@@ -76,6 +113,23 @@ export function isNotFound(error: unknown): boolean {
  */
 export function isConflict(error: unknown): boolean {
   return error instanceof ApiError && error.status === HTTP_CONFLICT;
+}
+
+/**
+ * True when the API refused what was sent as not valid: its problem names each field and
+ * why, which a screen shows in its own summary (F20's draft preview, T3.3).
+ */
+export function isInvalid(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_UNPROCESSABLE;
+}
+
+/**
+ * True when the API refused the request for the caller's limits. A screen that says so in
+ * its own words, as a dashboard does (F20, FR45), recognises one here; what to do about it
+ * everywhere else is `app/query-client.ts`'s.
+ */
+export function isRateLimited(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_TOO_MANY_REQUESTS;
 }
 
 export interface RequestOptions {

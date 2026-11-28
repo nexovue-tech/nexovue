@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from nexovue_platform.ai_records import CALL_SECONDS_MAX
 from nexovue_platform.alerts.tasks import (
     DELIVERIES_QUEUE,
     EVALUATE_NEW_ERRORS_TASK,
@@ -33,6 +34,7 @@ from nexovue_platform.alerts.tasks import (
     PRUNE_ATTEMPTS_TASK,
     SWEEP_DELIVERIES_TASK,
 )
+from nexovue_platform.assistant_records import ASSISTANT_SWEEP_TASK
 from nexovue_platform.checks.task import (
     RUN_CHECK_TASK,
     SHARED_QUEUE,
@@ -41,13 +43,30 @@ from nexovue_platform.checks.task import (
     probe_queue,
     time_limits_for,
 )
-from nexovue_platform.deployment import HOSTED
+from nexovue_platform.connections import (
+    CONNECTIONS_INTERACTIVE_QUEUE,
+    CONNECTIONS_QUEUE,
+    SWEEP_CONNECTIONS_TASK,
+)
+from nexovue_platform.deployment import HOSTED, ai_available
+from nexovue_platform.evidence import INSIGHT_QUEUE, SWEEP_INSIGHT_TASK
+from nexovue_platform.fixes.records import (
+    NOTIFY_REQUESTERS_TASK,
+    POLL_FIX_PULL_REQUESTS_TASK,
+    POLL_PULL_REQUESTS_EVERY_SECONDS,
+    POLL_PULL_REQUESTS_HARD_LIMIT_SECONDS,
+    POLL_PULL_REQUESTS_SOFT_LIMIT_SECONDS,
+    SWEEP_FIXES_TASK,
+    SWEEP_GENERAL_FIXES_TASK,
+)
 from nexovue_platform.jobs import JobRequest
+from nexovue_platform.knowledge import EMBED_SWEEP_TASK, KNOWLEDGE_SWEEP_TASK
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
+from nexovue_scheduler.cases import CASES_SWEEP_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.detection import (
     DETECTION_QUEUE,
@@ -60,6 +79,7 @@ from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.pollers.integrations import IntegrationDefinition, load_active_integrations
+from nexovue_scheduler.releases import RELEASES_QUEUE, SWEEP_RELEASES_TASK
 from nexovue_scheduler.settings import Settings
 
 # Task names come from the shared contract rather than imports, so beat does not
@@ -94,6 +114,64 @@ BASELINE_SWEEP_ENTRY: Final = "sweep:detection-baselines"
 # The rows that lapse rather than being removed (ADR-020): sessions, links, results, jobs.
 EXPIRY_SWEEP_SECONDS: Final = 60
 EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
+
+# F4: questions past their clock become `unavailable`, and dead ones' tokens are settled, by
+# chat's own sweep on `insight` (design, *Settling*). Every minute is a guess.
+ASSISTANT_SWEEP_SECONDS: Final = 60
+ASSISTANT_SWEEP_ENTRY: Final = "sweep:assistant"
+# F5: rung 2b's stuck rows and unrecorded results, on `light`, always, since a row clicked
+# before AI was turned off must still end (design, *Jobs*: every minute, a guess).
+GENERAL_FIX_SWEEP_SECONDS: Final = 60
+GENERAL_FIX_SWEEP_ENTRY: Final = "sweep:general-fixes"
+# F5 Step 3: rung 3's stuck and lapsed rows, code past its time, short-lived rows and the
+# Fix App's hourly refresh, on `connections` (design, *The sweep*: every minute, a guess),
+# while connections are on, so no job waits for a `scheduler-connections` not running.
+FIX_SWEEP_SECONDS: Final = 60
+FIX_SWEEP_ENTRY: Final = "sweep:fixes"
+# F5 Step 8: F5's own pull request poller, on `connections`, every 5 minutes (design, *Jobs*;
+# a guess), while connections are on. It reads only.
+FIX_PULL_REQUESTS_ENTRY: Final = "sweep:fix-pull-requests"
+# F5 Step 4: a requester's one email per event, on `light`, which holds the mail settings,
+# always, so an email owed before connections were turned off still goes (every minute, a
+# guess).
+FIX_NOTIFY_SECONDS: Final = 60
+FIX_NOTIFY_ENTRY: Final = "sweep:fix-requesters"
+
+# F4 T5.5: chat's fact lines from recovered findings, every 5 minutes (a guess), on the shared
+# queue with default limits; only where AI may be offered, as nothing else reads them.
+KNOWLEDGE_SWEEP_SECONDS: Final = 300
+KNOWLEDGE_SWEEP_ENTRY: Final = "sweep:knowledge"
+
+# F4 T6.1: due chunks embedded, and opted-out projects' vectors nulled, on `insight` as the
+# AI account, every 5 minutes (a guess), only while an AI connection is on, like F3's sweep.
+# A run stops starting calls after two minutes (`insight.knowledge.SWEEP_BUDGET`); its limits
+# leave room for the last call at the longest a connection allows.
+EMBED_SWEEP_SECONDS: Final = 300
+EMBED_SWEEP_ENTRY: Final = "sweep:embeddings"
+EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS: Final = 120 + CALL_SECONDS_MAX + 20
+EMBED_SWEEP_TIME_LIMIT_SECONDS: Final = EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS + 20
+
+# F22: cases end by silence and races heal within one sweep; 5 minutes is a guess.
+CASES_SWEEP_SECONDS: Final = 300
+CASES_SWEEP_ENTRY: Final = "sweep:cases"
+
+# F22 T4.5: due tracker links and each connection's hourly refresh, handed to
+# `scheduler-connections` every 30 seconds (a guess), and only while a connection is live
+# and connections are on (AC118), so no job waits for a role that is not running.
+CONNECTIONS_SWEEP_SECONDS: Final = 30
+CONNECTIONS_SWEEP_ENTRY: Final = "sweep:connections"
+
+# F28: releases seen in traffic, synced from the version rollup each minute on their own
+# capped queue (D31), so a slow read never takes an alert sweep's slot.
+RELEASE_SWEEP_SECONDS: Final = 60
+RELEASE_SWEEP_ENTRY: Final = "sweep:releases"
+
+# F3: the AI role's sweep, run by `scheduler-insight` as its own account: runs a killed
+# child left `started`, and wording left `pending` past its job (design, every 5 minutes, a
+# guess). Scheduled only while an AI connection is on, so an install without the AI
+# container, or with AI off, queues nothing for it; the page reads `off` then anyway.
+INSIGHT_SWEEP_SECONDS: Final = 300
+INSIGHT_SWEEP_ENTRY: Final = "sweep:insight"
 
 # A payment's grace period is days long; an hour late ending it costs nothing.
 GRACE_SWEEP_SECONDS: Final = 3600
@@ -179,6 +257,13 @@ class Beat:
         self._measure_due_at = 0.0
         self._entries: dict[str, Entry] = {}
         self._refresh_due_at = 0.0
+        # Whether a tracker connection is live, read with the schedule (F22 T4.5).
+        self.connections_live = False
+        # F5: whether connections are on at all, read with the schedule; rung 3's sweep
+        # runs on `scheduler-connections` then, with or without a tracker connection.
+        self.connections_on = False
+        # F3: whether any AI connection is on, read with the schedule; the AI sweep runs then.
+        self.ai_on = False
 
         # What the heartbeat reports. Counters rather than gauges, because the
         # question that matters is "is it still moving", and a number that has
@@ -260,7 +345,11 @@ class Beat:
         self._measure_due_at = now + metrics.MEASURE_SECONDS
         try:
             async with self._engine.connect() as connection:
-                readings = await metrics.read_queues(connection, now=datetime.now(UTC))
+                readings = await metrics.read_queues(
+                    connection,
+                    now=datetime.now(UTC),
+                    connections_enabled=self._settings.connections_enabled,
+                )
         except Exception:
             # A missed reading leaves the last one standing; the next tick tries again.
             logger.warning("beat could not read the queues for its metrics")
@@ -308,6 +397,12 @@ class Beat:
                 self._engine, all_locations=self._settings.probe_locations
             )
             integrations = await load_active_integrations(self._engine)
+            async with self._engine.connect() as connection:
+                self.connections_live = await metrics.connections_live(
+                    connection, enabled=self._settings.connections_enabled
+                )
+                self.connections_on = self._settings.connections_enabled
+                self.ai_on = await metrics.ai_connections_on(connection)
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
             # the entries we already hold are still correct, and dropping them
@@ -412,12 +507,53 @@ class Beat:
             BASELINE_SWEEP_ENTRY: (SWEEP_BASELINES_TASK, BASELINE_SWEEP_SECONDS, DETECTION_QUEUE),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
+            CASES_SWEEP_ENTRY: (CASES_SWEEP_TASK, CASES_SWEEP_SECONDS, SHARED_QUEUE),
+            RELEASE_SWEEP_ENTRY: (SWEEP_RELEASES_TASK, RELEASE_SWEEP_SECONDS, RELEASES_QUEUE),
+            ASSISTANT_SWEEP_ENTRY: (ASSISTANT_SWEEP_TASK, ASSISTANT_SWEEP_SECONDS, INSIGHT_QUEUE),
+            GENERAL_FIX_SWEEP_ENTRY: (
+                SWEEP_GENERAL_FIXES_TASK,
+                GENERAL_FIX_SWEEP_SECONDS,
+                SHARED_QUEUE,
+            ),
+            FIX_NOTIFY_ENTRY: (NOTIFY_REQUESTERS_TASK, FIX_NOTIFY_SECONDS, SHARED_QUEUE),
         }
+        if ai_available(self._settings.nexovue_deployment):
+            wanted[KNOWLEDGE_SWEEP_ENTRY] = (
+                KNOWLEDGE_SWEEP_TASK,
+                KNOWLEDGE_SWEEP_SECONDS,
+                SHARED_QUEUE,
+            )
+        if self.ai_on:
+            wanted[INSIGHT_SWEEP_ENTRY] = (SWEEP_INSIGHT_TASK, INSIGHT_SWEEP_SECONDS, INSIGHT_QUEUE)
+            wanted[EMBED_SWEEP_ENTRY] = (EMBED_SWEEP_TASK, EMBED_SWEEP_SECONDS, INSIGHT_QUEUE)
+        if self.connections_on:
+            wanted[FIX_SWEEP_ENTRY] = (SWEEP_FIXES_TASK, FIX_SWEEP_SECONDS, CONNECTIONS_QUEUE)
+            wanted[FIX_PULL_REQUESTS_ENTRY] = (
+                POLL_FIX_PULL_REQUESTS_TASK,
+                POLL_PULL_REQUESTS_EVERY_SECONDS,
+                CONNECTIONS_QUEUE,
+            )
+        if self.connections_live:
+            wanted[CONNECTIONS_SWEEP_ENTRY] = (
+                SWEEP_CONNECTIONS_TASK,
+                CONNECTIONS_SWEEP_SECONDS,
+                CONNECTIONS_INTERACTIVE_QUEUE,
+            )
         # A customer's own install charges nobody, so no payment has a grace period to end.
         if self._settings.nexovue_deployment == HOSTED:
             wanted[GRACE_SWEEP_ENTRY] = (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE)
         # A sweep fits in a minute; the night's erasure does not.
-        limits = {ERASURE_ENTRY: (ERASURE_SOFT_TIME_LIMIT_SECONDS, ERASURE_TIME_LIMIT_SECONDS)}
+        limits = {
+            ERASURE_ENTRY: (ERASURE_SOFT_TIME_LIMIT_SECONDS, ERASURE_TIME_LIMIT_SECONDS),
+            EMBED_SWEEP_ENTRY: (
+                EMBED_SWEEP_SOFT_TIME_LIMIT_SECONDS,
+                EMBED_SWEEP_TIME_LIMIT_SECONDS,
+            ),
+            FIX_PULL_REQUESTS_ENTRY: (
+                POLL_PULL_REQUESTS_SOFT_LIMIT_SECONDS,
+                POLL_PULL_REQUESTS_HARD_LIMIT_SECONDS,
+            ),
+        }
         entries: dict[str, Entry] = {}
         now = self._monotonic()
         for name, (task, seconds, queue_name) in wanted.items():

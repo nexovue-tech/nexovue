@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { HostedOnly } from "./HostedOnly";
+import { HostedOnly, SelfHostedOnly } from "./HostedOnly";
 
 /**
  * Billing and Support access on a customer's own install answer as an address with no screen,
@@ -40,7 +40,7 @@ function installIs(deployment: "hosted" | "self-hosted") {
   );
 }
 
-async function render() {
+async function render(only: typeof HostedOnly = HostedOnly, screen = "Billing") {
   const container = document.createElement("div");
   document.body.append(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -51,7 +51,7 @@ async function render() {
       createElement(
         QueryClientProvider,
         { client },
-        createElement(HostedOnly, { fallback: "No screen at this address" }, "Billing"),
+        createElement(only, { fallback: "No screen at this address" }, screen),
       ),
     ),
   );
@@ -72,5 +72,17 @@ describe("a hosted-only screen", () => {
   it("is an address with no screen on a customer's own install", async () => {
     installIs("self-hosted");
     expect(await render()).toBe("No screen at this address");
+  });
+});
+
+describe("a screen only a customer's own install has (F4 runbooks, AC92)", () => {
+  it("is the screen on a customer's own install", async () => {
+    installIs("self-hosted");
+    expect(await render(SelfHostedOnly, "Runbooks")).toBe("Runbooks");
+  });
+
+  it("is an address with no screen on nexovue's hosted service", async () => {
+    installIs("hosted");
+    expect(await render(SelfHostedOnly, "Runbooks")).toBe("No screen at this address");
   });
 });

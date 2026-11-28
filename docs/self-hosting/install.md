@@ -36,6 +36,15 @@ and everything it recorded.
 Two names rather than one: a sign-in cookie set for one name must never travel with telemetry sent to
 the other.
 
+**One install per Postgres server.** If you use a Postgres of your own, do not point a second nexovue
+install at the same server, even in another database. `setup` creates the narrow accounts
+`nexovue_insight` and `nexovue_connections` under fixed names, and a Postgres account belongs to the
+whole server, not one database. A second install's `setup` would reset the first install's passwords
+for them, so its AI and tracker containers stop signing in, and each account would hold rights in both
+databases. `setup`'s own lock holds within one database only, so two installs' setups would not wait
+for each other either (commit 60d11f6b, `tests/helpers/private_database.py`). The bundled Postgres
+is one install's alone.
+
 ## Install
 
 The newest release, from GitHub over HTTPS:
@@ -128,6 +137,11 @@ cosign verify-blob nexovue-X.Y.Z.tar.gz \
   everything else works. Set `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_SENDING_DOMAIN` and
   `EMAIL_FROM_ADDRESS` in `nexovue.env`, then run `sudo ./nexovue install` again to apply them.
 - **Teammates** join by invitation from the console. Public sign-up is closed (`SIGNUP_ENABLED=false`).
+- **Chat's meaning search** needs Postgres's `vector` extension, which only a superuser can create.
+  The bundled Postgres has it. On a database of your own whose account cannot create it, `setup` says
+  `vector: Postgres refused to create the vector extension…` and carries on: everything else works,
+  and chat finds runbooks and fact lines by keyword only, which `/settings/ai` says. To add it later,
+  run `CREATE EXTENSION vector;` as a superuser, then `nexovue setup` again.
 - **Monitoring.** `NEXOVUE_MONITORING=yes` in `nexovue.env` runs Prometheus and Alertmanager beside
   nexovue with its alert rules; name where alerts go in `monitoring/alertmanager.yml`. Or point your own
   monitor at the same endpoints and rules (`monitoring/`).

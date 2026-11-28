@@ -71,6 +71,27 @@ func TestARevokedPartitionsEndpointRollupLeavesTheBucket(t *testing.T) {
 	}
 }
 
+// The version rollup is fed from the same call as the service rollup and summed
+// on read the same way, so it must lose the same partition's share (AC16).
+func TestARevokedPartitionsVersionRollupLeavesTheBucket(t *testing.T) {
+	pipeline := pipelineForHandover(t, newRecordingStore())
+
+	absorbOn(t, pipeline, spansMoved, 100, 1)
+	absorbOn(t, pipeline, spansKept, 100, 2)
+
+	pipeline.release(map[string][]int32{pipeline.topic: {spansMoved}})
+
+	var requests, errored uint64
+	for _, row := range pipeline.stages.counters.DrainAll().Versions {
+		requests += row.RequestCount
+		errored += row.ErrorCount
+	}
+	if requests != spansPerTrace || errored != spansPerTrace {
+		t.Errorf("service_versions_1m drained %d requests and %d errors, want %d of each — "+
+			"the trace on the partition this worker still owns", requests, errored, spansPerTrace)
+	}
+}
+
 // The service-edge rollup accumulates the same way and is summed on read the
 // same way, so `service_edges_1m.call_count` is over-summed by a handover
 // exactly as `metrics_sum` is.

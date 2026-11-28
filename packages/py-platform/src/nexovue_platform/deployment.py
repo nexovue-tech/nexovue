@@ -19,3 +19,10 @@ DEPLOYMENT_VARIABLE: Final = "NEXOVUE_DEPLOYMENT"
 HOSTED: Final[Deployment] = "hosted"
 SELF_HOSTED: Final[Deployment] = "self-hosted"
 DEFAULT_DEPLOYMENT: Final[Deployment] = SELF_HOSTED
+
+
+def ai_available(deployment: Deployment) -> bool:
+    """Whether AI wording may be offered on this install (F3 FR31). The hosted service
+    keeps it off until each organization's reads are held apart by the database; in
+    the platform, not in `nexovue_platform.ai`, so the evidence job can ask (A37)."""
+    return deployment == SELF_HOSTED
