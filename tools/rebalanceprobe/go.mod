@@ -9,9 +9,9 @@ replace github.com/nexovue-tech/nexovue/packages/contracts => ../../packages/con
 require (
 	github.com/google/uuid v1.6.0
 	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0-00010101000000-000000000000
-	github.com/twmb/franz-go v1.22.2
+	github.com/twmb/franz-go v1.22.3
 	go.opentelemetry.io/proto/otlp v1.11.1
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -19,11 +19,11 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.15.0 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.15.1 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
-	google.golang.org/grpc v1.84.0 // indirect
+	google.golang.org/grpc v1.85.0 // indirect
 )
