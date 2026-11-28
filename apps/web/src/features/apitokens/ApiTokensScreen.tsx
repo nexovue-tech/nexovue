@@ -92,9 +92,7 @@ function MintedToken({ created, onDismiss }: { created: ApiTokenCreated; onDismi
       aria-label="New token"
       className="mb-4 border border-brand-line bg-brand-surface px-4 py-3"
     >
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
-        {created.api_token.name} is ready
-      </h2>
+      <h2 className="heading-section">{created.api_token.name} is ready</h2>
       <p className="max-w-3xl mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
 
       <div className="mt-3 flex items-center gap-3 border border-line bg-surface px-3 py-2">

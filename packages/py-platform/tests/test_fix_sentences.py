@@ -111,3 +111,10 @@ def test_every_written_suggestion_leads_with_the_as_is_terms() -> None:
 
     assert AS_IS in PROPOSED_LEAD
     assert "as is" in AS_IS and "you review and you merge" in AS_IS
+
+
+def test_ai_off_reads_for_ai_switched_off_as_well_as_never_set_up() -> None:
+    """Live test B5: AI only switched off read "An admin sets it up, then an owner agrees"."""
+    sentence = ELIGIBILITY_SENTENCES["ai_off"]
+    assert sentence.requester == "AI is off. An admin can turn it on in Settings, under AI."
+    assert sentence.viewer is None

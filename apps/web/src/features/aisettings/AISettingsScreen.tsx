@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { isConflict } from "@/shared/api-client";
@@ -8,6 +8,7 @@ import { CopyButton } from "@/shared/components/CopyButton";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { Tabs } from "@/shared/components/Tabs";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { formatDate, formatTimestamp } from "@/shared/format/time";
@@ -67,6 +68,7 @@ import {
 import { ChatSection } from "./ChatSection";
 import { CONSENT_WORDS, FixConsentPanel } from "./FixConsentPanel";
 import { FixSummaryPanel } from "./FixSummaryPanel";
+import { SetupChecklist } from "./SetupChecklist";
 
 /**
  * `/settings/ai` (F3 FR23 to FR32; design *AI settings*): connect a provider, test it, set a
@@ -78,8 +80,8 @@ export function AISettingsScreen() {
   const settings = useAISettings();
   return (
     <SettingsLayout
-      title="AI wording"
-      description="Optional plainer wording for a finding's facts, written by a model you choose. Off until an owner agrees to exactly what is sent."
+      title="AI"
+      description="Your own AI account writes plainer words for a finding's facts, answers chat and suggests fixes. Nothing is sent until an owner agrees to exactly what."
     >
       {settings.isPending ? (
         <SkeletonRows rows={5} label="Loading the AI settings" />
@@ -110,7 +112,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
       aria-labelledby={`${id}-title`}
       className="flex flex-col gap-3 border-line border-t pt-4"
     >
-      <h2 id={`${id}-title`} className="font-medium font-serif text-base text-ink">
+      <h2 id={`${id}-title`} className="heading-section">
         {title}
       </h2>
       {children}
@@ -118,38 +120,98 @@ function Section({ id, title, children }: { id: string; title: string; children:
   );
 }
 
+/** The AI page's tabs (approved drawing D): one screen or two each, not one page of 13,700 px. */
+export const AI_TABS = [
+  { id: "setup", label: "Setup" },
+  { id: "provider", label: "Provider" },
+  { id: "chat", label: "Chat" },
+  { id: "fixes", label: "Suggested fixes" },
+  { id: "usage", label: "Usage" },
+] as const;
+
+export type AITab = (typeof AI_TABS)[number]["id"];
+
+export function aiTabOf(value: unknown): AITab {
+  return AI_TABS.some((tab) => tab.id === value) ? (value as AITab) : "setup";
+}
+
+/** The tab a status line's link opens: the provider's sections, or Setup for the status. */
+export function tabOfAnchor(anchor: string): AITab {
+  return anchor === "ai-status" ? "setup" : "provider";
+}
+
 function Managed({ settings }: { settings: AISettings }) {
   const connection = settings.connection ?? null;
   const usable = settings.available === true;
+  const tab = aiTabOf(useSearch({ strict: false }).tab);
+  const navigate = useNavigate();
+  const needsProvider = (
+    <p className="max-w-prose text-ink-dim">
+      Save and test a provider first, under{" "}
+      <Link to="/settings/ai" search={{ tab: "provider" }} className="text-brand-text underline">
+        Provider
+      </Link>
+      .
+    </p>
+  );
   return (
     <div className="flex min-w-0 flex-col gap-6 text-sm">
       <Status settings={settings} />
-      {usable ? (
-        <>
-          <Provider settings={settings} connection={connection} />
-          {connection ? (
-            <>
-              <TestSection settings={settings} connection={connection} />
-              <PreviewSection />
-              <ConsentSection settings={settings} connection={connection} />
-              <SwitchSection settings={settings} />
-              <ProjectsSection />
-              <UsageSection />
-              {/* F5 Step 9 (UR12, AC39): the suggested fix summary, beside F3's usage. */}
-              <Section id="ai-fix-summary" title="Suggested fixes">
-                <FixSummaryPanel />
-              </Section>
+      <Tabs
+        label="AI"
+        items={AI_TABS}
+        selected={tab}
+        onSelect={(id) => void navigate({ to: "/settings/ai", search: { tab: id }, replace: true })}
+      >
+        <div className="flex min-w-0 flex-col gap-6 pt-4">
+          {tab === "setup" ? <SetupChecklist settings={settings} /> : null}
+          {tab === "provider" ? (
+            usable ? (
+              <>
+                <Provider settings={settings} connection={connection} />
+                {connection ? (
+                  <>
+                    <TestSection settings={settings} connection={connection} />
+                    <PreviewSection />
+                    <ConsentSection settings={settings} connection={connection} />
+                    <SwitchSection settings={settings} />
+                    <ProjectsSection />
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <p className="max-w-prose text-ink-dim">AI cannot be set up on this install.</p>
+            )
+          ) : null}
+          {tab === "chat" ? (
+            usable && connection ? (
               <Section id="ai-chat" title="Chat">
                 <ChatSection />
               </Section>
-              {/* F5 Step 3: an owner's consent per repository and folder (FR6). */}
-              <Section id="ai-source-consent" title={CONSENT_WORDS.heading}>
-                <FixConsentPanel />
-              </Section>
-            </>
+            ) : (
+              needsProvider
+            )
           ) : null}
-        </>
-      ) : null}
+          {tab === "fixes" ? (
+            usable && connection ? (
+              <>
+                {/* F5 Step 9 (UR12, AC39): the suggested fix summary. */}
+                <Section id="ai-fix-summary" title="Suggested fixes">
+                  <FixSummaryPanel />
+                </Section>
+                {/* F5 Step 3: an owner's consent per repository and folder (FR6). */}
+                <Section id="ai-source-consent" title={CONSENT_WORDS.heading}>
+                  <FixConsentPanel />
+                </Section>
+              </>
+            ) : (
+              needsProvider
+            )
+          ) : null}
+          {tab === "usage" ? usable && connection ? <UsageSection /> : needsProvider : null}
+        </div>
+      </Tabs>
+      {/* Under every tab: the switch and the setup both stop short of the MCP server. */}
       <Section id="ai-not-covered" title="What this does not cover">
         <p className="max-w-prose text-ink-dim">{MCP_LINE}</p>
       </Section>
@@ -178,9 +240,14 @@ function Status({ settings }: { settings: AISettings }) {
         <ul aria-label="Still needed" className="flex list-disc flex-col gap-1 pl-5 text-ink-dim">
           {(settings.missing ?? []).map((missing) => (
             <li key={missing}>
-              <a className="underline" href={`#${MISSING_ANCHOR[missing]}`}>
+              <Link
+                to="/settings/ai"
+                search={{ tab: tabOfAnchor(MISSING_ANCHOR[missing]) }}
+                hash={MISSING_ANCHOR[missing]}
+                className="underline"
+              >
                 {missingLine(missing)}
-              </a>
+              </Link>
             </li>
           ))}
         </ul>
@@ -336,7 +403,7 @@ function Provider({
           label="Key"
           name="key"
           type="password"
-          autoComplete="off"
+          autoComplete="new-password"
           required={false}
           value={draft.key}
           onChange={set("key")}
@@ -636,15 +703,13 @@ function SwitchSection({ settings }: { settings: AISettings }) {
           disabled={!settings.on && missing.length > 0}
           onClick={() => change.mutate(!settings.on)}
         >
-          {settings.on ? "Turn AI wording off" : "Turn AI wording on"}
+          {settings.on ? "Turn AI off" : "Turn AI on"}
         </Button>
         {!settings.on && missing.length > 0 ? (
           <p className="text-ink-dim">{`Needs: ${missing.map(missingLine).join("; ")}.`}</p>
         ) : null}
       </div>
-      {change.error ? (
-        <InlineFailure title="AI wording was not switched" error={change.error} />
-      ) : null}
+      {change.error ? <InlineFailure title="AI was not switched" error={change.error} /> : null}
     </Section>
   );
 }

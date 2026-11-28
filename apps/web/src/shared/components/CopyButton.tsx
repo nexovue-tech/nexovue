@@ -19,9 +19,12 @@ export function CopyButton({
   value,
   label,
   onUnavailable,
+  showLabel = false,
 }: {
   value: string;
   label: string;
+  /** Say what it copies on the button itself, where nothing beside it does ("Copy all three"). */
+  showLabel?: boolean;
   /**
    * Called when the clipboard write fails, so a caller whose value is hidden can show it
    * for selecting: "Select the value" is no use with nothing visible (F5 FR5a).
@@ -62,7 +65,7 @@ export function CopyButton({
       className="flex shrink-0 items-center gap-1.5 rounded-sm border border-line px-2 py-1 font-mono text-2xs text-ink-dim uppercase tracking-caps hover:border-line-strong hover:text-ink"
     >
       {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
-      {copied ? "Copied" : "Copy"}
+      {copied ? "Copied" : showLabel ? `Copy ${label}` : "Copy"}
     </button>
   );
 }

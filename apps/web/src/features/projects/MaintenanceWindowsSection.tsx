@@ -97,9 +97,7 @@ export function MaintenanceWindowsSection({ projectId }: { projectId: string }) 
   return (
     <section className="flex flex-col gap-4">
       <div className="max-w-2xl">
-        <h3 className="font-medium font-serif text-ink text-base tracking-tight">
-          Maintenance windows
-        </h3>
+        <h3 className="heading-sub">Maintenance windows</h3>
         <p className="mt-1 text-ink-dim text-sm leading-relaxed">
           Planned work that is expected to make checks fail. While a window is in effect, a failing
           check changes no state. Its runs are still recorded, marked as taken during maintenance,

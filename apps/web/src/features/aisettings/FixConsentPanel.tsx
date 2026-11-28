@@ -55,7 +55,8 @@ export interface ReadinessCounts {
 export const CONSENT_WORDS = {
   heading: "Source consent",
   failed: "Source consent could not be loaded",
-  empty: "No repositories connected yet. Set up the Nexovue suggestions App in Connections first.",
+  empty:
+    "No repositories connected yet. Set up the Nexovue suggestions App under Settings, GitHub first.",
   wholeRepository: "the whole repository",
   agree: "Agree",
   confirmAgree: "Agree to send this code",
@@ -65,9 +66,11 @@ export const CONSENT_WORDS = {
     "Require a linked GitHub account with read access to this repository to request a suggested fix, download a patch or read quoted code?",
   yes: "Yes, require it",
   no: "No",
-  requesters: (count: number) => `${count} people can ask for a suggested fix today.`,
-  live: "Agreed",
-  ended: "Ended: the provider, key or model changed. Agree again, or withdraw.",
+  requesters: (count: number) =>
+    `${count} ${count === 1 ? "person" : "people"} can ask for a suggested fix today.`,
+  live: (host: string, model: string) => `Agreed to ${host}, model ${model}.`,
+  ended: (host: string, model: string) =>
+    `Ended: the provider, key or model changed. Agree again, or withdraw. It was to ${host}, model ${model}.`,
   to: (host: string, model: string) => `To ${host}, model ${model}.`,
   neverSent: "Never sent",
   readinessHeading: "How recent findings would reach a suggested fix",
@@ -76,6 +79,11 @@ export const CONSENT_WORDS = {
   elsewhere: (count: number) => `Another service's finding first: ${count}`,
   noLocation: "Services with no code location",
 } as const;
+
+/** One repository folder's agreement, as one sentence. */
+export function consentLine(standing: string, host: string, model: string): string {
+  return standing === "live" ? CONSENT_WORDS.live(host, model) : CONSENT_WORDS.ended(host, model);
+}
 
 const CONSENT_KEY = ["connections", "source-consent"] as const;
 
@@ -153,15 +161,12 @@ function ConsentList() {
       <p className="text-ink-dim text-sm">{CONSENT_WORDS.requesters(data.requesters)}</p>
       {data.repositories.map((repository) => (
         <div key={repository.repository_id} className="flex flex-col gap-2">
-          <h3 className="font-mono text-ink text-sm [overflow-wrap:anywhere]">
-            {repository.repository}
-          </h3>
+          <h3 className="[overflow-wrap:anywhere] heading-sub">{repository.repository}</h3>
           <ul className="flex flex-col gap-1 text-sm">
             {repository.consents.map((consent) => (
               <li key={consent.id} className="[overflow-wrap:anywhere]">
                 {consent.folder_scope ?? CONSENT_WORDS.wholeRepository}:{" "}
-                {consent.standing === "live" ? CONSENT_WORDS.live : CONSENT_WORDS.ended}{" "}
-                {CONSENT_WORDS.to(consent.provider_host, consent.model)}
+                {consentLine(consent.standing, consent.provider_host, consent.model)}
               </li>
             ))}
           </ul>
@@ -282,7 +287,7 @@ export function FixReadinessPanel({ projectId }: { projectId: string | null }) {
   const counts = readiness.data;
   return (
     <div className="flex flex-col gap-2 text-sm" data-testid="fix-readiness">
-      <h3 className="font-medium text-ink">{CONSENT_WORDS.readinessHeading}</h3>
+      <h3 className="heading-sub">{CONSENT_WORDS.readinessHeading}</h3>
       {counts.findings === 0 ? (
         <p className="max-w-prose text-ink-dim">{counts.sentence}</p>
       ) : (

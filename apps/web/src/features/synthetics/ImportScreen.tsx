@@ -182,7 +182,7 @@ function ImportScreenForm() {
       <UnsavedChangesPrompt guard={guard} what="an import preview that has not been created" />
 
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Import checks</h1>
+        <h1 className="heading-page">Import checks</h1>
         <p className="mt-1 max-w-2xl text-ink-dim text-sm">
           Paste a cURL command, or choose an OpenAPI or Postman file. You will see every check it
           would create, the credentials that become secrets and anything skipped — nothing is

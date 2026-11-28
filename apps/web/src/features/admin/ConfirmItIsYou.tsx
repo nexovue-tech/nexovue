@@ -32,9 +32,7 @@ export function ConfirmItIsYou({ onConfirmed }: { onConfirmed: () => void }) {
         aria-label="Confirm it is you"
         className="w-full max-w-lg border border-line bg-surface px-5 py-5"
       >
-        <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
-          Confirm it is you
-        </h2>
+        <h2 className="heading-section">Confirm it is you</h2>
         <p className="mt-1 text-ink-dim text-sm leading-relaxed">
           The platform area needs your password again. It stays open for 30 minutes, and closes when
           you sign out.

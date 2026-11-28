@@ -17,7 +17,7 @@ export function SloBurnChart({ sloId }: { sloId: string }) {
   const line = useSloBurn(sloId);
   return (
     <section aria-label="How fast" className="flex flex-col gap-2 text-sm">
-      <h2 className="font-semibold text-ink">How fast</h2>
+      <h2 className="heading-section">How fast</h2>
       {line.isPending ? (
         <SkeletonRows rows={2} label="Reading how fast" />
       ) : line.isError ? (

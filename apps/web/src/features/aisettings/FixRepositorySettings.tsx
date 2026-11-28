@@ -88,7 +88,7 @@ export function FixRepositorySettings() {
       className="flex flex-col gap-3"
       data-testid="draft-settings"
     >
-      <h3 id="draft-settings" className="font-medium text-ink text-sm">
+      <h3 id="draft-settings" className="heading-sub">
         {DRAFT_SETTINGS_WORDS.heading}
       </h3>
       <p className="max-w-prose text-ink-dim text-sm">{DRAFT_SETTINGS_WORDS.lead}</p>

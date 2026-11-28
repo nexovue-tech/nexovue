@@ -102,7 +102,7 @@ export function FixBrief({
   return (
     <section aria-labelledby="finding-brief" className="flex flex-col gap-1">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <h3 id="finding-brief" className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        <h3 id="finding-brief" className="heading-sub">
           {BRIEF_WORDS.label}
         </h3>
         <p className="min-w-0 max-w-prose text-ink-dim text-sm">{BRIEF_WORDS.warning}</p>
@@ -170,7 +170,7 @@ export function FixSection({
   const heading = line?.heading ?? SUGGESTED_FIX.heading;
   return (
     <section id={SUGGESTED_FIX.anchor} aria-label={heading} className="flex min-w-0 flex-col gap-3">
-      <h2 className="font-medium font-serif text-base text-ink">{heading}</h2>
+      <h2 className="heading-section">{heading}</h2>
       <p role="status" data-testid="fix-status" className="sr-only">
         {latest ? stateWords(latest.state) : ""}
       </p>

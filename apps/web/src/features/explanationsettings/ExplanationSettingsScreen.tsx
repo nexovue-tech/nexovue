@@ -53,7 +53,7 @@ export function ExplanationSettingsScreen() {
             ))}
           </ul>
           <section aria-labelledby="explanations-summary" className="flex flex-col gap-2">
-            <h2 id="explanations-summary" className="font-medium font-serif text-base text-ink">
+            <h2 id="explanations-summary" className="heading-section">
               A summary you can send
             </h2>
             <p className="max-w-prose text-ink-dim text-sm">
@@ -79,7 +79,7 @@ function Rule({ rule }: { rule: RuleCount }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <li className="flex flex-col gap-1">
-      <h2 className="font-medium text-ink text-sm">{RULE_WORDS[rule.rule]}</h2>
+      <h2 className="heading-section">{RULE_WORDS[rule.rule]}</h2>
       <p className="text-ink-dim text-sm">{ruleLine(rule)}</p>
       {rule.stopped ? <p className="text-ink text-sm">{STOP_WORDS.stopped}</p> : null}
       {confirming ? (

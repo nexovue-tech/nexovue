@@ -71,7 +71,7 @@ function NewCheckScreenForm() {
           </Link>{" "}
           / New check
         </p>
-        <h1 className="mt-1 font-semibold font-serif text-ink text-xl tracking-tight">
+        <h1 className="mt-1 heading-page">
           {kind ? `New ${KIND_DESCRIPTIONS[kind].title} check` : "What should this check watch?"}
         </h1>
       </header>

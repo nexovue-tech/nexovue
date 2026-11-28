@@ -23,6 +23,7 @@ import {
   describeErrors,
   describePrecedingDeploy,
   describeServices,
+  exceptionTitle,
   firstWithStacktrace,
   isNewInWindow,
 } from "./error-groups";
@@ -193,7 +194,7 @@ export function ErrorsView({
     <div className="flex h-full min-h-0 flex-col @3xl:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 px-4 pt-5 pb-3">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Errors</h1>
+          <h1 className="heading-page">Errors</h1>
           <p className="mt-1 text-ink-dim text-sm">
             {isPending || isError
               ? `Every exception thrown in ${windowLabel}, grouped, most frequent first.`
@@ -355,7 +356,9 @@ function GroupRow({
         } ${selected ? "bg-raised" : ""}`}
       >
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate font-medium text-ink">{group.exception_type}</span>
+          <span className="truncate font-medium text-ink">
+            {exceptionTitle(group.exception_type, group.message_template)}
+          </span>
           {/* The template is what makes a hundred crashes one row, so a truncated one
               stays readable on hover rather than only inside the panel. */}
           <span className="truncate text-ink-dim text-xs" title={group.message_template}>

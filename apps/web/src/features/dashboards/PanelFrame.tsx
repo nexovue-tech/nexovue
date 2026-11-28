@@ -66,7 +66,7 @@ export function PanelFrame({
       tabIndex={-1}
       className={`col-span-12 rounded-sm border border-line p-3 ${span}`}
     >
-      <h2 id={headingId} className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h2 id={headingId} className="heading-section">
         {service === undefined ? (
           title
         ) : (

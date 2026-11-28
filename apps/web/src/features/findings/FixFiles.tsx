@@ -41,14 +41,14 @@ export function SourceSection({
 }) {
   const { latest, offer } = source;
   useEffect(() => {
-    const title = sourceTitle(latest?.state);
+    const title = sourceTitle(latest?.state, latest?.draft?.pull_request_state);
     if (title === null) return;
     const before = document.title;
     document.title = title;
     return () => {
       document.title = before;
     };
-  }, [latest?.state]);
+  }, [latest?.state, latest?.draft?.pull_request_state]);
   return (
     <div className="flex min-w-0 flex-col gap-3" data-testid="source-fix">
       {source.support_view_note ? (
@@ -168,7 +168,7 @@ function errorDetail(error: unknown): string | undefined {
 function SourceState({ findingId, fix, now }: { findingId: string; fix: SourceFix; now: number }) {
   return (
     <div className="flex min-w-0 flex-col gap-2" data-testid="source-state">
-      <h3 className="font-medium text-ink text-sm">{fix.heading}</h3>
+      <h3 className="heading-sub">{fix.heading}</h3>
       {fix.sentence ? <p className="max-w-prose text-ink text-sm">{fix.sentence}</p> : null}
       {fix.files ? <FileList findingId={findingId} fix={fix} files={fix.files} now={now} /> : null}
       {fix.proposal ? <Written proposal={fix.proposal} now={now} /> : null}

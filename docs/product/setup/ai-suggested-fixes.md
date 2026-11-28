@@ -1,15 +1,11 @@
 # Suggested fixes from AI
 
-> **Draft for the founder's approval.** Every sentence on this page is new customer wording
-> (foundation decision 2), listed in F5's status under *Wording waiting for the founder*.
-> Nothing here is published until he approves it.
-
 A finding can carry a suggested change to your code, written by the AI provider you chose and
 checked against Nexovue's published rules before you see it. It is a suggestion: Nexovue does
 not compile it, run it or merge it, and a person must review it as they would an outside
-contribution. **Provided as is, without warranty: you review and you merge.** The terms are in
-`docs/legal/suggested-fixes.md`; an owner agrees to them when
-agreeing to send a repository's code.
+contribution. **Provided as is, without warranty: you review and you merge.** The terms ship
+with Nexovue as its terms for suggested fixes; an owner agrees to them when agreeing to send a
+repository's code.
 
 **Where it applies.** On self-hosted installs, for GitHub.com repositories mapped to a service. Automatic file selection needs a newly appeared error with a stack, and adds files that the top of the stack imports from the same folder; otherwise a person names up to 5 files. The AI may ask for a few more files, and they go only if a person agrees. A draft pull request also needs a deploy of this service as the likely cause; otherwise the same change can be downloaded as a patch. Where Nexovue cannot read the code, a general suggestion with example code may be offered from the finding's facts alone, when there is a likely cause or a recognised error type; Nexovue has not seen that code. Other findings get what changed and the brief.
 
@@ -32,10 +28,11 @@ Each step needs more from you than the one before, and you can stop at any of th
 **Opening a draft pull request, and running CI on one, are on in this version,** by the
 founder's go of 28 November 2026, recorded in code (`nexovue_platform/fixes/write_gate.py`).
 The go followed the safety evaluation: attacks that try to steer a suggestion found no way
-past Nexovue's checks in 204 trials on **Claude Sonnet 5.5**, the model it names
-(`docs/research/f5-evaluation-2026-11.md`). That
+past Nexovue's checks in 204 trials on **Claude Sonnet 5.5**, the model it names (Nexovue's
+evaluation report of November 2026). That
 proves those trials only, not that any model resists every attack, and every attack still
-reached a person: the person's review is the protection. An install built with write access
+reached a person: the person's review is the protection. Drafts are offered whatever model your
+connection uses; with any model other than Claude Sonnet 5.5, nothing has been evaluated. An install built with write access
 off says, where the page would offer a draft:
 
 > Opening a draft pull request is switched off in this version of Nexovue, until its safety evaluation is done. Download the patch instead.

@@ -8,10 +8,9 @@
 > stack's own coded faults (`tools/otel-demo/upstream/src/payment/charge.js`) are flags, not
 > bugs in code, so they prove nothing here (spec D30).
 >
-> **Write access is off in code** (`write_gate.WRITE_ACCESS_GO` is None, ADR-097) until the
-> founder's written go at T6.5, so the demo ends at the patch. Every sentence the audience
-> sees is still waiting for the founder's wording approval (`status.md`, *Wording waiting for
-> the founder*).
+> **Write access is on** since the founder's go at T6.5 (2026-11-28, `write_gate.py`, ADR-097);
+> the rehearsal of 2026-11-22 ended at the patch, before it. The founder approved the wording
+> the audience sees on 2026-11-28.
 
 **Who runs it.** The scenes were rehearsed on 2026-11-22 against the **simulated GitHub and fake
 AI providers** (below). Running it for real, on a scratch GitHub repository with a real model, is

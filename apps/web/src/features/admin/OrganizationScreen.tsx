@@ -57,9 +57,7 @@ export function OrganizationScreen({ orgId }: { orgId: string }) {
         <Link to="/admin" className="text-ink-dim text-sm hover:text-ink">
           All organizations
         </Link>
-        <h1 className="mt-2 font-semibold font-serif text-ink text-xl tracking-tight">
-          {organization.name}
-        </h1>
+        <h1 className="mt-2 heading-page">{organization.name}</h1>
         <p className="text-ink-dim text-sm">
           <span className="font-mono">{organization.slug}</span> · {organization.region} · plan{" "}
           {usage?.plan.name ?? organization.plan} · created{" "}
@@ -98,7 +96,7 @@ export function OrganizationScreen({ orgId }: { orgId: string }) {
 function Panel({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section aria-label={label} className="border border-line bg-surface px-4 py-3">
-      <h2 className="font-medium font-serif text-base text-ink">{label}</h2>
+      <h2 className="heading-section">{label}</h2>
       <div className="mt-2">{children}</div>
     </section>
   );
@@ -114,7 +112,7 @@ function Panel({ label, children }: { label: string; children: ReactNode }) {
 function Members({ orgId, members }: { orgId: string; members: OrganizationPage["members"] }) {
   return (
     <section aria-label="Members" className="mt-6">
-      <h2 className="font-medium font-serif text-base text-ink">Members</h2>
+      <h2 className="heading-section">Members</h2>
       <div className="mt-2 flex items-center gap-3 border-line border-b px-1 pb-1 font-mono text-2xs text-ink-dim uppercase tracking-caps">
         <span className="min-w-0 flex-1">Member</span>
         <span className="hidden w-64 shrink-0 md:block">Email</span>
@@ -176,7 +174,7 @@ function MemberRow({
 function Projects({ projects }: { projects: OrganizationPage["projects"] }) {
   return (
     <section aria-label="Projects" className="mt-6">
-      <h2 className="font-medium font-serif text-base text-ink">Projects</h2>
+      <h2 className="heading-section">Projects</h2>
       <div className="mt-2 flex items-center gap-3 border-line border-b px-1 pb-1 font-mono text-2xs text-ink-dim uppercase tracking-caps">
         <span className="min-w-0 flex-1">Project</span>
         <span className="hidden w-48 shrink-0 sm:block">Slug</span>

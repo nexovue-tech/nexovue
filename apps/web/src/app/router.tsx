@@ -730,6 +730,9 @@ const settingsAIRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/ai",
   component: AISettingsScreen,
+  // The open tab is in the address, so a link and the back button land on it.
+  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
+    typeof search.tab === "string" ? { tab: search.tab } : {},
 });
 
 // F4 T5.3 (FR32, AC92): runbooks, only where AI may be offered; a chat step links here with

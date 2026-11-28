@@ -156,7 +156,7 @@ export function ChannelForm({
           label={SECRET_LABEL[draft.kind] ?? ""}
           name="channel-secret"
           type="password"
-          autoComplete="off"
+          autoComplete="new-password"
           value={draft.secret}
           onChange={(secret) => update({ secret })}
           error={problems.secret}

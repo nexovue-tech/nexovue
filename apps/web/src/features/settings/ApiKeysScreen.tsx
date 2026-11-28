@@ -101,7 +101,7 @@ export function ApiKeysScreen() {
 
       <div className="shrink-0 pt-6 pb-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Server keys</h2>
+          <h2 className="heading-section">Server keys</h2>
           <SecretBadge />
         </div>
         <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
@@ -187,9 +187,7 @@ function SecretBadge() {
 function MintedKey({ created, onDismiss }: { created: ApiKeyCreated; onDismiss: () => void }) {
   return (
     <section className="mb-4 border border-brand-line bg-brand-surface px-4 py-3">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
-        {created.api_key.name} is ready
-      </h2>
+      <h2 className="heading-section">{created.api_key.name} is ready</h2>
       <p className="max-w-3xl mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
 
       <div className="mt-3 flex items-center gap-3 border border-line bg-surface px-3 py-2">

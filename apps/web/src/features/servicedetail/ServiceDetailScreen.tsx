@@ -172,6 +172,12 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
               zone={settings.data?.timezone}
             />
             <TargetsLine projectId={projectId} serviceName={serviceName} />
+          </>
+        )
+      }
+      dashboards={
+        projectId === undefined ? null : (
+          <>
             <DashboardsShowingThisService
               service={serviceName}
               projectId={projectId}
@@ -287,6 +293,8 @@ export interface ServiceDetailViewProps {
   detection?: ReactNode;
   /** Whether the service is profiled, beside its alerts (F17, FR11). */
   profiling?: ReactNode;
+  /** The dashboards showing it and the way to start one, after everything else (sketch E). */
+  dashboards?: ReactNode;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -308,6 +316,7 @@ export function ServiceDetailView({
   alerts,
   detection,
   profiling,
+  dashboards,
 }: ServiceDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -353,9 +362,25 @@ export function ServiceDetailView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ServiceHeader serviceName={serviceName} windowLabel={windowLabel} state={state} row={row} />
-      {alerts ? <div className="px-4">{alerts}</div> : null}
-      {detection ? <div className="px-4">{detection}</div> : null}
-      {profiling ? <div className="px-4">{profiling}</div> : null}
+      {/* The service's state in one band: alerts, detection, profiling (approved sketch E,
+          2026-11-28). A part with nothing to say takes no cell. */}
+      {alerts || detection || profiling ? (
+        <div className="shrink-0 px-4 pb-4">
+          <div className="grid border border-line bg-surface @3xl:auto-cols-fr @3xl:grid-flow-col">
+            {[alerts, detection, profiling].map((part, index) =>
+              part ? (
+                <div
+                  // biome-ignore lint/suspicious/noArrayIndexKey: three fixed slots, never reordered.
+                  key={index}
+                  className={`min-w-0 px-4 py-1 empty:hidden [&>section]:border-b-0 ${index > 0 ? "border-line border-t @3xl:border-t-0 @3xl:border-l" : ""}`}
+                >
+                  {part}
+                </div>
+              ) : null,
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {state === "pending" ? (
         <div className="px-4">
@@ -368,12 +393,17 @@ export function ServiceDetailView({
             error={error}
             onRetry={onRetry}
           />
+          {dashboards ? <div className="pt-8 pb-10">{dashboards}</div> : null}
         </div>
       ) : state === "silent" ? (
-        <EmptyState
-          title="Nothing reported in this window"
-          detail={describeSilence(serviceName, windowLabel)}
-        />
+        <>
+          <EmptyState
+            title="Nothing reported in this window"
+            detail={describeSilence(serviceName, windowLabel)}
+          />
+          {/* A quiet service can still have a dashboard to open or start (FR41). */}
+          {dashboards ? <div className="px-4 pb-10">{dashboards}</div> : null}
+        </>
       ) : (
         <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto">
           <div ref={watchContentHeight}>
@@ -423,6 +453,8 @@ export function ServiceDetailView({
                 </div>
               </>
             ) : null}
+            {/* Dashboards last: a way on from this service, not part of its state (sketch E). */}
+            {dashboards ? <div className="px-4 pt-8 pb-10">{dashboards}</div> : null}
           </div>
         </div>
       )}
@@ -459,9 +491,7 @@ function ServiceHeader({
       </Link>
 
       <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-        <h1 className="min-w-0 break-all font-semibold font-serif text-ink text-xl tracking-tight">
-          {serviceName}
-        </h1>
+        <h1 className="min-w-0 break-all heading-page">{serviceName}</h1>
         {/* The service travels with the link (IA1). A person who has found the
             failing service should not have to type its name again on the next
             screen — and each destination spells the parameter differently, which
@@ -552,7 +582,7 @@ const SCOPED_LINK_CLASS = "text-brand-text underline-offset-2 hover:underline";
 function SectionHeading({ title, caption }: { title: string; caption: string }) {
   return (
     <div className="px-4 pt-6 pb-2">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">{title}</h2>
+      <h2 className="heading-section">{title}</h2>
       <p className="mt-0.5 text-ink-dim text-sm">{caption}</p>
     </div>
   );
@@ -580,7 +610,7 @@ function TrendSection({
         caption={
           bucketCount === 0
             ? "No buckets in this window — the rollup has nothing for this service yet."
-            : `Request rate, failure share and duration across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units — and three lines on the last, because the shape of a distribution is p50, p95 and p99 together.${spans.length > 0 ? " Shaded stretches are findings." : ""}`
+            : `Request rate, failure share and duration, in ${bucketCount} ${bucketCount === 1 ? "step" : "steps"} over the window.${spans.length > 0 ? " Shaded stretches are findings." : ""}`
         }
       />
       {bucketCount > 0 ? (
@@ -621,7 +651,7 @@ function TrendPanel({
 }) {
   return (
     <section className="rounded-sm border border-line p-3">
-      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{plot.label}</h3>
+      <h3 className="heading-sub">{plot.label}</h3>
       {plot.flatAtZero ? (
         // Held at the chart's own height so a row of three panels stays level.
         <p className="flex items-center text-ink-dim text-sm" style={{ height: CHART_HEIGHT }}>
@@ -663,7 +693,7 @@ function HeatmapSection({
     <>
       <SectionHeading
         title="Where the time went"
-        caption={`The shape of ${serviceName}'s latency in each bucket, from the ${heatmap.metric_name} histogram it reports. Each column is scaled to its own traffic, so a tail is visible in a quiet hour as well as a busy one.`}
+        caption={`How ${serviceName}'s requests spread across response times, from its ${heatmap.metric_name} histogram. A more solid cell holds more of that step's requests.`}
       />
       <div className="px-4">
         <DurationHeatmap
@@ -761,7 +791,7 @@ function DependencyList({
 
   return (
     <section>
-      <h3 className="flex items-center gap-1.5 border-line border-b pb-1 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h3 className="flex items-center gap-1.5 border-line border-b pb-1 heading-sub">
         <Arrow aria-hidden size={11} className="shrink-0 text-solid" />
         {title}
       </h3>

@@ -22,7 +22,16 @@
 - **Suggested fixes (F5).** From the files you confirm, your AI provider writes a change that
   nexovue checks against fixed rules before you see it. Download it as a patch, or open a draft
   pull request on GitHub. **Provided as is, without warranty: you review and you merge.**
-- **SLO tracking (F19)** and **dashboards (F20).**
+- **SLO tracking (F19)** and **dashboards (F20).** A burn that turns critical pages on PagerDuty,
+  even when it first joined another problem's warning alert.
+
+**A clearer console.** A finding opens on a strip of the five steps from the finding to a pull
+request, with the one next step; the suggested fix sits on the second screen, not the last. The
+finding list shows each finding's case, issue, fix and pull request in small. Settings has one
+**AI** page that opens on a setup checklist, and GitHub's two Apps have their own page. The
+sidebar is grouped by what you came to do (Respond, Investigate, Watch), counts open findings, and
+keeps your account, the documentation and the theme in one row. Headings, buttons and both menus
+follow one set of sizes.
 
 ## AI: what it works with
 
@@ -32,13 +41,14 @@
 - **Suggested fixes and draft pull requests were evaluated on Claude Sonnet 5.5:** attacks that
   try to steer a suggestion found no way past nexovue's checks in 204 trials
   (`docs/research/f5-evaluation-2026-11.md`). That proves those trials only; a person's review
-  is the protection.
+  is the protection. Drafts are not limited to that model: with any other, nothing has been
+  evaluated.
 - **Small local models:** chat needs a model that calls tools reliably. With a 7B local model
   (Qwen 2.5 7B) chat refused safely instead of answering, and suggested fixes were rarely correct.
 
 ## Before you upgrade
 
-- Database migrations run on start (up to `0086`). Back up first (`docs/self-hosting/backup.md`).
+- Database migrations run on start (up to `0087`). Back up first (`docs/self-hosting/backup.md`).
 - **Draft pull requests write to GitHub.** Before an owner allows drafts for a repository, read
   *Before you allow drafts: protect your branches* in the suggested-fix setup page. A public
   repository needs an admin's separate allowance.
@@ -52,7 +62,6 @@ a hosted service, and any claim that a model is "supported" beyond the evaluatio
 
 ## Known issues
 
-- After *Delete this branch*, the button stays offered; pressing it again does nothing harmful.
-- Two small wordings: chat says "There is no data in this project" when only the asked-about
-  service has none; the suggested fix says "An admin sets it up" when AI was only switched off.
+- One small wording: chat says "There is no data in this project" when only the asked-about
+  service has none.
 - Chat's number check can flag a number taken from the question itself.

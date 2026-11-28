@@ -30,7 +30,7 @@ export function DetectionSection({ projectId }: { projectId: string }) {
   return (
     <section className="flex flex-col gap-4">
       <div>
-        <h3 className="font-medium font-serif text-base text-ink tracking-tight">Detection</h3>
+        <h3 className="heading-sub">Detection</h3>
         <p className="mt-1 max-w-prose text-ink-dim text-sm leading-relaxed">
           How far a service must move from its own normal before it is a finding, and the clock its
           days and weeks follow.

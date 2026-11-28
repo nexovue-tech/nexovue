@@ -90,7 +90,7 @@ function MonthItem({ month, months }: { month: SloMonth; months: SloMonths }) {
   return (
     <li data-month={month.month} className="flex flex-col gap-1 py-3 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-semibold text-ink">
+        <h3 className="heading-sub">
           {monthName(month.month)} · {RESULT_WORDS[month.result]}
         </h3>
         <CopyButton value={copied} label={monthName(month.month)} />

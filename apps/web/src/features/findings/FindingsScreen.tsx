@@ -1,6 +1,6 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
@@ -39,11 +39,13 @@ import {
   useProjectSummary,
   useResolveFromFeed,
 } from "./api";
+import { feedChips } from "./chain";
 import { Segments } from "./ExplanationSection";
 import type { FeedChoice } from "./feed-filter";
 import { ACROSS_PROJECTS, FEED_CHOICES, NO_CASES, parseFeedSearch } from "./feed-filter";
 import { caseEndingSentence, caseSentence } from "./finding-page";
 import { CLOSED_AS } from "./finding-words";
+import { GetStarted } from "./GetStarted";
 import { orderFindings } from "./ordering";
 
 /**
@@ -141,11 +143,16 @@ export function FindingsScreen() {
       checks={checks.data}
       detection={detection.data}
       zone={settings.data?.timezone}
+      getStarted={
+        <GetStarted projectId={projectId} servicesReporting={summary.data?.totals?.service_count} />
+      }
     />
   );
 }
 
 export interface FindingsViewProps {
+  /** A new organization's first steps, above the feed (sketch H); a slot, so the view stays pure. */
+  getStarted?: ReactNode;
   findings: readonly FeedFinding[];
   /** A case filter (FR22), or null for the plain feed. */
   caseFilter?: CaseFilter | null;
@@ -179,6 +186,7 @@ export interface FindingsViewProps {
 }
 
 export function FindingsView({
+  getStarted,
   findings,
   caseFilter = null,
   onChoose = () => {},
@@ -216,7 +224,7 @@ export function FindingsView({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Findings</h1>
+        <h1 className="heading-page">Findings</h1>
         <p className="mt-1 max-w-prose text-ink-dim text-sm">
           Things that need you, newest first. Anything still wrong or still being worked comes
           before anything finished.
@@ -274,13 +282,19 @@ export function FindingsView({
           {/* Above everything in the feed, findings included: "detection is not
               running" matters most when the list looks quiet, and still matters when
               it does not. The muted list says nothing about the system, so not there. */}
+          {showingMuted ? null : getStarted}
           {detectionLine && !showingMuted ? (
-            <section className="shrink-0 border-line border-t px-4 py-4">
+            // A status line, not a heading-sized banner (UX review, 2026-11-28).
+            <section className="shrink-0 border-line border-t px-4 py-2">
               <h2
-                className={`font-medium font-serif text-lg tracking-tight ${
-                  detectionLine.wrong ? "text-critical-text" : "text-ink"
+                className={`flex items-center gap-2 text-sm ${
+                  detectionLine.wrong ? "font-medium text-critical-text" : "text-ink-dim"
                 }`}
               >
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 shrink-0 rounded-full ${detectionLine.wrong ? "bg-critical-solid" : "bg-line-strong"}`}
+                />
                 {detectionLine.title}
               </h2>
             </section>
@@ -348,11 +362,7 @@ function SummaryState({
 
   return (
     <section className="shrink-0 border-line border-t px-4 py-6">
-      <h2
-        className={`font-medium font-serif text-lg tracking-tight ${
-          headline.wrong ? "text-critical-text" : "text-ink"
-        }`}
-      >
+      <h2 className={`heading-section ${headline.wrong ? "text-critical-text" : ""}`}>
         {headline.title}
       </h2>
 
@@ -469,7 +479,7 @@ const TEXT_LINK = "font-medium text-brand-text underline-offset-2 hover:underlin
 function FeedPanel({ plot }: { plot: OverviewPlot }) {
   return (
     <section className="rounded-sm border border-line p-3">
-      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{plot.label}</h3>
+      <h3 className="heading-sub">{plot.label}</h3>
       {plot.flatAtZero ? (
         // Held at the chart's own height so the row of three stays level.
         <p className="flex items-center text-ink-dim text-sm" style={{ height: CHART_HEIGHT }}>
@@ -705,7 +715,7 @@ function CaseRow({ finding, context }: { finding: FeedFinding; context: RowConte
         />
       </span>
       <div className="min-w-0 flex-1">
-        <h3 className="text-ink text-sm">
+        <h3 className="heading-sub">
           <FindingLink finding={finding} filter={context.caseFilter} />
         </h3>
         <p className="mt-1 max-w-prose text-ink text-sm">{sentence}</p>
@@ -779,32 +789,67 @@ function CaseRow({ finding, context }: { finding: FeedFinding; context: RowConte
  * One whose case is still being worked keeps the full case row, in its own tier (FR21),
  * and an open finding with a case states both questions under its title (FR23).
  */
+
+/** The row's chain in small (drawing C); empty, it takes no room. */
+function ChainChips({ finding }: { finding: FeedFinding }) {
+  const chips = feedChips({ caseState: finding.case_state, chain: finding.chain });
+  if (chips.length === 0) return null;
+  return (
+    <ul aria-label="Where it stands" className="flex flex-wrap justify-end gap-1.5">
+      {chips.map((chip) => (
+        <li
+          key={chip.label}
+          className={`whitespace-nowrap rounded-full border px-2 font-medium text-2xs leading-5 ${
+            chip.tone === "next" ? "border-brand-line text-brand-text" : "border-line text-ink-dim"
+          }`}
+        >
+          {chip.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Every row's frame and its time column, so open and closed rows line up (drawing C). */
+const ROW = "flex gap-3 border-line-subtle border-b px-4 py-3";
+const TIME = "w-16 shrink-0 text-right font-mono text-2xs text-ink-dim";
+
 function FindingRow({ finding, context }: { finding: FeedFinding; context: RowContext }) {
   if (finding.state === "closed" && finding.case_state === "investigating") {
     return <CaseRow finding={finding} context={context} />;
   }
   if (finding.state === "closed") {
+    // The same parts in the same places as an open row (approved drawing C), quieter.
     return (
-      <div className="border-line-subtle border-b px-4 py-2 text-sm">
-        <p className="truncate text-ink-dim">
-          <FindingLink finding={finding} filter={null} />
-        </p>
-        <p className="mt-0.5 text-2xs text-ink-dim">
-          {finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed"}
-          {" · "}
-          <span className="font-mono">
+      <article className={ROW}>
+        <span className="flex w-2 shrink-0 justify-center pt-1.5">
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-line-strong" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-medium text-ink-dim text-sm [overflow-wrap:anywhere]">
+            <FindingLink finding={finding} filter={null} />
+          </h3>
+          <p className="mt-0.5 font-mono text-2xs text-ink-dim">
+            {finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed"}
+            {" · "}
+            {subjectOf(finding)}
+            <PartOfACase finding={finding} />
+          </p>
+        </div>
+        <div className="flex shrink-0 items-start gap-3">
+          <ChainChips finding={finding} />
+          <span className={TIME}>
             {finding.closed_at ? formatRelativeTime(finding.closed_at) : UNKNOWN}
           </span>
-          <PartOfACase finding={finding} />
-        </p>
-      </div>
+        </div>
+      </article>
     );
   }
 
   const subject = subjectOf(finding);
 
   return (
-    <article className="flex gap-3 border-line-subtle border-b px-4 py-3">
+    <article className={ROW}>
       <span className="flex w-2 shrink-0 justify-center pt-1.5">
         <span
           aria-hidden="true"
@@ -816,7 +861,7 @@ function FindingRow({ finding, context }: { finding: FeedFinding; context: RowCo
 
       <div className="min-w-0 flex-1">
         {/* The title is the product: a sentence, not a metric expression. */}
-        <h3 className="text-ink text-sm">
+        <h3 className="heading-sub">
           <FindingLink finding={finding} filter={null} />
         </h3>
         {finding.likely_cause_sentence ? (
@@ -844,13 +889,14 @@ function FindingRow({ finding, context }: { finding: FeedFinding; context: RowCo
       </div>
 
       <div className="flex shrink-0 items-start gap-3">
+        <ChainChips finding={finding} />
         <Sparkline
           points={finding.trend}
           max={Math.max(...finding.trend, 1)}
           tone={finding.severity === "critical" ? "critical" : "series"}
           label={`How ${subject} has been trending.`}
         />
-        <span className="font-mono text-2xs text-ink-dim">
+        <span className={TIME}>
           {finding.service_muted_until !== null
             ? "Muted · "
             : finding.service_snoozed_until !== null

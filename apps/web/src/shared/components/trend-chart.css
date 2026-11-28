@@ -13,3 +13,18 @@
 .nv-trend-chart .uplot {
   width: 100%;
 }
+
+/* A legend key is a short line in the series' colour and dash, as the chart draws it, not
+   uPlot's outlined square, which read as a checkbox (UX review, 2026-11-28). uPlot writes the
+   marker's border colour and style inline from the series; only its shape changes here. */
+.nv-trend-chart .u-legend .u-marker {
+  width: 14px;
+  height: 0;
+  margin-right: 6px;
+  border-top-width: 0 !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+  border-bottom-width: 2px !important;
+  background: transparent !important;
+  vertical-align: middle;
+}

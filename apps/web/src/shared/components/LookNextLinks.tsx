@@ -23,7 +23,7 @@ export function LookNextLinks({
 }) {
   return (
     <nav aria-labelledby={headingId} className="flex flex-col gap-1">
-      <h3 id={headingId} className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h3 id={headingId} className="heading-sub">
         Look next
       </h3>
       <ul className="flex flex-col gap-x-4 md:flex-row md:flex-wrap">

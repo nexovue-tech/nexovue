@@ -70,7 +70,7 @@ function Target({ view, zone }: { view: SloView; zone: string }) {
             Reliability targets
           </Link>
         </p>
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{view.name}</h1>
+        <h1 className="heading-page">{view.name}</h1>
         <p className="text-ink-dim text-sm">{view.label}</p>
       </header>
       <div className="grid gap-6 @3xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
@@ -126,7 +126,7 @@ function WhoIsTold({ view, zone }: { view: SloView; zone: string }) {
   const canRoute = useCan("operate_alerts");
   return (
     <section aria-label="Who is told" className="flex flex-col gap-1 text-sm">
-      <h2 className="font-semibold text-ink">Who is told</h2>
+      <h2 className="heading-section">Who is told</h2>
       <p className="max-w-prose text-ink">{toldSentence(view.told, zone)}</p>
       {view.told.alerting ? null : canRoute ? (
         <p>
@@ -174,7 +174,7 @@ function Measured({ view, zone }: { view: SloView; zone: string }) {
   const coverage = figures.coverage === null ? "—" : `${Math.floor(figures.coverage * 100)}%`;
   return (
     <section aria-label="What was measured" className="flex flex-col gap-2 text-sm">
-      <h2 className="font-semibold text-ink">What was measured</h2>
+      <h2 className="heading-section">What was measured</h2>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
         <dt className="text-ink-dim">Figure</dt>
         <dd className="font-mono text-ink">

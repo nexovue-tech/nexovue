@@ -69,7 +69,7 @@ export function SyntheticsScreen() {
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="flex shrink-0 flex-wrap items-end justify-between gap-3 px-4 pt-5 pb-3">
         <div className="min-w-0">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Synthetics</h1>
+          <h1 className="heading-page">Synthetics</h1>
           <p className="mt-1 text-ink-dim text-sm">
             What we check for you, from outside: whether it is up, since when, and how it behaved in{" "}
             {windowPhrase}.

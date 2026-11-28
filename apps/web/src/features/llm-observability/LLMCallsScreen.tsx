@@ -161,7 +161,7 @@ export function LLMCallsView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">LLM calls</h1>
+        <h1 className="heading-page">LLM calls</h1>
         <p className="mt-1 text-ink-dim text-sm">
           {narrowed
             ? `The model calls matching this search, of everything reported over ${windowLabel}.`
@@ -331,7 +331,7 @@ function CallsTable({ calls }: { calls: readonly LLMCallSummary[] }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col border-line border-t px-4">
       <div className="flex items-baseline justify-between py-2">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        <h2 className="heading-section">
           {formatCount(calls.length)} {plural(calls.length, "group")}
         </h2>
       </div>

@@ -90,7 +90,7 @@ WITHHELD_RULE_WORDS: Final[dict[str, str]] = {
 
 # Why rung 2b is not offered, in FR9's order (the first version, plan T2b.7).
 ELIGIBILITY_SENTENCES: Final[dict[str, FixSentence]] = {
-    "ai_off": FixSentence("AI is off. An admin sets it up, then an owner agrees.", None),
+    "ai_off": FixSentence("AI is off. An admin can turn it on in Settings, under AI.", None),
     "project_opted_out": FixSentence(
         "This project is opted out of AI. An admin can change that.",
         "This project is opted out of AI.",

@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-**Implemented, 2026-11-27; live-tested 2026-11-28.** Every plan step is built and on `feature/phase-2` (pull request #25). The live test with Claude Sonnet 5.5 and real GitHub passed E2 to E5, including a real draft pull request; AC21 passed and the founder gave the T6.5 go on 2026-11-28, so write access is on. Not yet **Verified**: the founder's review of PR #25 and the blockers in `readiness.md` are owed; not **Released**.
+**Implemented, 2026-11-27; live-tested 2026-11-28.** Every plan step is built and on `feature/phase-2` (pull request #25). The live test with Claude Sonnet 5.5 and real GitHub passed E2 to E5, including a real draft pull request; AC21 passed and the founder gave the T6.5 go on 2026-11-28, so write access is on. **Founder, 2026-11-28:** drafts are offered for **any model**, with no restriction to the evaluated one, and write access stays on from now; Run CI stays as is (the live test showed it pushes; no server test); the customer page, W1–W14 and the release notes are approved; A14 ships as a known issue. Not yet **Verified**: the founder's review of PR #25 and the blockers in `readiness.md` are owed; not **Released**.
 
 **Step 9 built 2026-11-22, committed; T6.5 still not given.** Built in `wt/f5s9`, on 4ad5d47 (`feature/phase-2`): the sweep's figures and its stalled alert (migration 0085), the admin summary with notices (AC39), NFR2's click timing, the customer's page and the written demo (both drafts for your wording approval), the rivals re-read dated 2026-11-22, the architecture documents and ADR-103 to ADR-106; and from the hardening pass, `fix-section.spec.ts` run and the Docker restore release check run and passing. **Write access stays off in code** (`write_gate.WRITE_ACCESS_GO` is None). T9.4's timing, T9.6's six unreachable rivals and OneUptime install, and T9.7's real run are the founder's (*Step 9*, below).
 
@@ -20,6 +20,8 @@
 The CodeQL fix of 2026-11-23 (below) was committed in its first round (bd072dc); its second round awaits the founder's review and commit. Before it, one change awaits the founder's review and the coordinator's commit: **Step 9** (`F5 Step 9: words, operations, launch, and the hardening pass's runs`; migration 0085, ADR-103 to ADR-106; its files are listed under *Step 9*, below). Then **the wording list** (*Wording waiting for the founder*, below), open decisions 119 to 130, and those still open from earlier steps. The real runs (T6.1, T6.3, T6.4), the go (T6.5), T7.11, T8.4, T9.4 and T9.7's real run are the founder's, after Phase 2.
 
 ## Wording waiting for the founder
+
+**Approved by the founder, 2026-11-28: W1 to W14 and the customer's page (open decision 125 answered); the page's draft banner is removed.**
 
 **Every piece of new user-facing wording F5 introduced that needs your approval (foundation decision 2), in one list.** "New" means words the spec did not fix itself; sentences the approved spec states word for word (FR24's confirm sentences, the label "Example pattern, not your code…", the source sentence) are already yours and are not repeated. Each line names where the words live in code, so one reading can approve or change them. **Recommendation:** read them on the screens with the demo (`docs/product/fix-demo.md`) and on the customer's page, then answer per group.
 

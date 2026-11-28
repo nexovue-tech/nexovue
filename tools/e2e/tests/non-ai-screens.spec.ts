@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
 import { newAccount, signUp } from "./support/accounts";
+import { paceReads } from "./support/paced-reads";
 
 const WEB = new URL("../../../apps/web/src/", import.meta.url);
 
@@ -60,8 +61,12 @@ test("every screen that is not AI's opens with no failure block, no empty page a
     }
   });
 
+  // Paced to one person's reads, as `layout-widths.spec.ts` is: unpaced, the walk outran the
+  // per-person read limit and a screen read as empty under its 429 (2026-11-28).
+  const readsAllowed = paceReads(page);
   await signUp(page, newAccount());
   for (const path of PATHS) {
+    await readsAllowed();
     current = path;
     await page.goto(path);
     await expect(page.locator("main")).toBeVisible();

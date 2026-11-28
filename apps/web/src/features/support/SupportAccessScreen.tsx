@@ -116,7 +116,7 @@ function Access({ grantedUntil }: { grantedUntil: string | null }) {
 function Views({ views }: { views: SupportAccessState["views"] }) {
   return (
     <section aria-label="Support views">
-      <h2 className="font-medium font-serif text-base">When support viewed</h2>
+      <h2 className="heading-section">When support viewed</h2>
       {views.length === 0 ? (
         <EmptyState
           headingLevel={3}

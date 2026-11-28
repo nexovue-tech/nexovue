@@ -713,7 +713,7 @@ export function PanelPicker({
       </div>
 
       <section aria-label="Preview" className="flex flex-col gap-2">
-        <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Preview</h3>
+        <h3 className="heading-sub">Preview</h3>
         <Preview
           applied={applied}
           pending={ask !== undefined && preview.isFetching}

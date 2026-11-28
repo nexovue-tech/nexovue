@@ -249,9 +249,7 @@ export function CheckForm({
           aria-label="Run now result"
           className="min-w-0 border-line border-t pt-4"
         >
-          <h3 className="mb-2 font-mono text-2xs text-ink-dim uppercase tracking-caps">
-            Run now — nothing was recorded
-          </h3>
+          <h3 className="mb-2 heading-sub">Run now — nothing was recorded</h3>
           {runNow.data ? (
             <EvidenceView key={runNow.data.run_id} evidence={runNow.data} />
           ) : (

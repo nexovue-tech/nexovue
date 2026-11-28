@@ -98,7 +98,20 @@ Each row: what is done, what must be seen, and the result. "Not run" is a result
 
 **Not a defect:** two tests reported flaky were run with plain `-n 6`, which splits one file across workers; with the project's `--dist loadfile` (CI and `just test-py`) the suite passed three times in a row (550 tests). **Still open:** A5's "the consent sentence names the old model" was not reproduced, since the sentence reads the saved connection.
 
+## Founder decisions, 2026-11-28
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Offer drafts only for the model that passed the evaluation (Claude Sonnet 5.5)? | **No restriction.** Drafts are offered for any model; write access stays on from now. The evaluation names the one model it proved; the customer page and the release notes say so |
+| 2 | F5 *Run CI*: test that CI starts on the server? | **Kept as is.** The live test showed it pushes; no further test |
+| 3 | F19: a burn noted on a warning PagerDuty alert that turns critical stays a note and never pages | **Fixed** (open decision 3/6, option (a)): the critical takes its own alert and pages; the burn's ending resolves every alert it is on that holds no other open problem. Seen failing first: `test_slo_one_message_live.py::test_decision_3_*` |
+| 4 | F19's multi-day fault run (AC49) | **Skipped for v0.2.0**, accepted in writing; run on the server later |
+| 5 | A14: *Delete this branch* stays offered after a delete | **Ships as a known issue** (release notes) |
+| 6 | The customer page, wording list W1–W14 and the release notes | **Approved** |
+| 7 | The GitHub webhook tunnel | **Skipped**; the server, with a public address, tests webhooks |
+| 8 | Who receives nexovue's own alerts on the server | **The founder** |
+
 ## Not covered here
 
-Webhooks from GitHub (no public address), a paid AI provider, the long fault runs, the deployed server, and
-any claim that a model is *supported*.
+Webhooks from GitHub (no public address; decision 7), the long fault runs (decision 4), the deployed
+server, and any claim that a model is *supported*.

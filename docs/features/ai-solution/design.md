@@ -156,7 +156,7 @@ Principle 10 settles words before React. These live in one constant in code, and
 | Code | Requester's sentence | Viewer's | Who | Retry |
 |---|---|---|---|---|
 | `hosted_ai_not_offered` | Not shown on the finding page. On `/settings/ai`: Suggested fixes are not part of the hosted service. | Not shown | Nobody | No |
-| `ai_off` | Owner, admin: AI is off. An admin sets it up, then an owner agrees. Member: not shown. | Not shown | Admin, owner | No |
+| `ai_off` | Owner, admin: AI is off. An admin can turn it on in Settings, under AI. Member: not shown. | Not shown | Admin, owner | No |
 | `project_opted_out` | This project is opted out of AI. An admin can change that. | Same, without the last sentence | Admin | No |
 | `project_finding` | This finding covers the whole project, so no one service's code applies. | Same | Nobody | No |
 | `closed_as_not_a_problem` | This was closed as not a problem, so there is nothing to change. | Same | Nobody | No |

@@ -448,7 +448,7 @@ function Builder({
       <UnsavedChangesPrompt guard={guard} what="this dashboard" />
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-1">
-          <h1 className="font-semibold text-ink text-lg">
+          <h1 className="heading-page">
             {saved ? `Editing: ${visibleEscapes(saved.title)}` : "New dashboard"}
           </h1>
           <p className="text-ink-dim text-sm">
@@ -534,10 +534,7 @@ function Builder({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex items-center gap-1">
                       {handle}
-                      <h2
-                        id={`edit-panel-${panel.id}-title`}
-                        className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
-                      >
+                      <h2 id={`edit-panel-${panel.id}-title`} className="heading-section">
                         {panelName(panel)}
                       </h2>
                     </div>

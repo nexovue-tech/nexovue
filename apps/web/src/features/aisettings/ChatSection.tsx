@@ -314,6 +314,7 @@ function SearchSection({ settings, now }: { settings: ChatSettings; now: number 
             <span className={HEADING}>Key</span>
             <input
               type="password"
+              autoComplete="new-password"
               value={key}
               onChange={(event) => setKey(event.target.value)}
               placeholder={embedding.own_has_key ? "Saved; leave empty to keep it" : "None"}

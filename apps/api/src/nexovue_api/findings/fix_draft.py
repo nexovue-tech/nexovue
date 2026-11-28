@@ -245,7 +245,11 @@ async def delete_branch(
     _refuse_while_off(go)
     org_id = identity.org_id
     row = await _source_row(db, org_id=org_id, finding_id=finding_id, fix_id=fix_id)
-    if row.pull_request_branch is None or row.pull_request_state not in _DELETABLE_STATES:
+    if (
+        row.pull_request_branch is None
+        or row.pull_request_branch_deleted_at is not None
+        or row.pull_request_state not in _DELETABLE_STATES
+    ):
         raise ConflictError(NO_BRANCH_TO_DELETE, code=NO_BRANCH_CODE)
     await fix_queries.queue_suggestion(
         db,

@@ -36,9 +36,47 @@ import {
  * days; traces are kept for thirty and metrics for over a year, so most of what a
  * customer pays to store could not be asked for from any screen until now.
  */
+/**
+ * The screens whose readings answer the top bar's window. Elsewhere (findings, alerts,
+ * targets, settings) the phrase would sit over a screen it changes nothing on.
+ */
+const WINDOWED_SCREENS = [
+  "/overview",
+  "/services",
+  "/service-map",
+  "/traces",
+  "/profiles",
+  "/llm",
+  "/errors",
+  "/releases",
+  "/logs",
+  "/rum",
+  "/synthetics",
+  "/infrastructure",
+  "/metrics",
+  "/dashboards",
+] as const;
+
+export function windowShownOn(pathname: string): boolean {
+  return WINDOWED_SCREENS.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
+/** The settings screens that hold one project's things; the rest cover the organization. */
+const PROJECT_SETTINGS = ["/settings/api-keys", "/settings/runbooks"] as const;
+
+/**
+ * Whether the top bar offers the project here. On an organization-wide setting it would read
+ * as a filter the screen does not apply (UX review, 2026-11-28).
+ */
+export function projectShownOn(pathname: string): boolean {
+  if (!pathname.startsWith("/settings/")) return true;
+  return PROJECT_SETTINGS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+}
+
 export function WindowControl() {
   const inAddress = useUrlWindow();
-  useProjectFromAddress();
   if (inAddress !== null) return <AddressWindow window={inAddress} />;
   return <ChosenWindow />;
 }
@@ -48,7 +86,7 @@ export function WindowControl() {
  * finding's window names one (F3), and so does a chat step's link to a screen that reads
  * only a project (F4 T3.3a). Selecting it changes no window.
  */
-function useProjectFromAddress(): void {
+export function useProjectFromAddress(): void {
   const named = useUrlProject();
   const { projectId } = useSelection();
   useEffect(() => {
@@ -177,7 +215,7 @@ function RangePicker({ zone, onClose }: { zone?: string; onClose: () => void }) 
         aria-labelledby="range-picker-title"
         className="w-full max-w-md rounded border border-line bg-raised p-5 shadow-overlay"
       >
-        <h2 id="range-picker-title" className="font-medium font-serif text-base text-ink">
+        <h2 id="range-picker-title" className="heading-section">
           Pick a range
         </h2>
         <p className="mt-1 text-ink-dim text-sm">

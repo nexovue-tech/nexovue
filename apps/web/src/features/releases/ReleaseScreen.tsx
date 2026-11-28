@@ -61,7 +61,7 @@ const WINDOW_TABS = WINDOW_HOURS.map((hours) => ({
 const ERRORS_ANCHOR = "errors-by-version";
 /** A sender's time this far from our arrival time is shown beside it (spec, error cases). */
 const CLAIM_GAP_SHOWN_MS = 15 * 60_000;
-const SECTION_HEADING = "font-medium text-ink text-sm";
+const SECTION_HEADING = "heading-section";
 const LINK = "text-brand-text hover:underline";
 
 /**
@@ -131,7 +131,7 @@ function ReleasePage({
         </Link>
       ) : null}
       <header className="flex flex-col gap-1">
-        <h1 className="break-words font-semibold font-serif text-ink text-xl tracking-tight">
+        <h1 className="break-words heading-page">
           {release.service_name}{" "}
           <span className="font-mono" title={release.version}>
             {shortVersion(release.version)}

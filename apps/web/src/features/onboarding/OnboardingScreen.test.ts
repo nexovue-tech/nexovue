@@ -183,4 +183,21 @@ describe("the way out for a service that is not instrumented", () => {
     expect(text).not.toMatch(/docs\.nexovue/);
     expect(text).not.toContain("docs/product/setup/");
   });
+
+  it("names what its last copy button copies, not a bare Copy (UX review, 2026-11-28)", async () => {
+    const container = await render();
+    const labels = [...container.querySelectorAll("button")].map((button) => button.textContent);
+    expect(labels).toContain("Copy all three");
+  });
+
+  it("lets a reader leave for the console, warning that the key is not shown again", async () => {
+    const container = await render();
+    expect(container.textContent).toContain("Go to the console now");
+    expect(container.textContent).toContain("copy the key first");
+  });
+
+  it("names the settings screen a new key is issued on by its menu name", async () => {
+    const container = await render({ setup: undefined });
+    expect(container.textContent).toContain("Settings → Ingest keys");
+  });
 });

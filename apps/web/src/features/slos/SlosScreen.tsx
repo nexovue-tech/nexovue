@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { Button } from "@/shared/components/Button";
+import { Button, buttonClass } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
@@ -58,12 +58,10 @@ const VIEWS = [
 function SlosHeader() {
   const canConfigure = useCan("configure_slos");
   return (
-    <header className="flex flex-wrap items-baseline justify-between gap-3">
-      <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-        Reliability targets (SLOs)
-      </h1>
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <h1 className="heading-page">Reliability targets (SLOs)</h1>
       {canConfigure ? (
-        <Link to="/slos/new" className="font-medium text-brand text-sm">
+        <Link to="/slos/new" className={buttonClass("primary")}>
           New target
         </Link>
       ) : null}
@@ -255,7 +253,7 @@ function NoTargets({ hasServices, canConfigure }: { hasServices: boolean; canCon
       detail="A target is how much failure your team accepts for a service, such as 99.9% of requests succeeding over 28 days. Nexovue then says how much is still allowed."
       action={
         canConfigure ? (
-          <Link to="/slos/new" className="font-medium text-brand text-sm">
+          <Link to="/slos/new" className={buttonClass("secondary")}>
             New target
           </Link>
         ) : (

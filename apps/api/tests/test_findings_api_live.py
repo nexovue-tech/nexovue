@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from nexovue_api.auth.dependencies import (
     Identity,
     Reader,
+    get_current_identity,
     get_current_reader,
     get_tenant_repository,
 )
@@ -96,6 +97,8 @@ PERSON_FEED_FIELDS: Final = {
     "project_name",
     # F3 FR18: the console card's cause line; a token reads causes on the explanation route.
     "likely_cause_sentence",
+    # The console row's chips: its issue, newest fix and pull request (UX review 2026-11-28).
+    "chain",
 }
 # AC27's test set, shared with the console's `ordering.test.ts`.
 FEED_ORDER_FIXTURE: Final = (
@@ -237,6 +240,8 @@ def _client(db: AsyncSession, clickhouse: AsyncClient, reader: Reader) -> httpx.
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_current_reader] = lambda: reader
+    if reader.identity is not None:
+        app.dependency_overrides[get_current_identity] = lambda: reader.identity
     app.dependency_overrides[get_tenant_repository] = lambda: TenantScopedRepository(
         clickhouse, tenant_id=str(reader.org_id)
     )
@@ -1298,3 +1303,26 @@ async def test_a_project_finding_lists_each_affected_service_s_latest_release(
         ("checkout", "v2"),
     ]
     assert (context["before"], context["coverage"], context["nearby"]) == (None, None, [])
+
+
+# ------------------------------------------------------------------ open count
+
+
+async def test_open_count_counts_open_unmuted_root_findings_of_one_project(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant, staging: Project
+) -> None:
+    """The sidebar's number beside Findings (UX review 2026-11-28, sketch G): what waits for
+    someone, so a closed, muted or joined finding, or another project's, does not count."""
+    root = await _finding(db, acme, service_name="a", severity="critical")
+    await _finding(db, acme, service_name="b")
+    await _finding(db, acme, service_name="c", closed_minutes_ago=5)
+    await _finding(db, acme, service_name="d", muted=True)
+    await _finding(db, acme, service_name="e", root_finding_id=root.id)
+    await _finding(db, acme, project_id=staging.id, service_name="f")
+
+    response = await _get(
+        db, clickhouse, _callers(acme).person, "/findings/open-count", project_id=acme.project.id
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"open": 2, "critical": 1}

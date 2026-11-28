@@ -445,6 +445,8 @@ describe("the finding page", () => {
     const { container } = await mountFinding();
     await heading(container);
 
+    // The signal's actions sit under More since the UX review of 2026-11-28 (drawing C).
+    await press(container, "More actions");
     await press(container, "False alarm");
 
     const panel = container.querySelector("fieldset");

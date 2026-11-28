@@ -51,6 +51,7 @@ from nexovue_api.findings.schemas import (
     LinkChanged,
     NoteRequest,
     NoteWritten,
+    OpenFindingCount,
     ReadAgainAccepted,
     RefreshAccepted,
     TimelineResponse,
@@ -135,6 +136,16 @@ async def finding_stats(
     return await service.finding_stats(
         db, org_id=reader.org_id, project_id=project.id, days=days, now=datetime.now(UTC)
     )
+
+
+# Before `/{finding_id}`, which would otherwise claim the path as a malformed id.
+@router.get("/open-count", summary="How many findings wait for someone, for the sidebar")
+async def open_finding_count(
+    identity: CurrentIdentity, db: DbSession, project_id: ProjectId
+) -> OpenFindingCount:
+    """A person's, as the Alerts count is: the sidebar reads it, and an API token has no
+    sidebar, so the token read surface stays as documented."""
+    return await service.open_finding_count(db, org_id=identity.org_id, project_id=project_id)
 
 
 @router.get("/{finding_id}", summary="One finding, with its readings while they last")

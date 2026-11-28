@@ -9,6 +9,7 @@ import {
   mergedFactsLine,
   restsOn,
   showsSection,
+  sourceTitle,
   tokensAndAge,
   triesLeft,
 } from "./fix-page";
@@ -142,5 +143,19 @@ describe("FR30's facts line after a merge (Step 8, T8.3)", () => {
     for (const sentence of mergedFactsLine(facts)) {
       expect(sentence).not.toMatch(/\b(because|caused|fixed|so|therefore|due|resolved)\b/i);
     }
+  });
+});
+
+describe("the background tab's word (design, *UX*)", () => {
+  it("says a draft is open only while its pull request is open", () => {
+    expect(sourceTitle("opened", "open")).toBe("Draft pull request open");
+    expect(sourceTitle("opened", "closed")).toBeNull();
+    expect(sourceTitle("opened", "merged")).toBeNull();
+  });
+
+  it("keeps the words for a list or a suggestion waiting on a person", () => {
+    expect(sourceTitle("gathered", null)).toBe("Files ready: confirm");
+    expect(sourceTitle("proposed", null)).toBe("Suggestion ready");
+    expect(sourceTitle(undefined, null)).toBeNull();
   });
 });

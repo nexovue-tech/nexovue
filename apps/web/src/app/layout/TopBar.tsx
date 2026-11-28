@@ -1,3 +1,4 @@
+import { useLocation } from "@tanstack/react-router";
 import { Menu } from "lucide-react";
 
 import { ASSISTANT_BUTTON_ID } from "@/features/assistant/AssistantPanel";
@@ -8,7 +9,12 @@ import { useProjectSelection } from "@/shared/projects";
 import { setSelectedProjectId } from "@/shared/selection";
 
 import { RefreshControl } from "./RefreshControl";
-import { WindowControl } from "./WindowControl";
+import {
+  projectShownOn,
+  useProjectFromAddress,
+  WindowControl,
+  windowShownOn,
+} from "./WindowControl";
 
 /**
  * Project and time range are the two things that qualify everything on every screen, so
@@ -25,6 +31,11 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   // "—" over every screen they can open
   // (`docs/quality/console-review-2026-09-20.md`).
   const operator = useIsOperator();
+  const pathname = useLocation().pathname;
+  const windowed = windowShownOn(pathname);
+  const projectShown = projectShownOn(pathname);
+  // A link's project is selected on every screen, with or without the window shown.
+  useProjectFromAddress();
 
   return (
     // One row on a desktop; below it, two — the window gets a row of its own. A tablet
@@ -48,7 +59,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
           <Menu size={16} aria-hidden="true" />
         </button>
 
-        {operator ? null : projects.length > 0 && projectId ? (
+        {operator || !projectShown ? null : projects.length > 0 && projectId ? (
           <SelectField
             capped
             compactLabel
@@ -66,7 +77,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
           </span>
         )}
 
-        {operator ? null : (
+        {operator || !windowed ? null : (
           <>
             <span aria-hidden className="hidden h-4 w-px bg-line @3xl:block" />
 

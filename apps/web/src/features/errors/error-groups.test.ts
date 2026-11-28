@@ -10,6 +10,7 @@ import {
   describeOccurrences,
   describePrecedingDeploy,
   describeServices,
+  exceptionTitle,
   firstWithStacktrace,
   isNewInWindow,
   stackFrames,
@@ -269,5 +270,18 @@ describe("what we hear about deploys, in the cell and the panel (F28 AC73, D23)"
       "Deploys reported by your CI, versions seen in traffic.",
       DEPLOY_IS_NOT_A_CAUSE,
     ]);
+  });
+});
+
+describe("an exception's title (UX review, 2026-11-28)", () => {
+  it("names a gRPC status code its message confirms", () => {
+    expect(exceptionTitle("14", "<n> UNAVAILABLE:")).toBe("gRPC UNAVAILABLE (14)");
+    expect(exceptionTitle("4", "DEADLINE_EXCEEDED: timed out")).toBe("gRPC DEADLINE_EXCEEDED (4)");
+  });
+
+  it("leaves any other type as it came", () => {
+    expect(exceptionTitle("14", "fourteen apples")).toBe("14");
+    expect(exceptionTitle("GateSeedError", "UNAVAILABLE")).toBe("GateSeedError");
+    expect(exceptionTitle("99", "UNAVAILABLE")).toBe("99");
   });
 });

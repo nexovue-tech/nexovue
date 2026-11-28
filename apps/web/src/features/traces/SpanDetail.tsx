@@ -214,9 +214,7 @@ function Note({ children }: { children: string }) {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="mb-5">
-      <h3 className="mb-1.5 border-line-subtle border-b pb-1 font-mono text-2xs text-ink-dim uppercase tracking-caps">
-        {title}
-      </h3>
+      <h3 className="mb-1.5 border-line-subtle border-b pb-1 heading-sub">{title}</h3>
       <dl>{children}</dl>
     </section>
   );

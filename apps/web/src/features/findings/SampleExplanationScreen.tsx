@@ -26,9 +26,7 @@ export function SampleExplanationScreen() {
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-4 py-5">
       <header className="flex flex-col gap-2">
         <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Sample</p>
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-          A sample finding: {finding.title}
-        </h1>
+        <h1 className="heading-page">A sample finding: {finding.title}</h1>
         <p className="max-w-prose text-ink-dim text-sm">
           This is fixed sample data, not a reading of your system. It shows what a finding's page
           says about where to look first. {FIRST_WEEK}

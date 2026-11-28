@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
+import { NAV_LABEL, NAV_ROW, NAV_ROW_ACTIVE, NAV_ROW_IDLE } from "@/shared/components/nav-row";
 import { useIsHosted } from "@/shared/deployment";
 import { useSession } from "@/shared/identity";
 import { useNothingLive } from "@/shared/refresh";
@@ -47,7 +48,7 @@ export function SettingsLayout({
     // two nested ones on a phone is how a list stops scrolling under a thumb.
     // `@lg` (32rem) is the width the pane is given, what a 768px window leaves it,
     // not the window's own: chat's panel narrows the pane (F4 T2.10b).
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto @lg:overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto @lg:flex-row @lg:overflow-hidden">
       {/* **The page uses the window; the prose inside it does not.**
           Left-aligned like the rest of the console — it used to be centred, which
           made the page's left edge jump every time somebody moved between Alerts
@@ -57,22 +58,22 @@ export function SettingsLayout({
           as it is a form. The cap that matters is inward, on the sentences: a line
           of explanation carries `max-w-3xl`, roughly 90 characters, past which a
           reader loses the start of the next line. A table does not have to. */}
-      <div className="flex w-full flex-col gap-8 px-4 py-6 @lg:h-full @lg:min-h-0 @lg:flex-row @lg:gap-10 @lg:py-0">
-        <SettingsNav />
+      {/* The settings menu is a second column beside the main one, with the same rows, and
+          the setting starts 16 px from it, as every screen starts 16 px from the main menu. */}
+      <SettingsNav />
 
-        {/* A column inside the shell's main landmark, not a second landmark. Two of
-            them is invalid HTML and gives a screen reader's landmark list a duplicate
-            to choose between; `AppShell` owns the page's one. */}
-        <div className="min-w-0 flex-1 pb-10 @lg:h-full @lg:min-h-0 @lg:overflow-y-auto @lg:pt-6">
-          <header>
-            <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
-            {description ? (
-              <p className="mt-1 max-w-3xl text-ink-dim text-sm leading-relaxed">{description}</p>
-            ) : null}
-          </header>
+      {/* A column inside the shell's main landmark, not a second landmark. Two of
+          them is invalid HTML and gives a screen reader's landmark list a duplicate
+          to choose between; `AppShell` owns the page's one. */}
+      <div className="min-w-0 flex-1 px-4 pt-5 pb-10 @lg:h-full @lg:min-h-0 @lg:overflow-y-auto">
+        <header>
+          <h1 className="heading-page">{title}</h1>
+          {description ? (
+            <p className="mt-1 max-w-3xl text-ink-dim text-sm leading-relaxed">{description}</p>
+          ) : null}
+        </header>
 
-          <div className="mt-6">{children}</div>
-        </div>
+        <div className="mt-6">{children}</div>
       </div>
     </div>
   );
@@ -109,7 +110,7 @@ function SettingsNav() {
     // scroll sideways by it.
     <nav
       aria-label="Settings"
-      className="w-full shrink-0 @lg:-mx-2 @lg:h-full @lg:w-56 @lg:overflow-y-auto @lg:px-2 @lg:py-6"
+      className="w-full shrink-0 px-4 pt-5 @lg:h-full @lg:w-52 @lg:overflow-y-auto @lg:border-line @lg:border-r @lg:px-0 @lg:py-4"
     >
       <button
         type="button"
@@ -130,23 +131,21 @@ function SettingsNav() {
           onChange={(event) => setTyped(event.target.value)}
           aria-label="Find a setting"
           placeholder="Find a setting"
-          className="w-full border border-line bg-surface px-2 py-1 text-ink text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none"
+          className="w-full border border-line bg-surface px-2 py-1 text-ink text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none @lg:mx-4 @lg:w-[calc(100%-2rem)]"
         />
 
         {groups.length === 0 ? (
           // Never a blank rail: a reader who mistyped would otherwise see a
           // settings screen with no way out of it.
-          <p className="mt-4 text-ink-dim text-xs leading-relaxed">
+          <p className="mt-4 text-ink-dim text-xs leading-relaxed @lg:px-4">
             Nothing here is called that. Clear the box to see everything.
           </p>
         ) : (
           <ul className="mt-4 flex flex-col gap-5">
             {groups.map((group) => (
               <li key={group.label}>
-                <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-                  {group.label}
-                </p>
-                <ul className="mt-1.5 flex flex-col">
+                <p className={`${NAV_LABEL} -mx-4 @lg:mx-0`}>{group.label}</p>
+                <ul className="-mx-4 flex flex-col @lg:mx-0">
                   {group.items.map((item) => (
                     <li key={item.path}>
                       <NavItem
@@ -179,10 +178,9 @@ function NavItem({
     <Link
       to={path}
       onClick={onNavigate}
-      // `min-h-11` rather than padding alone: on a phone these are the tap
-      // targets, and 28px is below what a finger reliably hits.
-      className="-mx-2 flex min-h-11 items-center rounded px-2 text-ink-dim text-sm hover:bg-hover hover:text-ink @lg:min-h-0 @lg:py-1"
-      activeProps={{ className: "bg-raised font-medium text-ink" }}
+      className={NAV_ROW}
+      activeProps={{ className: NAV_ROW_ACTIVE }}
+      inactiveProps={{ className: NAV_ROW_IDLE }}
     >
       {title}
     </Link>

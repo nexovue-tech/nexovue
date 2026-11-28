@@ -48,9 +48,7 @@ export function OnboardScreen() {
       <Link to="/admin" className="text-ink-dim text-sm hover:text-ink">
         All organizations
       </Link>
-      <h1 className="mt-2 font-semibold font-serif text-ink text-xl tracking-tight">
-        Onboard a paying customer
-      </h1>
+      <h1 className="mt-2 heading-page">Onboard a paying customer</h1>
       <p className="mt-1 text-ink-dim text-sm leading-relaxed">
         The payment is recorded once, against this organization, and cannot be entered twice.
       </p>

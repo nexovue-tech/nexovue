@@ -140,7 +140,7 @@ export function OverviewView({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Overview</h1>
+        <h1 className="heading-page">Overview</h1>
         <p className="mt-1 text-ink-dim text-sm">
           Every service you send traces from, over {windowLabel}.
         </p>
@@ -236,7 +236,7 @@ function Panel({
 }) {
   return (
     <section className="rounded-sm border border-line p-3">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{plot.label}</h2>
+      <h2 className="heading-section">{plot.label}</h2>
       {plot.flatAtZero ? (
         // Held at the chart's own height so the row of three stays level.
         <p className="flex items-center text-ink-dim text-sm" style={{ height: CHART_HEIGHT }}>
@@ -283,7 +283,7 @@ function WorstServices({ services }: { services: readonly OverviewService[] }) {
   return (
     <section className="shrink-0 border-line border-t">
       <div className="flex items-baseline justify-between px-4 py-2">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Worst services</h2>
+        <h2 className="heading-section">Worst services</h2>
         <Link to="/services" className="text-brand-text text-sm underline-offset-2 hover:underline">
           All services
         </Link>

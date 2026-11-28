@@ -50,7 +50,7 @@ export function SuggestionPanel({
   const window = read.check?.windows.find((each) => each.window_days === windowDays);
   return (
     <section aria-label="Suggestion" className="flex max-w-prose flex-col gap-2">
-      <h2 className="font-semibold text-ink">Suggested</h2>
+      <h2 className="heading-section">Suggested</h2>
       <p className="text-ink">
         {suggestionSentence({
           outcome: read.outcome,

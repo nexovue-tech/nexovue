@@ -61,7 +61,7 @@ export function Versions({
 
   return (
     <section aria-label="Versions" className="flex flex-col gap-3">
-      <h2 className="font-medium text-ink text-sm">Versions</h2>
+      <h2 className="heading-section">Versions</h2>
       {earlier.length === 0 ? (
         <p className="text-ink-dim text-sm">No earlier versions yet.</p>
       ) : null}

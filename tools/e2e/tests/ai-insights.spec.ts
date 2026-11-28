@@ -30,6 +30,8 @@ const FIRST_FACTS = 5;
 const TARGET_PX = 44;
 const PHONE = { width: 390, height: 664 } as const;
 const DESKTOP = { width: 1920, height: 1080 } as const;
+// About 20 characters of 13 px text: below this a sentence breaks inside its words.
+const SENTENCE_MIN_PX = 160;
 
 const fact = (number: number) => ({
   id: `e${number}`,
@@ -231,6 +233,28 @@ test("AC17: at 1920 px no container around the facts is capped", async ({ page }
   );
 });
 
+// The facts once split into four columns by the window's width, inside a column a third of it,
+// which left the sentence about 56 px and broke it letter by letter (UX review, 2026-11-28).
+for (const width of [1024, 1440, 1920]) {
+  test(`at ${width} px every fact's sentence reads on lines of at least 20 characters`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await signUp(page, newAccount());
+    await stubFinding(page);
+    await page.goto(`/findings/${FINDING_ID}`);
+
+    const sentences = page.locator("#explanation-facts ol > li > span:nth-child(2)");
+    await expect(sentences.first()).toBeVisible();
+    for (const sentence of await sentences.all()) {
+      const box = await sentence.boundingBox();
+      expect(box?.width ?? 0, "a fact's sentence is squeezed").toBeGreaterThanOrEqual(
+        SENTENCE_MIN_PX,
+      );
+    }
+  });
+}
+
 test("AC17: a citation opens the facts and moves to its fact", async ({ page }) => {
   await page.setViewportSize(PHONE);
   await signUp(page, newAccount());
@@ -416,21 +440,20 @@ test("AC103: with no AI container running, /settings/ai says so and the switch i
     page,
     settings({ on: false, container_running: false, missing: ["container"] }),
   );
-  await page.goto("/settings/ai");
+  // The switch sits on the Provider tab since the AI page took tabs (UX review, 2026-11-28).
+  await page.goto("/settings/ai?tab=provider");
 
   await expect(page.getByText(/container is not running/i).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Turn AI wording on" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Turn AI on" })).toBeDisabled();
   expect(await sidewaysScroll(page)).toBeLessThanOrEqual(0);
 });
 
-test("AC85: a member reads only that AI wording is off here", async ({ page }) => {
+test("AC85: a member reads only that AI is off here", async ({ page }) => {
   await page.setViewportSize(PHONE);
   await signUp(page, newAccount());
   await stubAiSettings(page, { on: false, full: false });
   await page.goto("/settings/ai");
 
-  await expect(
-    page.getByText("AI wording is off here. An owner or admin can set it up."),
-  ).toBeVisible();
+  await expect(page.getByText("AI is off here. An owner or admin can set it up.")).toBeVisible();
   expect(await sidewaysScroll(page)).toBeLessThanOrEqual(0);
 });

@@ -101,9 +101,13 @@ function ChannelRow({ channel }: { channel: ChannelSummary }) {
             <span className="font-medium text-base text-ink group-hover:underline">
               {channel.name}
             </span>
-            <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-              {KIND_NAMES[channel.kind]}
-            </span>
+            {/* The kind says what the name does not; "Organization owners ORGANIZATION
+                OWNERS" said it twice (UX review, 2026-11-28). */}
+            {KIND_NAMES[channel.kind].toLowerCase() === channel.name.toLowerCase() ? null : (
+              <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+                {KIND_NAMES[channel.kind]}
+              </span>
+            )}
           </p>
           <p className="mt-1 text-ink-dim text-sm">{describeDestination(channel)}</p>
           <p className="mt-1 text-ink-dim text-sm">

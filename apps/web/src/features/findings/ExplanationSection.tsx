@@ -141,7 +141,7 @@ export function ExplanationSection({
   const announcement = useVersionAnnouncement(explanation);
   return (
     <section aria-labelledby="finding-explanation" className="flex flex-col gap-3">
-      <h2 id="finding-explanation" className="font-medium font-serif text-base text-ink">
+      <h2 id="finding-explanation" className="heading-section">
         {SECTION_HEADING}
       </h2>
       <p role="status" data-testid="explanation-status" className="sr-only">
@@ -292,7 +292,8 @@ function Facts({
   if (facts.length === 0) return null;
   const shown = all ? facts : facts.slice(0, FIRST_FACTS);
   return (
-    <div id="explanation-facts" className="flex flex-col gap-2">
+    // `@container`: the facts split into columns by the width they are given, not the window's.
+    <div id="explanation-facts" className="@container flex flex-col gap-2">
       <ol ref={list} className="flex flex-col gap-2">
         {shown.map((fact, index) => (
           <li
@@ -300,7 +301,7 @@ function Facts({
             data-fact={fact.number}
             ref={index === FIRST_FACTS ? firstHidden : undefined}
             tabIndex={-1}
-            className="grid gap-x-4 gap-y-1 rounded-sm text-sm focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1 focus:bg-brand-surface md:grid-cols-[2rem_minmax(0,1fr)_14rem_minmax(0,14rem)]"
+            className="grid gap-x-4 gap-y-1 rounded-sm text-sm focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1 focus:bg-brand-surface grid-cols-[2rem_minmax(0,1fr)] @3xl:grid-cols-[2rem_minmax(0,1fr)_12rem_minmax(0,12rem)]"
           >
             <span className="font-mono text-ink-dim">{fact.number}</span>
             <span className="min-w-0 text-ink [overflow-wrap:anywhere]">
@@ -310,14 +311,16 @@ function Facts({
               ) : null}
             </span>
             {basisLabel(fact) ? (
-              <span className="text-ink-dim">
+              <span className="col-start-2 text-ink-dim @3xl:col-start-auto">
                 <span className="sr-only">Basis: </span>
                 {basisLabel(fact)}
               </span>
             ) : (
-              <span />
+              <span className="hidden @3xl:block" />
             )}
-            {links ? <FactLinkCell fact={fact} finding={finding} /> : <span />}
+            <span className="col-start-2 @3xl:col-start-auto">
+              {links ? <FactLinkCell fact={fact} finding={finding} /> : null}
+            </span>
           </li>
         ))}
       </ol>
@@ -409,9 +412,7 @@ function Wording({
   const older = olderWordsNote(explanation, zone);
   return (
     <div className="flex flex-col gap-2" data-testid="explanation-wording">
-      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-        {WORDING_WORDS.heading}
-      </h3>
+      <h3 className="heading-sub">{WORDING_WORDS.heading}</h3>
       {words !== null ? (
         <>
           <p className={`text-ink-dim text-xs ${PROSE}`}>{wordingLabel(words.model)}</p>

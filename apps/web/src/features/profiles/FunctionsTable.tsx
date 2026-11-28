@@ -38,7 +38,7 @@ export function FunctionsTable({
 
   return (
     <section aria-labelledby="profile-functions" className="flex flex-col gap-2">
-      <h2 id="profile-functions" className="font-medium font-serif text-base text-ink">
+      <h2 id="profile-functions" className="heading-section">
         Functions
       </h2>
       <p className="text-ink-dim text-xs">

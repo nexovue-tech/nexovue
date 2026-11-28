@@ -58,9 +58,7 @@ export function Waiting({
       {/* The live region carries the sentence that changes, not the reference material
           under it — a checklist read aloud in full on arrival is worse than silence. */}
       <div role="status" aria-live="polite">
-        <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
-          Listening for your first span
-        </h2>
+        <h2 className="heading-section">Listening for your first span</h2>
         <p className="mt-2 max-w-prose text-ink-dim text-sm leading-relaxed">
           {waitingMessage(failed, silent)}
         </p>

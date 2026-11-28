@@ -62,7 +62,7 @@ export function SideSheet({
     >
       <div className="flex flex-col gap-4">
         <header className="flex items-center justify-between gap-3">
-          <h2 id={headingId} className="font-semibold text-base text-ink">
+          <h2 id={headingId} className="heading-section">
             {title}
           </h2>
           <button

@@ -113,7 +113,7 @@ export function CompareView({
 
   return (
     <section aria-labelledby="profile-compare" className="flex flex-col gap-4">
-      <h2 id="profile-compare" className="font-medium font-serif text-base text-ink">
+      <h2 id="profile-compare" className="heading-section">
         Compare {typeName(selection.sampleType)}
       </h2>
       <div className="flex flex-wrap items-baseline gap-4">
@@ -288,7 +288,7 @@ function ChangesTable({
   if (functions.length === 0) {
     return (
       <section className="flex flex-col gap-1">
-        <h3 className="font-medium text-ink text-sm">{title}</h3>
+        <h3 className="heading-sub">{title}</h3>
         <p className="text-ink-dim text-sm">{empty}</p>
       </section>
     );

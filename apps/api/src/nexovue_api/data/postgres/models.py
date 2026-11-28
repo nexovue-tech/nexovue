@@ -2401,6 +2401,8 @@ class FindingFix(Base):
     pull_request_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pull_request_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     pull_request_branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Live test A14: when the job deleted that branch on GitHub, so it is not offered again.
+    pull_request_branch_deleted_at: Mapped[OptionalTimestamp]
     pull_request_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     pull_request_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     ci_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)

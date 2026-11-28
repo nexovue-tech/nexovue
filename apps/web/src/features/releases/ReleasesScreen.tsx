@@ -62,7 +62,7 @@ export function ReleasesScreen() {
   return (
     <div className="flex flex-col gap-4 px-4 py-5">
       <header className="flex flex-col gap-1">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Releases</h1>
+        <h1 className="heading-page">Releases</h1>
         {releases.data ? (
           <p aria-live="polite" className="max-w-prose text-ink text-sm">
             {windowCount(releases.data.total, releases.data.services)}

@@ -10,6 +10,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { identityFor } from "@/shared/identity.test-util";
 
 import { createAppRouter } from "../router";
+import { alsoActiveOn } from "./Sidebar";
 
 /**
  * The sidebar in the real route tree (AC55). `/` is matched exactly
@@ -140,5 +141,17 @@ describe("the 404 screen (FR44)", () => {
     );
 
     expect(back.getAttribute("href")).toBe("/");
+  });
+});
+
+describe("the row that is the reader's place (UX review, 2026-11-28)", () => {
+  it("marks Settings on every settings screen, not only General", () => {
+    expect(alsoActiveOn("/settings/general", "/settings/connections")).toBe(true);
+    expect(alsoActiveOn("/settings/general", "/services")).toBe(false);
+  });
+
+  it("marks Findings on a finding", () => {
+    expect(alsoActiveOn("/", "/findings/abc")).toBe(true);
+    expect(alsoActiveOn("/traces", "/traces/abc")).toBe(false);
   });
 });

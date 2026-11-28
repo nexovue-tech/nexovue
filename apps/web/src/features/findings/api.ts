@@ -6,6 +6,7 @@ import type { ExplanationFactTarget } from "@/shared/evidence-links";
 import type { OverviewPoint } from "@/shared/overview-plots";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
+import type { FeedChain } from "./chain";
 
 // The headline's shapes moved to `shared/` with it (F20, T2.18); the feed still names them here.
 export type {
@@ -209,6 +210,8 @@ export interface FeedFinding extends Finding, CasePeople {
    * cause or while it is held. Never model words.
    */
   likely_cause_sentence?: ExplanationSegment[] | null;
+  /** The chain past the case: issue, newest fix, its pull request (UX review 2026-11-28). */
+  chain?: FeedChain | null;
 }
 
 /** The service's latest other case, for a finding that holds none (FR9, FR13). */

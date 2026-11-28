@@ -18,6 +18,7 @@ import {
   isUnattributed,
   MEMORY_METRICS,
   nodeName,
+  noticeParts,
   STOPPED_REPORTING,
 } from "./node-readings";
 
@@ -352,5 +353,25 @@ describe("network faults — USE's last letter", () => {
 
   it("says nothing about a node that reported no counters at all", () => {
     expect(describeNetworkFaults([node()])).toBeNull();
+  });
+});
+
+describe("a notice as one line that opens (approved sketch F, 2026-11-28)", () => {
+  it("leads with its first sentence and keeps the rest for opening", () => {
+    expect(
+      noticeParts(
+        "recommendation is reporting host metrics without setting host.name, so they cannot be attributed. To fix it: set host.name on the resource.",
+      ),
+    ).toEqual({
+      lead: "recommendation is reporting host metrics without setting host.name, so they cannot be attributed.",
+      more: "To fix it: set host.name on the resource.",
+    });
+  });
+
+  it("has nothing to open in a single sentence", () => {
+    expect(noticeParts("2 nodes have work waiting.")).toEqual({
+      lead: "2 nodes have work waiting.",
+      more: null,
+    });
   });
 });

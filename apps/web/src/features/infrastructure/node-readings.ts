@@ -269,3 +269,14 @@ export function describeNetworkFaults(nodes: readonly NodeSummary[]): string | n
   const subject = faulty.length === 1 ? "node reported" : "nodes reported";
   return `${faulty.length} ${subject} network faults in this window: ${said.join(" · ")}. An interface erroring is not a queue overflowing, so the two are counted apart.`;
 }
+
+/**
+ * A notice as one line and what opens under it (approved sketch F, 2026-11-28): the first
+ * sentence says what is wrong; the rest, often a setting to copy, waits for a click. A
+ * sentence ends at a full stop followed by a space, so `host.name` does not end one.
+ */
+export function noticeParts(text: string): { lead: string; more: string | null } {
+  const end = text.indexOf(". ");
+  if (end === -1) return { lead: text, more: null };
+  return { lead: text.slice(0, end + 1), more: text.slice(end + 2).trim() || null };
+}

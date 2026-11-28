@@ -73,7 +73,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             ← All traces
           </Link>
 
-          <h1 className="mt-2 font-semibold font-serif text-ink text-xl tracking-tight">
+          <h1 className="mt-2 heading-page">
             {rootSpan ? (
               <>
                 <span className="text-ink-dim">{rootSpan.service_name}</span> {rootSpan.span_name}

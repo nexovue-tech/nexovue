@@ -225,7 +225,8 @@ async function settle() {
   });
 }
 
-async function mount(): Promise<HTMLElement> {
+/** The AI page opens on a tab (UX review 2026-11-28); most of these read the Provider tab. */
+async function mount(tab = "provider"): Promise<HTMLElement> {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -244,7 +245,7 @@ async function mount(): Promise<HTMLElement> {
   ]);
   const router = createRouter({
     routeTree,
-    history: createMemoryHistory({ initialEntries: ["/settings/ai"] }),
+    history: createMemoryHistory({ initialEntries: [`/settings/ai?tab=${tab}`] }),
   });
   await router.load();
   const container = document.createElement("div");
@@ -299,7 +300,7 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
       await textOf(container, MEMBER_LINE);
       expect(container.textContent).toContain(MCP_LINE);
       expect(container.querySelectorAll("a[href^='#']")).toHaveLength(0);
-      expect(button(container, "Turn AI wording on")).toBeUndefined();
+      expect(button(container, "Turn AI on")).toBeUndefined();
     },
   );
 
@@ -308,8 +309,8 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
     const container = await mount();
 
     await textOf(container, "The AI settings could not be loaded");
-    expect(container.textContent).not.toContain("AI wording is off");
-    expect(button(container, "Turn AI wording on")).toBeUndefined();
+    expect(container.textContent).not.toContain("AI is off");
+    expect(button(container, "Turn AI on")).toBeUndefined();
   });
 
   it("holds the layout with a skeleton while loading", async () => {
@@ -317,7 +318,7 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
     const container = await mount();
     // The first paint, before the read lands, is the skeleton's status.
     expect(container.innerHTML.length).toBeGreaterThan(0);
-    await textOf(container, "AI wording is off.");
+    await textOf(container, "AI is off.");
   });
 
   it("lists every missing step as a link to where it is done, and says no format is offered yet", async () => {
@@ -325,7 +326,9 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
     const container = await mount();
 
     await textOf(container, "Save a provider connection");
-    expect(container.querySelector("a[href='#ai-provider']")).not.toBeNull();
+    expect(
+      container.querySelector("a[href='/settings/ai?tab=provider#ai-provider']"),
+    ).not.toBeNull();
     expect(container.textContent).toContain(NO_FORMAT_YET);
     expect(container.textContent).toContain(MCP_LINE);
     expect(container.textContent).toContain("your own AI account");
@@ -343,7 +346,7 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
     const container = await mount();
 
     await textOf(container, CONTAINER_NOT_RUNNING);
-    const on = await waitFor(() => button(container, "Turn AI wording on"), "the switch");
+    const on = await waitFor(() => button(container, "Turn AI on"), "the switch");
     expect(on.disabled).toBe(true);
     expect(button(container, "Test this connection")?.disabled).toBe(true);
   });
@@ -497,7 +500,7 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
         run({ id: "6c1f0a52-7d64-4c87-9b7a-0f0d1d1d1d02", host_consent: "not_consented" }),
       ],
     });
-    const container = await mount();
+    const container = await mount("usage");
 
     await textOf(container, usageLine(USAGE));
     expect(usageLine(USAGE)).toBe("1.2 million of 2 million tokens used, resets 1 December");
@@ -512,7 +515,7 @@ describe("AI settings (F3 FR23 to FR32, AC85, AC90)", () => {
 
   it("says when there are no runs yet", async () => {
     stubApi("owner", { settings: settings({ missing: [], connection: connection() }) });
-    const container = await mount();
+    const container = await mount("usage");
     await textOf(container, NO_RUNS);
   });
 

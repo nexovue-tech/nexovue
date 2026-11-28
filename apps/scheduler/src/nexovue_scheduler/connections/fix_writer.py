@@ -739,6 +739,14 @@ async def delete_fix_branch(
         return None
 
 
+_BRANCH_DELETED: Final = text(
+    """
+    UPDATE finding_fixes SET pull_request_branch_deleted_at = :at
+    WHERE org_id = :org_id AND id = :fix_id
+    """
+)
+
+
 async def _delete(
     engine: AsyncEngine,
     row: Any,
@@ -770,6 +778,10 @@ async def _delete(
     finally:
         github.revoke(write)
     async with engine.begin() as connection:
+        # Live test A14: the row knows, so the page stops offering a branch that is gone.
+        await connection.execute(
+            _BRANCH_DELETED, {"org_id": row.org_id, "fix_id": row.id, "at": now}
+        )
         await connection.execute(
             text(RECORD_CASE_AUDIT_SQL),
             case_audit_parameters(

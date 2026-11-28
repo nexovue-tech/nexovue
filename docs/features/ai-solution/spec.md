@@ -252,7 +252,7 @@ From `feature-catalog.md:41-43`, with the research's finer personas.
 | Order | Code | Applies when | Who can change it |
 |---|---|---|---|
 | 1 | `hosted_ai_not_offered` | Hosted install | Nobody. **The section does not render for any role.** `/settings/ai` alone says "Suggested fixes are not part of the hosted service." |
-| 2 | `ai_off` | AI is off for this install | An admin sets it up, then an owner agrees. **Only owners and admins see this line** |
+| 2 | `ai_off` | AI is off for this install | An admin can turn it on in Settings, under AI (founder, UX review 2026-11-28). **Only owners and admins see this line** |
 | 3 | `project_opted_out` | This project is opted out | An admin |
 | 4 | `project_finding` | `scope = project` | Nobody can; rungs 1 and 2 remain |
 | 5 | `closed_as_not_a_problem` | `closed_reason` is `false_alarm`, `new_normal`, `adopted` or `service_gone` | Nobody can |

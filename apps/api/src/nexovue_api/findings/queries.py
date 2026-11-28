@@ -33,7 +33,9 @@ from nexovue_api.data.postgres.models import (
     DetectionState,
     Finding,
     FindingEvent,
+    FindingFix,
     FindingIncident,
+    FindingLink,
     FindingNote,
     Incident,
     NotificationChannel,
@@ -453,6 +455,81 @@ async def open_joined_of(
     )
     rows = await session.scalars(statement)
     return {row.root_finding_id: row for row in rows if row.root_finding_id is not None}
+
+
+async def open_finding_counts(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> dict[str, int]:
+    """Open findings by severity that wait for someone: not closed, not muted (nothing was
+    sent about those), and not joined into another finding's case (counted once, there)."""
+    statement = (
+        select(Finding.severity, func.count())
+        .where(
+            Finding.org_id == org_id,
+            Finding.project_id == project_id,
+            Finding.state != "closed",
+            Finding.muted.is_(False),
+            Finding.root_finding_id.is_(None),
+        )
+        .group_by(Finding.severity)
+    )
+    rows = (await session.execute(statement)).tuples().all()
+    return dict(rows)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedChainRow:
+    """Where a feed row's chain stands past its case: its synced issue, its newest
+    suggested fix and that fix's pull request (UX review 2026-11-28, drawing C)."""
+
+    issue_key: str | None
+    issue_state: str | None
+    fix_state: str | None
+    pull_request_state: str | None
+
+
+async def feed_chains(
+    session: AsyncSession, *, org_id: uuid.UUID, finding_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, FeedChainRow]:
+    """Each finding's synced issue and newest fix, in two reads for the whole feed. A
+    fix from the service's own files wins over a general one, as on the page."""
+    if not finding_ids:
+        return {}
+    links = await session.execute(
+        select(FindingLink.finding_id, FindingLink.external_key, FindingLink.seen_state)
+        .where(
+            FindingLink.org_id == org_id,
+            FindingLink.finding_id.in_(finding_ids),
+            FindingLink.role == "synced",
+            FindingLink.sync_status != "stopped",
+        )
+        .order_by(FindingLink.created_at.desc())
+    )
+    issue: dict[uuid.UUID, tuple[str | None, str | None]] = {}
+    for finding_id, key, seen in links:
+        issue.setdefault(finding_id, (key, seen))
+    fixes = await session.execute(
+        select(FindingFix.finding_id, FindingFix.state, FindingFix.pull_request_state)
+        .where(FindingFix.org_id == org_id, FindingFix.finding_id.in_(finding_ids))
+        .order_by(
+            case((FindingFix.kind == "source", 0), else_=1),
+            FindingFix.requested_at.desc(),
+        )
+    )
+    fix: dict[uuid.UUID, tuple[str, str | None]] = {}
+    for finding_id, state, pull_request_state in fixes:
+        fix.setdefault(finding_id, (state, pull_request_state))
+    chains: dict[uuid.UUID, FeedChainRow] = {}
+    for finding_id in set(issue) | set(fix):
+        key, seen = issue.get(finding_id, (None, None))
+        fix_state, pull_request_state = fix.get(finding_id, (None, None))
+        chains[finding_id] = FeedChainRow(
+            issue_key=key,
+            issue_state=seen,
+            fix_state=fix_state,
+            pull_request_state=pull_request_state,
+        )
+    return chains
 
 
 async def latest_joined_closes(

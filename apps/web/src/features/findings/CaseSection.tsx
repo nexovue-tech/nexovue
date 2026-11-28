@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { useId, useRef, useState } from "react";
 
 import { ApiError, isConflict } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
@@ -31,9 +32,9 @@ import { ReassignPanel } from "./ReassignPanel";
 import { Timeline } from "./Timeline";
 
 const PROSE = "max-w-prose";
-/** FR46: each case action at least 44 px tall and on its own row, never beside
- * another, so Resolve can never sit next to Reassign. */
-const CASE_ACTION = "min-h-11 w-full max-w-xs justify-center sm:w-64";
+/** FR46: on a phone each case action is 44 px tall and on its own row. From `md` they share
+ * one row, ordered so Resolve never sits next to Reassign: Reassign is under More. */
+const CASE_ACTION = "w-full md:w-auto";
 
 /**
  * The work half of the finding page (F22 design, *The finding page*): the case
@@ -46,20 +47,21 @@ export function CaseSection({
   zone,
   onReload,
   onOwnAct,
+  signalControls,
 }: {
   finding: FindingDetail;
   zone?: string;
   onReload: () => void;
   onOwnAct: () => void;
+  /** The signal's own actions (false alarm, snooze, mute), shown under More. */
+  signalControls: ReactNode;
 }) {
+  const moreId = useId();
+  const [moreOpen, setMoreOpen] = useState(false);
   const session = useSession();
   const inSupportView = Boolean(session.data?.support_view);
   const canOperate = useCan("operate_cases") && !inSupportView;
   const admin = useCan("manage_connections");
-  // F4 FR41: runbooks exist only where AI may be offered, and only these roles write them.
-  const mayManageKnowledge = useCan("manage_knowledge");
-  const hosted = useIsHosted();
-  const mayKeepAsRunbook = mayManageKnowledge && !hosted && !inSupportView;
   const viewerId = session.data?.user.id ?? null;
   const rootQuery = useRootCase(finding.root_finding_id);
   const change = useCaseChange(finding.id);
@@ -142,8 +144,7 @@ export function CaseSection({
   const canCreateIssue = canOperate && root.case_state !== "resolved" && syncedLink(root) == null;
 
   return (
-    <section aria-label="The case" className="flex flex-col gap-3">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">The case</h2>
+    <section id="the-case" aria-label="The case" className="flex flex-col gap-3">
       {isJoined ? (
         <p className={`text-ink text-sm ${PROSE}`}>
           <Link
@@ -184,112 +185,141 @@ export function CaseSection({
       {ending != null ? <p className={`text-ink text-sm ${PROSE}`}>{ending}</p> : null}
       {kept != null ? <p className={`text-ink-dim text-sm ${PROSE}`}>{kept}</p> : null}
 
-      {canOperate ? (
-        <div className="flex flex-col gap-2">
-          {actions.takeThis ? (
-            <Button
-              className={CASE_ACTION}
-              pending={change.isPending}
-              pendingLabel="Taking"
-              onClick={() => run("take", { case_state: "investigating" })}
-            >
-              Take this
-            </Button>
-          ) : null}
-          {actions.reopenEarlier != null ? (
-            <Button
-              variant="secondary"
-              className={CASE_ACTION}
-              pending={reopenEarlier.isPending}
-              pendingLabel="Reopening"
-              onClick={() => {
-                setDone("");
-                onOwnAct();
-                reopenEarlier.mutate(
-                  { case_state: "investigating" },
-                  {
-                    onSuccess: () => {
-                      setDone(caseDoneSentence("reopen"));
-                      onReload();
-                      landOnTheLine();
-                    },
+      {/* One filled button, the next step; the rest outlined, and the rarer ones under More
+          (design-system.md, *Buttons*). FR46's two labelled groups are The case and The signal. */}
+      <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
+        {canOperate && actions.takeThis ? (
+          <Button
+            className={CASE_ACTION}
+            pending={change.isPending}
+            pendingLabel="Taking"
+            onClick={() => run("take", { case_state: "investigating" })}
+          >
+            Take this
+          </Button>
+        ) : null}
+        {canOperate && actions.reopen ? (
+          <Button
+            className={CASE_ACTION}
+            pending={change.isPending}
+            pendingLabel="Reopening"
+            onClick={() => run("reopen", { case_state: "investigating" })}
+          >
+            Reopen
+          </Button>
+        ) : null}
+        {canOperate && actions.reopenEarlier != null ? (
+          <Button
+            variant="secondary"
+            className={CASE_ACTION}
+            pending={reopenEarlier.isPending}
+            pendingLabel="Reopening"
+            onClick={() => {
+              setDone("");
+              onOwnAct();
+              reopenEarlier.mutate(
+                { case_state: "investigating" },
+                {
+                  onSuccess: () => {
+                    setDone(caseDoneSentence("reopen"));
+                    onReload();
+                    landOnTheLine();
                   },
-                );
-              }}
-            >
-              Reopen that case
-            </Button>
-          ) : null}
-          {actions.takeOverFrom != null ? (
-            <Button
-              variant="secondary"
-              className={CASE_ACTION}
-              pending={change.isPending}
-              pendingLabel="Taking over"
-              onClick={() =>
-                run("assign", {
-                  assignee_id: viewerId,
-                  expected_assignee_id: root.assignee_id ?? null,
-                })
-              }
-            >
-              Take over from {actions.takeOverFrom}
-            </Button>
-          ) : null}
-          {actions.resolve ? (
-            <Button
-              className={CASE_ACTION}
-              pending={change.isPending && armed !== "resolve"}
-              pendingLabel="Resolving"
-              onClick={() => {
-                // FR6, AC92: one tap only with no synced issue and the signal closed;
-                // otherwise a confirmation that names what Resolve does.
-                if (choice.kind === "one_tap") run("resolve", { case_state: "resolved" });
-                else setArmed("resolve");
-              }}
-            >
-              Resolve
-            </Button>
-          ) : null}
-          {actions.reassign ? (
-            <Button
-              variant="secondary"
-              className={CASE_ACTION}
-              onClick={() => setArmed("reassign")}
-            >
-              Reassign
-            </Button>
-          ) : null}
-          {canCreateIssue ? (
-            <Button
-              variant="secondary"
-              className={CASE_ACTION}
-              onClick={() => setArmed("create-issue")}
-            >
-              Create an issue
-            </Button>
-          ) : null}
-          {canOperate ? (
-            <Button
-              variant="secondary"
-              className={CASE_ACTION}
-              onClick={() => setArmed("attach-issue")}
-            >
-              Attach an issue
-            </Button>
-          ) : null}
-          {actions.reopen ? (
-            <Button
-              className={CASE_ACTION}
-              pending={change.isPending}
-              pendingLabel="Reopening"
-              onClick={() => run("reopen", { case_state: "investigating" })}
-            >
-              Reopen
-            </Button>
-          ) : null}
+                },
+              );
+            }}
+          >
+            Reopen that case
+          </Button>
+        ) : null}
+        {canOperate && actions.takeOverFrom != null ? (
+          <Button
+            variant="secondary"
+            className={CASE_ACTION}
+            pending={change.isPending}
+            pendingLabel="Taking over"
+            onClick={() =>
+              run("assign", {
+                assignee_id: viewerId,
+                expected_assignee_id: root.assignee_id ?? null,
+              })
+            }
+          >
+            Take over from {actions.takeOverFrom}
+          </Button>
+        ) : null}
+        {canCreateIssue ? (
+          <Button
+            variant="secondary"
+            className={CASE_ACTION}
+            onClick={() => setArmed("create-issue")}
+          >
+            Create an issue
+          </Button>
+        ) : null}
+        {canOperate && actions.resolve ? (
+          <Button
+            variant="secondary"
+            className={CASE_ACTION}
+            pending={change.isPending && armed !== "resolve"}
+            pendingLabel="Resolving"
+            onClick={() => {
+              // FR6, AC92: one tap only with no synced issue and the signal closed;
+              // otherwise a confirmation that names what Resolve does.
+              if (choice.kind === "one_tap") run("resolve", { case_state: "resolved" });
+              else setArmed("resolve");
+            }}
+          >
+            Resolve
+          </Button>
+        ) : null}
+        {canOperate || signalControls ? (
+          <Button
+            variant="quiet"
+            className={CASE_ACTION}
+            aria-expanded={moreOpen}
+            aria-controls={moreId}
+            onClick={() => setMoreOpen((open) => !open)}
+          >
+            {moreOpen ? "Fewer actions" : "More actions"}
+          </Button>
+        ) : null}
+      </div>
+      <div
+        id={moreId}
+        hidden={!moreOpen}
+        className="flex flex-col gap-4 border border-line bg-surface p-3"
+      >
+        {canOperate ? (
+          <div className="flex flex-col gap-2">
+            <h3 className="heading-sub">The case</h3>
+            <div className="flex flex-col gap-2 md:flex-row md:flex-wrap">
+              {actions.reassign ? (
+                <Button
+                  variant="secondary"
+                  className={CASE_ACTION}
+                  onClick={() => setArmed("reassign")}
+                >
+                  Reassign
+                </Button>
+              ) : null}
+              <Button
+                variant="secondary"
+                className={CASE_ACTION}
+                onClick={() => setArmed("attach-issue")}
+              >
+                Attach an issue
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        <div className="flex flex-col gap-2">
+          <h3 className="heading-sub">The signal</h3>
+          {signalControls ?? (
+            <p className="text-ink-dim text-sm">Nothing to change on the signal now.</p>
+          )}
         </div>
-      ) : null}
+      </div>
 
       {armed === "resolve" && choice.kind !== "one_tap" ? (
         <ConfirmPanel label="Resolve">
@@ -407,12 +437,6 @@ export function CaseSection({
         />
       ) : null}
 
-      {inSupportView ? (
-        <p className={`text-ink-dim text-sm ${PROSE}`}>Hidden during support view</p>
-      ) : (
-        <NoteBox findingId={finding.id} projectId={finding.project_id} />
-      )}
-
       <LinksList
         findingId={finding.id}
         links={links}
@@ -423,13 +447,37 @@ export function CaseSection({
         viewerId={viewerId}
         zone={zone}
       />
+    </section>
+  );
+}
 
-      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Timeline</h3>
+/**
+ * The case's notes and timeline, at the end of the page (approved drawing C): the story
+ * reads first, the record of who did what after it.
+ */
+export function CaseHistory({ finding, zone }: { finding: FindingDetail; zone?: string }) {
+  const session = useSession();
+  const inSupportView = Boolean(session.data?.support_view);
+  const mayManageKnowledge = useCan("manage_knowledge");
+  const hosted = useIsHosted();
+  const mayKeepAsRunbook = mayManageKnowledge && !hosted && !inSupportView;
+  const rootQuery = useRootCase(finding.root_finding_id);
+  const root = finding.root_finding_id != null ? rootQuery.data : finding;
+  return (
+    <section aria-labelledby="case-history" className="flex flex-col gap-3">
+      <h2 id="case-history" className="heading-section border-line-subtle border-b pb-2">
+        History and notes
+      </h2>
       <Timeline
         findingId={finding.id}
         zone={zone}
-        saveAsRunbook={mayKeepAsRunbook && root.case_state === "resolved"}
+        saveAsRunbook={mayKeepAsRunbook && root?.case_state === "resolved"}
       />
+      {inSupportView ? (
+        <p className={`text-ink-dim text-sm ${PROSE}`}>Hidden during support view</p>
+      ) : (
+        <NoteBox findingId={finding.id} projectId={finding.project_id} />
+      )}
     </section>
   );
 }

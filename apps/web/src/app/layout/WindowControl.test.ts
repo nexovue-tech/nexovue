@@ -14,7 +14,7 @@ import {
   setSelectedRangeId,
 } from "@/shared/selection";
 
-import { WindowControl } from "./WindowControl";
+import { projectShownOn, WindowControl, windowShownOn } from "./WindowControl";
 
 /**
  * While a dashboard is mounted, the top bar's window phrase and range picker are on the
@@ -121,5 +121,44 @@ describe("the top bar while a dashboard is open", () => {
     await show();
     const select = container.querySelector("select");
     expect([...(select?.options ?? [])].map((o) => o.textContent)).not.toContain("30 days");
+  });
+});
+
+describe("which screens show the window (UX review, 2026-11-28)", () => {
+  it("shows it where a screen reads it", () => {
+    for (const path of ["/overview", "/services/cart", "/traces", "/logs", "/dashboards/x"]) {
+      expect(windowShownOn(path), path).toBe(true);
+    }
+  });
+
+  it("hides it where nothing on the screen answers it", () => {
+    for (const path of ["/", "/findings/abc", "/alerts", "/slos", "/settings/ai", "/admin"]) {
+      expect(windowShownOn(path), path).toBe(false);
+    }
+  });
+});
+
+describe("which screens show the project (UX review, 2026-11-28)", () => {
+  it("shows it on every telemetry screen and the settings that hold one project's things", () => {
+    for (const path of [
+      "/",
+      "/services",
+      "/findings/abc",
+      "/settings/api-keys",
+      "/settings/runbooks",
+    ]) {
+      expect(projectShownOn(path), path).toBe(true);
+    }
+  });
+
+  it("hides it on settings that cover the whole organization", () => {
+    for (const path of [
+      "/settings/members",
+      "/settings/usage",
+      "/settings/channels",
+      "/settings/ai",
+    ]) {
+      expect(projectShownOn(path), path).toBe(false);
+    }
   });
 });

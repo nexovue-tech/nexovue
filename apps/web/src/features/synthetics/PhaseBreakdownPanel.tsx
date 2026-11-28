@@ -66,9 +66,7 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
 
   return (
     <section className="border-line-subtle border-t px-4 py-5">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
-        Where the time goes
-      </h2>
+      <h2 className="heading-section">Where the time goes</h2>
       <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
         {describeBreakdown(plot.legend, plot.meanTotalMs, {
           runs: check.runs,
@@ -96,7 +94,7 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
       )}
 
       <div className="mt-6">
-        <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Recent probes</h3>
+        <h3 className="heading-sub">Recent probes</h3>
         {runs.isPending ? (
           <div className="mt-2">
             <SkeletonRows rows={1} label="Loading probes" />

@@ -32,7 +32,7 @@ export function DashboardsShowingThisService({
 
   return (
     <section aria-labelledby="dashboards-for-service" className="flex flex-col gap-1">
-      <h2 id="dashboards-for-service" className="font-medium font-serif text-base text-ink">
+      <h2 id="dashboards-for-service" className="heading-section">
         Dashboards showing this service
       </h2>
       {found.isPending ? (

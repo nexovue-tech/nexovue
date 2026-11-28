@@ -52,7 +52,9 @@ import {
   useGeneralFix,
   useSourceFix,
 } from "./api";
-import { CaseSection } from "./CaseSection";
+import { CaseHistory, CaseSection } from "./CaseSection";
+import { ChainStrip } from "./ChainStrip";
+import { chainSteps } from "./chain";
 import { ExplanationHeaderLine, ExplanationSection } from "./ExplanationSection";
 import type { HeaderLine } from "./explanation";
 import { headerLine } from "./explanation";
@@ -125,14 +127,17 @@ export function FindingScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-4 pt-5 pb-10">
-      {/* The feed is the front door now (FR1): back means `/`, with its filter. */}
-      <Link
-        to="/"
-        search={fromFilter === undefined ? {} : { case: fromFilter }}
-        className="text-ink-dim text-sm hover:text-ink"
-      >
-        {backLinkLabel(fromFilter)}
-      </Link>
+      <div className="flex flex-wrap items-center justify-between gap-x-4">
+        {/* The feed is the front door now (FR1): back means `/`, with its filter. */}
+        <Link
+          to="/"
+          search={fromFilter === undefined ? {} : { case: fromFilter }}
+          className="inline-flex min-h-11 items-center text-ink-dim text-sm hover:text-ink md:min-h-0"
+        >
+          {backLinkLabel(fromFilter)}
+        </Link>
+        <AskAboutFinding />
+      </div>
       {finding.isPending ? (
         <SkeletonRows rows={5} label="Loading the finding" />
       ) : finding.isError ? (
@@ -170,15 +175,9 @@ function useAssistantSubject(finding: FindingDetail): void {
 function AskAboutFinding() {
   if (!useOffersAssistant()) return null;
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => openAssistant({ fresh: true })}
-        className="inline-flex min-h-11 items-center font-medium text-brand-text text-sm underline-offset-2 hover:underline md:min-h-0"
-      >
-        Ask about this finding
-      </button>
-    </div>
+    <Button variant="quiet" onClick={() => openAssistant({ fresh: true })}>
+      Ask about this finding
+    </Button>
   );
 }
 
@@ -201,76 +200,70 @@ function FindingPage({
   // F5 rung 3 (Step 3): the service's own files, on their own read.
   const source = useSourceFix(finding.id);
   useAssistantSubject(finding);
+  const link = syncedLink(finding);
+  const latestSource = source.data?.latest ?? null;
+  const steps = chainSteps({
+    findingState: finding.state,
+    severity: finding.severity,
+    caseState: finding.case_state ?? null,
+    assigneeName: finding.assignee_name ?? null,
+    issue: link === null ? null : { key: link.external_key, state: link.seen_state },
+    fixState: latestSource?.state ?? general.data?.latest?.state ?? null,
+    fixOffered: Boolean(source.data?.offer ?? general.data?.offer ?? latestSource),
+    pullRequestState: latestSource?.draft?.pull_request_state ?? null,
+  });
   return (
+    // One column, in reading order (approved drawing C): the chain and the work first
+    // (D86, NFR8), then what happened, why, the suggested fix, and the record.
     <div className="flex flex-col gap-8">
-      <AskAboutFinding />
-      <Header
-        finding={finding}
-        zone={zone}
-        line={headerLine(explanation.data, { failed: explanation.isError, finding })}
-        suggestedFix={showsSection(general.data)}
-      />
+      <div className="flex flex-col gap-4">
+        <Header
+          finding={finding}
+          zone={zone}
+          line={headerLine(explanation.data, { failed: explanation.isError, finding })}
+          suggestedFix={showsSection(general.data)}
+        />
+        <ChainStrip steps={steps} />
+      </div>
       {/* FR45, AC105: one always-present status region, at page level because the
           case controls return nothing for a viewer. It announces only changes of
           assignee, case state and signal state, never the actor's own act. */}
       <p role="status" data-testid="page-status" className="sr-only">
         {announcement.message}
       </p>
-      {/* One DOM order, everywhere (D86, NFR8): work before evidence; the left
-          column at a wide window, stacked in the same order below it. */}
-      <div className="grid gap-8 @3xl:grid-cols-2">
-        <div className="flex min-w-0 flex-col gap-8">
-          <CaseSection
-            finding={finding}
-            zone={zone}
-            onReload={onReload}
-            onOwnAct={announcement.ownAct}
-          />
-          <section aria-label="The signal" className="flex flex-col gap-3">
-            <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">The signal</h2>
-            <Controls finding={finding} zone={zone} onReload={onReload} />
-          </section>
-        </div>
-        <div id="finding-evidence" className="flex min-w-0 flex-col gap-8">
-          {/* F3 FR14: the explanation leads the right column; F28's release row is its
-              first row (A45), extended by F5, with F5's brief as one line under it (D54). */}
-          <ExplanationSection
-            finding={finding}
-            explanation={explanation.data}
-            error={explanation.error}
-            onRetry={() => void explanation.refetch()}
-            releaseRow={
-              <>
-                <ReleaseSection finding={finding} zone={zone} addition={fixes.data?.deploy_line} />
-                <FixBrief
-                  fixes={fixes.data}
-                  pending={fixes.isPending}
-                  error={fixes.error}
-                  onRetry={() => void fixes.refetch()}
-                />
-              </>
-            }
-            zone={zone}
-          />
-          <Signals finding={finding} />
-          <Readings finding={finding} zone={zone} />
-          {finding.scope === "project" ? <Services finding={finding} /> : null}
-          <Incidents finding={finding} zone={zone} />
-          {finding.service_name ? (
-            <DashboardsShowingThisService
-              service={finding.service_name}
-              projectId={finding.project_id}
-              window={
-                finding.closed_at === null
-                  ? windowForOpen(finding.started_at, Date.now())
-                  : windowForClosed(finding.started_at, finding.closed_at, Date.now())
-              }
-            />
-          ) : null}
-          <Feedback finding={finding} />
-        </div>
+      <CaseSection
+        finding={finding}
+        zone={zone}
+        onReload={onReload}
+        onOwnAct={announcement.ownAct}
+        signalControls={<Controls finding={finding} zone={zone} onReload={onReload} />}
+      />
+      <div id="finding-evidence" className="flex min-w-0 flex-col gap-8">
+        {/* F3 FR14, AC86: the explanation leads the evidence; F28's release row is its first
+            row (A45), extended by F5, with F5's brief as one line under it (D54). */}
+        <ExplanationSection
+          finding={finding}
+          explanation={explanation.data}
+          error={explanation.error}
+          onRetry={() => void explanation.refetch()}
+          releaseRow={
+            <>
+              <ReleaseSection finding={finding} zone={zone} addition={fixes.data?.deploy_line} />
+              <FixBrief
+                fixes={fixes.data}
+                pending={fixes.isPending}
+                error={fixes.error}
+                onRetry={() => void fixes.refetch()}
+              />
+            </>
+          }
+          zone={zone}
+        />
+        <Signals finding={finding} />
+        <Readings finding={finding} zone={zone} />
+        {finding.scope === "project" ? <Services finding={finding} /> : null}
+        <Incidents finding={finding} zone={zone} />
       </div>
-      {/* D54's fifth row: full width below the split, so a diff has the window. */}
       <FixSection
         findingId={finding.id}
         general={general.data}
@@ -280,6 +273,19 @@ function FindingPage({
         now={Date.now()}
         zone={zone}
       />
+      <CaseHistory finding={finding} zone={zone} />
+      {finding.service_name ? (
+        <DashboardsShowingThisService
+          service={finding.service_name}
+          projectId={finding.project_id}
+          window={
+            finding.closed_at === null
+              ? windowForOpen(finding.started_at, Date.now())
+              : windowForClosed(finding.started_at, finding.closed_at, Date.now())
+          }
+        />
+      ) : null}
+      <Feedback finding={finding} />
     </div>
   );
 }
@@ -363,9 +369,7 @@ function Header({
         {finding.muted ? <span className="text-ink-dim">Muted</span> : null}
       </p>
       {/* The title is the product: a sentence, not a metric expression. */}
-      <h1 className={`font-semibold font-serif text-ink text-xl tracking-tight ${PROSE}`}>
-        {finding.title}
-      </h1>
+      <h1 className={`heading-page ${PROSE}`}>{finding.title}</h1>
       {/* F3 FR14: where to look first, in one code-written line; space always held. */}
       <ExplanationHeaderLine line={line} zone={zone} />
       <p className="text-ink-dim text-sm">
@@ -697,7 +701,7 @@ function Signals({ finding }: { finding: FindingDetail }) {
   if (finding.signals.length === 0) return null;
   return (
     <section aria-labelledby="finding-signals" className="flex flex-col gap-2">
-      <h2 id="finding-signals" className="font-medium font-serif text-base text-ink">
+      <h2 id="finding-signals" className="heading-section">
         What moved
       </h2>
       <ul className="flex flex-col gap-2">
@@ -754,7 +758,7 @@ function Readings({ finding, zone }: { finding: FindingDetail; zone?: string }) 
   if (finding.scope === "project") return null;
   return (
     <section aria-labelledby="finding-readings" className="flex flex-col gap-3">
-      <h2 id="finding-readings" className="font-medium font-serif text-base text-ink">
+      <h2 id="finding-readings" className="heading-section">
         Readings
       </h2>
       {finding.series.length === 0 ? (
@@ -855,10 +859,7 @@ function ReleaseSection({
     const listed = affectedReleases(context);
     return (
       <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
-        <h3
-          id="finding-release"
-          className="font-mono text-2xs text-ink-dim uppercase tracking-caps"
-        >
+        <h3 id="finding-release" className="heading-sub">
           Releases before this
         </h3>
         {listed.rows.length === 0 ? (
@@ -881,7 +882,7 @@ function ReleaseSection({
   const extras = deployAddition(addition, context, line);
   return (
     <section aria-labelledby="finding-release" className={`flex flex-col gap-2 ${PROSE}`}>
-      <h3 id="finding-release" className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <h3 id="finding-release" className="heading-sub">
         Release before this
       </h3>
       <p className={`break-words text-sm ${line.dim ? "text-ink-dim" : "text-ink"}`}>
@@ -915,9 +916,7 @@ function ReleaseSection({
       ) : null}
       {others.rows.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-            Elsewhere in this project
-          </h3>
+          <h3 className="heading-sub">Elsewhere in this project</h3>
           {others.lead ? <p className="text-ink-dim text-sm">{others.lead}</p> : null}
           <ReleaseRows rows={others.rows} finding={finding} />
           {context.called_known ? null : (
@@ -959,7 +958,7 @@ function ReleaseRows({ rows, finding }: { rows: readonly ReleaseFact[]; finding:
 function Services({ finding }: { finding: FindingDetail }) {
   return (
     <section aria-labelledby="finding-services" className="flex flex-col gap-2">
-      <h2 id="finding-services" className="font-medium font-serif text-base text-ink">
+      <h2 id="finding-services" className="heading-section">
         Services affected
       </h2>
       {finding.services.length === 0 ? (
@@ -985,7 +984,7 @@ function Incidents({ finding, zone }: { finding: FindingDetail; zone?: string })
   if (finding.incidents.length === 0) return null;
   return (
     <section aria-labelledby="finding-incidents" className="flex flex-col gap-2">
-      <h2 id="finding-incidents" className="font-medium font-serif text-base text-ink">
+      <h2 id="finding-incidents" className="heading-section">
         Linked alerts
       </h2>
       <ul className="flex flex-col gap-1">
@@ -1039,7 +1038,7 @@ function Feedback({ finding }: { finding: FindingDetail }) {
   if (finding.closed_reason !== "false_alarm" || !finding.feedback_reason) return null;
   return (
     <section aria-labelledby="finding-feedback" className="flex flex-col gap-1">
-      <h2 id="finding-feedback" className="font-medium font-serif text-base text-ink">
+      <h2 id="finding-feedback" className="heading-section">
         Why it was a false alarm
       </h2>
       <p className={`text-ink text-sm ${PROSE}`}>{finding.feedback_reason}</p>

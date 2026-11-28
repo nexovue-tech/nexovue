@@ -175,7 +175,7 @@ function IncidentDetail({ incident }: { incident: Incident }) {
           {incident.flapping ? <span className="text-ink-dim">Flapping</span> : null}
           {incident.muted ? <span className="text-ink-dim">Muted</span> : null}
         </p>
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
+        <h1 className="heading-page">
           {incident.condition_kind === "new_error_group"
             ? `A new error: ${incident.subject_label}`
             : `${incident.subject_label} ${describeHappening(incident)}`}
@@ -186,7 +186,7 @@ function IncidentDetail({ incident }: { incident: Incident }) {
       </header>
 
       <section aria-labelledby="incident-facts" className="flex flex-col gap-1">
-        <h2 id="incident-facts" className="font-medium font-serif text-base text-ink">
+        <h2 id="incident-facts" className="heading-section">
           What happened
         </h2>
         {incident.detail.reason ? (
@@ -224,7 +224,7 @@ function IncidentDetail({ incident }: { incident: Incident }) {
       </section>
 
       <section aria-labelledby="incident-evidence" className="flex flex-col gap-1">
-        <h2 id="incident-evidence" className="font-medium font-serif text-base text-ink">
+        <h2 id="incident-evidence" className="heading-section">
           Evidence
         </h2>
         <Evidence incident={incident} />
@@ -235,7 +235,7 @@ function IncidentDetail({ incident }: { incident: Incident }) {
       <IncidentDashboards incident={incident} />
 
       <section aria-labelledby="incident-told" className="flex flex-col gap-1">
-        <h2 id="incident-told" className="font-medium font-serif text-base text-ink">
+        <h2 id="incident-told" className="heading-section">
           Who was told
         </h2>
         {incident.notifications.length === 0 ? (

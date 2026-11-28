@@ -57,11 +57,11 @@ export function ConnectionsScreen() {
 
   return (
     <SettingsLayout
-      title="Connections"
+      title="GitHub"
       description={
         unavailable
           ? undefined
-          : "GitHub issues for your cases. The first write needs someone's click."
+          : "Two GitHub Apps: one creates and follows issues for your cases, the other reads code for suggested fixes and opens drafts. The first write needs someone's click."
       }
     >
       {!allowed ? (
@@ -105,7 +105,7 @@ export function ConnectionsScreen() {
 function WhatLeaves() {
   return (
     <section aria-label="What leaves this server" className="flex flex-col gap-2">
-      <h2 className="font-medium font-serif text-base">What leaves this server</h2>
+      <h2 className="heading-section">What leaves this server</h2>
       <ul className="flex max-w-prose list-disc flex-col gap-1 pl-5 text-ink-dim text-sm">
         <li>
           An issue, only when someone clicks Create: fixed words, numbers, times, the service name
@@ -133,7 +133,7 @@ function GitHub({ connection }: { connection: ConnectionView | undefined }) {
 function NotConnected() {
   return (
     <section aria-label="GitHub" className="flex flex-col gap-2">
-      <h2 className="font-medium font-serif text-base">GitHub</h2>
+      <h2 className="heading-section">GitHub</h2>
       <p className="max-w-prose text-ink-dim text-sm">
         A private GitHub App your organization owns, installed on the repositories you choose, so a
         case can open an issue and follow its status. {STATUS_ONLY}
@@ -160,7 +160,7 @@ function Setup({ connection }: { connection: ConnectionView }) {
 
   return (
     <section aria-label="GitHub setup" className="flex flex-col gap-3">
-      <h2 className="font-medium font-serif text-base">Setting up GitHub</h2>
+      <h2 className="heading-section">Setting up GitHub</h2>
       <p className="max-w-prose text-ink text-sm" role="status">
         {row.words}
       </p>
@@ -207,8 +207,8 @@ function Connected({ connection }: { connection: ConnectionView }) {
   return (
     <section aria-label="GitHub" className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
-        <h2 className="font-medium font-serif text-base">
-          GitHub App <span className="font-mono text-sm">{connection.app_slug}</span>
+        <h2 className="heading-section">
+          Issues App <span className="font-mono text-sm">{connection.app_slug}</span>
         </h2>
         <p className="max-w-prose text-ink text-sm" role="status">
           {standing(connection)}
@@ -354,7 +354,7 @@ function Repositories({
 
   return (
     <section aria-label="Repositories" className="flex flex-col gap-2">
-      <h3 className="font-medium text-ink text-sm">Repositories it reaches</h3>
+      <h3 className="heading-sub">Repositories it reaches</h3>
       {places.length === 0 ? (
         <p className="text-ink-dim text-sm">None yet.</p>
       ) : (
@@ -448,7 +448,7 @@ function Mapping({ places }: { places: ConnectionPlace[] }) {
 
   return (
     <section aria-label="Service repositories" className="flex flex-col gap-2">
-      <h3 className="font-medium text-ink text-sm">Where each service's issues go</h3>
+      <h3 className="heading-sub">Where each service's issues go</h3>
       {mappings.isPending ? (
         <SkeletonRows rows={2} label="Loading the mapping" />
       ) : mappings.isError ? (

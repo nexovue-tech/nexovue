@@ -541,6 +541,8 @@ async def test_ac66_delete_this_branch_deletes_only_its_own_branch_at_its_own_he
     assert deleted.actor_user_id == world.user_id
     deletes = [r.path for r in fake.site.requests if r.method == "DELETE" and "/git/" in r.path]
     assert deletes == [f"/repos/{REPOSITORY}/git/refs/heads/{fix_branch(fix_id)}"]
+    # Live test A14: the row records it, so the page stops offering the deletion.
+    assert await _branch_deleted_at(engine, fix_id) == now
 
 
 @pytest.mark.parametrize("why", ["still open", "moved by someone", "no write access"])
@@ -560,6 +562,16 @@ async def test_ac66_delete_this_branch_refuses_an_open_draft_a_moved_head_and_a_
 
     assert branch in git_of(fake).refs
     assert not [r for r in fake.site.requests if r.method == "DELETE" and "/git/" in r.path]
+    assert await _branch_deleted_at(engine, fix_id) is None
+
+
+async def _branch_deleted_at(engine: AsyncEngine, fix_id: uuid.UUID) -> datetime | None:
+    async with engine.connect() as connection:
+        found: datetime | None = await connection.scalar(
+            text("SELECT pull_request_branch_deleted_at FROM finding_fixes WHERE id = :id"),
+            {"id": fix_id},
+        )
+    return found
 
 
 async def test_ac62_a_repository_public_by_the_job_gets_no_unconfirmed_note(

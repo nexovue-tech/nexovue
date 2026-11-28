@@ -6,7 +6,7 @@ import { identityFor, type TestRole } from "@/shared/identity.test-util";
 import { mount, PROJECT_ID, settle, unmountAll } from "@/shared/router-harness.test-util";
 
 import type { ReadinessCounts, SourceConsentOverview } from "./FixConsentPanel";
-import { FixConsentPanel, scopeQuery } from "./FixConsentPanel";
+import { CONSENT_WORDS, consentLine, FixConsentPanel, scopeQuery } from "./FixConsentPanel";
 
 /**
  * F5's consent and readiness panels (plan T3.5, T3.6; spec FR6, FR7, FR10b, AC44, D20).
@@ -148,5 +148,21 @@ describe("readiness (FR10b, AC44)", () => {
 
     expect(shown.textContent).toContain("nothing to estimate yet");
     expect(shown.textContent).not.toContain("Ready from the error's stack");
+  });
+});
+
+describe("the consent lines read as sentences (UX review, 2026-11-28)", () => {
+  it("counts one person as a person", () => {
+    expect(CONSENT_WORDS.requesters(1)).toBe("1 person can ask for a suggested fix today.");
+    expect(CONSENT_WORDS.requesters(3)).toBe("3 people can ask for a suggested fix today.");
+  });
+
+  it("says what was agreed to in one sentence", () => {
+    expect(consentLine("live", "api.anthropic.com", "claude-sonnet-5-5")).toBe(
+      "Agreed to api.anthropic.com, model claude-sonnet-5-5.",
+    );
+    expect(consentLine("ended", "api.anthropic.com", "m")).toBe(
+      "Ended: the provider, key or model changed. Agree again, or withdraw. It was to api.anthropic.com, model m.",
+    );
   });
 });

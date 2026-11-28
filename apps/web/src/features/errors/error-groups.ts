@@ -196,3 +196,36 @@ export function describeOccurrences<T>(occurrences: readonly T[]): Array<Describ
     occurrence,
   }));
 }
+
+/** gRPC's status codes by number, as OpenTelemetry's gRPC instrumentation records the type. */
+const GRPC_CODES: readonly string[] = [
+  "OK",
+  "CANCELLED",
+  "UNKNOWN",
+  "INVALID_ARGUMENT",
+  "DEADLINE_EXCEEDED",
+  "NOT_FOUND",
+  "ALREADY_EXISTS",
+  "PERMISSION_DENIED",
+  "RESOURCE_EXHAUSTED",
+  "FAILED_PRECONDITION",
+  "ABORTED",
+  "OUT_OF_RANGE",
+  "UNIMPLEMENTED",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "DATA_LOSS",
+  "UNAUTHENTICATED",
+];
+
+/**
+ * A group's title. A bare number reads as nothing ("14"), so a gRPC status code is named,
+ * but only when the message names the same status: a number from anywhere else stays as it
+ * came (UX review, 2026-11-28).
+ */
+export function exceptionTitle(type: string, message: string): string {
+  if (!/^\d{1,2}$/.test(type)) return type;
+  const name = GRPC_CODES[Number(type)];
+  if (name === undefined || !message.includes(name)) return type;
+  return `gRPC ${name} (${type})`;
+}

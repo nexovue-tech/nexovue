@@ -50,7 +50,7 @@ export function DeploysSection({ projectId }: { projectId: string }) {
   return (
     <section id={DEPLOYS_ANCHOR} className="flex flex-col gap-5">
       <div className="max-w-2xl">
-        <h3 className="font-medium font-serif text-ink text-base tracking-tight">Deploys</h3>
+        <h3 className="heading-sub">Deploys</h3>
         <p className="mt-1 text-ink-dim text-sm leading-relaxed">
           Your CI tells nexovue when it deploys, signed with a secret from here. Releases then show
           failed and rolled-back deploys, same-version redeploys and commit links beside what your

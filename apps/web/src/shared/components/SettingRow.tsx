@@ -72,7 +72,7 @@ export function SettingGroup({
   return (
     <section className="mt-8 first:mt-0 @3xl:flex @3xl:gap-10">
       <div className="@3xl:w-64 @3xl:shrink-0 @3xl:pt-1">
-        <h2 className="font-medium font-serif text-ink text-lg tracking-tight">{title}</h2>
+        <h2 className="heading-section">{title}</h2>
         {description ? (
           <p className="mt-1 text-ink-dim text-sm leading-relaxed">{description}</p>
         ) : null}

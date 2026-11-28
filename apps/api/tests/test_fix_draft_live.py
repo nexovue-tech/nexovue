@@ -1153,3 +1153,20 @@ async def test_fr30_a_merge_no_deploy_recorded_reads_without_one(
     facts = (await _latest(db, rows.person(tenant), finding))["draft"]["merged_facts"]
 
     assert facts["deployed_at"] is None and facts["finding_closed_at"] is None
+
+
+async def test_a14_a_deleted_branch_is_not_offered_for_deletion_again(
+    db: AsyncSession, now: datetime, gate_on: None
+) -> None:
+    """Live test A14: after *Delete this branch* the button stayed, over a branch now gone."""
+    tenant, finding, repository = await _ready(db, now)
+    row = await _opened(db, finding, repository, now, pull_request_state="closed")
+    person = rows.person(tenant)
+    assert (await _latest(db, person, finding))["draft"]["delete_branch_action"] is not None
+
+    row.pull_request_branch_deleted_at = now
+    await db.flush()
+
+    assert (await _latest(db, person, finding))["draft"]["delete_branch_action"] is None
+    again = await _post(db, person, finding, f"/fixes/{row.id}/delete-branch", None)
+    assert again.status_code == 409 and again.json()["code"] == "no_branch_to_delete"

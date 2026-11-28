@@ -46,6 +46,7 @@ from nexovue_api.findings.schemas import (
     CaseFilter,
     EarlierCase,
     ExplanationSegment,
+    FeedChain,
     FeedState,
     Finding,
     FindingChanged,
@@ -59,6 +60,7 @@ from nexovue_api.findings.schemas import (
     LinkedBurn,
     LinkedIncident,
     NewNormalPreview,
+    OpenFindingCount,
     ProposedShift,
     ReleaseContext,
     ReleaseFact,
@@ -71,6 +73,7 @@ from nexovue_api.findings.schemas import (
     TimelineResponse,
 )
 from nexovue_api.findings.signals import SIGNAL_UNITS, parse_signals
+from nexovue_api.projects import service as projects
 from nexovue_api.releases import queries as release_queries
 from nexovue_api.releases import service as release_service
 
@@ -271,6 +274,7 @@ async def _feed_findings(
     causes = await explanation_queries.latest_causes(
         session, org_id=org_id, finding_ids=[f.id for f in findings]
     )
+    chains = await queries.feed_chains(session, org_id=org_id, finding_ids=[f.id for f in findings])
     feed_rows: list[FindingFeedRow] = []
     for row, finding in zip(rows, plain, strict=True):
         ends_on, ends_by = case_ending(
@@ -294,9 +298,31 @@ async def _feed_findings(
                 case_ends_by=ends_by,
                 project_name=row.project_name,
                 likely_cause_sentence=_card_line(causes.get(row.finding.id), show_held_causes),
+                chain=_chain(chains.get(row.finding.id)),
             )
         )
     return feed_rows
+
+
+async def open_finding_count(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> OpenFindingCount:
+    """A count, not the feed: the sidebar asks on every screen."""
+    await projects.require_project(session, org_id=org_id, project_id=project_id)
+    counts = await queries.open_finding_counts(session, org_id=org_id, project_id=project_id)
+    return OpenFindingCount(open=sum(counts.values()), critical=counts.get("critical", 0))
+
+
+def _chain(row: queries.FeedChainRow | None) -> FeedChain | None:
+    if row is None:
+        return None
+    seen = row.issue_state if row.issue_state in ("open", "closed") else None
+    return FeedChain(
+        issue_key=row.issue_key,
+        issue_state=seen,
+        fix_state=row.fix_state,
+        pull_request_state=row.pull_request_state,
+    )
 
 
 def _card_line(cause: Any, show_held_causes: bool) -> list[ExplanationSegment] | None:

@@ -85,7 +85,7 @@ export function ProjectSettings({
 function SectionHeading({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="max-w-2xl">
-      <h3 className="font-medium font-serif text-ink text-base tracking-tight">{title}</h3>
+      <h3 className="heading-sub">{title}</h3>
       <p className="mt-1 text-ink-dim text-sm leading-relaxed">{detail}</p>
     </div>
   );

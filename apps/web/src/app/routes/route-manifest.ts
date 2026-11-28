@@ -47,55 +47,48 @@ export interface NavSection {
   operatorOnly?: boolean;
 }
 
+/** Where the account row's Settings opens: the settings rail's first screen (sketch G). */
+export const SETTINGS_DOOR = "/settings/general" as const;
+
 export const NAV_SECTIONS: NavSection[] = [
+  // Grouped by what the reader came to do (approved sketch G, 2026-11-28), replacing Home,
+  // Signals, Surfaces and Account. No screen was removed; Settings moved to the account row.
   {
-    // Both first-class, per the founder's 2026-09-12 decision — and the feed is
-    // the front door now that the insight engine exists (FD15, F20 D58):
-    // Findings holds `/`, Overview keeps its own entry at `/overview`.
-    label: "Home",
+    // What needs me. Findings holds `/`, the front door (FD15, F20 D58); Alerts beside it,
+    // both answering "what is wrong"; targets, "are we meeting them" (F19 D22).
+    label: "Respond",
     items: [
       { path: "/", title: "Findings" },
-      { path: "/overview", title: "Overview" },
-      // F21. Beside Findings: both answer "what is wrong", one found by us and one
-      // declared by a rule the customer wrote.
       { path: "/alerts", title: "Alerts" },
-      // F19 (D22): after Alerts. It answers "are we meeting our target", as those two
-      // answer "what is wrong". "SLO" appears here so it can be found (D16).
-      { path: "/slos", title: "Targets (SLOs)" },
-      // F20: reached on purpose, by someone who knows what they want to watch; the feed
-      // stays the front door (design, *What it deliberately is not*).
-      { path: "/dashboards", title: "Dashboards" },
+      { path: "/slos", title: "Reliability targets" },
     ],
   },
   {
-    label: "Signals",
+    // Why: the screens a person reads to find the cause.
+    label: "Investigate",
     items: [
+      { path: "/overview", title: "Overview" },
       { path: "/services", title: "Services" },
       { path: "/service-map", title: "Service map" },
       { path: "/traces", title: "Traces" },
+      { path: "/logs", title: "Logs" },
+      { path: "/errors", title: "Errors" },
+      // F28: a release is context for what the other screens show.
+      { path: "/releases", title: "Releases" },
       { path: "/profiles", title: "Profiles" },
       { path: "/llm", title: "LLM calls" },
-      { path: "/errors", title: "Errors" },
-      // F28: after Errors. A release is context for what the other screens show.
-      { path: "/releases", title: "Releases" },
-      { path: "/logs", title: "Logs" },
     ],
   },
   {
-    label: "Surfaces",
+    // What a team keeps an eye on: its own dashboards and the surfaces it watches.
+    label: "Watch",
     items: [
-      { path: "/rum", title: "Real user monitoring" },
+      { path: "/dashboards", title: "Dashboards" },
       { path: "/synthetics", title: "Synthetics" },
+      { path: "/rum", title: "Real user monitoring" },
       { path: "/infrastructure", title: "Infrastructure" },
       { path: "/metrics", title: "Metrics" },
     ],
-  },
-  {
-    // One entry, not six. The settings screens have their own rail, which is what
-    // lets a reader see what else exists without the main sidebar listing account
-    // preferences beside telemetry screens.
-    label: "Account",
-    items: [{ path: "/settings/general", title: "Settings" }],
   },
   {
     // nexovue's own, and nobody else's: the customers of this deployment rather

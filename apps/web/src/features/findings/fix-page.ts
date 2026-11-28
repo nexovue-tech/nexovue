@@ -188,11 +188,17 @@ export function minutesLeft(lapsesAt: string, now: number): number {
   return Math.max(0, Math.ceil((Date.parse(lapsesAt) - now) / 60_000));
 }
 
-/** `document.title`'s word while a person waits on a background tab (design, *UX*). */
-export function sourceTitle(state: string | undefined): string | null {
+/**
+ * `document.title`'s word while a person waits on a background tab (design, *UX*). A draft
+ * stays `opened` after GitHub closes or merges it, so its pull request's own state decides.
+ */
+export function sourceTitle(
+  state: string | undefined,
+  pullRequestState: string | null | undefined,
+): string | null {
   if (state === "gathered") return "Files ready: confirm";
   if (state === "proposed") return "Suggestion ready";
-  if (state === "opened") return "Draft pull request open";
+  if (state === "opened" && pullRequestState === "open") return "Draft pull request open";
   return null;
 }
 

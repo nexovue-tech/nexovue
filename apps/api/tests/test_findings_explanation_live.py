@@ -37,7 +37,13 @@ from nexovue_api.auth.dependencies import (
     get_tenant_repository,
 )
 from nexovue_api.data.postgres.models import Finding as FindingRow
-from nexovue_api.data.postgres.models import FindingExplanation, Job, Project
+from nexovue_api.data.postgres.models import (
+    FindingExplanation,
+    FindingFix,
+    FindingLink,
+    Job,
+    Project,
+)
 from nexovue_api.deps import get_app_settings, get_db_session
 from nexovue_api.settings import API_PREFIX, Settings
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
@@ -636,3 +642,39 @@ async def test_stopping_a_rule_is_audited_and_stays_in_its_organization(
     resumed = await _send(db, _person(acme), "DELETE", "/explanations/stopped-rules/signed_deploy")
     assert resumed.json() == {"rule": "signed_deploy", "stopped": False}
     assert len(await _audit(db, acme, "explanation.rule_resumed")) == 1
+
+
+async def test_a_feed_row_carries_its_issue_and_newest_fix(db: AsyncSession) -> None:
+    """UX review 2026-11-28 (drawing C): each row's chain past its case, in states only."""
+    acme = await _tenant(db)
+    linked, bare = await _finding(db, acme), await _finding(db, acme, service="payments")
+    db.add(
+        FindingLink(
+            org_id=acme.organization.id,
+            finding_id=linked.id,
+            role="synced",
+            sync_status="in_sync",
+            external_key="acme/shop#1",
+            seen_state="open",
+        )
+    )
+    db.add(
+        FindingFix(
+            org_id=acme.organization.id,
+            project_id=acme.project.id,
+            finding_id=linked.id,
+            kind="source",
+            state="proposing",
+        )
+    )
+    await db.flush()
+
+    feed = (await _get(db, _person(acme), f"/findings?project_id={acme.project.id}")).json()
+    rows = {row["id"]: row for row in feed["findings"]}
+    assert rows[str(linked.id)]["chain"] == {
+        "issue_key": "acme/shop#1",
+        "issue_state": "open",
+        "fix_state": "proposing",
+        "pull_request_state": None,
+    }
+    assert rows[str(bare.id)]["chain"] is None

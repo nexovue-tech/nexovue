@@ -14,9 +14,8 @@ import type { KeywordOnlyReason } from "./chat-api";
  * so each can be tested without rendering, and the screen holds layout only.
  */
 
-export const MEMBER_LINE = "AI wording is off here. An owner or admin can set it up.";
-export const MEMBER_ON_LINE =
-  "AI wording is on here. Each explanation says which words came from a model.";
+export const MEMBER_LINE = "AI is off here. An owner or admin can set it up.";
+export const MEMBER_ON_LINE = "AI is on here. Each explanation says which words came from a model.";
 export const MCP_LINE =
   "This switch does not cover the MCP server: AI assistants reach it with your own read tokens, and this switch does not affect them.";
 export const CONTAINER_NOT_RUNNING = "The AI container is not running on this server.";
@@ -104,10 +103,10 @@ export function checkLine(ok: boolean, reason: CheckReason | null | undefined): 
 
 /** The status sentence for owners and admins, in one line. */
 export function statusLine(settings: AISettings): string {
-  if (settings.on) return "AI wording is on.";
+  if (settings.on) return "AI is on.";
   if (settings.off_reason === "consent_ended")
-    return "AI wording is off: a change ended the owners' agreement.";
-  return "AI wording is off.";
+    return "AI is off: a change ended the owners' agreement.";
+  return "AI is off.";
 }
 
 /** FR30: where data goes, in words that differ for a private address. */

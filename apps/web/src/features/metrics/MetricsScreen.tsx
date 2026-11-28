@@ -195,7 +195,7 @@ export function MetricsView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Metrics</h1>
+        <h1 className="heading-page">Metrics</h1>
         <p className="mt-1 text-ink-dim text-sm">
           {narrowed
             ? `The metrics matching these filters, of everything reported over ${windowLabel}.`
@@ -322,7 +322,7 @@ function Catalogue({
     // other list on this product already avoids.
     <section className="flex min-h-0 flex-1 flex-col border-line border-t">
       <div className="flex items-baseline justify-between px-4 py-2">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        <h2 className="heading-section">
           {formatCount(metrics.length)} {plural(metrics.length, "metric")}
         </h2>
       </div>

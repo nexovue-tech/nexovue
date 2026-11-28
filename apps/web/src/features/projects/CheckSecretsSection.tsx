@@ -36,7 +36,7 @@ export function CheckSecretsSection({ projectId }: { projectId: string }) {
   return (
     <section className="flex flex-col gap-4">
       <div className="max-w-2xl">
-        <h3 className="font-medium font-serif text-ink text-base tracking-tight">Check secrets</h3>
+        <h3 className="heading-sub">Check secrets</h3>
         <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
           Tokens, passwords and keys your checks send. Write{" "}
           <code className="font-mono text-ink text-xs">{secretReference("NAME")}</code> in a

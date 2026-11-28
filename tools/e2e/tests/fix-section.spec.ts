@@ -560,12 +560,9 @@ const STEP_7_STATES: [string, Record<string, unknown>][] = [
 
 for (const width of WIDTHS) {
   for (const [name, latest] of STEP_7_STATES) {
+    // The draft's buttons are 44 px on a phone since the shared Button took one height
+    // (UX review, 2026-11-28), so these no longer wait on decision 120.
     test(`AC37d: the draft ${name} fits ${width} px with its targets`, async ({ page }) => {
-      test.fail(
-        width === 375 &&
-          ["as shipped, with write access off", "with the draft confirm open"].includes(name),
-        BELOW_TARGET_ON_A_PHONE,
-      );
       await page.setViewportSize({ width, height: 900 });
       await signUp(page, newAccount());
       await stubFinding(page);

@@ -38,7 +38,7 @@ export function GeneralSuggestion({
 }) {
   return (
     <article aria-labelledby={`general-${fix.id}`} className="flex min-w-0 flex-col gap-2">
-      <h3 id={`general-${fix.id}`} className="font-medium text-ink text-sm">
+      <h3 id={`general-${fix.id}`} className="heading-sub">
         {fix.heading}
       </h3>
       {fix.content ? (
@@ -181,9 +181,7 @@ export function EarlierSuggestions({
   if (earlier.length === 0) return null;
   return (
     <section aria-label={GENERAL_WORDS.earlier} className="flex flex-col gap-1">
-      <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-        {GENERAL_WORDS.earlier}
-      </h3>
+      <h3 className="heading-sub">{GENERAL_WORDS.earlier}</h3>
       <ul className="flex flex-col gap-1 text-ink-dim text-sm">
         {earlier.map((each) => (
           <li key={each.id}>

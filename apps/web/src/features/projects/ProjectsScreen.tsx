@@ -72,7 +72,7 @@ export function ProjectsScreen() {
             {/* The list said nothing about being a list: no count, no heading, and a
               row whose only affordance was a hover class that does not exist. A
               reader could not tell there was anything to click. */}
-            <h2 className="border-line border-b pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+            <h2 className="border-line border-b pb-1.5 heading-section">
               {projects.data.length} {projects.data.length === 1 ? "project" : "projects"} — open
               one to change what it keeps
             </h2>

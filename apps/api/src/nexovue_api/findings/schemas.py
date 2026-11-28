@@ -483,6 +483,26 @@ class FindingFeedRow(Finding):
     project_name: str
     # F3 (FR18): the card's cause line as segments; None with no cause or while held.
     likely_cause_sentence: list[ExplanationSegment] | None = None
+    # The chain past the case: issue, newest fix, its pull request (UX review 2026-11-28).
+    chain: FeedChain | None = None
+
+
+class OpenFindingCount(BaseModel):
+    """The sidebar's number beside Findings (UX review 2026-11-28): open, unmuted findings
+    that lead their own case, and how many of them are critical."""
+
+    open: int
+    critical: int
+
+
+class FeedChain(BaseModel):
+    """A feed row's chain past its case, in states only: the row's chips (drawing C)."""
+
+    # `acme/shop#1`, or None while it is being created; None throughout with no issue.
+    issue_key: str | None
+    issue_state: Literal["open", "closed"] | None
+    fix_state: str | None
+    pull_request_state: str | None
 
 
 class FindingListResponse(BaseModel):

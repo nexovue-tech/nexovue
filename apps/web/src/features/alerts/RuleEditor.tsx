@@ -150,7 +150,7 @@ function RuleEditorPage({ title, children }: { title: string; children: React.Re
             Alerts
           </Link>
         </p>
-        <h1 className="mt-1 font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
+        <h1 className="mt-1 heading-page">{title}</h1>
       </header>
       {children}
     </div>
@@ -340,7 +340,7 @@ function RuleForm({
         />
 
         <fieldset className="flex flex-col gap-3">
-          <legend className="font-medium font-serif text-base text-ink">Who to tell</legend>
+          <legend className="heading-section">Who to tell</legend>
           {channels.isPending ? (
             <SkeletonRows rows={2} label="Loading channels" />
           ) : channels.isError ? (
@@ -382,7 +382,7 @@ function RuleForm({
         </fieldset>
 
         <fieldset className="flex flex-col gap-3">
-          <legend className="font-medium font-serif text-base text-ink">Noise</legend>
+          <legend className="heading-section">Noise</legend>
           {draft.kind === "anomaly_finding" ? (
             <p className="text-ink-dim text-sm leading-relaxed">
               A finding is sent when it opens, turns critical, gains a signal and closes — never
@@ -509,7 +509,7 @@ function Watch({
   return (
     <>
       <fieldset className="flex flex-col gap-3">
-        <legend className="font-medium font-serif text-base text-ink">What to watch</legend>
+        <legend className="heading-section">What to watch</legend>
         {kindFixed ? (
           <p className="text-ink text-sm">
             <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">When </span>
@@ -566,7 +566,7 @@ function Watch({
       </fieldset>
 
       <fieldset className="flex flex-col gap-3">
-        <legend className="font-medium font-serif text-base text-ink">How bad</legend>
+        <legend className="heading-section">How bad</legend>
         {draft.kind === "check_state" ? (
           <>
             <p className="text-ink-dim text-sm leading-relaxed">

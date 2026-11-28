@@ -310,7 +310,7 @@ function SloForm({
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-5 px-4 py-5">
       <UnsavedChangesPrompt guard={guard} what="this target" />
-      <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
+      <h1 className="heading-page">{title}</h1>
       {summary.length > 0 ? (
         <div
           role="alert"
@@ -456,7 +456,7 @@ function SloForm({
             />
           )}
           <div className="flex flex-col gap-2">
-            <h2 className="font-semibold text-ink">What counts</h2>
+            <h2 className="heading-section">What counts</h2>
             <ul className="flex max-w-prose list-disc flex-col gap-1 pl-5 text-ink-dim">
               {DEFINITIONS[draft.kind].map((line) => (
                 <li key={line}>{line}</li>
@@ -617,7 +617,7 @@ function WhoIsToldChoice({
   const listed = channels.data ?? [];
   return (
     <div className="flex flex-col gap-2">
-      <h2 className="font-semibold text-ink">Who is told</h2>
+      <h2 className="heading-section">Who is told</h2>
       {rules.data ? <p className="max-w-prose text-ink">{formToldSentence(rules.data)}</p> : null}
       {listed.length ? (
         <>

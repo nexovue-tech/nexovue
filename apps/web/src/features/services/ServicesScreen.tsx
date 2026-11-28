@@ -265,7 +265,7 @@ export function ServicesView({
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
         <div className="flex items-baseline justify-between gap-6">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Services</h1>
+          <h1 className="heading-page">Services</h1>
           <OrderToggle order={order} onOrderChange={onOrderChange} />
         </div>
         <p className="mt-1 text-ink-dim text-sm">

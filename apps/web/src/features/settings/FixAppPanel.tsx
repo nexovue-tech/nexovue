@@ -177,7 +177,7 @@ export function FixAppPanel() {
   if (!view.available) return null;
   return (
     <section aria-labelledby="fix-app" className="flex flex-col gap-3" data-testid="fix-app">
-      <h2 id="fix-app" className="font-medium font-serif text-base text-ink">
+      <h2 id="fix-app" className="heading-section">
         {FIX_APP_WORDS.heading}
       </h2>
       <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.lead}</p>
@@ -227,7 +227,7 @@ export function FixAppPanel() {
                   .join(", ")}
           </p>
           <div className="flex flex-col gap-1" data-testid="fix-app-raise">
-            <h3 className="font-medium text-ink text-sm">{FIX_APP_WORDS.raiseHeading}</h3>
+            <h3 className="heading-sub">{FIX_APP_WORDS.raiseHeading}</h3>
             <p className="max-w-prose text-ink text-sm">{FIX_APP_WORDS.raiseWarning}</p>
             <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.raiseSteps}</p>
             <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.signedCommits}</p>
@@ -339,7 +339,7 @@ export function CodeLocationsPanel({ app }: { app: FixAppView }) {
   const data = locations.data;
   return (
     <div className="flex flex-col gap-3" data-testid="code-locations">
-      <h3 className="font-medium text-ink text-sm">{FIX_APP_WORDS.locationsHeading}</h3>
+      <h3 className="heading-sub">{FIX_APP_WORDS.locationsHeading}</h3>
       <p className="max-w-prose text-ink-dim text-sm">{FIX_APP_WORDS.locationsLead}</p>
       {data.locations.length === 0 && data.services_without_location.length === 0 ? (
         <p className="text-ink-dim text-sm">{FIX_APP_WORDS.noServices}</p>

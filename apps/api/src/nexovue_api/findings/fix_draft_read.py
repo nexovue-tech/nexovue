@@ -309,7 +309,11 @@ def _pull_request_sentence(row: FindingFix, *, may_request: bool) -> str | None:
 
 
 def _delete_action(row: FindingFix) -> str | None:
-    if row.pull_request_branch is None or row.pull_request_state not in _DELETABLE:
+    if (
+        row.pull_request_branch is None
+        or row.pull_request_branch_deleted_at is not None
+        or row.pull_request_state not in _DELETABLE
+    ):
         return None
     return DELETE_BRANCH
 

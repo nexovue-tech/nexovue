@@ -64,7 +64,7 @@ export function ServiceMapScreen() {
   return (
     <div className="service-map flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Service map</h1>
+        <h1 className="heading-page">Service map</h1>
         <p className="mt-1 text-ink-dim text-sm">
           {map.data && graph.nodes.length > 0 ? (
             <MapSummary

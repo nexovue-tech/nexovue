@@ -694,7 +694,7 @@ function Header({
   return (
     <header className="flex flex-col gap-1">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="font-semibold text-ink text-lg">{visibleEscapes(dashboard.title)}</h1>
+        <h1 className="heading-page">{visibleEscapes(dashboard.title)}</h1>
         {context ? (
           // The project comes from the data, never from a title (BR13).
           <p className="text-ink-dim text-sm">

@@ -96,9 +96,7 @@ function DocBody({ doc }: { doc: SetupDoc }) {
 function NotAPage() {
   return (
     <main className="min-w-0 flex-1">
-      <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-        No setup page at this address
-      </h1>
+      <h1 className="heading-page">No setup page at this address</h1>
       <p className="mt-2 text-ink-dim text-sm leading-relaxed">
         Every page is listed beside this one. {DOCS.length} of them cover sending data from a
         language, a platform, a Collector or a browser.

@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import type { Column } from "@/shared/components/DataTable";
 import { DataTable } from "@/shared/components/DataTable";
 import { EmptyState } from "@/shared/components/EmptyState";
@@ -98,7 +99,9 @@ export function DashboardListScreen({ now = Date.now() }: { now?: number }) {
   return (
     <div className="flex flex-col gap-4 p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <h1 className="font-semibold text-ink text-lg">Dashboards</h1>
+        <h1 className="heading-page">Dashboards</h1>
+        {/* With dashboards listed, FR39's starting points sit here; empty, they lead the
+            empty state, blank dashboard last (FR39). */}
         <div className="flex flex-wrap items-start gap-2">
           {hasRows ? startAction : null}
           {canEdit ? (
@@ -139,14 +142,13 @@ export function DashboardListScreen({ now = Date.now() }: { now?: number }) {
       />
       <div className="flex flex-col gap-3">
         <div>
-          <button
-            type="button"
+          <Button
+            variant="quiet"
             aria-expanded={showDeleted}
             onClick={() => setShowDeleted((open) => !open)}
-            className="min-h-11 rounded-sm border border-line px-3 py-1.5 text-ink-dim text-sm hover:border-line-strong hover:text-ink md:min-h-0"
           >
             Recently deleted{deleted.data ? ` (${deleted.data.length})` : ""}
-          </button>
+          </Button>
         </div>
         {showDeleted ? <RecentlyDeleted now={now} /> : null}
       </div>

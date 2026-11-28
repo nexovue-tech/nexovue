@@ -341,7 +341,7 @@ function Section({
   return (
     <section className="mb-5">
       <div className="mb-1.5 flex items-center justify-between gap-3 border-line-subtle border-b pb-1">
-        <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{title}</h3>
+        <h3 className="heading-sub">{title}</h3>
         {aside}
       </div>
       {children}

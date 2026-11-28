@@ -92,7 +92,7 @@ export function FixSummaryPanel() {
   }
   return (
     <div className="flex min-w-0 flex-col gap-3 text-sm" data-testid="fix-summary">
-      <h3 className="font-medium text-ink">{FIX_SUMMARY_WORDS.heading}</h3>
+      <h3 className="heading-sub">{FIX_SUMMARY_WORDS.heading}</h3>
       <ul className="flex flex-col gap-1 text-ink">
         <li>{`${FIX_SUMMARY_WORDS.requested}: ${countText(view.requested)}`}</li>
         <li>{`${FIX_SUMMARY_WORDS.draftsOpened}: ${countText(view.drafts_opened)}`}</li>

@@ -185,7 +185,7 @@ function ConnectionHealth({ servers }: { servers: readonly ServerConnections[] }
 
   return (
     <section className="shrink-0 border-line border-b px-4 pb-4">
-      <h2 className="pb-2 font-mono text-2xs text-ink-dim uppercase tracking-caps">Connections</h2>
+      <h2 className="pb-2 heading-section">Connections</h2>
       <div className="flex flex-wrap gap-3">
         {servers.map((server) => (
           <ServerCard key={server.label} server={server} />

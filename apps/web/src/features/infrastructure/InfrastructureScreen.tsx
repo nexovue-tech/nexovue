@@ -37,6 +37,7 @@ import {
   isUnattributed,
   NETWORK_METRICS,
   nodeName,
+  noticeParts,
   STOPPED_REPORTING,
 } from "./node-readings";
 
@@ -161,9 +162,7 @@ export function InfrastructureScreen() {
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
         <div className="flex items-baseline justify-between gap-6">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-            Infrastructure
-          </h1>
+          <h1 className="heading-page">Infrastructure</h1>
           <ViewSwitch view={view} onSelect={setView} />
         </div>
         {view === "hosts" ? (
@@ -313,12 +312,7 @@ function StaleNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
 function SaturationNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
   const said = describeSaturation(nodes);
   if (said === null) return null;
-
-  return (
-    <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
-      {said}
-    </p>
-  );
+  return <OpeningNotice text={said} open="What this means" />;
 }
 
 /**
@@ -345,11 +339,36 @@ function NetworkFaultNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
 function UnattributedNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
   const said = describeUnattributed(nodes);
   if (said === null) return null;
+  return <OpeningNotice text={said} open="How to fix" />;
+}
 
+/**
+ * A warning as one line that opens (approved sketch F): two paragraphs with settings in
+ * them above the table pushed the table, which is what the screen is for, off the first
+ * view. Critical notices (stale nodes, network faults) stay open.
+ */
+function OpeningNotice({ text, open }: { text: string; open: string }) {
+  const { lead, more } = noticeParts(text);
+  if (more === null) {
+    return (
+      <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
+        {lead}
+      </p>
+    );
+  }
   return (
-    <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
-      {said}
-    </p>
+    <details className="group shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm">
+      <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-3 text-warning-text md:min-h-0 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">{lead}</span>
+        <span className="font-medium text-brand-text">
+          {open}
+          <span aria-hidden="true" className="ml-1 inline-block group-open:rotate-180">
+            ▾
+          </span>
+        </span>
+      </summary>
+      <p className="mt-2 max-w-prose text-ink [overflow-wrap:anywhere]">{more}</p>
+    </details>
   );
 }
 
@@ -657,8 +676,12 @@ function SignalStrip({ signals }: { signals: readonly SignalSummary[] }) {
   if (signals.length === 0) return null;
 
   return (
-    <section className="shrink-0 border-line border-t px-4 py-3">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Signals received</h2>
+    // Closed at the end (approved sketch F): a reference for someone checking what arrives,
+    // not part of reading the fleet.
+    <details className="shrink-0 border-line border-t px-4 py-3">
+      <summary className="cursor-pointer font-medium text-ink text-sm">
+        What we receive ({formatCount(signals.length)} metrics)
+      </summary>
       <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
         {signals.map((signal) => (
           <li
@@ -671,6 +694,6 @@ function SignalStrip({ signals }: { signals: readonly SignalSummary[] }) {
           </li>
         ))}
       </ul>
-    </section>
+    </details>
   );
 }

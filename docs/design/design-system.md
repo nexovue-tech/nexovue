@@ -332,6 +332,30 @@ This is why severity colours are *not* all tuned to identical contrast. An early
 
 ---
 
+## Type and spacing
+
+**Approved by the founder, 2026-11-28** (UX review; the drawing is the *Console Redesign* page).
+Screens had drifted: section headings were 14 px serif, one pixel above body text, beside 11 px
+mono capitals used as headings too; the two menus had 20 px and 28 px rows; content started at
+224 px on Findings and 472 px in Settings. These rules end that, and code holds them, not habit.
+
+| Use | Rule | In code |
+|---|---|---|
+| Page title | Serif 22/28 semibold, one per page | `heading-page` (`packages/ui/tokens.css`) |
+| Section heading | Serif 18/26 semibold | `heading-section` |
+| Sub-heading | Sans 13/20 semibold | `heading-sub` |
+| Field and column label | Mono 11/16 capitals, only above a field or a column, **never as a heading** | `font-mono text-2xs uppercase tracking-caps` |
+| Text | Sans 13/20; a sentence is capped near 72 characters, a box never | `max-w-prose` on the sentence |
+| Spacing | 4 · 8 · 12 · 16 · 24 · 32. Inside a section 12, between sections 32 | `gap-3`, `gap-8` |
+| Page edge | **16 px** from the menu on every screen, settings included | `px-4` |
+| Buttons | 32 px high (44 on a phone). One `primary` (filled) per area, the next step; `secondary` (outline) for other actions; `quiet` (text) for small ones. Disabled is 40% | `shared/components/Button.tsx` |
+| Menus | Both menus: 28 px rows (44 on a phone), 13 px, 16 px in, the chosen row a 3 px green rule, a green-tinted fill and semibold | `shared/components/nav-row.ts` |
+| Sidebar | Grouped by the reader's question: **Respond** (Findings, Alerts, Reliability targets), **Investigate**, **Watch**; a count beside Findings and Alerts only; one account row (⚙ Settings, ⋯ documentation, theme, sign out). Approved 2026-11-28, sketch G | `app/routes/route-manifest.ts`, `features/auth/SignedInAs.tsx` |
+
+**The page edge is 16 px, not the drawing's 24.** Every telemetry screen already starts 16 px
+from the menu and its list rows line up with that edge; moving fifty screens to 24 would have
+broken that alignment for no reader's gain. Only Settings was off, and it now matches.
+
 ## Components
 
 **Built, and where.** The shared set is deliberately small; everything specific to one screen lives in that screen's feature folder, which is what the import rule enforces.

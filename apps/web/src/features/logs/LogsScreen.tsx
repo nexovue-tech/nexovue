@@ -244,7 +244,7 @@ export function LogsView({
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Logs</h1>
+          <h1 className="heading-page">Logs</h1>
           <ExportControls exportUrl={exportUrl} buffer={tail.buffer} />
         </div>
         <p className="mt-1 text-ink-dim text-sm">
@@ -531,7 +531,7 @@ function InlineSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="max-w-44 cursor-pointer appearance-none truncate rounded-sm border-none bg-transparent py-0.5 pr-1 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        className="field-sizing-content max-w-44 cursor-pointer appearance-none truncate rounded-sm border-none bg-transparent py-0.5 pr-1 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
