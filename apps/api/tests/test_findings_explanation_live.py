@@ -387,7 +387,12 @@ async def _send(
 async def _audit(db: AsyncSession, tenant: ProvisionedTenant, action: str) -> list[Any]:
     return list(
         await db.execute(
-            text("SELECT target, detail FROM audit_log WHERE org_id = :org_id AND action = :a"),
+            # In the order written: `uuidv7()` rises within a session, while `at` is the
+            # transaction's time and ties. Unordered, CI read two ratings back to front.
+            text(
+                "SELECT target, detail FROM audit_log WHERE org_id = :org_id AND action = :a "
+                "ORDER BY id"
+            ),
             {"org_id": tenant.organization.id, "a": action},
         )
     )
