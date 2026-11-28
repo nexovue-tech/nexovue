@@ -16,6 +16,7 @@ from nexovue_platform.alerts.channels import (
     READ_BY_PEOPLE,
     webhook_signature,
 )
+from nexovue_platform.alerts.model import ENDING_KINDS
 from nexovue_platform.checks.sealing import SealedBox, SealError, channel_secret_owner
 from nexovue_platform.email import EmailSender
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -64,6 +65,9 @@ class Outgoing:
     resolved_at: datetime | None
     # D29, D35: this trigger adds to an alert a linked finding or incident opened.
     noted: bool = False
+    # An ending's PagerDuty alerts to resolve, which may be more than `dedup_key`'s
+    # (decision 3/6).
+    resolves: tuple[str, ...] = ()
 
 
 def message_for(kind: str, message: AlertMessage) -> AlertMessage:
@@ -103,16 +107,22 @@ async def send(
         return http.post(secret, payloads.teams(message), private_allowed=private, secret=secret)
     if kind == "pagerduty":
         region = str(channel.config.get("region", "us"))
-        body = payloads.pagerduty(
-            message,
-            routing_key=secret,
-            dedup_key=outgoing.dedup_key,
-            subject=outgoing.subject,
-            app_base_url=outbound.app_base_url,
-            noted=outgoing.noted,
-        )
         endpoint = PAGERDUTY_ENDPOINTS.get(region, PAGERDUTY_ENDPOINTS["us"])
-        return http.post(endpoint, body, private_allowed=private, secret=secret)
+        resolves = outgoing.resolves if message.kind in ENDING_KINDS else ()
+        # A retry resends every resolve: PagerDuty ignores one for a resolved alert.
+        for dedup_key in resolves or (outgoing.dedup_key,):
+            body = payloads.pagerduty(
+                message,
+                routing_key=secret,
+                dedup_key=dedup_key,
+                subject=outgoing.subject,
+                app_base_url=outbound.app_base_url,
+                noted=outgoing.noted,
+            )
+            result = http.post(endpoint, body, private_allowed=private, secret=secret)
+            if result.outcome != "delivered":
+                return result
+        return result
     if kind == "webhook":
         url = str(channel.config.get("url", ""))
         body = payloads.webhook(

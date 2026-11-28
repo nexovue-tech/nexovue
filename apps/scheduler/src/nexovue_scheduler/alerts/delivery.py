@@ -230,6 +230,7 @@ async def _send(
         message_id=str(batch.id),
         dedup_key=notice.pagerduty_key,
         noted=notice.noted,
+        resolves=notice.resolves,
         subject_kind=subject.kind,
         subject_id=str(subject.id),
         subject=subject.label,

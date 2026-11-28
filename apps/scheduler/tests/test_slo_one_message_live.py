@@ -266,6 +266,16 @@ class World:
                 await self.record(batch, SendResult(outcome="delivered"), now)
         return said
 
+    async def resolved(self, now: datetime) -> list[set[str]]:
+        """Everything due at `now`, delivered: the PagerDuty alerts each ending resolves."""
+        said: list[set[str]] = []
+        while batches := await self.claim(now):
+            for batch in batches:
+                if batch.channel.kind == "pagerduty":
+                    said.extend(set(notice.resolves) for notice in batch.notices)
+                await self.record(batch, SendResult(outcome="delivered"), now)
+        return said
+
     async def keys(self) -> dict[str, str]:
         """Each delivered PagerDuty row's alert, by what it said."""
         found = await rows(
@@ -1106,6 +1116,63 @@ async def test_ac27_a_critical_burn_after_a_warning_alert_pages(everyone: World)
     await everyone.burn(at + 2 * MINUTE, severity="critical")
 
     assert (await everyone.deliver_to(at + 3 * MINUTE))["pagerduty"] == [[("burn opened", "own")]]
+
+
+async def _warning_burn_noted_then_critical(
+    everyone: World,
+) -> tuple[uuid.UUID, incidents.Subject, dict[str, list[list[tuple[str, str]]]], datetime]:
+    """A warning finding's alert, a warning burn noted on it, then the burn turns
+    critical. Returns the finding, the burn, what the escalation told, and the start."""
+    at = future()
+    finding = await everyone.finding(at, severity="warning")
+    await everyone.deliver_to(at + MINUTE)
+    target = uuid.uuid4()
+    await everyone.burn(at + 2 * MINUTE, severity="warning", target=target)
+    assert (await everyone.deliver_to(at + 3 * MINUTE))["pagerduty"] == [[("burn opened", "noted")]]
+    burn = await everyone.burn(at + 4 * MINUTE, severity="critical", target=target)
+    told = await everyone.deliver_to(at + 5 * MINUTE)
+    return finding, burn, told, at
+
+
+async def test_decision_3_a_burn_noted_on_a_warning_alert_pages_when_it_turns_critical(
+    everyone: World,
+) -> None:
+    """Open decision 3/6 (a): a critical above its host's severity is a page, not a note."""
+    _, burn, told, _ = await _warning_burn_noted_then_critical(everyone)
+
+    assert told["pagerduty"] == [[("burn escalated", "own")]]
+    keys = await everyone.keys()
+    assert keys["burn escalated"] == f"incident:{await _incident_id(everyone, burn)}"
+
+
+async def test_decision_3_the_escalated_burn_s_ending_resolves_both_alerts_it_is_on(
+    everyone: World,
+) -> None:
+    """The finding ends first: its alert stays open for the burn noted on it. The burn's
+    ending then resolves the burn's own alert and the finding's."""
+    finding, burn, _, at = await _warning_burn_noted_then_critical(everyone)
+    finding_key = f"finding:{finding}"
+    burn_key = f"incident:{await _incident_id(everyone, burn)}"
+
+    await everyone.close_finding(finding, at + 6 * MINUTE)
+    assert "pagerduty" not in await everyone.deliver_to(at + 7 * MINUTE)
+    await everyone.end(burn, at + 8 * MINUTE)
+
+    assert await everyone.resolved(at + 9 * MINUTE) == [{burn_key, finding_key}]
+
+
+async def test_decision_3_a_burn_ending_first_leaves_the_open_finding_s_alert_to_it(
+    everyone: World,
+) -> None:
+    finding, burn, _, at = await _warning_burn_noted_then_critical(everyone)
+    finding_key = f"finding:{finding}"
+    burn_key = f"incident:{await _incident_id(everyone, burn)}"
+
+    await everyone.end(burn, at + 6 * MINUTE)
+    assert await everyone.resolved(at + 7 * MINUTE) == [{burn_key}]
+    await everyone.close_finding(finding, at + 8 * MINUTE)
+
+    assert await everyone.resolved(at + 9 * MINUTE) == [{finding_key}]
 
 
 async def test_ac30_a_check_burn_is_a_note_on_its_check_s_alert(everyone: World) -> None:

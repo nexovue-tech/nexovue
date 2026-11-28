@@ -52,7 +52,7 @@ unaffected by it.
 | 7 | Backup and restore of F19's history | **fail as evidence: never restored** | `slo_daily_counts`, `slo_deleted_months` and `slo_target_changes` are the **only** copy of a month's figure once ClickHouse's 30-day rollups expire. `backup.sh`'s `pg_dump` takes them (they are not in `POSTGRES_ROWS_NOT_KEPT`, `common.sh:45`), so they are in a backup by construction. **No restore including them has been performed**, and `backup-and-restore.md` says the real `nexovue restore` has not been run end to end outside `just insight-fence`. A backup never restored is not a backup |
 | 8 | Configuration and secrets | **pass** | No secret and no setting added; F19 reads the existing `POSTGRES_DSN` and `CLICKHOUSE_DSN`. Queues `slo`, `slo_counts`, `slo_history` are declared on `scheduler-light` (`nexovue.yaml:391`), under F3's floor of 4 capped slots |
 | 9 | Security and tenancy | **pass for what the code does** | Read in Step 6's review and tested in the batch: every new Postgres statement binds `org_id` or is named as install-wide (`test_scheduler_postgres_tenancy_structure.py`, `test_postgres_tenancy_structure.py`); routes need `CONFIGURE_SLOS` to change and a readable project to read (`slos/router.py`, `exclusions.py:204`; `test_authorization_coverage.py`); no SLO module reaches a network client (`test_slo_no_provider_calls.py`, seen failing on a planted import); an exclusion's free-text reason never reaches an AI path (`test_slo_ai_paths.py`). Forged spans and `synthetic.*` readings change no figure (P2, AC37, `test_browser_door_live.py`). No tenancy hole found |
-| 10 | Alert delivery: the hold-back rule does not lose news (AC24 to AC31, AC52 to AC59) | **pass in tests; open on real channels; one known gap** | `test_slo_one_message_live.py` and `test_slo_regression_live.py` (F6's delivery tests unedited, again beside an open burn). **Known gap, open decision 3/6:** a burn noted on a warning-level PagerDuty alert that then turns critical stays a note and **does not page**. Not seen with a real inbox or a real PagerDuty (Step 5's *Judgeable*, owed after Phase 2) |
+| 10 | Alert delivery: the hold-back rule does not lose news (AC24 to AC31, AC52 to AC59) | **pass in tests; open on real channels** | `test_slo_one_message_live.py` and `test_slo_regression_live.py` (F6's delivery tests unedited, again beside an open burn). Decision 3/6's gap (a critical burn noted on a warning alert never paged) **fixed 2026-11-28**. Not seen with a real inbox or a real PagerDuty (Step 5's *Judgeable*, owed after Phase 2) |
 | 11 | Screens | **pass in tests; partly seen** | Web tests above. The list and form seen in Chromium at 375 and 1280 px with no sideways scroll (Step 6). **Not walked:** the target page in a browser, AC81's keyboard half; **no Playwright spec exists for F19**. The *Exclusions* tab is not built: exclusions are API-only (open decision 7) |
 | 12 | Rollback | **pass on paper; not rehearsed** | Take `slo`, `slo_counts`, `slo_history` out of `scheduler-light`'s queues: no job, no burn. Step 5's hold-back can be backed out on its own (plan, *Rollout and rollback*). The migrations go down in tests; a rollback on an install with real targets was never done |
 | 13 | Operational ownership | **open: the founder** | `docs/operations/slo-tracking.md` is written from the drill and has never been used on call. Nobody is named to own it |
@@ -68,7 +68,7 @@ past them.
 | # | Decision | Recommended | Bearing on rollout |
 |---|---|---|---|
 | 1 | The finding page's burn figures come from the incident, not `/slos/{id}` | keep (a) | none: wording in the design |
-| 3, 6 | A burn on a lower-severity PagerDuty alert that escalates stays a note and does not page | fix (a), as its own change | **a critical that never pages**: see blocker 4 |
+| 3, 6 | A burn on a lower-severity PagerDuty alert that escalates stays a note and does not page | **fixed 2026-11-28**, option (a) | none: blocker 4 closed |
 | 4 | `/budget` reads the target's own window, no `?window=` | keep (a) | none |
 | 5 | No "released lately" metric (no index on `released_at`) | keep (a) | small: the delivery log shows it |
 | 7 | The Exclusions tab is not built; API only | build it (a) before release | a customer cannot leave planned maintenance out of a figure on screen |
@@ -79,7 +79,7 @@ past them.
 
 **BLOCKER**, a production rollout of F19 is unsafe without each:
 
-1. **AC49, the multi-day fault run, on a machine that stays on.** Without it nobody knows how often a burn opens
+1. **AC49, the multi-day fault run, on a machine that stays on.** *Skipped for v0.2.0 by the founder, accepted in writing 2026-11-28; run on the server.* Without it nobody knows how often a burn opens
    when nothing is wrong, or misses a real fault. A customer would be paged on a rate never measured, and the plan
    says F19 is not called proved on faults until it runs. One injection of five has been scored, and it was written
    into the table by hand, not caused by the demo's fault flag.
@@ -91,10 +91,7 @@ past them.
    checked.** Past 30 days these tables are the only record of a month's figure; a lost Postgres with an
    unrehearsed restore loses every customer's monthly history for good, because ClickHouse has already expired the
    rollups it was counted from.
-4. **Open decision 3/6 answered.** As built, a burn first sent as a note on a warning-level PagerDuty alert keeps
-   that alert's key, so its later escalation to critical is a note and never pages anyone: the exact failure
-   PagerDuty exists to prevent. Either fix it (recommended) or the founder accepts it in writing and the setup page
-   says so.
+4. ~~**Open decision 3/6 answered.**~~ **Closed 2026-11-28:** fixed as recommended. **Fixed 2026-11-28 (founder's decision 3 in the Phase 2 live test, option (a)):** a burn's news above the severity of the alert it is noted on takes its own key and pages; an ending resolves every alert its subject is on that holds no other open subject, and is withheld only when none may be resolved (`_PIN_KEY`, `_WITHHOLD_ENDING`, `resolves` in `alerts/outbox.py`; one resolve per alert in `dispatch.py`). Proved by `test_slo_one_message_live.py::test_decision_3_*` (seen failing first) and `test_alert_senders_live.py::test_an_ending_on_two_alerts_resolves_each_and_stops_at_a_failure`.
 5. **An owner for the runbook**, and the platform's own deploy gate. `NexovueSloStatusStale` is a ticket that
    nobody receives yet.
 

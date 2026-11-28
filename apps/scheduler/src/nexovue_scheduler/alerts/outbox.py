@@ -29,9 +29,11 @@ delivery after the claim, since detection imports this module (AC42).
 **One problem is one PagerDuty alert, whichever fires first** (D29, D35). A
 finding and an incident linked on one service share the alert of whichever
 reached the channel first; the other's triggers are notes on it. Each row's key
-is fixed at its subject's first claim there and kept, and the alert is resolved
-only by the last of them to end: PagerDuty drops events for a resolved alert and
-opens a new one on the next trigger, so an early resolve would page again.
+is fixed at its subject's first claim there and kept, except that a burn turning
+more severe than the alert it is noted on takes its own and pages (decision 3/6).
+An ending resolves each alert its subject is on once no other open subject is on
+it: PagerDuty drops events for a resolved alert and opens a new one on the next
+trigger, so an early resolve would page again.
 
 **A burn does not repeat news** (F19 FR20 to FR26, ADR-038). On a channel people read,
 a news row of a subject is `dropped`, with why, when a reliability target's burn is
@@ -340,6 +342,20 @@ def _open_for_another(key: str) -> str:
     """
 
 
+def _alerts_of_subject(alias: str) -> str:
+    """`alias`, a row of this row's subject on its channel that has a key: the alerts
+    the subject is on. A burn that escalated past its host is on two (decision 3/6)."""
+    return f"""
+        {alias}.org_id = notifications.org_id
+        AND {alias}.channel_id = notifications.channel_id
+        AND ({alias}.id = notifications.id
+             OR {alias}.incident_id = notifications.incident_id
+             OR {alias}.finding_id = notifications.finding_id)
+        AND {alias}.dedup_key IS NOT NULL
+        AND NOT {_open_for_another(f"{alias}.dedup_key")}
+    """
+
+
 _ENDING: Final = ", ".join(f"'{kind}'" for kind in sorted(ENDING_KINDS))
 # F3's follow-up, like an ending, is owed only where news of its finding reached the
 # channel (F19 FR24, AC58).
@@ -349,25 +365,33 @@ _OWED_ONLY_WHERE_TOLD: Final = f"{_ENDING}, '{EXPLAINED}'"
 _HOST_SEVERE_ENOUGH: Final = f"{_rank('host.severity')} >= {_rank('notifications.severity')}"
 # Threshold incidents a burn's alert can carry, and be carried by (F19 FR24a).
 _SHARES_WITH_BURNS: Final = "'service_error_rate', 'service_latency_p95'"
-# Fixed once per subject and channel: the key its earlier rows went under; else, for
-# news rather than an ending, the alert of a linked subject that is still open
-# there (either order, D35); else, for a reliability target's burn, the alert of an
-# open subject about the same service or check (F19 FR24a); else its own. Linked
-# through a finding, two incidents share the first one's alert too, because the
-# finding's rows carry that key. `service_silent` and `check_state` openings never
+
+
+# A burn's news above the severity of the alert it is noted on takes its own key and
+# pages (decision 3/6); else fixed per subject and channel: the key its latest row
+# went under; else, for news rather than an ending, the alert of a linked subject
+# that is still open there (either order, D35); else, for a reliability target's
+# burn, the alert of an open subject about the same service or check (F19 FR24a);
+# else its own. Linked through a finding, two incidents share the first one's alert
+# too, because the finding's rows carry that key. `service_silent` and `check_state` openings never
 # join a burn's alert.
 _PIN_KEY: Final = text(
     f"""
     UPDATE notifications SET dedup_key = coalesce(
-        (
-            SELECT earlier.dedup_key FROM notifications AS earlier
-            WHERE earlier.org_id = notifications.org_id
-              AND earlier.channel_id = notifications.channel_id
-              AND (earlier.incident_id = notifications.incident_id
-                   OR earlier.finding_id = notifications.finding_id)
-              AND earlier.dedup_key IS NOT NULL
-            LIMIT 1
-        ),
+        CASE WHEN notifications.kind NOT IN ({_ENDING})
+                  AND EXISTS (
+                      SELECT 1 FROM incidents AS burn
+                      WHERE burn.org_id = notifications.org_id
+                        AND burn.id = notifications.incident_id
+                        AND burn.about_signal IS NOT NULL)
+                  AND latest.dedup_key <> {_OWN_KEY}
+                  AND {_rank("notifications.severity")} > (
+                      SELECT max({_rank("host.severity")}) FROM notifications AS host
+                      WHERE host.org_id = notifications.org_id
+                        AND host.channel_id = notifications.channel_id
+                        AND host.dedup_key = latest.dedup_key)
+             THEN {_OWN_KEY} END,
+        latest.dedup_key,
         (
             SELECT host.dedup_key
             FROM finding_incidents AS link
@@ -423,18 +447,34 @@ _PIN_KEY: Final = text(
         ),
         {_OWN_KEY}
     )
-    WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[])) AND dedup_key IS NULL
+    FROM (
+        SELECT taken.id, (
+            SELECT earlier.dedup_key FROM notifications AS earlier
+            WHERE earlier.org_id = taken.org_id
+              AND earlier.channel_id = taken.channel_id
+              AND (earlier.incident_id = taken.incident_id
+                   OR earlier.finding_id = taken.finding_id)
+              AND earlier.dedup_key IS NOT NULL
+            ORDER BY earlier.created_at DESC, earlier.id DESC
+            LIMIT 1
+        ) AS dedup_key
+        FROM notifications AS taken
+        WHERE taken.org_id = :org_id AND taken.id = ANY(CAST(:ids AS uuid[]))
+    ) AS latest
+    WHERE notifications.org_id = :org_id AND notifications.id = latest.id
+      AND notifications.dedup_key IS NULL
     """
 )
-# An ending sent while the alert still carries another open subject would resolve
-# that subject's alert too; the last of them to end resolves it instead.
+# An ending resolves each alert its subject is on that carries no other open subject;
+# the last of them to end resolves the rest. With none to resolve, it is withheld.
 _WITHHOLD_ENDING: Final = text(
     f"""
     UPDATE notifications
     SET state = 'dropped', outcome_reason = :reason, lease_until = NULL
     WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[]))
       AND kind IN ({_ENDING})
-      AND {_open_for_another("notifications.dedup_key")}
+      AND NOT EXISTS (
+          SELECT 1 FROM notifications AS mine WHERE {_alerts_of_subject("mine")})
     RETURNING id
     """
 )
@@ -649,6 +689,12 @@ _TAKEN: Final = text(
            finding_rule.id AS finding_rule_id, finding_rule.name AS finding_rule_name,
            coalesce(notifications.dedup_key, {_OWN_KEY}) AS pagerduty_key,
            {_OWN_KEY} AS own_key,
+           CASE WHEN notifications.kind IN ({_ENDING}) AND notifications.dedup_key IS NOT NULL
+                THEN ARRAY(
+                    SELECT DISTINCT mine.dedup_key FROM notifications AS mine
+                    WHERE {_alerts_of_subject("mine")}
+                    ORDER BY mine.dedup_key)
+           END AS resolves,
            adopted.shifts AS adopted_shifts,
            cause.cause_values,
            notifications.release_period_id
@@ -852,6 +898,9 @@ class Notice:
     pagerduty_key: str
     # It goes to a linked subject's alert, as a note there rather than a page.
     noted: bool = False
+    # An ending's PagerDuty alerts to resolve: each alert its subject is on that
+    # carries no other open subject.
+    resolves: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1186,6 +1235,7 @@ def _notice(row: Any) -> Notice:
         subject=_subject(row),
         pagerduty_key=row.pagerduty_key,
         noted=row.pagerduty_key != row.own_key,
+        resolves=tuple(row.resolves or ()),
     )
 
 
